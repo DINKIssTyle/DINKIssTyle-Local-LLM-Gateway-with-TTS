@@ -64,7 +64,7 @@ func GetAppDataDir() string {
 		return exeDir // Fallback
 	}
 
-	docDir := filepath.Join(homeDir, "Documents", "DKST-LLM-Chat")
+	docDir := filepath.Join(homeDir, "Documents", "DKST LLM Chat")
 	if err := os.MkdirAll(docDir, 0755); err != nil {
 		return exeDir // Fallback
 	}
@@ -465,7 +465,7 @@ func (a *App) CheckAssets() bool {
 // DownloadAssets downloads missing assets
 func (a *App) DownloadAssets() error {
 	downloader := NewDownloader()
-	assetsDir := GetResourcePath("assets")
+	assetsDir := filepath.Join(GetAppDataDir(), "assets")
 	if err := downloader.DownloadAssets(assetsDir); err != nil {
 		return err
 	}
@@ -504,4 +504,11 @@ func (a *App) GetLicenseText() string {
 	}
 
 	return builder.String()
+}
+
+// ShowAbout triggers the about modal in the frontend
+func (a *App) ShowAbout() {
+	if a.ctx != nil {
+		wruntime.EventsEmit(a.ctx, "show-about")
+	}
 }

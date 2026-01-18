@@ -418,6 +418,11 @@
                         // Re-check TTS config (might auto-enable if we want)
                         loadTTSConfig();
                     });
+
+                    // Listen for Show About menu action
+                    window.runtime.EventsOn("show-about", () => {
+                        showAbout();
+                    });
                 } catch (e) {
                     console.error('Init failed:', e);
                 }
