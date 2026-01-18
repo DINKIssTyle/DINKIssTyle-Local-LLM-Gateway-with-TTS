@@ -1,0 +1,6 @@
+{
+  "port": "8080",
+  "llmEndpoint": "http://127.0.0.1:1234",
+  "enableTTS": true,
+}
+}

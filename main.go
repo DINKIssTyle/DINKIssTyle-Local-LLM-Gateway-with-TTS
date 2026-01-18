@@ -27,9 +27,9 @@ func main() {
 	err := wails.Run(&options.App{
 		Title:     "DKST LLM Chat Server",
 		Width:     450,
-		Height:    930,
+		Height:    990,
 		MinWidth:  450,
-		MinHeight: 930,
+		MinHeight: 990,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
