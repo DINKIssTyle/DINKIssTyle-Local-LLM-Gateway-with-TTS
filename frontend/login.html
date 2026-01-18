@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+ * Created by DINKIssTyle on 2026.
+ * Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
+-->
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - DKST LLM Chat</title>
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
+
+    <style>
+        :root {
+            --bg-color: #0d1117;
+            --card-bg: #161b22;
+            --border-color: #30363d;
+            --text-color: #e6edf3;
+            --text-secondary: #8b949e;
+            --accent-color: #58a6ff;
+            --accent-hover: #79b8ff;
+            --error-color: #f85149;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg-color);
+            color: var(--text-color);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .login-container {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 40px;
+            width: 100%;
+            max-width: 400px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        .login-header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .login-header .material-icons-round {
+            font-size: 48px;
+            color: var(--accent-color);
+            margin-bottom: 15px;
+        }
+
+        .login-header h1 {
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        .login-header p {
+            color: var(--text-secondary);
+            margin-top: 8px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: var(--text-secondary);
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--bg-color);
+            color: var(--text-color);
+            font-size: 16px;
+            transition: border-color 0.2s;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: var(--accent-color);
+        }
+
+        .error-message {
+            color: var(--error-color);
+            font-size: 14px;
+            margin-bottom: 15px;
+            display: none;
+        }
+
+        .error-message.show {
+            display: block;
+        }
+
+        .login-btn {
+            width: 100%;
+            padding: 14px;
+            background: var(--accent-color);
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .login-btn:hover {
+            background: var(--accent-hover);
+        }
+
+        .login-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .footer {
+            text-align: center;
+            margin-top: 20px;
+            color: var(--text-secondary);
+            font-size: 12px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="login-container">
+        <div class="login-header">
+            <img src="appicon.png" alt="App Icon" style="width: 48px; height: 48px; margin-bottom: 15px;">
+            <h1>DKST LLM Chat</h1>
+            <p>Sign in to continue</p>
+        </div>
+
+        <div id="auth-container" style="display: none; text-align: center;">
+            <div style="margin-bottom: 20px;">
+                <span class="material-icons-round"
+                    style="font-size: 64px; color: var(--accent-color);">account_circle</span>
+                <h2 id="auth-user" style="margin-top: 10px; font-weight: 500;">User</h2>
+                <p style="color: var(--text-secondary); font-size: 14px;">You are already logged in</p>
+            </div>
+
+            <button class="login-btn" onclick="window.location.href='/'" style="margin-bottom: 12px;">Continue</button>
+
+            <button class="login-btn" onclick="handleLogout()"
+                style="background: var(--card-bg); border: 1px solid var(--border-color); color: var(--text-secondary);">
+                Logout
+            </button>
+        </div>
+
+        <form id="login-form" onsubmit="handleLogin(event)" style="display: none;">
+            <div class="form-group">
+                <label for="username">Username</label>
+                <input type="text" id="username" name="username" required autocomplete="username">
+            </div>
+
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" required autocomplete="current-password">
+            </div>
+
+            <div class="form-group" style="display: flex; align-items: center; gap: 8px;">
+                <input type="checkbox" id="remember-me" style="width: auto;">
+                <label for="remember-me" style="margin: 0; font-weight: 400; cursor: pointer;">Remember me</label>
+            </div>
+
+            <div class="error-message" id="error-message"></div>
+
+            <button type="submit" class="login-btn" id="login-btn">Sign In</button>
+        </form>
+
+        <div class="footer">
+            &copy; 2026 DINKI'ssTyle
+        </div>
+    </div>
+
+    <script>
+        async function handleLogin(e) {
+            e.preventDefault();
+
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const rememberMe = document.getElementById('remember-me').checked;
+            const btn = document.getElementById('login-btn');
+            const errorEl = document.getElementById('error-message');
+
+            btn.disabled = true;
+            errorEl.classList.remove('show');
+
+            try {
+                const response = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: username, password: password })
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.status === 'ok') {
+                    if (rememberMe) {
+                        localStorage.setItem('savedUsername', username);
+                    } else {
+                        localStorage.removeItem('savedUsername');
+                    }
+                    window.location.href = '/';
+                } else {
+                    errorEl.textContent = data.error || 'Login failed';
+                    errorEl.classList.add('show');
+                }
+            } catch (err) {
+                errorEl.textContent = 'Connection error';
+                errorEl.classList.add('show');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function handleLogout() {
+            try {
+                await fetch('/api/logout', { method: 'POST' });
+                document.getElementById('auth-container').style.display = 'none';
+                document.getElementById('login-form').style.display = 'block';
+                document.getElementById('password').value = '';
+                // Keep username if saved
+            } catch (e) {
+                console.error('Logout failed', e);
+            }
+        }
+
+        // Check auth and setup UI
+        (async function () {
+            const savedUser = localStorage.getItem('savedUsername');
+            if (savedUser) {
+                document.getElementById('username').value = savedUser;
+                document.getElementById('remember-me').checked = true;
+            }
+
+            try {
+                const response = await fetch('/api/auth/check');
+                const data = await response.json();
+
+                const authContainer = document.getElementById('auth-container');
+                const loginForm = document.getElementById('login-form');
+
+                if (data.authenticated) {
+                    document.getElementById('auth-user').textContent = data.user_id;
+                    authContainer.style.display = 'block';
+                    loginForm.style.display = 'none';
+                } else {
+                    authContainer.style.display = 'none';
+                    loginForm.style.display = 'block';
+                }
+            } catch (e) {
+                // Fallback to login form on error
+                document.getElementById('login-form').style.display = 'block';
+            }
+        })();
+    </script>
+</body>
+
+</html>

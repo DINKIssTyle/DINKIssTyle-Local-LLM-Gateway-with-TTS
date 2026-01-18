@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="ko">
+<!--
+ * Created by DINKIssTyle on 2026.
+ * Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
+-->
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DKST LLM Chat Server</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0d1117;
+            --card-bg: #161b22;
+            --border-color: #30363d;
+            --text-color: #e6edf3;
+            --text-secondary: #8b949e;
+            --accent-color: #58a6ff;
+            --success-color: #3fb950;
+            --danger-color: #f85149;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg-color);
+            color: var(--text-color);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .controller {
+            max-width: 360px;
+            margin: 0 auto;
+        }
+
+        .header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .header .material-icons-round {
+            font-size: 32px;
+            color: var(--accent-color);
+        }
+
+        .header h1 {
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+
+        .card-title {
+            font-size: 12px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 12px;
+        }
+
+        .status-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--danger-color);
+        }
+
+        .status-dot.running {
+            background: var(--success-color);
+        }
+
+        .btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 10px 16px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: var(--accent-color);
+            color: #fff;
+        }
+
+        .btn-primary:hover {
+            background: #79b8ff;
+        }
+
+        .btn-danger {
+            background: var(--danger-color);
+            color: #fff;
+        }
+
+        .btn-danger:hover {
+            background: #da3633;
+        }
+
+        .btn-block {
+            width: 100%;
+        }
+
+        .btn .material-icons-round {
+            font-size: 18px;
+        }
+
+        .form-group {
+            margin-bottom: 12px;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--bg-color);
+            color: var(--text-color);
+            font-size: 14px;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: var(--accent-color);
+        }
+
+        .form-row {
+            display: flex;
+            gap: 12px;
+        }
+
+        .form-row .form-group {
+            flex: 1;
+        }
+
+        .user-list {
+            max-height: 120px;
+            overflow-y: auto;
+        }
+
+        .user-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 13px;
+        }
+
+        .user-item:last-child {
+            border-bottom: none;
+        }
+
+        .icon-btn {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 4px;
+        }
+
+        .icon-btn:hover {
+            color: var(--danger-color);
+        }
+
+        .footer {
+            text-align: center;
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 16px;
+        }
+
+        /* Modal Styles */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 100;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            width: 90%;
+            max-width: 500px;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        .modal-header {
+            padding: 16px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-title {
+            font-weight: 600;
+            font-size: 16px;
+        }
+
+        .modal-body {
+            padding: 16px;
+            overflow-y: auto;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .license-box {
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 12px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            height: 200px;
+            overflow-y: auto;
+            margin-top: 12px;
+            font-size: 11px;
+            color: var(--text-color);
+        }
+
+        .modal-footer {
+            padding: 16px;
+            border-top: 1px solid var(--border-color);
+            text-align: right;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="controller">
+        <div class="header">
+            <span class="material-icons-round">dns</span>
+            <h1>DKST LLM Chat Server</h1>
+        </div>
+
+        <!-- Server Status -->
+        <div class="card">
+            <div class="card-title">Server Status</div>
+            <div class="status-row">
+                <div class="status-indicator">
+                    <span class="status-dot" id="status-dot"></span>
+                    <span id="status-text">Stopped</span>
+                </div>
+                <span id="port-display" style="color: var(--text-secondary); font-size: 13px;"></span>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Port</label>
+                    <input type="text" id="port-input" value="8080" placeholder="8080" onchange="savePort()">
+                </div>
+            </div>
+            <button class="btn btn-primary btn-block" id="toggle-btn" onclick="toggleServer()">
+                <span class="material-icons-round">play_arrow</span>
+                Start Server
+            </button>
+        </div>
+
+        <!-- LLM Settings -->
+        <div class="card">
+            <div class="card-title">LLM Configuration</div>
+            <div class="form-group">
+                <label>LLM Endpoint</label>
+                <input type="text" id="llm-endpoint" value="http://127.0.0.1:1234" placeholder="http://127.0.0.1:1234">
+            </div>
+        </div>
+
+        <!-- TTS Engine Settings -->
+        <div class="card">
+            <div class="card-title">TTS Engine Settings</div>
+            <div class="form-group">
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                    <label style="margin:0;">Enable TTS</label>
+                    <input type="checkbox" id="enable-tts" onchange="toggleEnableTTS()">
+                </div>
+            </div>
+
+            <!-- Asset Status Section -->
+            <div class="form-group"
+                style="margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--border-color);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <label style="margin:0;">Asset Status</label>
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <span class="status-dot" id="asset-status-dot"></span>
+                        <span id="asset-status-text" style="font-size: 12px;">Checking...</span>
+                    </div>
+                </div>
+                <button id="download-assets-btn" class="btn btn-primary btn-block" style="display: none;"
+                    onclick="downloadAssets()">
+                    <span class="material-icons-round">download</span> Download Assets
+                </button>
+            </div>
+
+            <div class="footer" style="margin-top: 12px; text-align: left; font-size: 11px;">
+                Detailed TTS settings are available in the web client.
+            </div>
+        </div>
+
+        <!-- User Management -->
+        <div class="card">
+            <div class="card-title">User Management</div>
+            <div class="user-list" id="user-list"></div>
+            <button class="btn btn-block"
+                style="background: var(--border-color); color: var(--text-color); margin-top: 12px;"
+                onclick="addUser()">
+                <span class="material-icons-round">person_add</span>
+                Add User
+            </button>
+        </div>
+
+        <button class="btn btn-block" style="background: transparent; color: var(--text-secondary); margin-top: 20px;"
+            onclick="showAbout()">
+            <span class="material-icons-round">info</span>
+            About
+        </button>
+
+        <div class="footer">© 2026 DINKI'ssTyle</div>
+    </div>
+
+    <!-- About Modal -->
+    <div class="modal-overlay" id="about-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title">About</div>
+                <button class="icon-btn" onclick="closeAbout()">
+                    <span class="material-icons-round">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div style="text-align: center; margin-bottom: 20px;">
+                    <img src="appicon.png" alt="App Icon" style="width: 64px; height: 64px; margin-bottom: 12px;">
+                    <div style="font-size: 18px; font-weight: 600; color: var(--text-color); margin-bottom: 4px;">DKST
+                        LLM Chat Server</div>
+                    <div style="color: var(--accent-color);">Version 1.0b</div>
+                    <div style="margin-top: 8px;">(C) 2026 DINKI'ssTyle</div>
+                </div>
+
+                <div style="font-weight: 600; margin-bottom: 8px;">Open Source Licenses</div>
+                <div>This software uses the following open source libraries:</div>
+                <div class="license-box" id="license-text">Loading licenses...</div>
+            </div>
+            <div class="modal-footer" style="text-align: center;">
+                <button class="btn btn-primary" onclick="closeAbout()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let isRunning = false;
+
+        async function init() {
+            if (typeof window.go !== 'undefined') {
+                try {
+                    const status = await window.go.main.App.GetServerStatus();
+                    updateUI(status.running, status.port);
+                    document.getElementById('port-input').value = status.port; // Set loaded port
+                    document.getElementById('llm-endpoint').value = status.llmEndpoint || 'http://127.0.0.1:1234';
+                    loadUsers();
+                    loadTTSConfig();
+
+                    // Listen for asset events
+                    window.runtime.EventsOn("assets-ready", () => {
+                        console.log("Assets ready event received");
+                        checkAssetStatus();
+                        // Re-check TTS config (might auto-enable if we want)
+                        loadTTSConfig();
+                    });
+                } catch (e) {
+                    console.error('Init failed:', e);
+                }
+            }
+        }
+
+        async function loadTTSConfig() {
+            try {
+                // Get general config for enableTTS
+                const status = await window.go.main.App.GetServerStatus();
+                document.getElementById('enable-tts').checked = status.enableTTS;
+
+                checkAssetStatus();
+            } catch (e) {
+                console.error('TTS Config Load Failed:', e);
+            }
+        }
+
+        async function checkAssetStatus() {
+            if (typeof window.go === 'undefined') return;
+            try {
+                const ready = await window.go.main.App.CheckAssets();
+                updateAssetUI(ready);
+            } catch (e) {
+                console.error('Asset Check Failed:', e);
+            }
+        }
+
+        function updateAssetUI(ready) {
+            const dot = document.getElementById('asset-status-dot');
+            const text = document.getElementById('asset-status-text');
+            const btn = document.getElementById('download-assets-btn');
+
+            if (ready) {
+                dot.className = 'status-dot running'; // Re-use running class for green
+                text.textContent = 'Ready';
+                text.style.color = 'var(--success-color)';
+                btn.style.display = 'none';
+            } else {
+                dot.className = 'status-dot'; // Default red
+                text.textContent = 'Missing';
+                text.style.color = 'var(--danger-color)';
+                btn.style.display = 'flex';
+            }
+        }
+
+        async function downloadAssets() {
+            const btn = document.getElementById('download-assets-btn');
+            const originalText = btn.innerHTML;
+
+            if (!confirm("Download missing assets (~300MB)?\nThe application window may freeze during download.")) return;
+
+            btn.disabled = true;
+            btn.innerHTML = '<span class="material-icons-round">hourglass_bottom</span> Downloading...';
+
+            try {
+                // We'll trust the backend native dialogs to handle success/error messages mostly, 
+                // but we can also catch errors here.
+                // Note: The previous backend implementation showed native dialogs. 
+
+                // However, directly calling DownloadAssets from UI might not show the confirm dialog again 
+                // if we call the method directly. Let's see app.go.
+                // app.go has DownloadAssets() which calls downloader.DownloadAssets().
+                // It does NOT have the dialog logic inside DownloadAssets(), that was in startup().
+
+                await window.go.main.App.DownloadAssets();
+                alert("Assets downloaded successfully!");
+                checkAssetStatus(); // Refresh status
+            } catch (e) {
+                alert("Download failed: " + e.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = originalText;
+            }
+        }
+
+        async function toggleEnableTTS() {
+            const enabled = document.getElementById('enable-tts').checked;
+            try {
+                await window.go.main.App.SetEnableTTS(enabled);
+            } catch (e) {
+                console.error('Failed to set TTS:', e);
+            }
+        }
+
+        async function savePort() {
+            const port = document.getElementById('port-input').value;
+            try {
+                await window.go.main.App.SetPort(port);
+            } catch (e) {
+                console.error('Failed to save port:', e);
+            }
+        }
+
+
+
+        function updateUI(running, port) {
+            isRunning = running;
+            const dot = document.getElementById('status-dot');
+            const text = document.getElementById('status-text');
+            const btn = document.getElementById('toggle-btn');
+            const portDisplay = document.getElementById('port-display');
+
+            if (running) {
+                dot.classList.add('running');
+                text.textContent = 'Running';
+
+                // Update to clickable link
+                const url = `http://localhost:${port}`;
+                portDisplay.innerHTML = `<a href="#" onclick="window.runtime.BrowserOpenURL('${url}'); return false;" style="color: var(--accent-color); text-decoration: none;">${url}</a>`;
+
+                btn.className = 'btn btn-danger btn-block';
+                btn.innerHTML = '<span class="material-icons-round">stop</span> Stop Server';
+            } else {
+                dot.classList.remove('running');
+                text.textContent = 'Stopped';
+                portDisplay.textContent = '';
+                btn.className = 'btn btn-primary btn-block';
+                btn.innerHTML = '<span class="material-icons-round">play_arrow</span> Start Server';
+            }
+        }
+
+        async function toggleServer() {
+            if (typeof window.go === 'undefined') return;
+
+            const port = document.getElementById('port-input').value;
+            const llmEndpoint = document.getElementById('llm-endpoint').value;
+            const btn = document.getElementById('toggle-btn');
+            btn.disabled = true;
+
+            try {
+                if (isRunning) {
+                    await window.go.main.App.StopServer();
+                    updateUI(false, port);
+                } else {
+                    await window.go.main.App.SetLLMEndpoint(llmEndpoint);
+                    await window.go.main.App.StartServer(port);
+                    updateUI(true, port);
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function loadUsers() {
+            if (typeof window.go === 'undefined') return;
+            try {
+                const users = await window.go.main.App.GetUsers();
+                const list = document.getElementById('user-list');
+                list.innerHTML = users.map(u => `
+                    <div class="user-item">
+                        <span>${u.id} <span style="color: var(--text-secondary);">(${u.role})</span></span>
+                        <button class="icon-btn" onclick="deleteUser('${u.id}')" title="Delete">
+                            <span class="material-icons-round" style="font-size: 18px;">delete</span>
+                        </button>
+                    </div>
+                `).join('');
+            } catch (e) {
+                console.error('Load users failed:', e);
+            }
+        }
+
+        async function addUser() {
+            const id = prompt('Username:');
+            if (!id) return;
+            const password = prompt('Password:');
+            if (!password) return;
+            const role = confirm('Admin?') ? 'admin' : 'user';
+
+            try {
+                await window.go.main.App.AddUser(id, password, role);
+                loadUsers();
+            } catch (e) {
+                alert('Failed: ' + e.message);
+            }
+        }
+
+        async function deleteUser(id) {
+            if (!confirm(`Delete "${id}"?`)) return;
+            try {
+                await window.go.main.App.DeleteUser(id);
+                loadUsers();
+            } catch (e) {
+                alert('Failed: ' + e.message);
+            }
+        }
+
+        async function showAbout() {
+            const modal = document.getElementById('about-modal');
+            modal.style.display = 'flex';
+
+            try {
+                if (window.go) {
+                    const text = await window.go.main.App.GetLicenseText();
+                    document.getElementById('license-text').textContent = text;
+                }
+            } catch (e) {
+                document.getElementById('license-text').textContent = "Failed to load licenses: " + e.message;
+            }
+        }
+
+        function closeAbout() {
+            document.getElementById('about-modal').style.display = 'none';
+        }
+
+        init();
+    </script>
+</body>
+
+</html>

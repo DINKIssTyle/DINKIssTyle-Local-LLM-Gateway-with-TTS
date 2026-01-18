@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+ * Created by DINKIssTyle on 2026.
+ * Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
+-->
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
+    <title>DINKI'ssTyle Chat</title>
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap"
+        rel="stylesheet">
+
+    <!-- Icons -->
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
+
+    <!-- Styles -->
+    <link rel="stylesheet" href="style.css?v=2">
+
+    <!-- Highlight.js -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+</head>
+
+<body>
+
+
+    <!-- Mobile Overlay -->
+    <div id="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+    <!-- Sidebar -->
+    <div id="sidebar">
+        <div class="sidebar-header">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <img src="appicon.png" alt="App Icon" style="width: 24px; height: 24px;">
+                DKST LLM Chat
+            </div>
+            <button class="icon-btn" onclick="toggleSidebar()" aria-label="Close Sidebar">
+                <span class="material-icons-round">close</span>
+            </button>
+        </div>
+
+        <div class="sidebar-content">
+            <!-- Server Control Panel -->
+            <div class="server-control">
+                <div class="server-status" id="server-status">
+                    <span class="status-dot stopped"></span>
+                    <span>Server: Stopped</span>
+                </div>
+                <div class="setting-group">
+                    <label>Server Port</label>
+                    <input type="number" id="server-port" value="8080" min="1024" max="65535">
+                </div>
+                <button class="btn btn-primary" id="server-toggle-btn" onclick="toggleServer()">
+                    <span class="material-icons-round">play_arrow</span> Start Server
+                </button>
+            </div>
+
+            <hr style="border-color: var(--border-color); opacity: 0.3; margin: 15px 0;">
+
+            <div class="setting-group desktop-only" id="llm-endpoint-setting">
+                <label>LLM Endpoint</label>
+                <input type="text" id="cfg-api" placeholder="http://127.0.0.1:1234">
+            </div>
+
+            <div class="setting-group">
+                <label>Model Name</label>
+                <input type="text" id="cfg-model" placeholder="gemma-2b-it">
+            </div>
+
+            <div class="setting-group">
+                <div class="setting-toggle" onclick="toggleSwitch('cfg-hide-think')">
+                    <span>Hide &lt;think&gt;</span>
+                    <input type="checkbox" id="cfg-hide-think" checked>
+                </div>
+            </div>
+
+            <div class="setting-group">
+                <label>System Prompt</label>
+                <textarea id="cfg-system-prompt" rows="3" placeholder="You are a helpful AI assistant."></textarea>
+            </div>
+
+            <hr style="border-color: var(--border-color); opacity: 0.3; margin: 15px 0;">
+
+            <div class="setting-group">
+                <label>Temperature</label>
+                <input type="number" id="cfg-temp" step="0.1" value="0.7">
+            </div>
+
+            <div class="setting-group">
+                <label>Max Tokens</label>
+                <input type="number" id="cfg-max-tokens" value="2048">
+            </div>
+
+            <div class="setting-group">
+                <label>History Count</label>
+                <input type="number" id="cfg-history" value="10">
+            </div>
+
+            <hr style="border-color: var(--border-color); opacity: 0.3; margin: 15px 0;">
+
+            <div class="setting-group-header">TTS Engine</div>
+            <div class="setting-group">
+                <div class="setting-toggle" onclick="toggleSwitch('cfg-enable-tts')">
+                    <span>Enable TTS</span>
+                    <input type="checkbox" id="cfg-enable-tts">
+                </div>
+            </div>
+
+            <div class="setting-group">
+                <div class="setting-toggle" onclick="toggleSwitch('cfg-auto-tts')">
+                    <span>Auto-play</span>
+                    <input type="checkbox" id="cfg-auto-tts">
+                </div>
+            </div>
+
+            <div class="setting-group">
+                <label>Voice Style</label>
+                <select id="cfg-tts-voice">
+                    <option value="">Loading...</option>
+                </select>
+            </div>
+
+            <div class="setting-group">
+                <div style="display: flex; justify-content: space-between;">
+                    <label>Speed</label>
+                    <span id="speed-val" style="font-size: 11px; color: var(--text-secondary);">1.0</span>
+                </div>
+                <input type="range" id="cfg-tts-speed" min="0.5" max="3.0" step="0.1" value="1.0"
+                    oninput="document.getElementById('speed-val').textContent=this.value">
+            </div>
+
+            <div class="setting-group">
+                <label>TTS Language</label>
+                <select id="cfg-tts-lang">
+                    <option value="ko">Korean</option>
+                    <option value="en">English</option>
+                    <option value="es">Spanish</option>
+                    <option value="fr">French</option>
+                    <option value="pt">Portuguese</option>
+                </select>
+            </div>
+
+            <div class="setting-group">
+                <label>Smart Chunking (Chars)</label>
+                <input type="number" id="cfg-chunk-size" value="300" min="50" max="1000">
+            </div>
+
+            <div class="sidebar-actions">
+                <button class="btn btn-primary" id="save-cfg-btn">Save Settings</button>
+
+                <div class="action-separator"></div>
+
+                <button class="btn btn-secondary" onclick="clearChat()">
+                    <span class="material-icons-round">delete_sweep</span> Clear Chat History
+                </button>
+                <button class="btn btn-danger" onclick="logout()">
+                    <span class="material-icons-round">logout</span> Logout
+                </button>
+            </div>
+        </div>
+
+        <div class="footer">
+            &copy; 2026 DINKI'ssTyle
+        </div>
+    </div>
+
+    <!-- Main Chat -->
+    <div id="main-chat">
+        <div id="chat-header">
+            <button class="icon-btn" onclick="toggleSidebar()">
+                <span class="material-icons-round">menu</span>
+            </button>
+            <span class="header-title">Chat</span>
+            <button class="icon-btn" onclick="clearChat()" title="Clear Chat">
+                <span class="material-icons-round">delete_outline</span>
+            </button>
+        </div>
+
+        <div id="chat-messages">
+            <!-- Messages will be injected here -->
+            <div class="message assistant">
+                <div class="message-bubble">
+                    <div class="markdown-body">
+                        Hello! I am ready to chat. Configure your LM Studio connection in the sidebar.
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="preview-container">
+            <div class="preview-wrapper">
+                <img id="image-preview" class="preview-img" src="" alt="Preview">
+                <div class="remove-img-btn" onclick="removeImage()">
+                    <span class="material-icons-round">close</span>
+                </div>
+            </div>
+        </div>
+
+        <div id="input-area">
+            <div class="input-container">
+                <textarea id="message-input" rows="1" placeholder="Type a message..."></textarea>
+
+                <div class="input-actions">
+                    <input type="file" id="image-upload" accept="image/*" style="display: none"
+                        onchange="handleImageUpload(this)">
+                    <button class="icon-btn" onclick="document.getElementById('image-upload').click()"
+                        title="Upload Image">
+                        <span class="material-icons-round">add_photo_alternate</span>
+                    </button>
+                    <button class="icon-btn send-btn" id="send-btn" title="Send Message">
+                        <span class="material-icons-round">send</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="app.js"></script>
+
+</body>
+
+</html>

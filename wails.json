@@ -1,0 +1,9 @@
+{
+    "name": "DKST LLM Chat Server",
+    "outputfilename": "DKST LLM Chat Server",
+    "frontend:dir": "frontend",
+    "author": {
+        "name": "DINKIssTyle",
+        "email": ""
+    }
+}
