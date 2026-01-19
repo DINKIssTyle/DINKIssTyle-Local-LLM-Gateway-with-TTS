@@ -592,7 +592,7 @@ func GenerateWAV(audioData []float32, sampleRate int) ([]byte, error) {
 }
 
 // GenerateMP3 generates MP3 bytes from audio data using LAME encoder
-func GenerateMP3(audioData []float32, sampleRate int) ([]byte, error) {
+func GenerateMP3(audioData []float32, sampleRate int, bitrate int) ([]byte, error) {
 	// Convert float32 samples to int16 PCM bytes (little-endian)
 	pcmBytes := make([]byte, len(audioData)*2)
 	for i, sample := range audioData {
@@ -612,8 +612,8 @@ func GenerateMP3(audioData []float32, sampleRate int) ([]byte, error) {
 	// Set encoder parameters
 	enc.SetInSamplerate(sampleRate)
 	enc.SetNumChannels(1)
-	enc.SetBitrate(128) // 128 kbps - good balance of quality and size
-	enc.SetQuality(2)   // High quality (0=best, 9=worst)
+	enc.SetBitrate(bitrate) // Variable bitrate
+	enc.SetQuality(2)       // High quality (0=best, 9=worst)
 
 	if enc.InitParams() < 0 {
 		return nil, fmt.Errorf("failed to init LAME params")
@@ -629,10 +629,20 @@ func GenerateMP3(audioData []float32, sampleRate int) ([]byte, error) {
 }
 
 // GenerateAudio generates audio bytes in the specified format
+// GenerateAudio generates audio bytes in the specified format
 func GenerateAudio(audioData []float32, sampleRate int, format string) ([]byte, string, error) {
 	switch strings.ToLower(format) {
-	case "mp3":
-		data, err := GenerateMP3(audioData, sampleRate)
+	case "mp3-low":
+		// Low bandwidth mode: 32kbps
+		data, err := GenerateMP3(audioData, sampleRate, 32)
+		return data, "audio/mpeg", err
+	case "mp3-medium":
+		// Medium bandwidth mode: 96kbps
+		data, err := GenerateMP3(audioData, sampleRate, 96)
+		return data, "audio/mpeg", err
+	case "mp3", "mp3-high":
+		// Standard/High quality: 128kbps
+		data, err := GenerateMP3(audioData, sampleRate, 128)
 		return data, "audio/mpeg", err
 	case "wav":
 		fallthrough

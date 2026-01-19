@@ -307,7 +307,9 @@ function loadConfig() {
     if (config.ttsVoice) document.getElementById('cfg-tts-voice').value = config.ttsVoice;
     document.getElementById('cfg-tts-speed').value = config.ttsSpeed || 1.0;
     document.getElementById('speed-val').textContent = config.ttsSpeed || 1.0;
-    document.getElementById('cfg-tts-format').value = config.ttsFormat || 'wav';
+    let format = config.ttsFormat || 'wav';
+    if (format === 'mp3') format = 'mp3-high'; // Legacy mapping
+    document.getElementById('cfg-tts-format').value = format;
 }
 
 function saveConfig() {
