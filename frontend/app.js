@@ -849,8 +849,8 @@ function scrollToBottom() {
 
 // TTS: Speak a message using the Go server's /api/tts endpoint
 async function speakMessage(text, btn = null) {
-    // If clicking the same button that is currently playing, stop it
-    if (currentAudio && btn && btn === currentAudioBtn) {
+    // If clicking the same button that is currently playing or streaming, stop it
+    if ((isPlayingQueue || streamingTTSActive) && btn && btn === currentAudioBtn) {
         stopAllAudio();
         return;
     }
@@ -868,10 +868,14 @@ async function speakMessage(text, btn = null) {
     const cleanText = cleanTextForTTS(text);
     if (!cleanText) return;
 
+    // Initialize/Clear queue
+    ttsQueue = []; // Clear existing queue if any (though stopAllAudio called above)
+    if (btn) currentAudioBtn = btn;
+
     // 1. Split by paragraphs (double newlines) first to ensure backend doesn't receive multi-paragraph chunks
     const paragraphs = cleanText.split(/\n\s*\n+/);
 
-    let chunks = [];
+    let currentChunk = "";
 
     for (const paragraph of paragraphs) {
         if (!paragraph.trim()) continue;
@@ -880,23 +884,31 @@ async function speakMessage(text, btn = null) {
         // Match sentences followed by space or end of string, keeping delimiter
         const rawChunks = paragraph.match(/[^.!?\n]+[.!?\n]*/g) || [paragraph];
 
-        let currentChunk = "";
-
         // 3. Combine sentences up to chunkSize
         for (const part of rawChunks) {
             if ((currentChunk + part).length > config.chunkSize && currentChunk) {
-                chunks.push(currentChunk.trim());
+                const chunk = currentChunk.trim();
+                ttsQueue.push(chunk);
                 currentChunk = "";
+
+                // Trigger playback immediately if not running
+                processTTSQueue();
             }
             currentChunk += part;
         }
-        if (currentChunk) chunks.push(currentChunk.trim());
+        if (currentChunk) {
+            const chunk = currentChunk.trim();
+            ttsQueue.push(chunk);
+            currentChunk = "";
+            processTTSQueue();
+        }
     }
 
-    ttsQueue = chunks;
-    if (btn) currentAudioBtn = btn;
-
-    processTTSQueue();
+    // Final check for remaining chunk (redundant with logic above but safe)
+    if (currentChunk) {
+        ttsQueue.push(currentChunk.trim());
+        processTTSQueue();
+    }
 }
 
 // ============================================================================

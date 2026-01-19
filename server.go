@@ -103,8 +103,9 @@ func handleLogin(am *AuthManager) http.HandlerFunc {
 		}
 
 		var req struct {
-			ID       string `json:"id"`
-			Password string `json:"password"`
+			ID         string `json:"id"`
+			Password   string `json:"password"`
+			RememberMe bool   `json:"remember_me"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request", http.StatusBadRequest)
@@ -120,12 +121,17 @@ func handleLogin(am *AuthManager) http.HandlerFunc {
 		}
 
 		// Set session cookie
+		maxAge := 86400 // 24 hours default
+		if req.RememberMe {
+			maxAge = 86400 * 30 // 30 days
+		}
+
 		http.SetCookie(w, &http.Cookie{
 			Name:     "session",
 			Value:    token,
 			Path:     "/",
 			HttpOnly: true,
-			MaxAge:   86400, // 24 hours
+			MaxAge:   maxAge,
 		})
 
 		w.Header().Set("Content-Type", "application/json")
