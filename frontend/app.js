@@ -33,6 +33,12 @@ let audioWarmup = null; // Used to bypass auto-play blocks
 let ttsQueue = [];
 
 let isPlayingQueue = false;
+
+// Streaming TTS State
+let streamingTTSActive = false;
+let streamingTTSCommittedIndex = 0; // How much of the display text has been sent to TTS
+let streamingTTSBuffer = ""; // Uncommitted text buffer
+let streamingTTSProcessor = null; // Reference to the active processor loop
 let ttsSessionId = 0;
 
 
@@ -582,6 +588,12 @@ async function processStream(response, elementId) {
     let buffer = '';
     let fullText = '';
 
+    // Initialize streaming TTS if enabled
+    const useStreamingTTS = config.enableTTS && config.autoTTS;
+    if (useStreamingTTS) {
+        initStreamingTTS(elementId);
+    }
+
     while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -596,7 +608,7 @@ async function processStream(response, elementId) {
             if (!trimmed.startsWith('data: ')) continue;
 
             const dataStr = trimmed.substring(6);
-            if (dataStr === '[DONE]') break; // Was 'return' - caused assistant message to not be saved!
+            if (dataStr === '[DONE]') break;
 
             try {
                 const json = JSON.parse(dataStr);
@@ -611,31 +623,29 @@ async function processStream(response, elementId) {
                         if (displayText.includes('<think>')) displayText = displayText.split('<think>')[0];
                     }
                     updateMessageContent(elementId, displayText);
+
+                    // Feed to streaming TTS
+                    if (useStreamingTTS) {
+                        feedStreamingTTS(displayText);
+                    }
                 }
             } catch (e) {
                 console.error('JSON Parse Error', e);
             }
         }
     }
+
     // Finalize
     messages.push({ role: 'assistant', content: fullText });
 
-    // Auto-play TTS if enabled
-    if (config.enableTTS && config.autoTTS && fullText) {
-        let displayText = fullText;
+    // Finalize streaming TTS (commit any remaining text)
+    if (useStreamingTTS) {
+        let finalDisplayText = fullText;
         if (config.hideThink) {
-            displayText = fullText.replace(/<think>[\s\S]*?<\/think>/g, '');
+            finalDisplayText = fullText.replace(/<think>[\s\S]*?<\/think>/g, '');
         }
-        console.log("Auto-playing TTS for text length:", displayText.length);
-
-        // Target the last message's speak button if it exists
-        const lastMsg = document.getElementById(elementId);
-        const btn = lastMsg ? lastMsg.querySelector('.speak-btn') : null;
-        speakMessage(displayText, btn);
+        finalizeStreamingTTS(finalDisplayText);
     }
-
-    // Ensure action buttons are rendered properly (unhide or ensure they exist)
-    // appendMessage already creates them. We don't need addSpeakButton anymore.
 }
 
 function appendMessage(msg) {
@@ -769,12 +779,15 @@ function stopAllAudio() {
     if (currentAudio) {
         currentAudio.pause();
         currentAudio.src = '';
-        currentAudio.src = '';
         currentAudio = null;
     }
     // Clear Queue
     ttsQueue = [];
     isPlayingQueue = false;
+    // Reset streaming TTS state
+    streamingTTSActive = false;
+    streamingTTSCommittedIndex = 0;
+    streamingTTSBuffer = "";
     // Reset all icons
     document.querySelectorAll('.speak-btn').forEach(btn => {
         const icon = btn.querySelector('.material-icons-round');
@@ -821,26 +834,34 @@ async function speakMessage(text, btn = null) {
         return;
     }
 
-    // Clean markdown/html from text
-    const cleanText = text.replace(/<[^>]*>/g, '').replace(/[#*`_~]/g, '').trim();
+    // Clean text for TTS (remove emojis, markdown, etc.)
+    const cleanText = cleanTextForTTS(text);
     if (!cleanText) return;
 
-    // Split text into chunks (sentences)
-    // Match sentences followed by space or end of string, keeping delimiter
-    const rawChunks = cleanText.match(/[^.!?\n]+[.!?\n]*/g) || [cleanText];
+    // 1. Split by paragraphs (double newlines) first to ensure backend doesn't receive multi-paragraph chunks
+    const paragraphs = cleanText.split(/\n\s*\n+/);
 
-    // Combine short chunks
     let chunks = [];
-    let currentChunk = "";
 
-    for (const part of rawChunks) {
-        if ((currentChunk + part).length > config.chunkSize && currentChunk) {
-            chunks.push(currentChunk.trim());
-            currentChunk = "";
+    for (const paragraph of paragraphs) {
+        if (!paragraph.trim()) continue;
+
+        // 2. Split paragraph into sentences
+        // Match sentences followed by space or end of string, keeping delimiter
+        const rawChunks = paragraph.match(/[^.!?\n]+[.!?\n]*/g) || [paragraph];
+
+        let currentChunk = "";
+
+        // 3. Combine sentences up to chunkSize
+        for (const part of rawChunks) {
+            if ((currentChunk + part).length > config.chunkSize && currentChunk) {
+                chunks.push(currentChunk.trim());
+                currentChunk = "";
+            }
+            currentChunk += part;
         }
-        currentChunk += part;
+        if (currentChunk) chunks.push(currentChunk.trim());
     }
-    if (currentChunk) chunks.push(currentChunk.trim());
 
     ttsQueue = chunks;
     if (btn) currentAudioBtn = btn;
@@ -848,113 +869,392 @@ async function speakMessage(text, btn = null) {
     processTTSQueue();
 }
 
-async function processTTSQueue(isFirstChunk = false) {
-    if (ttsQueue.length === 0) {
-        console.log("TTS Queue finished");
-        if (currentAudioBtn) {
-            currentAudioBtn.querySelector('.material-icons-round').textContent = 'volume_up';
-            currentAudioBtn.title = 'Speak';
-            currentAudioBtn = null;
+// ============================================================================
+// Streaming TTS Functions
+// These enable TTS generation to start while LLM is still streaming
+// ============================================================================
+
+/**
+ * Clean text for TTS - removes emojis, markdown, and non-speakable characters
+ */
+function cleanTextForTTS(text) {
+    if (!text) return '';
+
+    let cleaned = text;
+
+    // Remove HTML tags
+    cleaned = cleaned.replace(/<[^>]*>/g, '');
+
+    // Remove emoji (comprehensive Unicode ranges)
+    cleaned = cleaned.replace(/[\u{1F600}-\u{1F64F}]/gu, ''); // Emoticons
+    cleaned = cleaned.replace(/[\u{1F300}-\u{1F5FF}]/gu, ''); // Misc Symbols and Pictographs
+    cleaned = cleaned.replace(/[\u{1F680}-\u{1F6FF}]/gu, ''); // Transport and Map
+    cleaned = cleaned.replace(/[\u{1F1E0}-\u{1F1FF}]/gu, ''); // Flags
+    cleaned = cleaned.replace(/[\u{2600}-\u{26FF}]/gu, '');   // Misc symbols
+    cleaned = cleaned.replace(/[\u{2700}-\u{27BF}]/gu, '');   // Dingbats
+    cleaned = cleaned.replace(/[\u{FE00}-\u{FE0F}]/gu, '');   // Variation Selectors
+    cleaned = cleaned.replace(/[\u{1F900}-\u{1F9FF}]/gu, ''); // Supplemental Symbols and Pictographs
+    cleaned = cleaned.replace(/[\u{1FA00}-\u{1FA6F}]/gu, ''); // Chess Symbols
+    cleaned = cleaned.replace(/[\u{1FA70}-\u{1FAFF}]/gu, ''); // Symbols and Pictographs Extended-A
+    cleaned = cleaned.replace(/[\u{231A}-\u{231B}]/gu, '');   // Watch, Hourglass
+    cleaned = cleaned.replace(/[\u{23E9}-\u{23F3}]/gu, '');   // Various symbols
+    cleaned = cleaned.replace(/[\u{23F8}-\u{23FA}]/gu, '');   // Various symbols
+    cleaned = cleaned.replace(/[\u{25AA}-\u{25AB}]/gu, '');   // Squares
+    cleaned = cleaned.replace(/[\u{25B6}]/gu, '');            // Play button
+    cleaned = cleaned.replace(/[\u{25C0}]/gu, '');            // Reverse button
+    cleaned = cleaned.replace(/[\u{25FB}-\u{25FE}]/gu, '');   // Squares
+    cleaned = cleaned.replace(/[\u{2614}-\u{2615}]/gu, '');   // Umbrella, Hot beverage
+    cleaned = cleaned.replace(/[\u{2648}-\u{2653}]/gu, '');   // Zodiac
+    cleaned = cleaned.replace(/[\u{267F}]/gu, '');            // Wheelchair
+    cleaned = cleaned.replace(/[\u{2693}]/gu, '');            // Anchor
+    cleaned = cleaned.replace(/[\u{26A1}]/gu, '');            // High voltage
+    cleaned = cleaned.replace(/[\u{26AA}-\u{26AB}]/gu, '');   // Circles
+    cleaned = cleaned.replace(/[\u{26BD}-\u{26BE}]/gu, '');   // Sports
+    cleaned = cleaned.replace(/[\u{26C4}-\u{26C5}]/gu, '');   // Weather
+    cleaned = cleaned.replace(/[\u{26CE}]/gu, '');            // Ophiuchus
+    cleaned = cleaned.replace(/[\u{26D4}]/gu, '');            // No entry
+    cleaned = cleaned.replace(/[\u{26EA}]/gu, '');            // Church
+    cleaned = cleaned.replace(/[\u{26F2}-\u{26F3}]/gu, '');   // Fountain, Golf
+    cleaned = cleaned.replace(/[\u{26F5}]/gu, '');            // Sailboat
+    cleaned = cleaned.replace(/[\u{26FA}]/gu, '');            // Tent
+    cleaned = cleaned.replace(/[\u{26FD}]/gu, '');            // Fuel pump
+    cleaned = cleaned.replace(/[\u{2702}]/gu, '');            // Scissors
+    cleaned = cleaned.replace(/[\u{2705}]/gu, '');            // Check mark
+    cleaned = cleaned.replace(/[\u{2708}-\u{270D}]/gu, '');   // Various
+    cleaned = cleaned.replace(/[\u{270F}]/gu, '');            // Pencil
+    cleaned = cleaned.replace(/[\u{2712}]/gu, '');            // Black nib
+    cleaned = cleaned.replace(/[\u{2714}]/gu, '');            // Check mark
+    cleaned = cleaned.replace(/[\u{2716}]/gu, '');            // X mark
+    cleaned = cleaned.replace(/[\u{271D}]/gu, '');            // Latin cross
+    cleaned = cleaned.replace(/[\u{2721}]/gu, '');            // Star of David
+    cleaned = cleaned.replace(/[\u{2728}]/gu, '');            // Sparkles
+    cleaned = cleaned.replace(/[\u{2733}-\u{2734}]/gu, '');   // Eight spoked asterisk
+    cleaned = cleaned.replace(/[\u{2744}]/gu, '');            // Snowflake
+    cleaned = cleaned.replace(/[\u{2747}]/gu, '');            // Sparkle
+    cleaned = cleaned.replace(/[\u{274C}]/gu, '');            // Cross mark
+    cleaned = cleaned.replace(/[\u{274E}]/gu, '');            // Cross mark
+    cleaned = cleaned.replace(/[\u{2753}-\u{2755}]/gu, '');   // Question marks
+    cleaned = cleaned.replace(/[\u{2757}]/gu, '');            // Exclamation mark
+    cleaned = cleaned.replace(/[\u{2763}-\u{2764}]/gu, '');   // Hearts
+    cleaned = cleaned.replace(/[\u{2795}-\u{2797}]/gu, '');   // Math symbols
+    cleaned = cleaned.replace(/[\u{27A1}]/gu, '');            // Right arrow
+    cleaned = cleaned.replace(/[\u{27B0}]/gu, '');            // Curly loop
+    cleaned = cleaned.replace(/[\u{27BF}]/gu, '');            // Double curly loop
+    cleaned = cleaned.replace(/[\u{2934}-\u{2935}]/gu, '');   // Arrows
+    cleaned = cleaned.replace(/[\u{2B05}-\u{2B07}]/gu, '');   // Arrows
+    cleaned = cleaned.replace(/[\u{2B1B}-\u{2B1C}]/gu, '');   // Squares
+    cleaned = cleaned.replace(/[\u{2B50}]/gu, '');            // Star
+    cleaned = cleaned.replace(/[\u{2B55}]/gu, '');            // Circle
+    cleaned = cleaned.replace(/[\u{3030}]/gu, '');            // Wavy dash
+    cleaned = cleaned.replace(/[\u{303D}]/gu, '');            // Part alternation mark
+    cleaned = cleaned.replace(/[\u{3297}]/gu, '');            // Circled Ideograph Congratulation
+    cleaned = cleaned.replace(/[\u{3299}]/gu, '');            // Circled Ideograph Secret
+
+    // Remove markdown formatting
+    cleaned = cleaned.replace(/[#*`_~|]/g, ''); // Markdown syntax characters
+    cleaned = cleaned.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1'); // [link text](url) -> link text
+    cleaned = cleaned.replace(/!\[[^\]]*\]\([^)]*\)/g, ''); // Remove image markdown
+    cleaned = cleaned.replace(/```[\s\S]*?```/g, ''); // Code blocks
+    cleaned = cleaned.replace(/`[^`]*`/g, ''); // Inline code
+    cleaned = cleaned.replace(/^>\s*/gm, ''); // Blockquotes
+    cleaned = cleaned.replace(/^-{3,}$/gm, ''); // Horizontal rules
+    cleaned = cleaned.replace(/^\s*[-*+]\s+/gm, ''); // List markers
+    cleaned = cleaned.replace(/^\s*\d+\.\s+/gm, ''); // Numbered lists
+
+    // Remove special characters that shouldn't be spoken
+    cleaned = cleaned.replace(/[«»""''„‚]/g, ''); // Fancy quotes
+    cleaned = cleaned.replace(/[—–]/g, ', '); // Dashes to pauses
+    cleaned = cleaned.replace(/\.{3,}/g, '.'); // Ellipsis
+    cleaned = cleaned.replace(/\s*[-•◦▪▸►]\s*/g, ', '); // Bullet points to pauses
+
+    // Normalize whitespace
+    cleaned = cleaned.replace(/\r\n/g, '\n'); // Normalize line endings
+    cleaned = cleaned.replace(/\n{3,}/g, '\n\n'); // Max 2 newlines
+    cleaned = cleaned.replace(/[ \t]+/g, ' '); // Multiple spaces to single
+    cleaned = cleaned.replace(/^\s+|\s+$/gm, ''); // Trim each line
+
+    return cleaned.trim();
+}
+
+/**
+ * Initialize streaming TTS for a new message
+ */
+function initStreamingTTS(elementId) {
+    // Stop any existing audio/TTS
+    stopAllAudio();
+
+    streamingTTSActive = true;
+    streamingTTSCommittedIndex = 0;
+    streamingTTSBuffer = "";
+
+    // Get speak button for UI updates
+    const msgEl = document.getElementById(elementId);
+    if (msgEl) {
+        currentAudioBtn = msgEl.querySelector('.speak-btn');
+    }
+
+    console.log("[Streaming TTS] Initialized");
+}
+
+/**
+ * Feed new display text to the streaming TTS processor
+ * This is called every time the LLM emits new tokens
+ */
+function feedStreamingTTS(displayText) {
+    if (!streamingTTSActive) return;
+
+    // Get the new portion of text since last commit
+    const newText = displayText.substring(streamingTTSCommittedIndex);
+    if (!newText) return;
+
+    // Find "committed" segments: complete paragraphs or sentences
+    // A segment is committed when we see a paragraph boundary OR
+    // a sentence ending followed by more characters
+
+    // Check for paragraph boundaries (double newline)
+    const paragraphMatch = newText.match(/^([\s\S]*?\n\s*\n)/);
+    if (paragraphMatch) {
+        const committed = cleanTextForTTS(paragraphMatch[1]);
+        if (committed) {
+            console.log(`[Streaming TTS] Committing paragraph: "${committed.substring(0, 30)}..."`);
+            pushToStreamingTTSQueue(committed);
+            streamingTTSCommittedIndex += paragraphMatch[0].length;
         }
-        isPlayingQueue = false;
         return;
     }
 
+    // Check for sentence boundaries: sentence ending followed by space and more text
+    // This ensures the sentence is truly complete (next sentence has started)
+    const sentenceMatch = newText.match(/^([\s\S]*?[.!?])(\s+\S)/);
+    if (sentenceMatch) {
+        const committed = cleanTextForTTS(sentenceMatch[1]);
+        if (committed) {
+            console.log(`[Streaming TTS] Committing sentence: "${committed.substring(0, 30)}..."`);
+            pushToStreamingTTSQueue(committed);
+            // Only advance past the committed sentence, not the following text
+            streamingTTSCommittedIndex += sentenceMatch[1].length;
+        }
+    }
+}
+
+/**
+ * Finalize streaming TTS when LLM stream ends
+ * Commits any remaining uncommitted text
+ */
+function finalizeStreamingTTS(finalDisplayText) {
+    if (!streamingTTSActive) return;
+
+    // Commit any remaining text
+    const remainingText = finalDisplayText.substring(streamingTTSCommittedIndex);
+    const cleanText = cleanTextForTTS(remainingText);
+
+    if (cleanText) {
+        console.log(`[Streaming TTS] Finalizing: "${cleanText.substring(0, 30)}..."`);
+        pushToStreamingTTSQueue(cleanText);
+    }
+
+    streamingTTSActive = false;
+    console.log("[Streaming TTS] Finalized");
+}
+
+/**
+ * Push a text segment to the TTS queue and ensure processing is running
+ */
+function pushToStreamingTTSQueue(text) {
+    if (!text || !text.trim()) return;
+
+    // Split into smaller chunks if needed (by paragraph/sentence within the segment)
+    const paragraphs = text.split(/\n\s*\n+/);
+
+    for (const para of paragraphs) {
+        if (!para.trim()) continue;
+
+        // Split by sentences and combine to chunkSize
+        const rawChunks = para.match(/[^.!?\n]+[.!?\n]*/g) || [para];
+        let currentChunk = "";
+
+        for (const part of rawChunks) {
+            if ((currentChunk + part).length > config.chunkSize && currentChunk) {
+                const chunk = currentChunk.trim();
+                // Only add if it has actual speakable content (not just punctuation)
+                if (chunk && chunk.length > 1 && /[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ0-9]/.test(chunk)) {
+                    ttsQueue.push(chunk);
+                }
+                currentChunk = "";
+            }
+            currentChunk += part;
+        }
+        if (currentChunk.trim()) {
+            const chunk = currentChunk.trim();
+            // Only add if it has actual speakable content
+            if (chunk && chunk.length > 1 && /[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ0-9]/.test(chunk)) {
+                ttsQueue.push(chunk);
+            }
+        }
+    }
+
+    // Start processing if not already running
+    if (!isPlayingQueue && ttsQueue.length > 0) {
+        processTTSQueue();
+    }
+}
+
+// New global for playback chaining
+let playbackChain = Promise.resolve();
+
+async function processTTSQueue(isFirstChunk = false) {
+    if (ttsQueue.length === 0) return;
+    if (isPlayingQueue) return; // Already running
+
     isPlayingQueue = true;
-    const text = ttsQueue.shift();
     const btn = currentAudioBtn;
     const sessionId = ttsSessionId;
 
-    // Safety: if manually stopped, don't auto-continue unless it's new
-    if (!isPlayingQueue && !isFirstChunk) return;
+    if (btn) {
+        const iconEl = btn.querySelector('.material-icons-round');
+        if (iconEl) iconEl.textContent = 'hourglass_empty';
+        btn.disabled = true;
+    }
 
-    try {
-        if (btn) {
-            btn.querySelector('.material-icons-round').textContent = 'hourglass_empty';
-            btn.disabled = true;
-        }
+    // Audio Cache (text -> Promise<url>)
+    const audioCache = new Map();
+    let chunkIndex = 0;
+    let firstChunkPlayed = false;
 
-        console.log(`Fetching TTS chunk: "${text.substring(0, 20)}..."`);
-        const response = await fetch('/api/tts', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                text: text,
-                lang: config.ttsLang,
-                chunkSize: parseInt(config.chunkSize) || 300,
-                voiceStyle: config.ttsVoice,
-                speed: parseFloat(config.ttsSpeed) || 1.0
-            })
-        });
+    // Helper to start fetching a chunk by its text
+    const prefetch = (text) => {
+        if (!text) return null;
+        if (audioCache.has(text)) return audioCache.get(text);
 
-        // Check if queue was stopped while fetching
-        if (!isPlayingQueue || sessionId !== ttsSessionId) {
-            if (btn) btn.disabled = false;
-            return;
-        }
+        const promise = (async () => {
+            if (sessionId !== ttsSessionId) return null;
 
-        if (btn) btn.disabled = false;
+            try {
+                const payload = {
+                    text: text,
+                    lang: config.ttsLang,
+                    chunkSize: parseInt(config.chunkSize) || 300,
+                    voiceStyle: config.ttsVoice,
+                    speed: parseFloat(config.ttsSpeed) || 1.0
+                };
 
-        if (!response.ok) {
-            const errMsg = await response.text();
-            console.error('TTS Error:', errMsg);
+                console.log(`[TTS] Prefetching: "${text.substring(0, 20)}..."`);
+                const response = await fetch('/api/tts', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
 
-            if (isFirstChunk) {
-                alert(`TTS Failed: ${errMsg}`);
-                stopAllAudio(); // Stop queue
-                if (btn) btn.querySelector('.material-icons-round').textContent = 'error';
-                return;
+                if (!response.ok) {
+                    console.error(`[TTS] Chunk failed:`, await response.text());
+                    return null;
+                }
+
+                const blob = await response.blob();
+                return URL.createObjectURL(blob);
+            } catch (e) {
+                console.error(`[TTS] Chunk error:`, e);
+                return null;
             }
+        })();
+        audioCache.set(text, promise);
+        return promise;
+    };
 
-            // If mid-queue failure, maybe just log and stop to avoid partial confusion
-            console.warn("Stopping TTS queue due to error.");
-            stopAllAudio();
-            if (btn) btn.querySelector('.material-icons-round').textContent = 'error';
-            return;
+    // Main processing loop - keeps running while streaming or queue has items
+    while (true) {
+        // Check cancellation
+        if (sessionId !== ttsSessionId) break;
+
+        // Get next item from queue
+        const text = ttsQueue.shift();
+
+        if (!text) {
+            // Queue empty - check if streaming is still active
+            if (streamingTTSActive) {
+                // Wait a bit for more items to arrive
+                await new Promise(r => setTimeout(r, 100));
+                continue;
+            } else {
+                // Streaming finished and queue empty - we're done
+                break;
+            }
         }
 
-        const contentType = response.headers.get('content-type');
-        if (contentType && contentType.includes('audio/wav')) {
-            const blob = await response.blob();
-            const url = URL.createObjectURL(blob);
+        // Start prefetching next item while we process current
+        const nextText = ttsQueue[0];
+        if (nextText) prefetch(nextText);
 
-            const audio = new Audio(url);
-            // Don't set currentAudio globally yet?
-            // If we do, stopAllAudio() works.
+        // Fetch current audio
+        const audioUrlPromise = prefetch(text);
+        const audioUrl = await audioUrlPromise;
+
+        if (!audioUrl) {
+            // Skip failed chunks
+            audioCache.delete(text);
+            continue;
+        }
+
+        // Check cancellation again
+        if (sessionId !== ttsSessionId) {
+            URL.revokeObjectURL(audioUrl);
+            break;
+        }
+
+        // Play audio
+        await new Promise((resolve) => {
+            const audio = new Audio(audioUrl);
             currentAudio = audio;
 
-            if (btn) {
-                btn.querySelector('.material-icons-round').textContent = 'stop';
+            // Update UI on first chunk
+            if (!firstChunkPlayed && btn) {
+                btn.disabled = false;
+                const iconEl = btn.querySelector('.material-icons-round');
+                if (iconEl) iconEl.textContent = 'stop';
                 btn.title = "Stop";
+                firstChunkPlayed = true;
             }
 
             audio.onended = () => {
                 currentAudio = null;
-                processTTSQueue();
+                resolve();
             };
 
             audio.onerror = (e) => {
                 console.error("Audio playback error", e);
                 currentAudio = null;
-                processTTSQueue();
+                resolve();
             };
 
-            await audio.play();
-        } else {
-            console.warn("TTS returned non-audio:", contentType);
-            processTTSQueue();
-        }
-    } catch (e) {
-        console.error('TTS Fetch/Play Error:', e);
-        if (btn) btn.disabled = false;
+            audio.play().catch(e => {
+                console.error("Play failed", e);
+                resolve();
+            });
+        });
 
-        if (isFirstChunk) {
-            alert(`TTS Error: ${e.message}`);
-            stopAllAudio();
-            if (btn) btn.querySelector('.material-icons-round').textContent = 'error';
-        } else {
-            processTTSQueue();
+        // Cleanup
+        URL.revokeObjectURL(audioUrl);
+        audioCache.delete(text);
+        chunkIndex++;
+    }
+
+    // Finished or Cancelled
+    if (sessionId === ttsSessionId) {
+        endTTS(btn, sessionId);
+    }
+}
+
+function endTTS(btn, sessionId) {
+    // Only update UI if we are still in the same session
+    if (sessionId === ttsSessionId) {
+        if (btn) {
+            const iconEl = btn.querySelector('.material-icons-round');
+            if (iconEl) iconEl.textContent = 'volume_up';
+            btn.title = 'Speak';
+            btn.disabled = false;
         }
+        currentAudioBtn = null;
+        isPlayingQueue = false;
     }
 }
 

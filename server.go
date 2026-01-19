@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -26,6 +27,9 @@ var (
 		VoiceStyle: "M1.json",
 		Speed:      1.0,
 	}
+	// Style Cache
+	styleCache = make(map[string]*Style)
+	styleMutex sync.Mutex
 )
 
 type ServerTTSConfig struct {
@@ -350,13 +354,35 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 	}
 	voiceStylePath := GetResourcePath(filepath.Join("assets", "voice_styles", styleName))
 
-	style, err := LoadVoiceStyle(voiceStylePath)
-	if err != nil {
-		log.Printf("Failed to load voice style %s: %v", styleName, err)
-		http.Error(w, "Failed to load voice style", http.StatusInternalServerError)
-		return
+	// Check Cache
+	styleMutex.Lock()
+	style, found := styleCache[styleName]
+	styleMutex.Unlock()
+
+	if !found {
+		// Load if not in cache
+		loadedStyle, err := LoadVoiceStyle(voiceStylePath)
+		if err != nil {
+			log.Printf("Failed to load voice style %s: %v", styleName, err)
+			http.Error(w, "Failed to load voice style", http.StatusInternalServerError)
+			return
+		}
+
+		styleMutex.Lock()
+		// Double check locking (standard double-checked locking pattern not strictly needed for this scale but safe)
+		if cached, ok := styleCache[styleName]; ok {
+			loadedStyle.Destroy() // discard duplicate
+			style = cached
+		} else {
+			styleCache[styleName] = loadedStyle
+			style = loadedStyle
+		}
+		styleMutex.Unlock()
+		log.Printf("Loaded and cached voice style: %s", styleName)
 	}
-	defer style.Destroy()
+
+	// Do NOT destroy style here, it is cached for lifetime of app (or until explicit clear)
+	// defer style.Destroy() <--- REMOVED
 
 	// Generate speech using configured speed
 	speed := ttsConfig.Speed
