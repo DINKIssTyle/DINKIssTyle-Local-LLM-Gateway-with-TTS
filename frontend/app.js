@@ -31,7 +31,9 @@ let currentAudio = null;
 let currentAudioBtn = null;
 let audioWarmup = null; // Used to bypass auto-play blocks
 let ttsQueue = [];
+
 let isPlayingQueue = false;
+let ttsSessionId = 0;
 
 
 // DOM Elements
@@ -365,7 +367,10 @@ function setupEventListeners() {
 
     messageInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
+            // Fix Korean IME duplicate submission / residual character issue
+            if (e.isComposing) return;
             e.preventDefault();
+
             unlockAudioContext(); // Unlock audio on user interaction
             sendMessage();
         }
@@ -433,6 +438,9 @@ function clearChat() {
 
 async function sendMessage() {
     if (isGenerating) return;
+
+    // Stop and clear any existing audio/TTS
+    stopAllAudio();
 
     const text = messageInput.value.trim();
     if (!text && !pendingImage) return;
@@ -774,6 +782,7 @@ function stopAllAudio() {
         btn.title = "Speak";
     });
     currentAudioBtn = null;
+    ttsSessionId++; // Invalidate pending fetches
 }
 
 function updateMessageContent(id, text) {
@@ -854,6 +863,7 @@ async function processTTSQueue(isFirstChunk = false) {
     isPlayingQueue = true;
     const text = ttsQueue.shift();
     const btn = currentAudioBtn;
+    const sessionId = ttsSessionId;
 
     // Safety: if manually stopped, don't auto-continue unless it's new
     if (!isPlayingQueue && !isFirstChunk) return;
@@ -876,6 +886,12 @@ async function processTTSQueue(isFirstChunk = false) {
                 speed: parseFloat(config.ttsSpeed) || 1.0
             })
         });
+
+        // Check if queue was stopped while fetching
+        if (!isPlayingQueue || sessionId !== ttsSessionId) {
+            if (btn) btn.disabled = false;
+            return;
+        }
 
         if (btn) btn.disabled = false;
 
