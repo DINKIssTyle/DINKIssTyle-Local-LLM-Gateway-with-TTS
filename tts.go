@@ -605,8 +605,20 @@ func preprocessText(text string, lang string) string {
 		text = strings.ReplaceAll(text, old, new)
 	}
 
+	// First normalize all whitespace to single spaces
 	text = regexp.MustCompile(`\s+`).ReplaceAllString(text, " ")
 	text = strings.TrimSpace(text)
+
+	// Add natural pauses after punctuation marks by duplicating punctuation
+	// This technique works with many TTS engines to create brief pauses
+	// Period: add comma for pause between sentences
+	text = regexp.MustCompile(`\.(\s+)([A-Z가-힣])`).ReplaceAllString(text, "., $2")
+	// Exclamation/Question: add period for pause
+	text = regexp.MustCompile(`([!?])(\s+)`).ReplaceAllString(text, "$1, ")
+	// Colon/Semicolon: add comma for medium pause
+	text = regexp.MustCompile(`([:;])(\s*)`).ReplaceAllString(text, "$1, ")
+	// Equals sign in context: ensure space
+	text = regexp.MustCompile(`\s*=\s*`).ReplaceAllString(text, " - ")
 
 	if text != "" && !regexp.MustCompile(`[.!?;:,'"]$`).MatchString(text) {
 		text += "."

@@ -435,7 +435,13 @@ function removeImage() {
 }
 
 function clearChat() {
-    if (isGenerating) return;
+    // Stop any TTS playback and generation
+    stopAllAudio();
+
+    if (isGenerating) {
+        stopGeneration();
+    }
+
     messages = [];
     chatMessages.innerHTML = '';
 }
@@ -788,6 +794,10 @@ function stopAllAudio() {
     streamingTTSActive = false;
     streamingTTSCommittedIndex = 0;
     streamingTTSBuffer = "";
+    // Clear audio cache
+    if (typeof clearTTSAudioCache === 'function') {
+        clearTTSAudioCache();
+    }
     // Reset all icons
     document.querySelectorAll('.speak-btn').forEach(btn => {
         const icon = btn.querySelector('.material-icons-round');
@@ -950,8 +960,22 @@ function cleanTextForTTS(text) {
     cleaned = cleaned.replace(/[\u{3297}]/gu, '');            // Circled Ideograph Congratulation
     cleaned = cleaned.replace(/[\u{3299}]/gu, '');            // Circled Ideograph Secret
 
-    // Remove markdown formatting
-    cleaned = cleaned.replace(/[#*`_~|]/g, ''); // Markdown syntax characters
+    // FIRST: Add punctuation to markdown elements that typically don't have them
+    // Headlines (# text) - add period at end if no punctuation
+    cleaned = cleaned.replace(/^(#{1,6})\s*([^\n]+?)([.!?]?)$/gm, (match, hashes, text, punct) => {
+        // If headline doesn't end with punctuation, add a period
+        if (!punct) {
+            return `${hashes} ${text}.`;
+        }
+        return match;
+    });
+
+    // Bold/Italic text that ends a line without punctuation
+    cleaned = cleaned.replace(/(\*\*[^*]+\*\*|\*[^*]+\*)(\s*)$/gm, '$1.$2');
+
+    // Remove markdown formatting (AFTER adding punctuation)
+    cleaned = cleaned.replace(/#{1,6}\s*/gm, ''); // Headlines - remove # but keep text
+    cleaned = cleaned.replace(/[*`_~|]/g, ''); // Other markdown syntax characters
     cleaned = cleaned.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1'); // [link text](url) -> link text
     cleaned = cleaned.replace(/!\[[^\]]*\]\([^)]*\)/g, ''); // Remove image markdown
     cleaned = cleaned.replace(/```[\s\S]*?```/g, ''); // Code blocks
@@ -1003,37 +1027,61 @@ function initStreamingTTS(elementId) {
 function feedStreamingTTS(displayText) {
     if (!streamingTTSActive) return;
 
-    // Get the new portion of text since last commit
-    const newText = displayText.substring(streamingTTSCommittedIndex);
-    if (!newText) return;
+    // Process all available committed segments in a loop
+    let iterations = 0;
+    const maxIterations = 20; // Safety limit
 
-    // Find "committed" segments: complete paragraphs or sentences
-    // A segment is committed when we see a paragraph boundary OR
-    // a sentence ending followed by more characters
+    while (iterations < maxIterations) {
+        iterations++;
 
-    // Check for paragraph boundaries (double newline)
-    const paragraphMatch = newText.match(/^([\s\S]*?\n\s*\n)/);
-    if (paragraphMatch) {
-        const committed = cleanTextForTTS(paragraphMatch[1]);
-        if (committed) {
-            console.log(`[Streaming TTS] Committing paragraph: "${committed.substring(0, 30)}..."`);
-            pushToStreamingTTSQueue(committed);
-            streamingTTSCommittedIndex += paragraphMatch[0].length;
+        // Get the new portion of text since last commit
+        const newText = displayText.substring(streamingTTSCommittedIndex);
+        if (!newText || newText.length < 5) break; // Need at least some content
+
+        let committed = null;
+        let advanceBy = 0;
+
+        // Priority 1: Check for paragraph boundaries (double newline)
+        const paragraphMatch = newText.match(/^([\s\S]*?\n\s*\n)/);
+        if (paragraphMatch && paragraphMatch[1].trim()) {
+            committed = cleanTextForTTS(paragraphMatch[1]);
+            advanceBy = paragraphMatch[0].length;
         }
-        return;
-    }
 
-    // Check for sentence boundaries: sentence ending followed by space and more text
-    // This ensures the sentence is truly complete (next sentence has started)
-    const sentenceMatch = newText.match(/^([\s\S]*?[.!?])(\s+\S)/);
-    if (sentenceMatch) {
-        const committed = cleanTextForTTS(sentenceMatch[1]);
-        if (committed) {
-            console.log(`[Streaming TTS] Committing sentence: "${committed.substring(0, 30)}..."`);
-            pushToStreamingTTSQueue(committed);
-            // Only advance past the committed sentence, not the following text
-            streamingTTSCommittedIndex += sentenceMatch[1].length;
+        // Priority 2: Check for sentence endings (.!?) followed by space and more text
+        if (!committed) {
+            const sentenceMatch = newText.match(/^([\s\S]*?[.!?])(\s+\S)/);
+            if (sentenceMatch && sentenceMatch[1].trim()) {
+                committed = cleanTextForTTS(sentenceMatch[1]);
+                advanceBy = sentenceMatch[1].length;
+            }
         }
+
+        // Priority 3: Check for colon followed by newline (common in lists/explanations)
+        if (!committed) {
+            const colonMatch = newText.match(/^([\s\S]*?:)\s*\n/);
+            if (colonMatch && colonMatch[1].trim().length > 10) {
+                committed = cleanTextForTTS(colonMatch[1]);
+                advanceBy = colonMatch[0].length;
+            }
+        }
+
+        // Priority 4: Check for single newline with substantial text before it
+        if (!committed) {
+            const lineMatch = newText.match(/^([^\n]{20,})\n/);
+            if (lineMatch) {
+                committed = cleanTextForTTS(lineMatch[1]);
+                advanceBy = lineMatch[0].length;
+            }
+        }
+
+        // If nothing matched, stop the loop
+        if (!committed) break;
+
+        // Commit the segment
+        console.log(`[Streaming TTS] Committing: "${committed.substring(0, 40)}..."`);
+        pushToStreamingTTSQueue(committed);
+        streamingTTSCommittedIndex += advanceBy;
     }
 }
 
@@ -1065,6 +1113,7 @@ function pushToStreamingTTSQueue(text) {
 
     // Split into smaller chunks if needed (by paragraph/sentence within the segment)
     const paragraphs = text.split(/\n\s*\n+/);
+    const newChunks = [];
 
     for (const para of paragraphs) {
         if (!para.trim()) continue;
@@ -1079,6 +1128,7 @@ function pushToStreamingTTSQueue(text) {
                 // Only add if it has actual speakable content (not just punctuation)
                 if (chunk && chunk.length > 1 && /[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ0-9]/.test(chunk)) {
                     ttsQueue.push(chunk);
+                    newChunks.push(chunk);
                 }
                 currentChunk = "";
             }
@@ -1089,8 +1139,15 @@ function pushToStreamingTTSQueue(text) {
             // Only add if it has actual speakable content
             if (chunk && chunk.length > 1 && /[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ0-9]/.test(chunk)) {
                 ttsQueue.push(chunk);
+                newChunks.push(chunk);
             }
         }
+    }
+
+    // IMMEDIATELY start prefetching new chunks (don't wait for the playback loop)
+    // This is the key optimization - prefetch starts right when text is committed
+    for (const chunk of newChunks) {
+        prefetchTTSAudio(chunk);
     }
 
     // Start processing if not already running
@@ -1099,8 +1156,75 @@ function pushToStreamingTTSQueue(text) {
     }
 }
 
-// New global for playback chaining
-let playbackChain = Promise.resolve();
+// ============================================================================
+// Global TTS Audio Cache and Prefetch System
+// ============================================================================
+const ttsAudioCache = new Map(); // text -> Promise<url>
+
+/**
+ * Prefetch audio for a given text chunk
+ * Can be called anytime - will use cached promise if already fetching/fetched
+ */
+function prefetchTTSAudio(text) {
+    if (!text) return null;
+    if (ttsAudioCache.has(text)) return ttsAudioCache.get(text);
+
+    const promise = (async () => {
+        // Check if session is still valid
+        const sessionAtStart = ttsSessionId;
+
+        try {
+            const payload = {
+                text: text,
+                lang: config.ttsLang,
+                chunkSize: parseInt(config.chunkSize) || 300,
+                voiceStyle: config.ttsVoice,
+                speed: parseFloat(config.ttsSpeed) || 1.0
+            };
+
+            console.log(`[TTS] Prefetching: "${text.substring(0, 25)}..."`);
+            const response = await fetch('/api/tts', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            // Check if session changed during fetch
+            if (sessionAtStart !== ttsSessionId) {
+                console.log(`[TTS] Session changed, discarding prefetch`);
+                return null;
+            }
+
+            if (!response.ok) {
+                console.error(`[TTS] Chunk failed:`, await response.text());
+                return null;
+            }
+
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            console.log(`[TTS] Prefetch complete: "${text.substring(0, 25)}..."`);
+            return url;
+        } catch (e) {
+            console.error(`[TTS] Chunk error:`, e);
+            return null;
+        }
+    })();
+
+    ttsAudioCache.set(text, promise);
+    return promise;
+}
+
+/**
+ * Clear the audio cache (called on stopAllAudio)
+ */
+function clearTTSAudioCache() {
+    // Revoke all URLs
+    ttsAudioCache.forEach(async (promise) => {
+        const url = await promise;
+        if (url) URL.revokeObjectURL(url);
+    });
+    ttsAudioCache.clear();
+}
 
 async function processTTSQueue(isFirstChunk = false) {
     if (ttsQueue.length === 0) return;
@@ -1116,50 +1240,12 @@ async function processTTSQueue(isFirstChunk = false) {
         btn.disabled = true;
     }
 
-    // Audio Cache (text -> Promise<url>)
-    const audioCache = new Map();
-    let chunkIndex = 0;
     let firstChunkPlayed = false;
 
-    // Helper to start fetching a chunk by its text
-    const prefetch = (text) => {
-        if (!text) return null;
-        if (audioCache.has(text)) return audioCache.get(text);
-
-        const promise = (async () => {
-            if (sessionId !== ttsSessionId) return null;
-
-            try {
-                const payload = {
-                    text: text,
-                    lang: config.ttsLang,
-                    chunkSize: parseInt(config.chunkSize) || 300,
-                    voiceStyle: config.ttsVoice,
-                    speed: parseFloat(config.ttsSpeed) || 1.0
-                };
-
-                console.log(`[TTS] Prefetching: "${text.substring(0, 20)}..."`);
-                const response = await fetch('/api/tts', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-
-                if (!response.ok) {
-                    console.error(`[TTS] Chunk failed:`, await response.text());
-                    return null;
-                }
-
-                const blob = await response.blob();
-                return URL.createObjectURL(blob);
-            } catch (e) {
-                console.error(`[TTS] Chunk error:`, e);
-                return null;
-            }
-        })();
-        audioCache.set(text, promise);
-        return promise;
-    };
+    // Start prefetching first few items immediately
+    for (let i = 0; i < Math.min(3, ttsQueue.length); i++) {
+        prefetchTTSAudio(ttsQueue[i]);
+    }
 
     // Main processing loop - keeps running while streaming or queue has items
     while (true) {
@@ -1181,17 +1267,20 @@ async function processTTSQueue(isFirstChunk = false) {
             }
         }
 
-        // Start prefetching next item while we process current
-        const nextText = ttsQueue[0];
-        if (nextText) prefetch(nextText);
+        // Start prefetching next items while we process current
+        for (let i = 0; i < Math.min(2, ttsQueue.length); i++) {
+            prefetchTTSAudio(ttsQueue[i]);
+        }
 
-        // Fetch current audio
-        const audioUrlPromise = prefetch(text);
+        // Get current audio (should be prefetched or start fetching now)
+        const audioUrlPromise = prefetchTTSAudio(text);
         const audioUrl = await audioUrlPromise;
+
+        // Remove from cache after getting
+        ttsAudioCache.delete(text);
 
         if (!audioUrl) {
             // Skip failed chunks
-            audioCache.delete(text);
             continue;
         }
 
@@ -1232,10 +1321,8 @@ async function processTTSQueue(isFirstChunk = false) {
             });
         });
 
-        // Cleanup
+        // Cleanup URL
         URL.revokeObjectURL(audioUrl);
-        audioCache.delete(text);
-        chunkIndex++;
     }
 
     // Finished or Cancelled
@@ -1244,6 +1331,9 @@ async function processTTSQueue(isFirstChunk = false) {
     }
 }
 
+/**
+ * Reset TTS UI state after playback completes
+ */
 function endTTS(btn, sessionId) {
     // Only update UI if we are still in the same session
     if (sessionId === ttsSessionId) {
