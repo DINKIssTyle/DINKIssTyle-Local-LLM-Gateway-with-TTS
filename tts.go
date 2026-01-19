@@ -208,27 +208,33 @@ func LoadTextToSpeech(onnxDir string, cfg TTSConfig) (*TextToSpeech, error) {
 	vectorEstPath := filepath.Join(onnxDir, "vector_estimator.onnx")
 	vocoderPath := filepath.Join(onnxDir, "vocoder.onnx")
 
+	// Optimization: Set session options for multi-threading
+	so, _ := ort.NewSessionOptions()
+	defer so.Destroy()
+	so.SetIntraOpNumThreads(4) // Use 4 threads for parallel execution
+	so.SetInterOpNumThreads(1)
+
 	dpOrt, err := ort.NewDynamicAdvancedSession(dpPath, []string{"text_ids", "style_dp", "text_mask"},
-		[]string{"duration"}, nil)
+		[]string{"duration"}, so)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load duration predictor: %w", err)
 	}
 
 	textEncOrt, err := ort.NewDynamicAdvancedSession(textEncPath, []string{"text_ids", "style_ttl", "text_mask"},
-		[]string{"text_emb"}, nil)
+		[]string{"text_emb"}, so)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load text encoder: %w", err)
 	}
 
 	vectorEstOrt, err := ort.NewDynamicAdvancedSession(vectorEstPath,
 		[]string{"noisy_latent", "text_emb", "style_ttl", "latent_mask", "text_mask", "current_step", "total_step"},
-		[]string{"denoised_latent"}, nil)
+		[]string{"denoised_latent"}, so)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load vector estimator: %w", err)
 	}
 
 	vocoderOrt, err := ort.NewDynamicAdvancedSession(vocoderPath, []string{"latent"},
-		[]string{"wav_tts"}, nil)
+		[]string{"wav_tts"}, so)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load vocoder: %w", err)
 	}
@@ -409,6 +415,12 @@ func (tts *TextToSpeech) infer(textList []string, langList []string, style *Styl
 	totalStepTensor, _ := ort.NewTensor(scalarShape, totalStepArray)
 	defer totalStepTensor.Destroy()
 
+	// Optimization: Move invariant tensor creation OUT of the loop
+	latentMaskTensor := arrayToTensor(latentMask, latentMaskShape)
+	defer latentMaskTensor.Destroy()
+	textMaskTensor2 := arrayToTensor(textMask, textMaskShape)
+	defer textMaskTensor2.Destroy()
+
 	// Denoising loop
 	for step := 0; step < totalStep; step++ {
 		currentStepArray := make([]float32, bsz)
@@ -418,8 +430,6 @@ func (tts *TextToSpeech) infer(textList []string, langList []string, style *Styl
 
 		currentStepTensor, _ := ort.NewTensor(scalarShape, currentStepArray)
 		noisyLatentTensor := arrayToTensor(xt, latentShape)
-		latentMaskTensor := arrayToTensor(latentMask, latentMaskShape)
-		textMaskTensor2 := arrayToTensor(textMask, textMaskShape)
 
 		vectorEstOutputs := make([]ort.ArbitraryTensor, 1)
 		err = tts.vectorEstOrt.Run(
@@ -428,6 +438,8 @@ func (tts *TextToSpeech) infer(textList []string, langList []string, style *Styl
 			vectorEstOutputs,
 		)
 		if err != nil {
+			currentStepTensor.Destroy()
+			noisyLatentTensor.Destroy()
 			return nil, nil, fmt.Errorf("failed to run vector estimator: %w", err)
 		}
 
@@ -445,8 +457,6 @@ func (tts *TextToSpeech) infer(textList []string, langList []string, style *Styl
 		}
 
 		noisyLatentTensor.Destroy()
-		latentMaskTensor.Destroy()
-		textMaskTensor2.Destroy()
 		currentStepTensor.Destroy()
 		denoisedTensor.Destroy()
 	}

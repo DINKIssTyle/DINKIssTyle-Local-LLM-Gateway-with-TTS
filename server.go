@@ -399,7 +399,7 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 	if req.Speed > 0 {
 		speed = req.Speed
 	}
-	wavData, _, err := globalTTS.Call(req.Text, req.Lang, style, 8, speed, req.ChunkSize)
+	wavData, _, err := globalTTS.Call(req.Text, req.Lang, style, 5, speed, req.ChunkSize)
 	if err != nil {
 		log.Printf("TTS failed: %v", err)
 		http.Error(w, "TTS generation failed", http.StatusInternalServerError)
