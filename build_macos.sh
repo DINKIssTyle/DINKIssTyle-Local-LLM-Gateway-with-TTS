@@ -14,16 +14,14 @@ echo "Clean complete. Building for macOS..."
 if [ $? -eq 0 ]; then
     APP_CONTENT_DIR="build/bin/DKST LLM Chat Server.app/Contents/MacOS/"
     
-    # Copy onnxruntime folder but clean it
+    # Copy onnxruntime folder but clean out binary files (keep only LICENSE and metadata)
     cp -r onnxruntime "$APP_CONTENT_DIR"
     rm -f "$APP_CONTENT_DIR/onnxruntime/"*.so*
     rm -f "$APP_CONTENT_DIR/onnxruntime/"*.dll
     rm -f "$APP_CONTENT_DIR/onnxruntime/"*.lib
+    rm -f "$APP_CONTENT_DIR/onnxruntime/"*.dylib
     
-    # Also keep the dylib in root for linking if needed, or rely on RPATH pointing to inner folder?
-    # The install_name_tool logic below uses "$APP_CONTENT_DIR/libonnxruntime.dylib"
-    # So we probably want the dylib in the root of MacOS too, or point to the one in onnxruntime folder.
-    # To be safe and consistent with previous working state (linking), let's copy the dylib to root AND keep the folder metadata for app.go logic.
+    # Copy the dylib to root MacOS folder for linking
     cp onnxruntime/libonnxruntime.dylib "$APP_CONTENT_DIR"
     
     # cp -r assets "$APP_CONTENT_DIR"

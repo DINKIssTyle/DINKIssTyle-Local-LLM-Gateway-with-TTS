@@ -370,6 +370,56 @@
         <div class="footer">© 2026 DINKI'ssTyle</div>
     </div>
 
+    <!-- Add User Modal -->
+    <div class="modal-overlay" id="add-user-modal">
+        <div class="modal" style="max-width: 300px;">
+            <div class="modal-header">
+                <div class="modal-title">Add User</div>
+                <button class="icon-btn" onclick="closeAddUserModal()">
+                    <span class="material-icons-round">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" id="new-user-id" placeholder="Enter username">
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="new-user-password" placeholder="Enter password">
+                </div>
+                <div class="form-group" style="margin-top: 8px;">
+                    <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                        <input type="checkbox" id="new-user-admin" style="width: 18px; height: 18px;">
+                        <span style="color: #e6edf3; font-size: 14px;">Admin Role</span>
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer" style="display: flex; gap: 8px; justify-content: flex-end;">
+                <button class="btn" style="background: var(--border-color);"
+                    onclick="closeAddUserModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="submitAddUser()">Add User</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Confirm Modal -->
+    <div class="modal-overlay" id="confirm-modal">
+        <div class="modal" style="max-width: 300px;">
+            <div class="modal-header">
+                <div class="modal-title">Confirm</div>
+            </div>
+            <div class="modal-body">
+                <p id="confirm-message">Are you sure?</p>
+            </div>
+            <div class="modal-footer" style="display: flex; gap: 8px; justify-content: flex-end;">
+                <button class="btn" style="background: var(--border-color);"
+                    onclick="closeConfirmModal(false)">Cancel</button>
+                <button class="btn btn-danger" onclick="closeConfirmModal(true)">Confirm</button>
+            </div>
+        </div>
+    </div>
+
     <!-- About Modal -->
     <div class="modal-overlay" id="about-modal">
         <div class="modal">
@@ -470,33 +520,26 @@
         }
 
         async function downloadAssets() {
-            const btn = document.getElementById('download-assets-btn');
-            const originalText = btn.innerHTML;
+            showConfirm("Download missing assets (~300MB)?\\nThe application window may freeze during download.", async (confirmed) => {
+                if (!confirmed) return;
 
-            if (!confirm("Download missing assets (~300MB)?\nThe application window may freeze during download.")) return;
+                const btn = document.getElementById('download-assets-btn');
+                const originalText = btn.innerHTML;
 
-            btn.disabled = true;
-            btn.innerHTML = '<span class="material-icons-round">hourglass_bottom</span> Downloading...';
+                btn.disabled = true;
+                btn.innerHTML = '<span class="material-icons-round">hourglass_bottom</span> Downloading...';
 
-            try {
-                // We'll trust the backend native dialogs to handle success/error messages mostly, 
-                // but we can also catch errors here.
-                // Note: The previous backend implementation showed native dialogs. 
-
-                // However, directly calling DownloadAssets from UI might not show the confirm dialog again 
-                // if we call the method directly. Let's see app.go.
-                // app.go has DownloadAssets() which calls downloader.DownloadAssets().
-                // It does NOT have the dialog logic inside DownloadAssets(), that was in startup().
-
-                await window.go.main.App.DownloadAssets();
-                alert("Assets downloaded successfully!");
-                checkAssetStatus(); // Refresh status
-            } catch (e) {
-                alert("Download failed: " + e.message);
-            } finally {
-                btn.disabled = false;
-                btn.innerHTML = originalText;
-            }
+                try {
+                    await window.go.main.App.DownloadAssets();
+                    showAlert("Assets downloaded successfully!");
+                    checkAssetStatus(); // Refresh status
+                } catch (e) {
+                    showAlert("Download failed: " + e.message);
+                } finally {
+                    btn.disabled = false;
+                    btn.innerHTML = originalText;
+                }
+            });
         }
 
         async function toggleEnableTTS() {
@@ -587,29 +630,78 @@
             }
         }
 
-        async function addUser() {
-            const id = prompt('Username:');
-            if (!id) return;
-            const password = prompt('Password:');
-            if (!password) return;
-            const role = confirm('Admin?') ? 'admin' : 'user';
+        // Add User Modal Functions
+        function addUser() {
+            document.getElementById('new-user-id').value = '';
+            document.getElementById('new-user-password').value = '';
+            document.getElementById('new-user-admin').checked = false;
+            document.getElementById('add-user-modal').style.display = 'flex';
+            document.getElementById('new-user-id').focus();
+        }
+
+        function closeAddUserModal() {
+            document.getElementById('add-user-modal').style.display = 'none';
+        }
+
+        async function submitAddUser() {
+            const id = document.getElementById('new-user-id').value.trim();
+            const password = document.getElementById('new-user-password').value;
+            const isAdmin = document.getElementById('new-user-admin').checked;
+
+            if (!id) {
+                showAlert('Please enter a username.');
+                return;
+            }
+            if (!password) {
+                showAlert('Please enter a password.');
+                return;
+            }
+
+            const role = isAdmin ? 'admin' : 'user';
 
             try {
                 await window.go.main.App.AddUser(id, password, role);
+                closeAddUserModal();
                 loadUsers();
             } catch (e) {
-                alert('Failed: ' + e.message);
+                showAlert('Failed: ' + e.message);
             }
         }
 
-        async function deleteUser(id) {
-            if (!confirm(`Delete "${id}"?`)) return;
-            try {
-                await window.go.main.App.DeleteUser(id);
-                loadUsers();
-            } catch (e) {
-                alert('Failed: ' + e.message);
+        // Confirm Modal Functions
+        let confirmCallback = null;
+
+        function showConfirm(message, callback) {
+            document.getElementById('confirm-message').innerHTML = message.replace(/\\n/g, '<br>');
+            confirmCallback = callback;
+            document.getElementById('confirm-modal').style.display = 'flex';
+        }
+
+        function closeConfirmModal(result) {
+            document.getElementById('confirm-modal').style.display = 'none';
+            if (confirmCallback) {
+                confirmCallback(result);
+                confirmCallback = null;
             }
+        }
+
+        function showAlert(message) {
+            // Simple alert using confirm modal with only OK button
+            document.getElementById('confirm-message').innerHTML = message.replace(/\\n/g, '<br>');
+            document.getElementById('confirm-modal').style.display = 'flex';
+            confirmCallback = null; // No callback needed for alert
+        }
+
+        async function deleteUser(id) {
+            showConfirm(`Delete user "${id}"?`, async (confirmed) => {
+                if (!confirmed) return;
+                try {
+                    await window.go.main.App.DeleteUser(id);
+                    loadUsers();
+                } catch (e) {
+                    showAlert('Failed: ' + e.message);
+                }
+            });
         }
 
         async function showAbout() {

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -100,6 +101,27 @@ func (am *AuthManager) SaveUsers() error {
 	return os.WriteFile(am.usersFile, data, 0600)
 }
 
+// saveUsersLocked saves users to JSON file (assumes lock is already held)
+func (am *AuthManager) saveUsersLocked() error {
+	users := make([]*User, 0, len(am.users))
+	for _, u := range am.users {
+		users = append(users, u)
+	}
+
+	data, err := json.MarshalIndent(users, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	// Ensure parent directory exists
+	dir := filepath.Dir(am.usersFile)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
+	return os.WriteFile(am.usersFile, data, 0600)
+}
+
 // AddUser adds a new user
 func (am *AuthManager) AddUser(id, password, role string) error {
 	am.mu.Lock()
@@ -121,11 +143,8 @@ func (am *AuthManager) AddUser(id, password, role string) error {
 		CreatedAt:    time.Now().Format(time.RFC3339),
 	}
 
-	// Save immediately
-	am.mu.Unlock()
-	err = am.SaveUsers()
-	am.mu.Lock()
-	return err
+	// Save while still holding lock
+	return am.saveUsersLocked()
 }
 
 // DeleteUser removes a user
@@ -135,10 +154,8 @@ func (am *AuthManager) DeleteUser(id string) error {
 
 	delete(am.users, id)
 
-	am.mu.Unlock()
-	err := am.SaveUsers()
-	am.mu.Lock()
-	return err
+	// Save while still holding lock
+	return am.saveUsersLocked()
 }
 
 // Authenticate validates credentials and returns a session token
