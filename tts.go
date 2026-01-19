@@ -646,12 +646,14 @@ func GenerateAudio(audioData []float32, sampleRate int, format string) ([]byte, 
 func preprocessText(text string, lang string) string {
 	text = norm.NFKD.String(text)
 
-	emojiPattern := regexp.MustCompile(`[\x{1F600}-\x{1F64F}\x{1F300}-\x{1F5FF}\x{1F680}-\x{1F6FF}\x{2600}-\x{26FF}\x{2700}-\x{27BF}]+`)
-	text = emojiPattern.ReplaceAllString(text, "")
+	// Remove all characters except allowed ones (Letters, Numbers, Basic Punctuation)
+	// We use \p{L} to support accented characters for French, Spanish, Portuguese, etc.
+	// This still excludes symbols like arrows (→) or math symbols.
+	allowedPattern := regexp.MustCompile(`[^\p{L}\p{N}\s.,!?:;'"\(\)\[\]\-]`)
+	text = allowedPattern.ReplaceAllString(text, " ")
 
 	replacements := map[string]string{
-		"–": "-", "‑": "-", "—": "-", "_": " ",
-		"\u201C": "\"", "\u201D": "\"", "\u2018": "'", "\u2019": "'",
+		"_": " ", "\u201C": "\"", "\u201D": "\"", "\u2018": "'", "\u2019": "'",
 	}
 	for old, new := range replacements {
 		text = strings.ReplaceAll(text, old, new)
