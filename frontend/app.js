@@ -17,7 +17,8 @@ let config = {
     systemPrompt: 'You are a helpful AI assistant.',
     ttsVoice: '',
     ttsSpeed: 1.3,
-    autoTTS: true
+    autoTTS: true,
+    ttsFormat: 'wav' // 'wav' or 'mp3'
 };
 
 // Chat State
@@ -51,31 +52,31 @@ const previewContainer = document.getElementById('preview-container');
 
 // Audio Context for Auto-play
 let audioContextUnlocked = false;
+let audioCtx = null;
+let currentSource = null;
 
 function unlockAudioContext() {
-    if (audioContextUnlocked) return;
+    if (!audioCtx) {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (AudioContext) {
+            audioCtx = new AudioContext();
+        }
+    }
 
-    // Create and resume an AudioContext or play a silent buffer
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
-    if (AudioContext) {
-        const ctx = new AudioContext();
-        ctx.resume().then(() => {
-            const buffer = ctx.createBuffer(1, 1, 22050);
-            const source = ctx.createBufferSource();
+    if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume().then(() => {
+            // Play silent buffer to unlock
+            const buffer = audioCtx.createBuffer(1, 1, 22050);
+            const source = audioCtx.createBufferSource();
             source.buffer = buffer;
-            source.connect(ctx.destination);
+            source.connect(audioCtx.destination);
             source.start(0);
             audioContextUnlocked = true;
-            console.log("AudioContext unlocked");
-
-            // Warm up a silent audio element
-            if (!audioWarmup) {
-                audioWarmup = new Audio();
-                audioWarmup.play().catch(() => { });
-            }
-        });
+            console.log("AudioContext unlocked/resumed");
+        }).catch(e => console.error("Failed to resume AudioContext", e));
     }
 }
+
 
 // Initialization
 document.addEventListener('DOMContentLoaded', async () => {
@@ -306,6 +307,7 @@ function loadConfig() {
     if (config.ttsVoice) document.getElementById('cfg-tts-voice').value = config.ttsVoice;
     document.getElementById('cfg-tts-speed').value = config.ttsSpeed || 1.0;
     document.getElementById('speed-val').textContent = config.ttsSpeed || 1.0;
+    document.getElementById('cfg-tts-format').value = config.ttsFormat || 'wav';
 }
 
 function saveConfig() {
@@ -323,6 +325,7 @@ function saveConfig() {
     config.systemPrompt = document.getElementById('cfg-system-prompt').value.trim() || 'You are a helpful AI assistant.';
     config.ttsVoice = document.getElementById('cfg-tts-voice').value;
     config.ttsSpeed = parseFloat(document.getElementById('cfg-tts-speed').value);
+    config.ttsFormat = document.getElementById('cfg-tts-format').value;
 
     localStorage.setItem('appConfig', JSON.stringify(config));
     alert('Settings saved!');
@@ -449,13 +452,15 @@ function clearChat() {
 /* Chat Logic */
 
 async function sendMessage() {
+    // Unlock audio context on user interaction
+    unlockAudioContext();
+
+    const text = messageInput.value.trim();
+    if (!text && !pendingImage) return;
     if (isGenerating) return;
 
     // Stop and clear any existing audio/TTS
     stopAllAudio();
-
-    const text = messageInput.value.trim();
-    if (!text && !pendingImage) return;
 
     // Prepare User Message
     const userMsg = {
@@ -486,8 +491,7 @@ async function sendMessage() {
     // Always start with a system prompt to define behavior and anchor the context
     const systemMsg = { role: 'system', content: config.systemPrompt };
 
-    // Trim old messages if history exceeds limit (Chrome extension approach)
-    // historyCount = number of conversation turns (user+assistant pairs)
+    // Trim old messages if history exceeds limit (user+assistant pairs)
     const maxMessages = (parseInt(config.historyCount) || 10) * 2;
     if (messages.length > maxMessages) {
         // Remove oldest messages, keeping recent ones
@@ -781,31 +785,47 @@ function speakMessageFromBtn(btn) {
     }
 }
 
+/**
+ * Stop all audio playback and clear queues
+ */
 function stopAllAudio() {
-    if (currentAudio) {
-        currentAudio.pause();
-        currentAudio.src = '';
-        currentAudio = null;
-    }
-    // Clear Queue
+    // Clear queues
     ttsQueue = [];
-    isPlayingQueue = false;
-    // Reset streaming TTS state
-    streamingTTSActive = false;
-    streamingTTSCommittedIndex = 0;
-    streamingTTSBuffer = "";
-    // Clear audio cache
-    if (typeof clearTTSAudioCache === 'function') {
-        clearTTSAudioCache();
+    audioWarmup = null;
+
+    // Stop current audio source
+    if (currentSource) {
+        try {
+            currentSource.stop();
+        } catch (e) {
+            // Ignore errors if already stopped
+        }
+        currentSource = null;
     }
-    // Reset all icons
-    document.querySelectorAll('.speak-btn').forEach(btn => {
-        const icon = btn.querySelector('.material-icons-round');
-        if (icon) icon.textContent = 'volume_up';
-        btn.title = "Speak";
-    });
+
+    // Clear audio cache to free memory
+    clearTTSAudioCache();
+
+    // Reset loop state
+    isPlayingQueue = false;
+
+    // Cancel streaming
+    streamingTTSActive = false;
+    streamingTTSBuffer = "";
+    streamingTTSCommittedIndex = 0;
+
+    // Increment session ID to invalidate pending ops
+    ttsSessionId++;
+
+    // Reset UI
+    const btn = currentAudioBtn;
+    if (btn) {
+        const iconEl = btn.querySelector('.material-icons-round');
+        if (iconEl) iconEl.textContent = 'volume_up';
+        btn.title = 'Speak';
+        btn.disabled = false;
+    }
     currentAudioBtn = null;
-    ttsSessionId++; // Invalidate pending fetches
 }
 
 function updateMessageContent(id, text) {
@@ -1179,7 +1199,8 @@ function prefetchTTSAudio(text) {
                 lang: config.ttsLang,
                 chunkSize: parseInt(config.chunkSize) || 300,
                 voiceStyle: config.ttsVoice,
-                speed: parseFloat(config.ttsSpeed) || 1.0
+                speed: parseFloat(config.ttsSpeed) || 1.0,
+                format: config.ttsFormat || 'wav'
             };
 
             console.log(`[TTS] Prefetching: "${text.substring(0, 25)}..."`);
@@ -1247,7 +1268,7 @@ async function processTTSQueue(isFirstChunk = false) {
         prefetchTTSAudio(ttsQueue[i]);
     }
 
-    // Main processing loop - keeps running while streaming or queue has items
+    // Main processing loop
     while (true) {
         // Check cancellation
         if (sessionId !== ttsSessionId) break;
@@ -1272,16 +1293,20 @@ async function processTTSQueue(isFirstChunk = false) {
             prefetchTTSAudio(ttsQueue[i]);
         }
 
-        // Get current audio (should be prefetched or start fetching now)
-        const audioUrlPromise = prefetchTTSAudio(text);
-        const audioUrl = await audioUrlPromise;
+        // Get current audio
+        let audioUrl = null;
+        try {
+            const audioUrlPromise = prefetchTTSAudio(text);
+            audioUrl = await audioUrlPromise;
+        } catch (e) {
+            console.error("Prefetch failed", e);
+        }
 
         // Remove from cache after getting
         ttsAudioCache.delete(text);
 
         if (!audioUrl) {
-            // Skip failed chunks
-            continue;
+            continue; // Skip failed chunks
         }
 
         // Check cancellation again
@@ -1290,12 +1315,23 @@ async function processTTSQueue(isFirstChunk = false) {
             break;
         }
 
-        // Play audio
-        await new Promise((resolve) => {
-            const audio = new Audio(audioUrl);
-            currentAudio = audio;
+        // Play audio using Web Audio API
+        try {
+            // Unlock audio context if needed (last ditch effort)
+            unlockAudioContext();
 
-            // Update UI on first chunk
+            if (!audioCtx) {
+                throw new Error("AudioContext not available");
+            }
+
+            // Fetch blob data
+            const response = await fetch(audioUrl);
+            const arrayBuffer = await response.arrayBuffer();
+
+            // Decode audio data
+            const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+
+            // Update UI on first chunk playing
             if (!firstChunkPlayed && btn) {
                 btn.disabled = false;
                 const iconEl = btn.querySelector('.material-icons-round');
@@ -1304,25 +1340,32 @@ async function processTTSQueue(isFirstChunk = false) {
                 firstChunkPlayed = true;
             }
 
-            audio.onended = () => {
-                currentAudio = null;
-                resolve();
-            };
+            // Create source and play
+            await new Promise((resolve, reject) => {
+                // Check cancellation before starting
+                if (sessionId !== ttsSessionId) {
+                    resolve();
+                    return;
+                }
 
-            audio.onerror = (e) => {
-                console.error("Audio playback error", e);
-                currentAudio = null;
-                resolve();
-            };
+                const source = audioCtx.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(audioCtx.destination);
+                currentSource = source;
 
-            audio.play().catch(e => {
-                console.error("Play failed", e);
-                resolve();
+                source.onended = () => {
+                    currentSource = null;
+                    resolve();
+                };
+
+                source.start(0);
             });
-        });
 
-        // Cleanup URL
-        URL.revokeObjectURL(audioUrl);
+        } catch (e) {
+            console.error("Playback failed for chunk:", e);
+        } finally {
+            URL.revokeObjectURL(audioUrl);
+        }
     }
 
     // Finished or Cancelled

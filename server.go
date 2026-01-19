@@ -326,6 +326,7 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 		ChunkSize  int     `json:"chunkSize"`
 		VoiceStyle string  `json:"voiceStyle"`
 		Speed      float32 `json:"speed"`
+		Format     string  `json:"format"` // "wav" or "mp3"
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
@@ -334,6 +335,9 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 
 	if req.Lang == "" {
 		req.Lang = "ko"
+	}
+	if req.Format == "" {
+		req.Format = "wav" // Default to WAV for backward compatibility
 	}
 
 	// Check if TTS is initialized
@@ -396,18 +400,18 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate WAV bytes
-	wavBytes, err := GenerateWAV(wavData, globalTTS.SampleRate)
+	// Generate audio bytes in requested format
+	audioBytes, contentType, err := GenerateAudio(wavData, globalTTS.SampleRate, req.Format)
 	if err != nil {
-		log.Printf("WAV generation failed: %v", err)
-		http.Error(w, "WAV generation failed", http.StatusInternalServerError)
+		log.Printf("Audio generation failed: %v", err)
+		http.Error(w, "Audio generation failed", http.StatusInternalServerError)
 		return
 	}
 
-	// Return WAV audio
-	w.Header().Set("Content-Type", "audio/wav")
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(wavBytes)))
-	w.Write(wavBytes)
+	// Return audio
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(audioBytes)))
+	w.Write(audioBytes)
 }
 
 // handleTTSStyles returns list of available voice styles

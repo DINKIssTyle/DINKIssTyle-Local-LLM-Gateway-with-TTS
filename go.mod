@@ -5,6 +5,7 @@ go 1.22.0
 require (
 	github.com/go-audio/audio v1.0.0
 	github.com/go-audio/wav v1.1.0
+	github.com/sjzar/go-lame v0.0.9
 	github.com/wailsapp/wails/v2 v2.11.0
 	github.com/yalue/onnxruntime_go v1.9.0
 	golang.org/x/crypto v0.33.0

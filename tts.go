@@ -24,6 +24,7 @@ import (
 
 	"github.com/go-audio/audio"
 	"github.com/go-audio/wav"
+	"github.com/sjzar/go-lame"
 	ort "github.com/yalue/onnxruntime_go"
 	"golang.org/x/text/unicode/norm"
 )
@@ -588,6 +589,57 @@ func GenerateWAV(audioData []float32, sampleRate int) ([]byte, error) {
 	// Read back the file
 	tmpFile.Seek(0, 0)
 	return os.ReadFile(tmpFile.Name())
+}
+
+// GenerateMP3 generates MP3 bytes from audio data using LAME encoder
+func GenerateMP3(audioData []float32, sampleRate int) ([]byte, error) {
+	// Convert float32 samples to int16 PCM bytes (little-endian)
+	pcmBytes := make([]byte, len(audioData)*2)
+	for i, sample := range audioData {
+		clamped := math.Max(-1.0, math.Min(1.0, float64(sample)))
+		val := int16(clamped * 32767)
+		pcmBytes[i*2] = byte(val)
+		pcmBytes[i*2+1] = byte(val >> 8)
+	}
+
+	// Create LAME encoder
+	enc := lame.Init()
+	if enc == nil {
+		return nil, fmt.Errorf("failed to initialize LAME encoder")
+	}
+	defer enc.Close()
+
+	// Set encoder parameters
+	enc.SetInSamplerate(sampleRate)
+	enc.SetNumChannels(1)
+	enc.SetBitrate(128) // 128 kbps - good balance of quality and size
+	enc.SetQuality(2)   // High quality (0=best, 9=worst)
+
+	if enc.InitParams() < 0 {
+		return nil, fmt.Errorf("failed to init LAME params")
+	}
+
+	// Encode PCM to MP3
+	mp3Data := enc.Encode(pcmBytes)
+
+	// Flush encoder
+	flush := enc.Flush()
+
+	return append(mp3Data, flush...), nil
+}
+
+// GenerateAudio generates audio bytes in the specified format
+func GenerateAudio(audioData []float32, sampleRate int, format string) ([]byte, string, error) {
+	switch strings.ToLower(format) {
+	case "mp3":
+		data, err := GenerateMP3(audioData, sampleRate)
+		return data, "audio/mpeg", err
+	case "wav":
+		fallthrough
+	default:
+		data, err := GenerateWAV(audioData, sampleRate)
+		return data, "audio/wav", err
+	}
 }
 
 // Helper functions
