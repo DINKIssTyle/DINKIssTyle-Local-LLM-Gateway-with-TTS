@@ -9,15 +9,11 @@ Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
 
 # DINKIssTyle Local LLM Gateway with TTS
 
+**DINKIssTyle Local LLM Gateway with TTS**는 로컬 LLM(Large Language Model)과의 연동 및 고품질 TTS(Text-to-Speech) 엔진인 [Supertonic — Lightning Fast, On-Device TTS](https://github.com/supertone-inc/supertonic)를 통합하여 제공하는 게이트웨이 서버입니다. [Wails](https://wails.io) 프레임워크를 기반으로 Go(백엔드)와 HTML/JS(프론트엔드)를 사용하여 개발되었습니다.
+
 <p align="center">
   <img src="manual/imgs/server_control.png" alt="server_control" width="512px">
 </p>
-
-<p align="center">
-  <img src="manual/imgs/chat_01.png" alt="chat_01" width="512px">
-</p>
-
-**DINKIssTyle Local LLM Gateway with TTS**는 로컬 LLM(Large Language Model)과의 연동 및 고품질 TTS(Text-to-Speech) 엔진인 [Supertonic — Lightning Fast, On-Device TTS](https://github.com/supertone-inc/supertonic)를 통합하여 제공하는 게이트웨이 서버입니다. [Wails](https://wails.io) 프레임워크를 기반으로 Go(백엔드)와 HTML/JS(프론트엔드)를 사용하여 개발되었습니다.
 
 ## 주요 기능 (Key Features)
 
@@ -77,6 +73,9 @@ build_windows.bat
 ```bash
 wails dev
 ```
+<p align="center">
+  <img src="manual/imgs/chat_01.png" alt="chat_01" width="512px">
+</p>
 
 ## 사용법 (Usage)
 
