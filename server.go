@@ -73,6 +73,9 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 		})
 	}))
 	mux.HandleFunc("/api/tts/styles", AuthMiddleware(authMgr, handleTTSStyles))
+	mux.HandleFunc("/api/models", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
+		handleModels(w, r, app.llmEndpoint)
+	}))
 
 	// Admin-only endpoints
 	mux.HandleFunc("/api/users", AdminMiddleware(authMgr, handleUsers(authMgr)))
@@ -262,6 +265,36 @@ func handleDeleteUser(am *AuthManager) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	}
+}
+
+// handleModels proxies model list requests to LLM server
+func handleModels(w http.ResponseWriter, r *http.Request, llmEndpoint string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	modelsURL := llmEndpoint + "/v1/models"
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequestWithContext(r.Context(), "GET", modelsURL, nil)
+	if err != nil {
+		http.Error(w, "Failed to create request", http.StatusInternalServerError)
+		return
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("Failed to connect to LLM server: %v", err)
+		http.Error(w, "Failed to connect to LLM server", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	// Copy response headers and body
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
 }
 
 // handleChat proxies chat requests to LM Studio with SSE streaming

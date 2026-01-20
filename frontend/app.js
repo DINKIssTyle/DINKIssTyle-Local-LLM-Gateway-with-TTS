@@ -203,8 +203,59 @@ async function releaseWakeLock() {
 // Settings Modal Control
 // ============================================================================
 
+/**
+ * Fetch available models from LLM server and populate dropdown
+ */
+async function fetchModels() {
+    const select = document.getElementById('cfg-model');
+    if (!select) return;
+
+    try {
+        const response = await fetch('/api/models');
+        if (!response.ok) {
+            throw new Error('Failed to fetch models');
+        }
+
+        const data = await response.json();
+        const models = data.data || [];
+
+        // Clear existing options
+        select.innerHTML = '';
+
+        if (models.length === 0) {
+            select.innerHTML = '<option value="">No models available</option>';
+            return;
+        }
+
+        // Populate with models
+        models.forEach(model => {
+            const option = document.createElement('option');
+            option.value = model.id;
+            option.textContent = model.id;
+            select.appendChild(option);
+        });
+
+        // Select current config value if it exists
+        if (config.model && Array.from(select.options).some(opt => opt.value === config.model)) {
+            select.value = config.model;
+        } else if (models.length > 0) {
+            select.value = models[0].id;
+            config.model = models[0].id;
+        }
+    } catch (err) {
+        console.error('[Models] Failed to fetch:', err);
+        select.innerHTML = '<option value="">Connection error</option>';
+        // Add a manual input option as fallback
+        const manualOption = document.createElement('option');
+        manualOption.value = config.model || '';
+        manualOption.textContent = config.model || 'Enter model manually';
+        select.appendChild(manualOption);
+    }
+}
+
 function openSettingsModal() {
     document.getElementById('settings-modal').classList.add('active');
+    fetchModels(); // Populate model dropdown when modal opens
 }
 
 function closeSettingsModal() {
@@ -865,7 +916,13 @@ async function processStream(response, elementId) {
                         fullText += content;
                         let displayText = fullText;
                         if (config.hideThink) {
+                            // Remove complete <think>...</think> blocks
                             displayText = fullText.replace(/<think>[\s\S]*?<\/think>/g, '');
+                            // Handle case where </think> exists without opening tag (remove everything before it)
+                            if (displayText.includes('</think>')) {
+                                displayText = displayText.split('</think>').pop().trim();
+                            }
+                            // Handle incomplete <think> tag (still being streamed)
                             if (displayText.includes('<think>')) displayText = displayText.split('<think>')[0];
                         }
                         updateMessageContent(elementId, displayText);
@@ -897,7 +954,12 @@ async function processStream(response, elementId) {
         if (useStreamingTTS) {
             let finalDisplayText = fullText;
             if (config.hideThink) {
+                // Remove complete <think>...</think> blocks
                 finalDisplayText = fullText.replace(/<think>[\s\S]*?<\/think>/g, '');
+                // Handle case where </think> exists without opening tag
+                if (finalDisplayText.includes('</think>')) {
+                    finalDisplayText = finalDisplayText.split('</think>').pop().trim();
+                }
             }
             finalizeStreamingTTS(finalDisplayText);
         }

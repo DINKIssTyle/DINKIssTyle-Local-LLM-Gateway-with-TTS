@@ -56,7 +56,9 @@
                     <div class="setting-item">
                         <label data-i18n="setting.model.label">Model Name</label>
                         <p class="setting-desc" data-i18n="setting.model.desc">LLM서버에서 현재 로드되어 있는 모델 이름을 적어주세요.</p>
-                        <input type="text" id="cfg-model" placeholder="gemma-2b-it">
+                        <select id="cfg-model">
+                            <option value="">Loading models...</option>
+                        </select>
                     </div>
 
                     <div class="setting-item">
