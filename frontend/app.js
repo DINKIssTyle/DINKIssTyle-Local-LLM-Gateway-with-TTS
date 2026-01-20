@@ -168,6 +168,36 @@ function setLanguage(lang) {
 }
 
 // ============================================================================
+// Screen Wake Lock API
+// ============================================================================
+let wakeLock = null;
+
+async function requestWakeLock() {
+    if ('wakeLock' in navigator) {
+        try {
+            wakeLock = await navigator.wakeLock.request('screen');
+            console.log('[WakeLock] Screen Wake Lock active');
+            wakeLock.addEventListener('release', () => {
+                console.log('[WakeLock] Screen Wake Lock released');
+            });
+        } catch (err) {
+            console.error(`[WakeLock] Failed to request Wake Lock: ${err.name}, ${err.message}`);
+        }
+    }
+}
+
+async function releaseWakeLock() {
+    if (wakeLock) {
+        try {
+            await wakeLock.release();
+            wakeLock = null;
+        } catch (err) {
+            console.error(`[WakeLock] Failed to release Wake Lock: ${err.name}, ${err.message}`);
+        }
+    }
+}
+
+// ============================================================================
 // Settings Modal Control
 // ============================================================================
 
@@ -612,11 +642,7 @@ function setupEventListeners() {
 
     // Enter key handling (prevent duplicate listener if one exists in HTML? No, setupEventListeners covers it)
     // Note: The previous listener on sendBtn was not shown in viewed lines but likely exists or was default form submission? 
-    // Ah, line 301 calls sendMessage(). I should remove the old click listener if any, or ensuring `sendMessage` checks `isGenerating` is not enough if we want STOP behavior.
-    // The previous code didn't show an explicit click listener for sendBtn!
-    // Wait, let me check where sendMessage is called.
-    // Line 277 calls sendMessage on Enter. 
-    // I need to make sure the Button Click also calls sendMessage OR stopGeneration.
+    // Ah, line 301 calls sendMessage(). I need to make sure the Button Click also calls sendMessage OR stopGeneration.
     // I will Assume there isn't one and add it.
 }
 
@@ -808,6 +834,7 @@ async function processStream(response, elementId) {
     const useStreamingTTS = config.enableTTS && config.autoTTS;
     if (useStreamingTTS) {
         initStreamingTTS(elementId);
+        requestWakeLock(); // Request wake lock when TTS streaming starts
     }
 
     try {
@@ -872,6 +899,7 @@ async function processStream(response, elementId) {
             }
             finalizeStreamingTTS(finalDisplayText);
         }
+        releaseWakeLock(); // Release screen lock after generation and TTS streaming is done
     }
 }
 
@@ -1022,6 +1050,7 @@ function stopAllAudio() {
 
     // Clear audio cache to free memory
     clearTTSAudioCache();
+    releaseWakeLock(); // Release lock on stop
 
     // Reset loop state
     isPlayingQueue = false;
@@ -1552,6 +1581,7 @@ async function processTTSQueue(isFirstChunk = false) {
     if (isPlayingQueue) return; // Already running
 
     isPlayingQueue = true;
+    requestWakeLock(); // Request screen keep-alive
     const btn = currentAudioBtn;
     const sessionId = ttsSessionId;
 
