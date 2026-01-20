@@ -1078,7 +1078,10 @@ async function speakMessage(text, btn = null) {
     ttsQueue = []; // Clear existing queue if any (though stopAllAudio called above)
     if (btn) currentAudioBtn = btn;
 
-    // 1. Split by paragraphs (double newlines) first to ensure backend doesn't receive multi-paragraph chunks
+    // Minimum chunk length - chunks shorter than this will be merged
+    const MIN_CHUNK_LENGTH = 50;
+
+    // 1. Split by paragraphs (double newlines) first
     const paragraphs = cleanText.split(/\n\s*\n+/);
 
     let currentChunk = "";
@@ -1086,32 +1089,42 @@ async function speakMessage(text, btn = null) {
     for (const paragraph of paragraphs) {
         if (!paragraph.trim()) continue;
 
-        // 2. Split paragraph into sentences
-        // Match sentences followed by space or end of string, keeping delimiter
-        const rawChunks = paragraph.match(/[^.!?\n]+[.!?\n]*/g) || [paragraph];
+        // 2. Smart sentence splitting:
+        // - Split on sentence endings (.!?) followed by space and uppercase/Korean
+        // - But NOT on numbered lists like "1.", "2." or abbreviations
+        // - Pattern: sentence ending + space + (uppercase letter OR Korean character)
+        const sentencePattern = /(?<=[.!?])(?=\s+(?:[A-Z가-힣]|$))/g;
+        const rawChunks = paragraph.split(sentencePattern).filter(s => s.trim());
 
-        // 3. Combine sentences up to chunkSize
-        for (const part of rawChunks) {
-            if ((currentChunk + part).length > config.chunkSize && currentChunk) {
-                const chunk = currentChunk.trim();
-                ttsQueue.push(chunk);
+        // If no splits found, use the whole paragraph
+        const sentences = rawChunks.length > 0 ? rawChunks : [paragraph];
+
+        // 3. Combine sentences up to chunkSize, merging short chunks
+        for (const part of sentences) {
+            const trimmedPart = part.trim();
+            if (!trimmedPart) continue;
+
+            // If adding this part exceeds chunkSize and we have content, queue current chunk
+            if ((currentChunk + " " + trimmedPart).length > config.chunkSize && currentChunk.length >= MIN_CHUNK_LENGTH) {
+                ttsQueue.push(currentChunk.trim());
                 currentChunk = "";
-
-                // Trigger playback immediately if not running
                 processTTSQueue();
             }
-            currentChunk += part;
+
+            // Add to current chunk
+            currentChunk = currentChunk ? currentChunk + " " + trimmedPart : trimmedPart;
         }
-        if (currentChunk) {
-            const chunk = currentChunk.trim();
-            ttsQueue.push(chunk);
+
+        // At paragraph end, queue if we have enough content
+        if (currentChunk.length >= MIN_CHUNK_LENGTH) {
+            ttsQueue.push(currentChunk.trim());
             currentChunk = "";
             processTTSQueue();
         }
     }
 
-    // Final check for remaining chunk (redundant with logic above but safe)
-    if (currentChunk) {
+    // Final chunk - queue even if short (it's the last one)
+    if (currentChunk.trim()) {
         ttsQueue.push(currentChunk.trim());
         processTTSQueue();
     }
@@ -1265,6 +1278,9 @@ function initStreamingTTS(elementId) {
 function feedStreamingTTS(displayText) {
     if (!streamingTTSActive) return;
 
+    // Minimum length before we commit a chunk for TTS
+    const MIN_STREAMING_CHUNK_LENGTH = 50;
+
     // Process all available committed segments in a loop
     let iterations = 0;
     const maxIterations = 20; // Safety limit
@@ -1274,24 +1290,41 @@ function feedStreamingTTS(displayText) {
 
         // Get the new portion of text since last commit
         const newText = displayText.substring(streamingTTSCommittedIndex);
-        if (!newText || newText.length < 5) break; // Need at least some content
+        if (!newText || newText.length < 10) break; // Need at least some content
 
         let committed = null;
         let advanceBy = 0;
 
         // Priority 1: Check for paragraph boundaries (double newline)
+        // Always commit on paragraph break regardless of length
         const paragraphMatch = newText.match(/^([\s\S]*?\n\s*\n)/);
         if (paragraphMatch && paragraphMatch[1].trim()) {
-            committed = cleanTextForTTS(paragraphMatch[1]);
-            advanceBy = paragraphMatch[0].length;
+            const cleaned = cleanTextForTTS(paragraphMatch[1]);
+            if (cleaned && cleaned.length >= 10) {
+                committed = cleaned;
+                advanceBy = paragraphMatch[0].length;
+            }
         }
 
-        // Priority 2: Check for sentence endings (.!?) followed by space and more text
+        // Priority 2: Check for sentence endings followed by new sentence start
+        // Use smart pattern that avoids numbered lists like "1.", "2."
         if (!committed) {
-            const sentenceMatch = newText.match(/^([\s\S]*?[.!?])(\s+\S)/);
+            // Look for sentence end followed by space and uppercase/Korean char
+            const sentenceMatch = newText.match(/^([\s\S]*?[.!?])(\s+[A-Z가-힣])/);
             if (sentenceMatch && sentenceMatch[1].trim()) {
-                committed = cleanTextForTTS(sentenceMatch[1]);
-                advanceBy = sentenceMatch[1].length;
+                const potentialCommit = streamingTTSBuffer + cleanTextForTTS(sentenceMatch[1]);
+
+                // Only commit if buffer + new content is long enough
+                if (potentialCommit.length >= MIN_STREAMING_CHUNK_LENGTH) {
+                    committed = potentialCommit;
+                    streamingTTSBuffer = "";
+                    advanceBy = sentenceMatch[1].length;
+                } else {
+                    // Add to buffer and continue accumulating
+                    streamingTTSBuffer = potentialCommit + " ";
+                    streamingTTSCommittedIndex += sentenceMatch[1].length;
+                    continue; // Try to find more content
+                }
             }
         }
 
@@ -1299,16 +1332,26 @@ function feedStreamingTTS(displayText) {
         if (!committed) {
             const colonMatch = newText.match(/^([\s\S]*?:)\s*\n/);
             if (colonMatch && colonMatch[1].trim().length > 10) {
-                committed = cleanTextForTTS(colonMatch[1]);
-                advanceBy = colonMatch[0].length;
+                const potentialCommit = streamingTTSBuffer + cleanTextForTTS(colonMatch[1]);
+                if (potentialCommit.length >= MIN_STREAMING_CHUNK_LENGTH) {
+                    committed = potentialCommit;
+                    streamingTTSBuffer = "";
+                    advanceBy = colonMatch[0].length;
+                } else {
+                    streamingTTSBuffer = potentialCommit + " ";
+                    streamingTTSCommittedIndex += colonMatch[0].length;
+                    continue;
+                }
             }
         }
 
         // Priority 4: Check for single newline with substantial text before it
         if (!committed) {
-            const lineMatch = newText.match(/^([^\n]{20,})\n/);
+            const lineMatch = newText.match(/^([^\n]{30,})\n/);
             if (lineMatch) {
-                committed = cleanTextForTTS(lineMatch[1]);
+                const potentialCommit = streamingTTSBuffer + cleanTextForTTS(lineMatch[1]);
+                committed = potentialCommit;
+                streamingTTSBuffer = "";
                 advanceBy = lineMatch[0].length;
             }
         }
@@ -1317,7 +1360,7 @@ function feedStreamingTTS(displayText) {
         if (!committed) break;
 
         // Commit the segment
-        console.log(`[Streaming TTS] Committing: "${committed.substring(0, 40)}..."`);
+        console.log(`[Streaming TTS] Committing: "${committed.substring(0, 50)}..."`);
         pushToStreamingTTSQueue(committed);
         streamingTTSCommittedIndex += advanceBy;
     }
@@ -1330,15 +1373,19 @@ function feedStreamingTTS(displayText) {
 function finalizeStreamingTTS(finalDisplayText) {
     if (!streamingTTSActive) return;
 
-    // Commit any remaining text
+    // Commit any remaining text including buffer
     const remainingText = finalDisplayText.substring(streamingTTSCommittedIndex);
     const cleanText = cleanTextForTTS(remainingText);
 
-    if (cleanText) {
-        console.log(`[Streaming TTS] Finalizing: "${cleanText.substring(0, 30)}..."`);
-        pushToStreamingTTSQueue(cleanText);
+    // Combine buffer with remaining text
+    const finalText = (streamingTTSBuffer + " " + (cleanText || "")).trim();
+
+    if (finalText) {
+        console.log(`[Streaming TTS] Finalizing: "${finalText.substring(0, 50)}..."`);
+        pushToStreamingTTSQueue(finalText);
     }
 
+    streamingTTSBuffer = "";
     streamingTTSActive = false;
     console.log("[Streaming TTS] Finalized");
 }
@@ -1349,6 +1396,8 @@ function finalizeStreamingTTS(finalDisplayText) {
 function pushToStreamingTTSQueue(text) {
     if (!text || !text.trim()) return;
 
+    const MIN_CHUNK_LENGTH = 50;
+
     // Split into smaller chunks if needed (by paragraph/sentence within the segment)
     const paragraphs = text.split(/\n\s*\n+/);
     const newChunks = [];
@@ -1356,34 +1405,37 @@ function pushToStreamingTTSQueue(text) {
     for (const para of paragraphs) {
         if (!para.trim()) continue;
 
-        // Split by sentences and combine to chunkSize
-        const rawChunks = para.match(/[^.!?\n]+[.!?\n]*/g) || [para];
+        // Smart sentence splitting - avoid breaking on numbered lists like "1.", "2."
+        const sentencePattern = /(?<=[.!?])(?=\s+(?:[A-Z가-힣]|$))/g;
+        const rawChunks = para.split(sentencePattern).filter(s => s.trim());
+        const sentences = rawChunks.length > 0 ? rawChunks : [para];
+
         let currentChunk = "";
 
-        for (const part of rawChunks) {
-            if ((currentChunk + part).length > config.chunkSize && currentChunk) {
-                const chunk = currentChunk.trim();
-                // Only add if it has actual speakable content (not just punctuation)
-                if (chunk && chunk.length > 1 && /[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ0-9]/.test(chunk)) {
-                    ttsQueue.push(chunk);
-                    newChunks.push(chunk);
+        for (const part of sentences) {
+            const trimmedPart = part.trim();
+            if (!trimmedPart) continue;
+
+            if ((currentChunk + " " + trimmedPart).length > config.chunkSize && currentChunk.length >= MIN_CHUNK_LENGTH) {
+                // Only add if it has actual speakable content
+                if (/[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ0-9]/.test(currentChunk)) {
+                    ttsQueue.push(currentChunk.trim());
+                    newChunks.push(currentChunk.trim());
                 }
                 currentChunk = "";
             }
-            currentChunk += part;
+            currentChunk = currentChunk ? currentChunk + " " + trimmedPart : trimmedPart;
         }
-        if (currentChunk.trim()) {
-            const chunk = currentChunk.trim();
-            // Only add if it has actual speakable content
-            if (chunk && chunk.length > 1 && /[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ0-9]/.test(chunk)) {
-                ttsQueue.push(chunk);
-                newChunks.push(chunk);
-            }
+
+        // Queue paragraph remainder if long enough
+        if (currentChunk.length >= MIN_CHUNK_LENGTH && /[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ0-9]/.test(currentChunk)) {
+            ttsQueue.push(currentChunk.trim());
+            newChunks.push(currentChunk.trim());
+            currentChunk = "";
         }
     }
 
     // IMMEDIATELY start prefetching new chunks (don't wait for the playback loop)
-    // This is the key optimization - prefetch starts right when text is committed
     for (const chunk of newChunks) {
         prefetchTTSAudio(chunk);
     }
