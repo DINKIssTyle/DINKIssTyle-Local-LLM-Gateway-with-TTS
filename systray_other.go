@@ -33,8 +33,11 @@ var iconData = []byte{
 }
 
 // InitSystemTray initializes the system tray (Windows/Linux only)
-func InitSystemTray(app *App) {
+func InitSystemTray(app *App, icon []byte) {
 	trayApp = app
+	if len(icon) > 0 {
+		iconData = icon
+	}
 	go systray.Run(onTrayReady, onTrayExit)
 }
 

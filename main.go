@@ -6,6 +6,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"log"
 
@@ -18,6 +19,9 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+//go:embed trayicon.png
+var trayIcon []byte
+
 //go:embed frontend/*
 var assets embed.FS
 
@@ -25,20 +29,28 @@ func main() {
 	app := NewApp(assets)
 
 	// Initialize system tray
-	InitSystemTray(app)
+	InitSystemTray(app, trayIcon)
 
 	err := wails.Run(&options.App{
 		Title:     "DKST LLM Chat Server",
 		Width:     780,
-		Height:    720,
+		Height:    760,
 		MinWidth:  600,
-		MinHeight: 720,
+		MinHeight: 760,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
 		OnStartup:         app.startup,
-		HideWindowOnClose: true, // Minimize to tray instead of quitting
-		Menu:              createAppMenu(app),
+		HideWindowOnClose: false, // Handled by OnBeforeClose
+		OnBeforeClose: func(ctx context.Context) (prevent bool) {
+			minimize := app.GetMinimizeToTray()
+			if minimize {
+				runtime.WindowHide(ctx)
+				return true
+			}
+			return false
+		},
+		Menu: createAppMenu(app),
 		Bind: []interface{}{
 			app,
 		},

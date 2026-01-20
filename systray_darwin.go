@@ -10,7 +10,7 @@ package main
 
 // InitSystemTray is a no-op on macOS due to AppDelegate conflict with Wails
 // macOS users can use Dock icon to restore the window
-func InitSystemTray(app *App) {
+func InitSystemTray(app *App, iconData []byte) {
 	// No-op on macOS - HideWindowOnClose will minimize to Dock
 }
 
