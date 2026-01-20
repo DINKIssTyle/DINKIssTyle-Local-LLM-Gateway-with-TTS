@@ -174,6 +174,31 @@ function setLanguage(lang) {
 // ============================================================================
 let wakeLock = null;
 
+// Audio Context Recovery for iOS/PWA
+document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState === 'visible') {
+        console.log('[Audio] App foregrounded, checking audio context...');
+
+        // Re-acquire Wake Lock if it was active
+        if (isPlayingQueue || isGenerating) {
+            await requestWakeLock();
+        }
+    }
+});
+
+// Unlock audio context on first user interaction (critical for iOS)
+const unlockAudio = () => {
+    // We don't use Web Audio API directly for playback (using Audio element), 
+    // but this pattern helps browser policies favorable to audio
+    const audio = new Audio();
+    audio.play().catch(() => { });
+    document.removeEventListener('touchstart', unlockAudio);
+    document.removeEventListener('click', unlockAudio);
+    console.log('[Audio] Audio unlocked by user interaction');
+};
+document.addEventListener('touchstart', unlockAudio);
+document.addEventListener('click', unlockAudio);
+
 async function requestWakeLock() {
     if ('wakeLock' in navigator) {
         try {
