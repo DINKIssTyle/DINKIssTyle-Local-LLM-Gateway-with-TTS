@@ -36,10 +36,13 @@ type App struct {
 
 // AppConfig holds the persistent application configuration
 type AppConfig struct {
-	Port        string          `json:"port"`
-	LLMEndpoint string          `json:"llmEndpoint"`
-	EnableTTS   bool            `json:"enableTTS"`
-	TTS         ServerTTSConfig `json:"tts"`
+	Port            string          `json:"port"`
+	LLMEndpoint     string          `json:"llmEndpoint"`
+	EnableTTS       bool            `json:"enableTTS"`
+	TTS             ServerTTSConfig `json:"tts"`
+	StartOnBoot     bool            `json:"startOnBoot"`
+	MinimizeToTray  bool            `json:"minimizeToTray"`
+	AutoStartServer bool            `json:"autoStartServer"`
 }
 
 var configFile = "config.json"
@@ -230,20 +233,27 @@ func (a *App) loadConfig() {
 }
 
 func (a *App) saveConfig() {
-	cfg := AppConfig{
-		Port:        a.port,
-		LLMEndpoint: a.llmEndpoint,
-		EnableTTS:   a.enableTTS,
-		TTS:         ttsConfig,
+	cfgPath := GetResourcePath(configFile)
+
+	// Read existing config to preserve other fields
+	var cfg AppConfig
+	data, err := os.ReadFile(cfgPath)
+	if err == nil {
+		json.Unmarshal(data, &cfg)
 	}
 
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	// Update fields managed by this function
+	cfg.Port = a.port
+	cfg.LLMEndpoint = a.llmEndpoint
+	cfg.EnableTTS = a.enableTTS
+	cfg.TTS = ttsConfig
+
+	data, err = json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		fmt.Printf("Failed to marshal config: %v\n", err)
 		return
 	}
 
-	cfgPath := GetResourcePath(configFile)
 	if err := os.WriteFile(cfgPath, data, 0644); err != nil {
 		fmt.Printf("Failed to save config: %v\n", err)
 	}
@@ -258,6 +268,12 @@ func (a *App) startup(ctx context.Context) {
 
 	// Reload config now that paths are set up and files potentially copied
 	a.loadConfig()
+
+	// Check for Auto Start Server
+	if a.GetAutoStartServer() {
+		fmt.Println("Auto-starting server based on configuration...")
+		go a.StartServerWithCurrentConfig()
+	}
 
 	// Initialize TTS if enabled
 	if a.enableTTS {
@@ -343,6 +359,114 @@ func (a *App) SetEnableTTS(enabled bool) {
 	a.saveConfig()
 }
 
+// Startup Settings - exposed to Wails frontend
+
+// SetStartOnBoot enables/disables start on boot
+func (a *App) SetStartOnBoot(enabled bool) {
+	if enabled {
+		if err := RegisterStartup(); err != nil {
+			fmt.Printf("Failed to register startup: %v\n", err)
+		}
+	} else {
+		if err := UnregisterStartup(); err != nil {
+			fmt.Printf("Failed to unregister startup: %v\n", err)
+		}
+	}
+	a.saveStartupSetting("startOnBoot", enabled)
+}
+
+// GetStartOnBoot returns the start on boot setting
+func (a *App) GetStartOnBoot() bool {
+	return a.loadStartupSetting("startOnBoot")
+}
+
+// SetMinimizeToTray enables/disables minimize to tray
+func (a *App) SetMinimizeToTray(enabled bool) {
+	a.saveStartupSetting("minimizeToTray", enabled)
+}
+
+// GetMinimizeToTray returns the minimize to tray setting
+func (a *App) GetMinimizeToTray() bool {
+	// Default to true - loadStartupSetting returns false if not set
+	// so we need to check if the key exists in config
+	cfgPath := GetResourcePath(configFile)
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return true // Default to true
+	}
+	var cfg AppConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return true // Default to true
+	}
+	return cfg.MinimizeToTray
+}
+
+// SetAutoStartServer enables/disables auto start server
+func (a *App) SetAutoStartServer(enabled bool) {
+	a.saveStartupSetting("autoStartServer", enabled)
+}
+
+// GetAutoStartServer returns the auto start server setting
+func (a *App) GetAutoStartServer() bool {
+	return a.loadStartupSetting("autoStartServer")
+}
+
+// Helper methods for startup settings persistence
+func (a *App) saveStartupSetting(key string, value bool) {
+	cfgPath := GetResourcePath(configFile)
+	data, err := os.ReadFile(cfgPath)
+
+	var cfg AppConfig
+	if err == nil {
+		json.Unmarshal(data, &cfg)
+	}
+
+	switch key {
+	case "startOnBoot":
+		cfg.StartOnBoot = value
+	case "minimizeToTray":
+		cfg.MinimizeToTray = value
+	case "autoStartServer":
+		cfg.AutoStartServer = value
+	}
+
+	// Preserve existing values
+	if cfg.Port == "" {
+		cfg.Port = a.port
+	}
+	if cfg.LLMEndpoint == "" {
+		cfg.LLMEndpoint = a.llmEndpoint
+	}
+	cfg.EnableTTS = a.enableTTS
+	cfg.TTS = ttsConfig
+
+	newData, _ := json.MarshalIndent(cfg, "", "  ")
+	os.WriteFile(cfgPath, newData, 0644)
+}
+
+func (a *App) loadStartupSetting(key string) bool {
+	cfgPath := GetResourcePath(configFile)
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return false
+	}
+
+	var cfg AppConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return false
+	}
+
+	switch key {
+	case "startOnBoot":
+		return cfg.StartOnBoot
+	case "minimizeToTray":
+		return cfg.MinimizeToTray
+	case "autoStartServer":
+		return cfg.AutoStartServer
+	}
+	return false
+}
+
 // StartServer starts the HTTP server on the specified port
 func (a *App) StartServer(port string) error {
 	a.serverMux.Lock()
@@ -368,8 +492,17 @@ func (a *App) StartServer(port string) error {
 	a.isRunning = true
 	fmt.Printf("Server started on http://localhost:%s\n", port)
 	a.saveConfig()
-	a.saveConfig()
+	UpdateTrayServerState()
 	return nil
+}
+
+// StartServerWithCurrentConfig starts the server using the current port configuration
+func (a *App) StartServerWithCurrentConfig() error {
+	port := a.port
+	if port == "" {
+		port = "7860"
+	}
+	return a.StartServer(port)
 }
 
 // SetPort sets the server port
@@ -397,6 +530,7 @@ func (a *App) StopServer() error {
 
 	a.isRunning = false
 	fmt.Println("Server stopped")
+	UpdateTrayServerState()
 	return nil
 }
 

@@ -24,17 +24,21 @@ var assets embed.FS
 func main() {
 	app := NewApp(assets)
 
+	// Initialize system tray
+	InitSystemTray(app)
+
 	err := wails.Run(&options.App{
 		Title:     "DKST LLM Chat Server",
-		Width:     450,
-		Height:    990,
-		MinWidth:  450,
-		MinHeight: 990,
+		Width:     780,
+		Height:    700,
+		MinWidth:  600,
+		MinHeight: 700,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		OnStartup: app.startup,
-		Menu:      createAppMenu(app),
+		OnStartup:         app.startup,
+		HideWindowOnClose: true, // Minimize to tray instead of quitting
+		Menu:              createAppMenu(app),
 		Bind: []interface{}{
 			app,
 		},
