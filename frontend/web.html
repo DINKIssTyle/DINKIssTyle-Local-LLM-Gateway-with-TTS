@@ -22,7 +22,7 @@
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
 
     <!-- Styles -->
-    <link rel="stylesheet" href="style.css?v=2">
+    <link rel="stylesheet" href="style.css?v=4">
 
     <!-- Highlight.js -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
@@ -30,185 +30,199 @@
 
 <body>
 
-
-    <!-- Mobile Overlay -->
-    <div id="sidebar-overlay" onclick="toggleSidebar()"></div>
-
-    <!-- Sidebar -->
-    <div id="sidebar">
-        <div class="sidebar-header">
-            <div style="display: flex; align-items: center; gap: 10px;">
-                <img src="appicon.png" alt="App Icon" style="width: 24px; height: 24px;">
-                DKST LLM Chat
-            </div>
-            <button class="icon-btn" onclick="toggleSidebar()" aria-label="Close Sidebar">
-                <span class="material-icons-round">close</span>
-            </button>
-        </div>
-
-        <div class="sidebar-content">
-            <!-- Server Control Panel -->
-            <div class="server-control">
-                <div class="server-status" id="server-status">
-                    <span class="status-dot stopped"></span>
-                    <span>Server: Stopped</span>
-                </div>
-                <div class="setting-group">
-                    <label>Server Port</label>
-                    <input type="number" id="server-port" value="8080" min="1024" max="65535">
-                </div>
-                <button class="btn btn-primary" id="server-toggle-btn" onclick="toggleServer()">
-                    <span class="material-icons-round">play_arrow</span> Start Server
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal-overlay" onclick="if(event.target===this)closeSettingsModal()">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 data-i18n="modal.settings.title">Settings</h2>
+                <button class="modal-close" onclick="closeSettingsModal()">
+                    <span class="material-icons-round">close</span>
                 </button>
             </div>
+            <div class="modal-body">
+                <!-- Language Selector -->
+                <div class="lang-selector">
+                    <label>🌐 Language</label>
+                    <select id="cfg-lang" onchange="setLanguage(this.value)">
+                        <option value="ko">한국어</option>
+                        <option value="en">English</option>
+                    </select>
+                </div>
 
-            <hr style="border-color: var(--border-color); opacity: 0.3; margin: 15px 0;">
+                <!-- LLM Settings Section -->
+                <div class="setting-section">
+                    <div class="setting-section-title" data-i18n="section.llm">LLM Settings</div>
 
-            <div class="setting-group desktop-only" id="llm-endpoint-setting">
-                <label>LLM Endpoint</label>
-                <input type="text" id="cfg-api" placeholder="http://127.0.0.1:1234">
-            </div>
+                    <div class="setting-item">
+                        <label data-i18n="setting.model.label">Model Name</label>
+                        <p class="setting-desc" data-i18n="setting.model.desc">LLM서버에서 현재 로드되어 있는 모델 이름을 적어주세요.</p>
+                        <input type="text" id="cfg-model" placeholder="gemma-2b-it">
+                    </div>
 
-            <div class="setting-group">
-                <label>Model Name</label>
-                <input type="text" id="cfg-model" placeholder="gemma-2b-it">
-            </div>
+                    <div class="setting-item">
+                        <div class="setting-toggle" onclick="toggleSwitch('cfg-hide-think')">
+                            <span data-i18n="setting.hideThink.label">Hide &lt;think&gt;</span>
+                            <input type="checkbox" id="cfg-hide-think" checked>
+                        </div>
+                        <p class="setting-desc" data-i18n="setting.hideThink.desc">LLM이 생각하는 과정을 채팅창에 보여주지 않습니다.</p>
+                    </div>
 
-            <div class="setting-group">
-                <div class="setting-toggle" onclick="toggleSwitch('cfg-hide-think')">
-                    <span>Hide &lt;think&gt;</span>
-                    <input type="checkbox" id="cfg-hide-think" checked>
+                    <div class="setting-item">
+                        <label data-i18n="setting.systemPrompt.label">System Prompt</label>
+                        <p class="setting-desc" data-i18n="setting.systemPrompt.desc">LLM의 역할을 지정하세요. 예: "당신은 나의 영어
+                            선생님입니다."</p>
+                        <textarea id="cfg-system-prompt" rows="3"
+                            placeholder="You are a helpful AI assistant."></textarea>
+                    </div>
+
+                    <div class="setting-item">
+                        <label data-i18n="setting.temperature.label">Temperature</label>
+                        <p class="setting-desc" data-i18n="setting.temperature.desc">(기본값: 0.7) 값이 낮을수록 평범한 대답, 높을수록
+                            창의적인 대답</p>
+                        <input type="number" id="cfg-temp" step="0.1" value="0.7">
+                    </div>
+
+                    <div class="setting-item">
+                        <label data-i18n="setting.maxTokens.label">Max Tokens</label>
+                        <p class="setting-desc" data-i18n="setting.maxTokens.desc">(기본값: 4096) LLM이 생성할 최대 토큰 수</p>
+                        <input type="number" id="cfg-max-tokens" value="2048">
+                    </div>
+
+                    <div class="setting-item">
+                        <label data-i18n="setting.history.label">History Count</label>
+                        <p class="setting-desc" data-i18n="setting.history.desc">(기본값: 10) 대화 기억 횟수</p>
+                        <input type="number" id="cfg-history" value="10">
+                    </div>
+                </div>
+
+                <!-- TTS Settings Section -->
+                <div class="setting-section">
+                    <div class="setting-section-title" data-i18n="section.tts">TTS Engine</div>
+
+                    <div class="setting-item">
+                        <div class="setting-toggle" onclick="toggleSwitch('cfg-enable-tts')">
+                            <span data-i18n="setting.enableTTS.label">Enable TTS</span>
+                            <input type="checkbox" id="cfg-enable-tts">
+                        </div>
+                        <p class="setting-desc" data-i18n="setting.enableTTS.desc">응답을 음성으로 재생합니다.</p>
+                    </div>
+
+                    <div class="setting-item">
+                        <div class="setting-toggle" onclick="toggleSwitch('cfg-auto-tts')">
+                            <span data-i18n="setting.autoPlay.label">Auto-play</span>
+                            <input type="checkbox" id="cfg-auto-tts">
+                        </div>
+                        <p class="setting-desc" data-i18n="setting.autoPlay.desc">응답을 자동으로 음성 재생합니다.</p>
+                    </div>
+
+                    <div class="setting-item">
+                        <label data-i18n="setting.voiceStyle.label">Voice Style</label>
+                        <p class="setting-desc" data-i18n="setting.voiceStyle.desc">TTS 음성 스타일을 선택합니다.</p>
+                        <select id="cfg-tts-voice">
+                            <option value="">Loading...</option>
+                        </select>
+                    </div>
+
+                    <div class="setting-item">
+                        <label data-i18n="setting.speed.label">Speed</label>
+                        <p class="setting-desc" data-i18n="setting.speed.desc">음성 재생 속도입니다.</p>
+                        <div class="slider-row">
+                            <input type="range" id="cfg-tts-speed" min="0.5" max="3.0" step="0.1" value="1.0">
+                            <span class="slider-value" id="speed-val">1.0</span>
+                        </div>
+                    </div>
+
+                    <div class="setting-item">
+                        <label data-i18n="setting.ttsLang.label">TTS Language</label>
+                        <p class="setting-desc" data-i18n="setting.ttsLang.desc">선호하는 언어를 선택하세요.</p>
+                        <select id="cfg-tts-lang">
+                            <option value="ko">한국어</option>
+                            <option value="en">English</option>
+                            <option value="es">Español</option>
+                            <option value="fr">Français</option>
+                            <option value="pt">Português</option>
+                        </select>
+                    </div>
+
+                    <div class="setting-item">
+                        <label data-i18n="setting.chunkSize.label">Smart Chunking</label>
+                        <p class="setting-desc" data-i18n="setting.chunkSize.desc">(추천값: 150~300) TTS가 몇 글자씩 잘라 생성할지 지정
+                        </p>
+                        <input type="number" id="cfg-chunk-size" value="300" min="50" max="1000">
+                    </div>
+
+                    <div class="setting-item">
+                        <label data-i18n="setting.steps.label">Inference Steps</label>
+                        <p class="setting-desc" data-i18n="setting.steps.desc">(추천값: 2~8, 기본값: 5) 높을수록 자연스러운 음성</p>
+                        <div class="slider-row">
+                            <input type="range" id="cfg-tts-steps" min="1" max="50" step="1" value="5">
+                            <span class="slider-value" id="steps-val">5</span>
+                        </div>
+                    </div>
+
+                    <div class="setting-item">
+                        <label data-i18n="setting.threads.label">CPU Threads</label>
+                        <p class="setting-desc" data-i18n="setting.threads.desc">(기본값: 4) TTS 생성에 할당하는 CPU 스레드</p>
+                        <div class="slider-row">
+                            <input type="range" id="cfg-tts-threads" min="1" max="16" step="1" value="4">
+                            <span class="slider-value" id="threads-val">4</span>
+                        </div>
+                    </div>
+
+                    <div class="setting-item">
+                        <label data-i18n="setting.format.label">Audio Format</label>
+                        <p class="setting-desc" data-i18n="setting.format.desc">MP3는 WAV를 변환하여 재생합니다.</p>
+                        <select id="cfg-tts-format">
+                            <option value="wav">WAV (Original)</option>
+                            <option value="mp3-high">MP3 (High - 128kbps)</option>
+                            <option value="mp3-medium">MP3 (Medium - 96kbps)</option>
+                            <option value="mp3-low">MP3 (Low - 32kbps)</option>
+                        </select>
+                    </div>
                 </div>
             </div>
-
-            <div class="setting-group">
-                <label>System Prompt</label>
-                <textarea id="cfg-system-prompt" rows="3" placeholder="You are a helpful AI assistant."></textarea>
-            </div>
-
-            <hr style="border-color: var(--border-color); opacity: 0.3; margin: 15px 0;">
-
-            <div class="setting-group">
-                <label>Temperature</label>
-                <input type="number" id="cfg-temp" step="0.1" value="0.7">
-            </div>
-
-            <div class="setting-group">
-                <label>Max Tokens</label>
-                <input type="number" id="cfg-max-tokens" value="2048">
-            </div>
-
-            <div class="setting-group">
-                <label>History Count</label>
-                <input type="number" id="cfg-history" value="10">
-            </div>
-
-            <hr style="border-color: var(--border-color); opacity: 0.3; margin: 15px 0;">
-
-            <div class="setting-group-header">TTS Engine</div>
-            <div class="setting-group">
-                <div class="setting-toggle" onclick="toggleSwitch('cfg-enable-tts')">
-                    <span>Enable TTS</span>
-                    <input type="checkbox" id="cfg-enable-tts">
+            <div class="modal-footer">
+                <div class="modal-footer-buttons">
+                    <button class="btn btn-secondary btn-lg" onclick="closeSettingsModal()">
+                        <span class="material-icons-round">close</span>
+                        <span data-i18n="action.cancel">취소</span>
+                    </button>
+                    <button class="btn btn-primary btn-lg" id="save-cfg-btn">
+                        <span class="material-icons-round">save</span>
+                        <span data-i18n="action.save">저장</span>
+                    </button>
                 </div>
-            </div>
-
-            <div class="setting-group">
-                <div class="setting-toggle" onclick="toggleSwitch('cfg-auto-tts')">
-                    <span>Auto-play</span>
-                    <input type="checkbox" id="cfg-auto-tts">
-                </div>
-            </div>
-
-            <div class="setting-group">
-                <label>Voice Style</label>
-                <select id="cfg-tts-voice">
-                    <option value="">Loading...</option>
-                </select>
-            </div>
-
-            <div class="setting-group">
-                <div style="display: flex; justify-content: space-between;">
-                    <label>Speed</label>
-                    <span id="speed-val" style="font-size: 11px; color: var(--text-secondary);">1.0</span>
-                </div>
-                <input type="range" id="cfg-tts-speed" min="0.5" max="3.0" step="0.1" value="1.0"
-                    oninput="document.getElementById('speed-val').textContent=this.value">
-            </div>
-
-            <div class="setting-group">
-                <label>TTS Language</label>
-                <select id="cfg-tts-lang">
-                    <option value="ko">Korean</option>
-                    <option value="en">English</option>
-                    <option value="es">Spanish</option>
-                    <option value="fr">French</option>
-                    <option value="pt">Portuguese</option>
-                </select>
-            </div>
-
-            <div class="setting-group">
-                <label>Smart Chunking (Chars)</label>
-                <input type="number" id="cfg-chunk-size" value="300" min="50" max="1000">
-            </div>
-
-            <div class="setting-group">
-                <label>Inference Steps (Default: 5): <span id="steps-val">5</span></label>
-                <input type="range" id="cfg-tts-steps" min="1" max="50" step="1" value="5">
-            </div>
-
-            <div class="setting-group">
-                <label>CPU Threads (Reloads TTS): <span id="threads-val">4</span></label>
-                <input type="range" id="cfg-tts-threads" min="1" max="16" step="1" value="4">
-            </div>
-
-            <div class="setting-group">
-                <label>Audio Format</label>
-                <select id="cfg-tts-format">
-                    <option value="wav">WAV (Original)</option>
-                    <option value="mp3-high">MP3 (High Quality - 128kbps)</option>
-                    <option value="mp3-medium">MP3 (Medium - 96kbps)</option>
-                    <option value="mp3-low">MP3 (Low Bandwidth - 32kbps)</option>
-                </select>
-            </div>
-
-            <div class="sidebar-actions">
-                <button class="btn btn-primary" id="save-cfg-btn">Save Settings</button>
-
-                <div class="action-separator"></div>
-
-                <button class="btn btn-secondary" onclick="clearChat()">
-                    <span class="material-icons-round">delete_sweep</span> Clear Chat History
+                <button class="btn btn-logout" onclick="logout()">
+                    <span class="material-icons-round">logout</span>
+                    <span data-i18n="action.logout">로그아웃</span>
                 </button>
-                <button class="btn btn-danger" onclick="logout()">
-                    <span class="material-icons-round">logout</span> Logout
-                </button>
+                <div class="modal-footer-info">
+                    &copy; 2026 DINKI'ssTyle
+                </div>
             </div>
-        </div>
-
-        <div class="footer">
-            &copy; 2026 DINKI'ssTyle
         </div>
     </div>
 
     <!-- Main Chat -->
     <div id="main-chat">
         <div id="chat-header">
-            <button class="icon-btn" onclick="toggleSidebar()">
-                <span class="material-icons-round">menu</span>
-            </button>
-            <span class="header-title">Chat</span>
-            <button class="icon-btn" onclick="clearChat()" title="Clear Chat">
-                <span class="material-icons-round">delete_outline</span>
-            </button>
+            <span id="header-model-name" class="header-model-name">Loading...</span>
+            <div style="display: flex; gap: 4px;">
+                <button class="icon-btn" onclick="clearChat()" title="Clear Chat">
+                    <span class="material-icons-round">delete_outline</span>
+                </button>
+                <button class="icon-btn" onclick="openSettingsModal()" title="Settings">
+                    <span class="material-icons-round">settings</span>
+                </button>
+            </div>
         </div>
 
         <div id="chat-messages">
             <!-- Messages will be injected here -->
             <div class="message assistant">
                 <div class="message-bubble">
-                    <div class="markdown-body">
-                        Hello! I am ready to chat. Configure your LM Studio connection in the sidebar.
+                    <div class="markdown-body" data-i18n="chat.welcome">
+                        Hello! I am ready to chat. Configure your settings using the gear icon.
                     </div>
                 </div>
             </div>
@@ -225,7 +239,8 @@
 
         <div id="input-area">
             <div class="input-container">
-                <textarea id="message-input" rows="1" placeholder="Type a message..."></textarea>
+                <textarea id="message-input" rows="1" placeholder="Type a message..."
+                    data-i18n-placeholder="input.placeholder"></textarea>
 
                 <div class="input-actions">
                     <input type="file" id="image-upload" accept="image/*" style="display: none"

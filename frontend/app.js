@@ -18,8 +18,166 @@ let config = {
     ttsVoice: '',
     ttsSpeed: 1.3,
     autoTTS: true,
-    ttsFormat: 'wav' // 'wav' or 'mp3'
+    ttsFormat: 'wav',
+    language: 'ko' // UI language
 };
+
+// ============================================================================
+// i18n Translation System
+// ============================================================================
+
+const translations = {
+    ko: {
+        // Modal
+        'modal.settings.title': '설정',
+        // Sections
+        'section.llm': 'LLM 설정',
+        'section.tts': 'TTS 엔진',
+        // Server
+        'server.stopped': '서버: 중지됨',
+        'server.running': '서버: 실행중',
+        'server.port': '서버 포트',
+        'server.start': '서버 시작',
+        'server.stop': '서버 중지',
+        // Actions
+        'action.clearChat': '대화 기록 삭제',
+        'action.logout': '로그아웃',
+        'action.save': '저장',
+        'action.cancel': '취소',
+        // Settings - LLM
+        'setting.llmEndpoint.label': 'LLM 엔드포인트',
+        'setting.model.label': '모델 이름',
+        'setting.model.desc': 'LLM서버에서 현재 로드되어 있는 모델 이름을 적어주세요.',
+        'setting.hideThink.label': 'Hide <think>',
+        'setting.hideThink.desc': 'LLM이 생각하는 과정을 채팅창에 보여주지 않습니다.',
+        'setting.systemPrompt.label': '시스템 프롬프트',
+        'setting.systemPrompt.desc': 'LLM의 역할을 지정하세요. 예: "당신은 나의 영어 선생님입니다."',
+        'setting.temperature.label': 'Temperature',
+        'setting.temperature.desc': '(기본값: 0.7) 값이 낮을수록 평범한 대답, 높을수록 창의적인 대답',
+        'setting.maxTokens.label': 'Max Tokens',
+        'setting.maxTokens.desc': '(기본값: 4096) LLM이 생성할 최대 토큰 수',
+        'setting.history.label': 'History Count',
+        'setting.history.desc': '(기본값: 10) 대화 기억 횟수',
+        // Settings - TTS
+        'setting.enableTTS.label': 'TTS 활성화',
+        'setting.enableTTS.desc': '응답을 음성으로 재생합니다.',
+        'setting.autoPlay.label': '자동 재생',
+        'setting.autoPlay.desc': '응답을 자동으로 음성 재생합니다.',
+        'setting.voiceStyle.label': '음성 스타일',
+        'setting.voiceStyle.desc': 'TTS 음성 스타일을 선택합니다.',
+        'setting.speed.label': '속도',
+        'setting.speed.desc': '음성 재생 속도입니다.',
+        'setting.ttsLang.label': 'TTS 언어',
+        'setting.ttsLang.desc': '선호하는 언어를 선택하세요.',
+        'setting.chunkSize.label': 'Smart Chunking',
+        'setting.chunkSize.desc': '(추천값: 150~300) TTS가 몇 글자씩 잘라 생성할지 지정',
+        'setting.steps.label': '추론 단계',
+        'setting.steps.desc': '(추천값: 2~8, 기본값: 5) 높을수록 자연스러운 음성',
+        'setting.threads.label': 'CPU 사용',
+        'setting.threads.desc': '(기본값: 4) TTS 생성에 할당하는 CPU 스레드',
+        'setting.format.label': '재생 형식',
+        'setting.format.desc': 'MP3는 WAV를 변환하여 재생합니다.',
+        // Chat
+        'chat.welcome': '안녕하세요! 채팅할 준비가 되었습니다. 우측 상단 기어 아이콘에서 설정하세요.',
+        'input.placeholder': '메시지를 입력하세요...'
+    },
+    en: {
+        // Modal
+        'modal.settings.title': 'Settings',
+        // Sections
+        'section.llm': 'LLM Settings',
+        'section.tts': 'TTS Engine',
+        // Server
+        'server.stopped': 'Server: Stopped',
+        'server.running': 'Server: Running',
+        'server.port': 'Server Port',
+        'server.start': 'Start Server',
+        'server.stop': 'Stop Server',
+        // Actions
+        'action.clearChat': 'Clear Chat History',
+        'action.logout': 'Logout',
+        'action.save': 'Save Settings',
+        'action.cancel': 'Cancel',
+        // Settings - LLM
+        'setting.llmEndpoint.label': 'LLM Endpoint',
+        'setting.model.label': 'Model Name',
+        'setting.model.desc': 'Enter the model name loaded on your LLM server.',
+        'setting.hideThink.label': 'Hide <think>',
+        'setting.hideThink.desc': 'Hides the thinking process from the chat.',
+        'setting.systemPrompt.label': 'System Prompt',
+        'setting.systemPrompt.desc': 'Define the LLM\'s role. Example: "You are my English teacher."',
+        'setting.temperature.label': 'Temperature',
+        'setting.temperature.desc': '(Default: 0.7) Lower = predictable, Higher = creative',
+        'setting.maxTokens.label': 'Max Tokens',
+        'setting.maxTokens.desc': '(Default: 4096) Maximum tokens to generate',
+        'setting.history.label': 'History Count',
+        'setting.history.desc': '(Default: 10) Number of messages to remember',
+        // Settings - TTS
+        'setting.enableTTS.label': 'Enable TTS',
+        'setting.enableTTS.desc': 'Play responses as audio.',
+        'setting.autoPlay.label': 'Auto-play',
+        'setting.autoPlay.desc': 'Automatically play audio responses.',
+        'setting.voiceStyle.label': 'Voice Style',
+        'setting.voiceStyle.desc': 'Select the TTS voice style.',
+        'setting.speed.label': 'Speed',
+        'setting.speed.desc': 'Audio playback speed.',
+        'setting.ttsLang.label': 'TTS Language',
+        'setting.ttsLang.desc': 'Select your preferred language.',
+        'setting.chunkSize.label': 'Smart Chunking',
+        'setting.chunkSize.desc': '(Recommended: 150~300) Characters per TTS chunk',
+        'setting.steps.label': 'Inference Steps',
+        'setting.steps.desc': '(Recommended: 2~8, Default: 5) Higher = more natural voice',
+        'setting.threads.label': 'CPU Threads',
+        'setting.threads.desc': '(Default: 4) CPU threads for TTS generation',
+        'setting.format.label': 'Audio Format',
+        'setting.format.desc': 'MP3 is converted from WAV.',
+        // Chat
+        'chat.welcome': 'Hello! I am ready to chat. Configure settings using the gear icon.',
+        'input.placeholder': 'Type a message...'
+    }
+};
+
+function t(key) {
+    const lang = config.language || 'ko';
+    return translations[lang]?.[key] || translations['en']?.[key] || key;
+}
+
+function applyTranslations() {
+    const lang = config.language || 'ko';
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+        const key = el.getAttribute('data-i18n');
+        if (translations[lang]?.[key]) {
+            el.textContent = translations[lang][key];
+        }
+    });
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+        const key = el.getAttribute('data-i18n-placeholder');
+        if (translations[lang]?.[key]) {
+            el.placeholder = translations[lang][key];
+        }
+    });
+    // Update language selector
+    const langSelect = document.getElementById('cfg-lang');
+    if (langSelect) langSelect.value = lang;
+}
+
+function setLanguage(lang) {
+    config.language = lang;
+    localStorage.setItem('appConfig', JSON.stringify(config));
+    applyTranslations();
+}
+
+// ============================================================================
+// Settings Modal Control
+// ============================================================================
+
+function openSettingsModal() {
+    document.getElementById('settings-modal').classList.add('active');
+}
+
+function closeSettingsModal() {
+    document.getElementById('settings-modal').classList.remove('active');
+}
 
 // Chat State
 let messages = [];
@@ -295,7 +453,8 @@ function loadConfig() {
     }
 
     // Update UI
-    document.getElementById('cfg-api').value = config.apiEndpoint;
+    const cfgApi = document.getElementById('cfg-api');
+    if (cfgApi) cfgApi.value = config.apiEndpoint;
     document.getElementById('cfg-model').value = config.model;
     document.getElementById('cfg-hide-think').checked = config.hideThink;
     document.getElementById('cfg-temp').value = config.temperature;
@@ -317,10 +476,23 @@ function loadConfig() {
     let format = config.ttsFormat || 'wav';
     if (format === 'mp3') format = 'mp3-high'; // Legacy mapping
     document.getElementById('cfg-tts-format').value = format;
+
+    // Language selector
+    document.getElementById('cfg-lang').value = config.language || 'ko';
+
+    // Update header with model name
+    const headerModelName = document.getElementById('header-model-name');
+    if (headerModelName) {
+        headerModelName.textContent = config.model || 'No Model Set';
+    }
+
+    // Apply i18n translations
+    applyTranslations();
 }
 
 function saveConfig() {
-    config.apiEndpoint = document.getElementById('cfg-api').value.trim();
+    const cfgApiEl = document.getElementById('cfg-api');
+    config.apiEndpoint = cfgApiEl ? cfgApiEl.value.trim() : config.apiEndpoint;
     config.model = document.getElementById('cfg-model').value.trim();
     config.hideThink = document.getElementById('cfg-hide-think').checked;
     config.temperature = parseFloat(document.getElementById('cfg-temp').value);
@@ -349,7 +521,15 @@ function saveConfig() {
         if (!r.ok) console.warn('Failed to sync settings');
     }).catch(e => console.warn('Sync error:', e));
 
-    alert('Settings saved! (TTS reloading if threads changed)');
+    // Update header model name
+    const headerModelName = document.getElementById('header-model-name');
+    if (headerModelName) {
+        headerModelName.textContent = config.model || 'No Model Set';
+    }
+
+    // Close modal and show feedback
+    closeSettingsModal();
+    showToast(t('action.save') + ' ✓');
 }
 
 async function syncServerConfig() {
@@ -443,12 +623,6 @@ function setupEventListeners() {
 function autoResizeInput() {
     messageInput.style.height = 'auto';
     messageInput.style.height = Math.min(messageInput.scrollHeight, 150) + 'px';
-}
-
-function toggleSidebar() {
-    document.getElementById('sidebar').classList.toggle('active');
-    const overlay = document.getElementById('sidebar-overlay');
-    if (overlay) overlay.classList.toggle('active');
 }
 
 function handleImageUpload(input) {
