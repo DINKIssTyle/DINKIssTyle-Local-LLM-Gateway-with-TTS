@@ -810,57 +810,68 @@ async function processStream(response, elementId) {
         initStreamingTTS(elementId);
     }
 
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
+            buffer += decoder.decode(value, { stream: true });
 
-        const lines = buffer.split('\n\n');
-        buffer = lines.pop();
+            const lines = buffer.split('\n\n');
+            buffer = lines.pop();
 
-        for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith('data: ')) continue;
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed.startsWith('data: ')) continue;
 
-            const dataStr = trimmed.substring(6);
-            if (dataStr === '[DONE]') break;
+                const dataStr = trimmed.substring(6);
+                if (dataStr === '[DONE]') break;
 
-            try {
-                const json = JSON.parse(dataStr);
-                const delta = json.choices[0].delta;
-                const content = delta.content || '';
+                try {
+                    const json = JSON.parse(dataStr);
+                    const delta = json.choices[0].delta;
+                    const content = delta.content || '';
 
-                if (content) {
-                    fullText += content;
-                    let displayText = fullText;
-                    if (config.hideThink) {
-                        displayText = fullText.replace(/<think>[\s\S]*?<\/think>/g, '');
-                        if (displayText.includes('<think>')) displayText = displayText.split('<think>')[0];
+                    if (content) {
+                        fullText += content;
+                        let displayText = fullText;
+                        if (config.hideThink) {
+                            displayText = fullText.replace(/<think>[\s\S]*?<\/think>/g, '');
+                            if (displayText.includes('<think>')) displayText = displayText.split('<think>')[0];
+                        }
+                        updateMessageContent(elementId, displayText);
+
+                        // Feed to streaming TTS
+                        if (useStreamingTTS) {
+                            feedStreamingTTS(displayText);
+                        }
                     }
-                    updateMessageContent(elementId, displayText);
-
-                    // Feed to streaming TTS
-                    if (useStreamingTTS) {
-                        feedStreamingTTS(displayText);
-                    }
+                } catch (e) {
+                    console.error('JSON Parse Error', e);
                 }
-            } catch (e) {
-                console.error('JSON Parse Error', e);
             }
         }
-    }
-
-    // Finalize
-    messages.push({ role: 'assistant', content: fullText });
-
-    // Finalize streaming TTS (commit any remaining text)
-    if (useStreamingTTS) {
-        let finalDisplayText = fullText;
-        if (config.hideThink) {
-            finalDisplayText = fullText.replace(/<think>[\s\S]*?<\/think>/g, '');
+    } catch (err) {
+        if (err.name === 'AbortError') {
+            console.log('Stream aborted by user');
+        } else {
+            console.error('Stream Error:', err);
+            throw err; // Re-throw other errors
         }
-        finalizeStreamingTTS(finalDisplayText);
+    } finally {
+        // Finalize (Save to history even if aborted)
+        if (fullText) {
+            messages.push({ role: 'assistant', content: fullText });
+        }
+
+        // Finalize streaming TTS (commit any remaining text)
+        if (useStreamingTTS) {
+            let finalDisplayText = fullText;
+            if (config.hideThink) {
+                finalDisplayText = fullText.replace(/<think>[\s\S]*?<\/think>/g, '');
+            }
+            finalizeStreamingTTS(finalDisplayText);
+        }
     }
 }
 
@@ -1237,10 +1248,15 @@ function cleanTextForTTS(text) {
     cleaned = cleaned.replace(/^\s*\d+\.\s+/gm, ''); // Numbered lists
 
     // Remove special characters that shouldn't be spoken
-    cleaned = cleaned.replace(/[«»""''„‚]/g, ''); // Fancy quotes
+    cleaned = cleaned.replace(/[«»""„‚]/g, ' '); // Fancy quotes -> space (prevent stuck words)
+    cleaned = cleaned.replace(/[=→]/g, ', '); // Equals and arrows to pauses
     cleaned = cleaned.replace(/[—–]/g, ', '); // Dashes to pauses
     cleaned = cleaned.replace(/\.{3,}/g, '.'); // Ellipsis
     cleaned = cleaned.replace(/\s*[-•◦▪▸►]\s*/g, ', '); // Bullet points to pauses
+
+    // Ensure space after punctuation to prevent stuck sentences
+    // e.g., "word.Next" -> "word. Next"
+    cleaned = cleaned.replace(/([.!?])(?=[^ \n])/g, '$1 ');
 
     // Normalize whitespace
     cleaned = cleaned.replace(/\r\n/g, '\n'); // Normalize line endings
@@ -1382,7 +1398,7 @@ function finalizeStreamingTTS(finalDisplayText) {
 
     if (finalText) {
         console.log(`[Streaming TTS] Finalizing: "${finalText.substring(0, 50)}..."`);
-        pushToStreamingTTSQueue(finalText);
+        pushToStreamingTTSQueue(finalText, true); // Force output even if short
     }
 
     streamingTTSBuffer = "";
@@ -1392,8 +1408,10 @@ function finalizeStreamingTTS(finalDisplayText) {
 
 /**
  * Push a text segment to the TTS queue and ensure processing is running
+ * @param {string} text - Text to speak
+ * @param {boolean} force - If true, ignores MIN_CHUNK_LENGTH check (use for final chunk)
  */
-function pushToStreamingTTSQueue(text) {
+function pushToStreamingTTSQueue(text, force = false) {
     if (!text || !text.trim()) return;
 
     const MIN_CHUNK_LENGTH = 50;
@@ -1416,7 +1434,8 @@ function pushToStreamingTTSQueue(text) {
             const trimmedPart = part.trim();
             if (!trimmedPart) continue;
 
-            if ((currentChunk + " " + trimmedPart).length > config.chunkSize && currentChunk.length >= MIN_CHUNK_LENGTH) {
+            // If adding this part exceeds chunkSize and we have content, queue current chunk
+            if ((currentChunk + " " + trimmedPart).length > config.chunkSize && (currentChunk.length >= MIN_CHUNK_LENGTH || force)) {
                 // Only add if it has actual speakable content
                 if (/[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ0-9]/.test(currentChunk)) {
                     ttsQueue.push(currentChunk.trim());
@@ -1427,8 +1446,8 @@ function pushToStreamingTTSQueue(text) {
             currentChunk = currentChunk ? currentChunk + " " + trimmedPart : trimmedPart;
         }
 
-        // Queue paragraph remainder if long enough
-        if (currentChunk.length >= MIN_CHUNK_LENGTH && /[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ0-9]/.test(currentChunk)) {
+        // Queue paragraph remainder if long enough OR forced
+        if ((currentChunk.length >= MIN_CHUNK_LENGTH || force) && /[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ0-9]/.test(currentChunk)) {
             ttsQueue.push(currentChunk.trim());
             newChunks.push(currentChunk.trim());
             currentChunk = "";

@@ -431,7 +431,7 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Use globalTTS directly while holding the lock to prevent destruction
-	wavData, _, err := globalTTS.Call(req.Text, req.Lang, style, steps, speed, req.ChunkSize)
+	wavData, _, err := globalTTS.Call(r.Context(), req.Text, req.Lang, style, steps, speed, req.ChunkSize)
 	sampleRate := globalTTS.SampleRate
 	globalTTSMutex.RUnlock()
 

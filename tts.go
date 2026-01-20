@@ -9,6 +9,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -312,7 +313,7 @@ func LoadVoiceStyle(voiceStylePath string) (*Style, error) {
 }
 
 // Call synthesizes speech from text
-func (tts *TextToSpeech) Call(text string, lang string, style *Style, totalStep int, speed float32, maxLen int) ([]float32, float32, error) {
+func (tts *TextToSpeech) Call(ctx context.Context, text string, lang string, style *Style, totalStep int, speed float32, maxLen int) ([]float32, float32, error) {
 	if maxLen == 0 {
 		maxLen = 300
 		if lang == "ko" {
@@ -334,7 +335,9 @@ func (tts *TextToSpeech) Call(text string, lang string, style *Style, totalStep 
 
 	for i, chunk := range chunks {
 		fmt.Printf("Processing chunk %d/%d: %s\n", i+1, len(chunks), chunk)
-		wav, duration, err := tts.infer([]string{chunk}, []string{lang}, style, totalStep, speed)
+		start := time.Now()
+		wav, duration, err := tts.infer(ctx, []string{chunk}, []string{lang}, style, totalStep, speed)
+		elapsed := time.Since(start).Seconds()
 		if err != nil {
 			return nil, 0, err
 		}
@@ -356,13 +359,13 @@ func (tts *TextToSpeech) Call(text string, lang string, style *Style, totalStep 
 
 		combinedWav = append(combinedWav, wavChunk...)
 		totalDuration += dur
-		fmt.Printf("TTS: Chunk %d/%d completed (%.2fs)\n", i+1, len(chunks), dur)
+		fmt.Printf("TTS: Chunk %d/%d completed (Audio: %.2fs, Processing: %.2fs)\n", i+1, len(chunks), dur, elapsed)
 	}
 
 	return combinedWav, totalDuration, nil
 }
 
-func (tts *TextToSpeech) infer(textList []string, langList []string, style *Style, totalStep int, speed float32) ([]float32, []float32, error) {
+func (tts *TextToSpeech) infer(ctx context.Context, textList []string, langList []string, style *Style, totalStep int, speed float32) ([]float32, []float32, error) {
 	bsz := len(textList)
 
 	textIDs, textMask := tts.textProcessor.Call(textList, langList)
@@ -426,6 +429,13 @@ func (tts *TextToSpeech) infer(textList []string, langList []string, style *Styl
 
 	// Denoising loop
 	for step := 0; step < totalStep; step++ {
+		// Check for cancellation
+		select {
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		default:
+		}
+
 		currentStepArray := make([]float32, bsz)
 		for b := 0; b < bsz; b++ {
 			currentStepArray[b] = float32(step)
