@@ -4,6 +4,8 @@
  */
 
 // Configuration State
+// [NOTICE] 웹페이지(web.html)의 초기 설정값은 아래 객체에서 정의됩니다. HTML 파일의 value 속성은 무시됩니다.
+// 브라우저 캐시(LocalStorage)에 저장된 값이 있다면 그것이 가장 우선됩니다.
 let config = {
     apiEndpoint: 'http://127.0.0.1:1234',
     model: 'qwen/qwen3-vl-30b',
