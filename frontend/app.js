@@ -1365,14 +1365,20 @@ function feedStreamingTTS(displayText) {
             }
         }
 
-        // Priority 4: Check for single newline with substantial text before it
+        // Priority 4: Check for single newline (Headlines, short list items)
         if (!committed) {
-            const lineMatch = newText.match(/^([^\n]{30,})\n/);
+            // Match any line ending with \n that has some content (>5 chars check below)
+            const lineMatch = newText.match(/^([^\n]+)\n/);
             if (lineMatch) {
-                const potentialCommit = streamingTTSBuffer + cleanTextForTTS(lineMatch[1]);
-                committed = potentialCommit;
-                streamingTTSBuffer = "";
-                advanceBy = lineMatch[0].length;
+                const cleanedLine = cleanTextForTTS(lineMatch[1]);
+                const potentialCommit = streamingTTSBuffer + cleanedLine;
+
+                // Allow if it's a headline (>5 chars) OR long enough regular text
+                if (potentialCommit.length >= 5) {
+                    committed = potentialCommit;
+                    streamingTTSBuffer = "";
+                    advanceBy = lineMatch[0].length;
+                }
             }
         }
 
@@ -1381,7 +1387,7 @@ function feedStreamingTTS(displayText) {
 
         // Commit the segment
         console.log(`[Streaming TTS] Committing: "${committed.substring(0, 50)}..."`);
-        pushToStreamingTTSQueue(committed);
+        pushToStreamingTTSQueue(committed, true); // Force output (feedStreamingTTS already handles buffering logic)
         streamingTTSCommittedIndex += advanceBy;
     }
 }
