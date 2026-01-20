@@ -200,8 +200,8 @@ func (tts *TextToSpeech) Destroy() {
 }
 
 // LoadTextToSpeech loads TTS components
-func LoadTextToSpeech(onnxDir string, cfg TTSConfig) (*TextToSpeech, error) {
-	fmt.Println("Loading TTS models (CPU mode)")
+func LoadTextToSpeech(onnxDir string, cfg TTSConfig, threads int) (*TextToSpeech, error) {
+	fmt.Printf("Loading TTS models (CPU mode, Threads: %d)\n", threads)
 
 	dpPath := filepath.Join(onnxDir, "duration_predictor.onnx")
 	textEncPath := filepath.Join(onnxDir, "text_encoder.onnx")
@@ -209,9 +209,12 @@ func LoadTextToSpeech(onnxDir string, cfg TTSConfig) (*TextToSpeech, error) {
 	vocoderPath := filepath.Join(onnxDir, "vocoder.onnx")
 
 	// Optimization: Set session options for multi-threading
+	if threads <= 0 {
+		threads = 4
+	}
 	so, _ := ort.NewSessionOptions()
 	defer so.Destroy()
-	so.SetIntraOpNumThreads(4) // Use 4 threads for parallel execution
+	so.SetIntraOpNumThreads(threads) // Use configured threads
 	so.SetInterOpNumThreads(1)
 
 	dpOrt, err := ort.NewDynamicAdvancedSession(dpPath, []string{"text_ids", "style_dp", "text_mask"},

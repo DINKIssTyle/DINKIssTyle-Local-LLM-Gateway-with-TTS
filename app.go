@@ -195,7 +195,8 @@ func (a *App) loadConfig() {
 	a.port = "8080"
 	a.llmEndpoint = "http://127.0.0.1:1234"
 	a.enableTTS = false
-	ttsConfig = ServerTTSConfig{VoiceStyle: "M1.json", Speed: 1.0}
+	a.enableTTS = false
+	ttsConfig = ServerTTSConfig{VoiceStyle: "M1.json", Speed: 1.0, Threads: 4}
 
 	cfgPath := GetResourcePath(configFile)
 	data, err := os.ReadFile(cfgPath)
@@ -222,6 +223,9 @@ func (a *App) loadConfig() {
 	}
 	if cfg.TTS.Speed > 0 {
 		ttsConfig.Speed = cfg.TTS.Speed
+	}
+	if cfg.TTS.Threads > 0 {
+		ttsConfig.Threads = cfg.TTS.Threads
 	}
 }
 
@@ -298,7 +302,7 @@ func (a *App) startup(ctx context.Context) {
 			}
 		}
 
-		if err := InitTTS(GetResourcePath("assets")); err != nil {
+		if err := InitTTS(GetResourcePath("assets"), ttsConfig.Threads); err != nil {
 			fmt.Printf("Initial TTS Init failed: %v\n", err)
 		}
 	}
@@ -331,7 +335,7 @@ func (a *App) SetEnableTTS(enabled bool) {
 	a.enableTTS = enabled
 	if enabled && globalTTS == nil {
 		go func() {
-			if err := InitTTS(GetResourcePath("assets")); err != nil {
+			if err := InitTTS(GetResourcePath("assets"), ttsConfig.Threads); err != nil {
 				fmt.Printf("Dynamic TTS Init failed: %v\n", err)
 			}
 		}()
@@ -440,6 +444,24 @@ func (a *App) SetTTSConfig(style string, speed float32) {
 	a.saveConfig()
 }
 
+// SetTTSThreads updates TTS thread count and reloads model
+func (a *App) SetTTSThreads(threads int) {
+	if threads <= 0 {
+		threads = 4
+	}
+	ttsConfig.Threads = threads
+	a.saveConfig()
+
+	if a.enableTTS {
+		fmt.Printf("Reloading TTS with %d threads...\n", threads)
+		go func() {
+			if err := InitTTS(GetResourcePath("assets"), threads); err != nil {
+				fmt.Printf("Failed to reload TTS: %v\n", err)
+			}
+		}()
+	}
+}
+
 // CheckAssets checks if required assets exist
 func (a *App) CheckAssets() bool {
 	assetsDir := GetResourcePath("assets")
@@ -471,7 +493,7 @@ func (a *App) DownloadAssets() error {
 	}
 
 	// Initialize TTS after download
-	if err := InitTTS(assetsDir); err != nil {
+	if err := InitTTS(assetsDir, 4); err != nil {
 		return fmt.Errorf("download succeeded but TTS init failed: %w", err)
 	}
 

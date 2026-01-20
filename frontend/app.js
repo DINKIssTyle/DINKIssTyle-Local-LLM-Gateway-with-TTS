@@ -55,7 +55,7 @@ let audioContextUnlocked = false;
 let audioCtx = null;
 let currentSource = null;
 
-function unlockAudioContext() {
+async function unlockAudioContext() {
     if (!audioCtx) {
         const AudioContext = window.AudioContext || window.webkitAudioContext;
         if (AudioContext) {
@@ -64,8 +64,9 @@ function unlockAudioContext() {
     }
 
     if (audioCtx && audioCtx.state === 'suspended') {
-        audioCtx.resume().then(() => {
-            // Play silent buffer to unlock
+        try {
+            await audioCtx.resume();
+            // Play silent buffer to unlock state
             const buffer = audioCtx.createBuffer(1, 1, 22050);
             const source = audioCtx.createBufferSource();
             source.buffer = buffer;
@@ -73,7 +74,9 @@ function unlockAudioContext() {
             source.start(0);
             audioContextUnlocked = true;
             console.log("AudioContext unlocked/resumed");
-        }).catch(e => console.error("Failed to resume AudioContext", e));
+        } catch (e) {
+            console.error("Failed to resume AudioContext", e);
+        }
     }
 }
 
@@ -307,6 +310,10 @@ function loadConfig() {
     if (config.ttsVoice) document.getElementById('cfg-tts-voice').value = config.ttsVoice;
     document.getElementById('cfg-tts-speed').value = config.ttsSpeed || 1.0;
     document.getElementById('speed-val').textContent = config.ttsSpeed || 1.0;
+    document.getElementById('cfg-tts-steps').value = config.ttsSteps || 5;
+    document.getElementById('steps-val').textContent = config.ttsSteps || 5;
+    document.getElementById('cfg-tts-threads').value = config.ttsThreads || 4;
+    document.getElementById('threads-val').textContent = config.ttsThreads || 4;
     let format = config.ttsFormat || 'wav';
     if (format === 'mp3') format = 'mp3-high'; // Legacy mapping
     document.getElementById('cfg-tts-format').value = format;
@@ -327,10 +334,22 @@ function saveConfig() {
     config.systemPrompt = document.getElementById('cfg-system-prompt').value.trim() || 'You are a helpful AI assistant.';
     config.ttsVoice = document.getElementById('cfg-tts-voice').value;
     config.ttsSpeed = parseFloat(document.getElementById('cfg-tts-speed').value);
+    config.ttsSteps = parseInt(document.getElementById('cfg-tts-steps').value);
+    config.ttsThreads = parseInt(document.getElementById('cfg-tts-threads').value);
     config.ttsFormat = document.getElementById('cfg-tts-format').value;
 
     localStorage.setItem('appConfig', JSON.stringify(config));
-    alert('Settings saved!');
+
+    // Sync threads to server (triggers reload)
+    fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tts_threads: config.ttsThreads })
+    }).then(r => {
+        if (!r.ok) console.warn('Failed to sync settings');
+    }).catch(e => console.warn('Sync error:', e));
+
+    alert('Settings saved! (TTS reloading if threads changed)');
 }
 
 async function syncServerConfig() {
@@ -389,6 +408,17 @@ function setupEventListeners() {
     });
 
     messageInput.addEventListener('input', autoResizeInput);
+
+    // TTS Settings listeners
+    document.getElementById('cfg-tts-speed').addEventListener('input', (e) => {
+        document.getElementById('speed-val').textContent = e.target.value;
+    });
+    document.getElementById('cfg-tts-steps').addEventListener('input', (e) => {
+        document.getElementById('steps-val').textContent = e.target.value;
+    });
+    document.getElementById('cfg-tts-threads').addEventListener('input', (e) => {
+        document.getElementById('threads-val').textContent = e.target.value;
+    });
 
     // Stop handling
     sendBtn.addEventListener('click', () => {
@@ -1214,6 +1244,7 @@ function prefetchTTSAudio(text) {
                 chunkSize: parseInt(config.chunkSize) || 300,
                 voiceStyle: config.ttsVoice,
                 speed: parseFloat(config.ttsSpeed) || 1.0,
+                steps: parseInt(config.ttsSteps) || 5,
                 format: config.ttsFormat || 'wav'
             };
 
@@ -1332,7 +1363,7 @@ async function processTTSQueue(isFirstChunk = false) {
         // Play audio using Web Audio API
         try {
             // Unlock audio context if needed (last ditch effort)
-            unlockAudioContext();
+            await unlockAudioContext();
 
             if (!audioCtx) {
                 throw new Error("AudioContext not available");

@@ -30,11 +30,14 @@ var (
 	// Style Cache
 	styleCache = make(map[string]*Style)
 	styleMutex sync.Mutex
+	// Global TTS Mutex
+	globalTTSMutex sync.RWMutex
 )
 
 type ServerTTSConfig struct {
 	VoiceStyle string  `json:"voiceStyle"`
 	Speed      float32 `json:"speed"`
+	Threads    int     `json:"threads"`
 }
 
 // createServerMux creates the HTTP handler mux for the server
@@ -52,11 +55,21 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	}))
 	mux.HandleFunc("/api/tts", AuthMiddleware(authMgr, handleTTS))
 	mux.HandleFunc("/api/config", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			var newCfg struct {
+				TTSThreads int `json:"tts_threads"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&newCfg); err == nil && newCfg.TTSThreads > 0 {
+				app.SetTTSThreads(newCfg.TTSThreads)
+			}
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-cache")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"llm_endpoint": app.llmEndpoint,
 			"enable_tts":   app.enableTTS,
+			"tts_config":   ttsConfig,
 		})
 	}))
 	mux.HandleFunc("/api/tts/styles", AuthMiddleware(authMgr, handleTTSStyles))
@@ -333,6 +346,7 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 		VoiceStyle string  `json:"voiceStyle"`
 		Speed      float32 `json:"speed"`
 		Format     string  `json:"format"` // "wav" or "mp3"
+		Steps      int     `json:"steps"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
@@ -347,7 +361,11 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if TTS is initialized
-	if globalTTS == nil {
+	globalTTSMutex.RLock()
+	ttsInstance := globalTTS
+	globalTTSMutex.RUnlock()
+
+	if ttsInstance == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		json.NewEncoder(w).Encode(map[string]string{
@@ -399,7 +417,24 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 	if req.Speed > 0 {
 		speed = req.Speed
 	}
-	wavData, _, err := globalTTS.Call(req.Text, req.Lang, style, 5, speed, req.ChunkSize)
+	steps := 5
+	if req.Steps > 0 {
+		steps = req.Steps
+		if steps > 50 {
+			steps = 50
+		}
+	}
+	globalTTSMutex.RLock()
+	if globalTTS == nil {
+		globalTTSMutex.RUnlock()
+		http.Error(w, "TTS not initialized", http.StatusInternalServerError)
+		return
+	}
+	// Use globalTTS directly while holding the lock to prevent destruction
+	wavData, _, err := globalTTS.Call(req.Text, req.Lang, style, steps, speed, req.ChunkSize)
+	sampleRate := globalTTS.SampleRate
+	globalTTSMutex.RUnlock()
+
 	if err != nil {
 		log.Printf("TTS failed: %v", err)
 		http.Error(w, "TTS generation failed", http.StatusInternalServerError)
@@ -407,7 +442,7 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate audio bytes in requested format
-	audioBytes, contentType, err := GenerateAudio(wavData, globalTTS.SampleRate, req.Format)
+	audioBytes, contentType, err := GenerateAudio(wavData, sampleRate, req.Format)
 	if err != nil {
 		log.Printf("Audio generation failed: %v", err)
 		http.Error(w, "Audio generation failed", http.StatusInternalServerError)
@@ -442,7 +477,7 @@ func handleTTSStyles(w http.ResponseWriter, r *http.Request) {
 // Global TTS instance
 
 // InitTTS initializes the TTS engine
-func InitTTS(assetsDir string) error {
+func InitTTS(assetsDir string, threads int) error {
 	onnxDir := assetsDir + "/onnx"
 
 	// Check if TTS files exist
@@ -451,7 +486,7 @@ func InitTTS(assetsDir string) error {
 		return nil
 	}
 
-	// Initialize ONNX Runtime
+	// Initialize ONNX Runtime (idempotent, safe to call multiple times or check internal flag)
 	if err := InitializeONNXRuntime(); err != nil {
 		return fmt.Errorf("failed to initialize ONNX Runtime: %w", err)
 	}
@@ -463,12 +498,21 @@ func InitTTS(assetsDir string) error {
 	}
 
 	// Load TTS models
-	tts, err := LoadTextToSpeech(onnxDir, cfg)
+	// Note: Loading takes time, do it before acquiring lock
+	tts, err := LoadTextToSpeech(onnxDir, cfg, threads)
 	if err != nil {
 		return fmt.Errorf("failed to load TTS: %w", err)
 	}
 
+	// Swap instances
+	globalTTSMutex.Lock()
+	defer globalTTSMutex.Unlock()
+
+	if globalTTS != nil {
+		globalTTS.Destroy()
+	}
+
 	globalTTS = tts
-	log.Println("TTS initialized successfully")
+	log.Printf("TTS initialized successfully (Threads: %d)", threads)
 	return nil
 }

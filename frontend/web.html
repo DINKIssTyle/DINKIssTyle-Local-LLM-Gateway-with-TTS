@@ -153,6 +153,16 @@
             </div>
 
             <div class="setting-group">
+                <label>Inference Steps (Default: 5): <span id="steps-val">5</span></label>
+                <input type="range" id="cfg-tts-steps" min="1" max="50" step="1" value="5">
+            </div>
+
+            <div class="setting-group">
+                <label>CPU Threads (Reloads TTS): <span id="threads-val">4</span></label>
+                <input type="range" id="cfg-tts-threads" min="1" max="16" step="1" value="4">
+            </div>
+
+            <div class="setting-group">
                 <label>Audio Format</label>
                 <select id="cfg-tts-format">
                     <option value="wav">WAV (Original)</option>
