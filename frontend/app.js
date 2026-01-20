@@ -14,11 +14,13 @@ let config = {
     enableTTS: true,
     ttsLang: 'ko',
     chunkSize: 300,
-    systemPrompt: 'You are a helpful AI assistant.',
+    systemPrompt: 'You are my AI assistant that responds using voice. Please answer in a way that is suitable for text-to-speech, and avoid using tables or other formats that are not suitable for TTS.',
     ttsVoice: '',
     ttsSpeed: 1.3,
     autoTTS: true,
     ttsFormat: 'wav',
+    ttsSteps: 5,
+    ttsThreads: 2,
     language: 'ko' // UI language
 };
 

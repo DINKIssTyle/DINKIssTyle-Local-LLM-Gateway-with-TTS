@@ -324,7 +324,7 @@ func (tts *TextToSpeech) Call(ctx context.Context, text string, lang string, sty
 	// Chunk text to avoid degradation on long inputs
 	chunks := chunkText(text, maxLen)
 
-	fmt.Printf("TTS: Split text into %d chunks\n", len(chunks))
+	fmt.Printf("%s TTS: Split text into %d chunks\n", time.Now().Format("15:04:05.000"), len(chunks))
 
 	var combinedWav []float32
 	var totalDuration float32
@@ -334,7 +334,7 @@ func (tts *TextToSpeech) Call(ctx context.Context, text string, lang string, sty
 	silence := make([]float32, silenceSamples)
 
 	for i, chunk := range chunks {
-		fmt.Printf("Processing chunk %d/%d: %s\n", i+1, len(chunks), chunk)
+		fmt.Printf("%s Processing chunk %d/%d: %s\n", time.Now().Format("15:04:05.000"), i+1, len(chunks), chunk)
 		start := time.Now()
 		wav, duration, err := tts.infer(ctx, []string{chunk}, []string{lang}, style, totalStep, speed)
 		elapsed := time.Since(start).Seconds()
@@ -359,7 +359,7 @@ func (tts *TextToSpeech) Call(ctx context.Context, text string, lang string, sty
 
 		combinedWav = append(combinedWav, wavChunk...)
 		totalDuration += dur
-		fmt.Printf("TTS: Chunk %d/%d completed (Audio: %.2fs, Processing: %.2fs)\n", i+1, len(chunks), dur, elapsed)
+		fmt.Printf("%s TTS: Chunk %d/%d completed (Audio: %.2fs, Processing: %.2fs)\n", time.Now().Format("15:04:05.000"), i+1, len(chunks), dur, elapsed)
 	}
 
 	return combinedWav, totalDuration, nil
