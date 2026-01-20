@@ -1296,6 +1296,7 @@ function feedStreamingTTS(displayText) {
 
     // Minimum length before we commit a chunk for TTS
     const MIN_STREAMING_CHUNK_LENGTH = 50;
+    const MIN_SENTENCE_LENGTH = 10;
 
     // Process all available committed segments in a loop
     let iterations = 0;
@@ -1306,17 +1307,17 @@ function feedStreamingTTS(displayText) {
 
         // Get the new portion of text since last commit
         const newText = displayText.substring(streamingTTSCommittedIndex);
-        if (!newText || newText.length < 10) break; // Need at least some content
+        if (!newText || newText.length < 5) break; // Need at least some content
 
         let committed = null;
         let advanceBy = 0;
 
         // Priority 1: Check for paragraph boundaries (double newline)
-        // Always commit on paragraph break regardless of length
+        // Always commit on paragraph break regardless of length if > 5 chars (Short headlines)
         const paragraphMatch = newText.match(/^([\s\S]*?\n\s*\n)/);
         if (paragraphMatch && paragraphMatch[1].trim()) {
             const cleaned = cleanTextForTTS(paragraphMatch[1]);
-            if (cleaned && cleaned.length >= 10) {
+            if (cleaned && cleaned.length >= 5) {
                 committed = cleaned;
                 advanceBy = paragraphMatch[0].length;
             }
@@ -1330,8 +1331,11 @@ function feedStreamingTTS(displayText) {
             if (sentenceMatch && sentenceMatch[1].trim()) {
                 const potentialCommit = streamingTTSBuffer + cleanTextForTTS(sentenceMatch[1]);
 
-                // Only commit if buffer + new content is long enough
-                if (potentialCommit.length >= MIN_STREAMING_CHUNK_LENGTH) {
+                // Allow short sentences if they are clearly complete (>10 chars)
+                const isLongEnough = potentialCommit.length >= MIN_STREAMING_CHUNK_LENGTH;
+                const isValidShortSentence = potentialCommit.length >= MIN_SENTENCE_LENGTH && /[가-힣A-Za-z]{2,}/.test(potentialCommit);
+
+                if (isLongEnough || isValidShortSentence) {
                     committed = potentialCommit;
                     streamingTTSBuffer = "";
                     advanceBy = sentenceMatch[1].length;
@@ -1347,9 +1351,9 @@ function feedStreamingTTS(displayText) {
         // Priority 3: Check for colon followed by newline (common in lists/explanations)
         if (!committed) {
             const colonMatch = newText.match(/^([\s\S]*?:)\s*\n/);
-            if (colonMatch && colonMatch[1].trim().length > 10) {
+            if (colonMatch && colonMatch[1].trim().length > 5) {
                 const potentialCommit = streamingTTSBuffer + cleanTextForTTS(colonMatch[1]);
-                if (potentialCommit.length >= MIN_STREAMING_CHUNK_LENGTH) {
+                if (potentialCommit.length >= MIN_STREAMING_CHUNK_LENGTH || (potentialCommit.length >= 10)) {
                     committed = potentialCommit;
                     streamingTTSBuffer = "";
                     advanceBy = colonMatch[0].length;
