@@ -16,7 +16,7 @@ let config = {
     chunkSize: 300,
     systemPrompt: 'You are my AI assistant that responds using voice. Please answer in a way that is suitable for text-to-speech, and avoid using tables or other formats that are not suitable for TTS.',
     ttsVoice: '',
-    ttsSpeed: 1.3,
+    ttsSpeed: 1.1,
     autoTTS: true,
     ttsFormat: 'wav',
     ttsSteps: 5,
@@ -883,6 +883,10 @@ async function processStream(response, elementId) {
     let buffer = '';
     let fullText = '';
 
+    // Think detection state for TTS
+    let thinkTagDetected = false;      // True if <think> was seen (suppress TTS)
+    let thinkEndHandled = false;       // True after we handled </think> (restart TTS)
+
     // Initialize streaming TTS if enabled
     const useStreamingTTS = config.enableTTS && config.autoTTS;
     if (useStreamingTTS) {
@@ -915,6 +919,13 @@ async function processStream(response, elementId) {
                     if (content) {
                         fullText += content;
                         let displayText = fullText;
+
+                        // Detect <think> tag for TTS suppression
+                        if (config.hideThink && !thinkTagDetected && fullText.includes('<think>')) {
+                            thinkTagDetected = true;
+                            console.log('[TTS] <think> detected - suppressing TTS until </think>');
+                        }
+
                         if (config.hideThink) {
                             // Remove complete <think>...</think> blocks
                             displayText = fullText.replace(/<think>[\s\S]*?<\/think>/g, '');
@@ -927,8 +938,33 @@ async function processStream(response, elementId) {
                         }
                         updateMessageContent(elementId, displayText);
 
-                        // Feed to streaming TTS
-                        if (useStreamingTTS) {
+                        // Smart TTS feeding with think detection
+                        if (useStreamingTTS && config.hideThink) {
+                            // Check if </think> just appeared (first time)
+                            if (!thinkEndHandled && fullText.includes('</think>')) {
+                                thinkEndHandled = true;
+                                console.log('[TTS] </think> detected - restarting TTS with response only');
+
+                                // Stop any currently playing TTS and clear queue
+                                stopAllAudio();
+
+                                // Re-initialize streaming TTS
+                                initStreamingTTS(elementId);
+
+                                // Feed clean content
+                                if (displayText.trim()) {
+                                    feedStreamingTTS(displayText);
+                                }
+                            } else if (thinkEndHandled) {
+                                // Already handled </think>, continue feeding normally
+                                feedStreamingTTS(displayText);
+                            } else if (!thinkTagDetected) {
+                                // No <think> seen yet, feed normally (non-thinking model)
+                                feedStreamingTTS(displayText);
+                            }
+                            // If thinkTagDetected but not thinkEndHandled, suppress TTS
+                        } else if (useStreamingTTS) {
+                            // hideThink is off, feed everything
                             feedStreamingTTS(displayText);
                         }
                     }

@@ -7,9 +7,21 @@ echo "Cleaning build artifacts..."
 rm -rf build/bin
 rm -rf frontend/dist
 
+# Setup PATH for Go and Wails
+export PATH="$HOME/go/bin:$PATH"
+export PATH="/usr/local/go/bin:$PATH"
+export PATH="/opt/homebrew/bin:$PATH"
+
+# Verify wails is available
+if ! command -v wails &> /dev/null; then
+    echo "Error: wails not found. Please install wails: go install github.com/wailsapp/wails/v2/cmd/wails@latest"
+    exit 1
+fi
+
 echo "Clean complete. Building for macOS..."
+echo "Using wails at: $(which wails)"
 # You can change darwin/universal to darwin/amd64 or darwin/arm64 if needed
-/Users/dinki/go/bin/wails build -platform darwin/universal -skipbindings
+wails build -platform darwin/universal -skipbindings
 
 if [ $? -eq 0 ]; then
     APP_CONTENT_DIR="build/bin/DKST LLM Chat Server.app/Contents/MacOS/"
