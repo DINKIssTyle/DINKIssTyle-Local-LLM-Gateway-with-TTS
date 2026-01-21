@@ -115,8 +115,8 @@ if [ -d "$APP_CONTENT_DIR" ]; then
     echo "Organizing artifacts..."
     # Copy ONNX Runtime lib if exists
     if [ -f "onnxruntime/libonnxruntime.so" ]; then
-        cp onnxruntime/libonnxruntime.so "$APP_CONTENT_DIR/libonnxruntime.so"
         mkdir -p "$APP_CONTENT_DIR/onnxruntime"
+        cp onnxruntime/libonnxruntime.so "$APP_CONTENT_DIR/onnxruntime/libonnxruntime.so"
         cp onnxruntime/LICENSE.txt "$APP_CONTENT_DIR/onnxruntime/LICENSE.txt"
         cp onnxruntime/ThirdPartyNotices.txt "$APP_CONTENT_DIR/onnxruntime/ThirdPartyNotices.txt"
     else
