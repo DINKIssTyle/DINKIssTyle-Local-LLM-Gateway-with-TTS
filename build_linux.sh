@@ -125,7 +125,7 @@ if [ -d "$APP_CONTENT_DIR" ]; then
 
     # Copy resources
     # cp -r assets "$APP_CONTENT_DIR"
-    cp -r frontend "$APP_CONTENT_DIR"
+
     cp users.json "$APP_CONTENT_DIR" 2>/dev/null || echo "{}" > "$APP_CONTENT_DIR/users.json"
     cp config.json "$APP_CONTENT_DIR" 2>/dev/null || true
     cp dictionary_*.txt "$APP_CONTENT_DIR" 2>/dev/null || true
@@ -134,7 +134,7 @@ if [ -d "$APP_CONTENT_DIR" ]; then
     
     # Cleanup
     rm -rf "$APP_CONTENT_DIR/assets/.git"
-    rm -rf "$APP_CONTENT_DIR/frontend/.git"
+
 
     echo "Build success! Output directory: $APP_CONTENT_DIR"
 else
