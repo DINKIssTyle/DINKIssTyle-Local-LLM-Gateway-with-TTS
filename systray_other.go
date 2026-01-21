@@ -9,6 +9,10 @@
 package main
 
 import (
+	"fmt"
+	"os"
+	"time"
+
 	"github.com/energye/systray"
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -16,6 +20,7 @@ import (
 var (
 	trayApp       *App
 	mServerToggle *systray.MenuItem
+	trayQuitChan  = make(chan struct{})
 )
 
 // Icon data - minimal 16x16 PNG (gray square placeholder)
@@ -38,6 +43,7 @@ func InitSystemTray(app *App, icon []byte) {
 	if len(icon) > 0 {
 		iconData = icon
 	}
+	// Start tray in a goroutine
 	go systray.Run(onTrayReady, onTrayExit)
 }
 
@@ -102,7 +108,11 @@ func onTrayReady() {
 }
 
 func onTrayExit() {
-	// Cleanup if needed
+	fmt.Println("System tray exiting...")
+	close(trayQuitChan)
+	// Force exit after a short delay to ensure cleanup
+	time.Sleep(100 * time.Millisecond)
+	os.Exit(0)
 }
 
 // updateServerMenuItem updates the server menu item text based on server state
@@ -122,4 +132,9 @@ func updateServerMenuItem() {
 // UpdateTrayServerState is called from App to update tray menu
 func UpdateTrayServerState() {
 	updateServerMenuItem()
+}
+
+// QuitSystemTray stops the system tray loop
+func QuitSystemTray() {
+	systray.Quit()
 }

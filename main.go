@@ -9,7 +9,7 @@ import (
 	"context"
 	"embed"
 	"log"
-	"os"
+	"runtime"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/menu"
@@ -17,17 +17,32 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/wailsapp/wails/v2/pkg/options/windows"
+	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 //go:embed trayicon.png
-var trayIcon []byte
+var trayIconPng []byte
+
+//go:embed trayicon.ico
+var trayIconIco []byte
+
+//go:embed build/windows/icon.ico
+var windowIcon []byte
 
 //go:embed frontend/*
 var assets embed.FS
 
 func main() {
 	app := NewApp(assets)
+
+	// Select tray icon based on OS (Windows prefers ICO)
+	var trayIcon []byte
+	if runtime.GOOS == "windows" {
+		trayIcon = trayIconIco
+	} else {
+		trayIcon = trayIconPng
+	}
 
 	// Initialize system tray
 	InitSystemTray(app, trayIcon)
@@ -47,7 +62,7 @@ func main() {
 		OnBeforeClose: func(ctx context.Context) (prevent bool) {
 			minimize := app.GetMinimizeToTray()
 			if minimize {
-				runtime.WindowHide(ctx)
+				wruntime.WindowHide(ctx)
 				return true
 			}
 			return false
@@ -59,13 +74,19 @@ func main() {
 		Mac: &mac.Options{
 			TitleBar: mac.TitleBarDefault(),
 		},
+		Windows: &windows.Options{
+			WebviewIsTransparent: false,
+			WindowIsTranslucent:  false,
+			DisableWindowIcon:    false,
+			Theme:                windows.SystemDefault,
+			CustomTheme:          nil,
+		},
 	})
 
 	if err != nil {
 		log.Fatal(err)
 	}
-	// Explicitly exit to ensure all resources and goroutines are cleaned up
-	os.Exit(0)
+	// Process exit is handled by onTrayExit callback in systray
 }
 
 func createAppMenu(app *App) *menu.Menu {
@@ -79,7 +100,7 @@ func createAppMenu(app *App) *menu.Menu {
 	appMenu.AddSeparator()
 	appMenu.AddText("Quit", keys.CmdOrCtrl("q"), func(_ *menu.CallbackData) {
 		if app.ctx != nil {
-			runtime.Quit(app.ctx)
+			wruntime.Quit(app.ctx)
 		}
 	})
 
@@ -87,33 +108,33 @@ func createAppMenu(app *App) *menu.Menu {
 	editMenu := men.AddSubmenu("Edit")
 	editMenu.AddText("Undo", keys.CmdOrCtrl("z"), func(_ *menu.CallbackData) {
 		if app.ctx != nil {
-			runtime.WindowExecJS(app.ctx, "document.execCommand('undo')")
+			wruntime.WindowExecJS(app.ctx, "document.execCommand('undo')")
 		}
 	})
 	editMenu.AddText("Redo", keys.CmdOrCtrl("shift+z"), func(_ *menu.CallbackData) {
 		if app.ctx != nil {
-			runtime.WindowExecJS(app.ctx, "document.execCommand('redo')")
+			wruntime.WindowExecJS(app.ctx, "document.execCommand('redo')")
 		}
 	})
 	editMenu.AddSeparator()
 	editMenu.AddText("Cut", keys.CmdOrCtrl("x"), func(_ *menu.CallbackData) {
 		if app.ctx != nil {
-			runtime.WindowExecJS(app.ctx, "document.execCommand('cut')")
+			wruntime.WindowExecJS(app.ctx, "document.execCommand('cut')")
 		}
 	})
 	editMenu.AddText("Copy", keys.CmdOrCtrl("c"), func(_ *menu.CallbackData) {
 		if app.ctx != nil {
-			runtime.WindowExecJS(app.ctx, "document.execCommand('copy')")
+			wruntime.WindowExecJS(app.ctx, "document.execCommand('copy')")
 		}
 	})
 	editMenu.AddText("Paste", keys.CmdOrCtrl("v"), func(_ *menu.CallbackData) {
 		if app.ctx != nil {
-			runtime.WindowExecJS(app.ctx, "document.execCommand('paste')")
+			wruntime.WindowExecJS(app.ctx, "document.execCommand('paste')")
 		}
 	})
 	editMenu.AddText("Select All", keys.CmdOrCtrl("a"), func(_ *menu.CallbackData) {
 		if app.ctx != nil {
-			runtime.WindowExecJS(app.ctx, "document.execCommand('selectAll')")
+			wruntime.WindowExecJS(app.ctx, "document.execCommand('selectAll')")
 		}
 	})
 
@@ -121,12 +142,12 @@ func createAppMenu(app *App) *menu.Menu {
 	windowMenu := men.AddSubmenu("Window")
 	windowMenu.AddText("Minimize", keys.CmdOrCtrl("m"), func(_ *menu.CallbackData) {
 		if app.ctx != nil {
-			runtime.WindowMinimise(app.ctx)
+			wruntime.WindowMinimise(app.ctx)
 		}
 	})
 	windowMenu.AddText("Zoom", nil, func(_ *menu.CallbackData) {
 		if app.ctx != nil {
-			runtime.WindowMaximise(app.ctx)
+			wruntime.WindowMaximise(app.ctx)
 		}
 	})
 

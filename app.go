@@ -342,6 +342,7 @@ func (a *App) startup(ctx context.Context) {
 func (a *App) shutdown(ctx context.Context) {
 	fmt.Println("Shutting down application...")
 	a.StopServer()
+	QuitSystemTray()
 }
 
 // GetServerStatus returns the current server status

@@ -18,3 +18,8 @@ func InitSystemTray(app *App, iconData []byte) {
 func UpdateTrayServerState() {
 	// No-op on macOS
 }
+
+// QuitSystemTray is a no-op on macOS
+func QuitSystemTray() {
+	// No-op on macOS
+}
