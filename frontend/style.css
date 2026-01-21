@@ -729,6 +729,22 @@ body.is-desktop .desktop-only {
   .modal-body {
     padding: 16px;
   }
+
+  /* 모바일에서 버튼 크기 축소 */
+  .modal-footer-buttons .btn-lg {
+    padding: 10px 12px !important;
+    font-size: 13px !important;
+    min-height: auto;
+    gap: 4px;
+  }
+
+  .modal-footer-buttons .btn-lg .material-icons-round {
+    font-size: 18px;
+  }
+
+  .modal-footer-buttons .btn-lg span:not(.material-icons-round) {
+    white-space: nowrap;
+  }
 }
 
 /* ============================================
