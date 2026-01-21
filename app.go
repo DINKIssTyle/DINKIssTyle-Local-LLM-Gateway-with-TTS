@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -118,25 +119,38 @@ func (a *App) CheckAndSetupPaths() {
 	bundleDir := filepath.Dir(exePath)
 
 	// List of things to copy from bundle to AppDataDir if missing
-	items := []string{"onnxruntime", "users.json", "config.json"}
+	items := []string{"onnxruntime", "users.json", "config.json", "Dictionary_editor.py"}
 
+	// Copy specific items
 	for _, item := range items {
 		destPath := filepath.Join(appDataDir, item)
 		if _, err := os.Stat(destPath); os.IsNotExist(err) {
 			srcPath := filepath.Join(bundleDir, item)
-			// Try finding in CWD if not in bundle (dev mode fallback)
 			if _, err := os.Stat(srcPath); os.IsNotExist(err) {
 				if _, err := os.Stat(item); err == nil {
 					srcPath = item
 				} else {
-					continue // Source missing, skip
+					continue
 				}
 			}
+			copyRecursive(srcPath, destPath)
+		}
+	}
 
-			fmt.Printf("Setup: Copying %s to %s\n", srcPath, destPath)
-			if err := copyRecursive(srcPath, destPath); err != nil {
-				fmt.Printf("Failed to copy %s: %v\n", item, err)
-			}
+	// Copy all dictionary files (dictionary_*.txt)
+	// Check bundle first, then CWD
+	dictPattern := "dictionary_*.txt"
+	matches, _ := filepath.Glob(filepath.Join(bundleDir, dictPattern))
+	if len(matches) == 0 {
+		matches, _ = filepath.Glob(dictPattern) // CWD check
+	}
+
+	for _, srcPath := range matches {
+		filename := filepath.Base(srcPath)
+		destPath := filepath.Join(appDataDir, filename)
+		if _, err := os.Stat(destPath); os.IsNotExist(err) {
+			fmt.Printf("Setup: Copying dictionary %s to %s\n", filename, destPath)
+			copyRecursive(srcPath, destPath)
 		}
 	}
 }
@@ -322,6 +336,12 @@ func (a *App) startup(ctx context.Context) {
 			fmt.Printf("Initial TTS Init failed: %v\n", err)
 		}
 	}
+}
+
+// shutdown is called when the app terminates
+func (a *App) shutdown(ctx context.Context) {
+	fmt.Println("Shutting down application...")
+	a.StopServer()
 }
 
 // GetServerStatus returns the current server status
@@ -523,8 +543,11 @@ func (a *App) StopServer() error {
 	}
 
 	if a.server != nil {
-		if err := a.server.Shutdown(context.Background()); err != nil {
-			return fmt.Errorf("failed to stop server: %v", err)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := a.server.Shutdown(ctx); err != nil {
+			a.server.Close() // Force close
+			return fmt.Errorf("failed to stop server gracefully: %v", err)
 		}
 	}
 
@@ -660,6 +683,59 @@ func (a *App) GetLicenseText() string {
 	}
 
 	return builder.String()
+}
+
+// GetTTSDictionary returns the dictionary for the specified language
+func (a *App) GetTTSDictionary(lang string) map[string]string {
+	if lang == "" {
+		lang = "ko"
+	}
+	filename := fmt.Sprintf("dictionary_%s.txt", lang)
+	dictFile := filepath.Join(GetAppDataDir(), filename)
+
+	// Create default if missing (only for ko/en as examples, or empty for others)
+	if _, err := os.Stat(dictFile); os.IsNotExist(err) {
+		// Provide basic defaults for ko/en if creating from scratch
+		var defaultContent string
+		if lang == "ko" {
+			defaultContent = "macOS, Mac OS\ndinki, 딩키\n"
+		} else if lang == "en" {
+			defaultContent = "macOS, Mac O S\nGUI, G U I\n"
+		} else {
+			defaultContent = "" // Empty for others by default
+		}
+		if defaultContent != "" {
+			os.WriteFile(dictFile, []byte(defaultContent), 0644)
+		}
+	}
+
+	result := make(map[string]string)
+	content, err := os.ReadFile(dictFile)
+	if err != nil {
+		// fmt.Printf("Failed to read dictionary %s: %v\n", filename, err)
+		return result
+	}
+
+	lines := strings.Split(string(content), "\n")
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, ",", 2)
+		if len(parts) == 2 {
+			key := strings.TrimSpace(parts[0])
+			val := strings.TrimSpace(parts[1])
+			if key != "" {
+				result[key] = val
+			} else {
+				fmt.Printf("[Dictionary] Warning: Empty key in %s line %d\n", filename, i+1)
+			}
+		} else {
+			fmt.Printf("[Dictionary] Warning: Malformed line in %s line %d (missing comma)\n", filename, i+1)
+		}
+	}
+	return result
 }
 
 // ShowAbout triggers the about modal in the frontend

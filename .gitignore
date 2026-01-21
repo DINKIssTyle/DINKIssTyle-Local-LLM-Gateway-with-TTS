@@ -2,3 +2,6 @@
 build/bin/
 assets
 supertonic/
+dinkisstyle-chat
+*.exe
+*.log

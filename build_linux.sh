@@ -128,6 +128,8 @@ if [ -d "$APP_CONTENT_DIR" ]; then
     cp -r frontend "$APP_CONTENT_DIR"
     cp users.json "$APP_CONTENT_DIR" 2>/dev/null || echo "{}" > "$APP_CONTENT_DIR/users.json"
     cp config.json "$APP_CONTENT_DIR" 2>/dev/null || true
+    cp dictionary_*.txt "$APP_CONTENT_DIR" 2>/dev/null || true
+    cp Dictionary_editor.py "$APP_CONTENT_DIR" 2>/dev/null || true
     
     # Cleanup
     rm -rf "$APP_CONTENT_DIR/assets/.git"

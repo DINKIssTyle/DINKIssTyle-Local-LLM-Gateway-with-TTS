@@ -1,0 +1,255 @@
+macOS, Mac OS
+dinki, 딩키
+Google, 구글
+Windows, 윈도우스
+Linux, 리눅스
+Android, 안드로이드
+iOS, 아이 오스
+LLM, 엘엘엠
+MS-DOS, MS Dos
+DOS, Dos
+GUI, G U I
+CLI, C L I
+HTTP, H T T P
+HTTPS, H T T P S
+API, 에이피아이
+URL, 유알엘
+JSON, 제이 에스 오 엔
+HTML, 에이치 티 엠 엘
+CSS, 씨 에스 에스
+JS, 제이에스
+PNG, 피 엔 지
+JPG, 제이 피 지
+JPEG, 제이 피 이 지
+GIF, 지 아이 에프
+MP3, 엠 피 쓰리
+MP4, 엠 피 포
+WAV, 웨이브
+PDF, 피 디 에프
+DOC, 디 오 씨
+DOCX, 디 오 씨 엑스
+PPT, 피 피 티
+PPTX, 피 피 티 엑스
+XLS, 엑스 엘 에스
+XLSX, 엑스 엘 에스 엑스
+TXT, 티 엑스 티
+ZIP, 지 아이 피
+RAR, 알 에이 알
+7Z, 세븐 집
+EXE, 이 엑스 이
+DLL, 디 엘 엘
+BAT, 비 에이 티
+SH, 에스 에이치
+PS1, 피 에스 원
+PY, 피 와이
+GO, 지 오
+RB, 알 비
+PHP, 피 에이치 피
+JAVA, 제이 에이 비 에이
+C, 씨
+CPP, 씨 피 피
+CS, 씨 에스
+HTML, 에이치 티 엠 엘
+CSS, 씨 에스 에스
+JS, 제이에스
+PNG, 피 엔 지
+JPG, 제이 피 지
+JPEG, 제이 피 이 지
+GIF, 지 아이 에프
+MP3, 엠 피 쓰리
+MP4, 엠 피 포
+WAV, 웨이브
+PDF, 피 디 에프
+DOC, 디 오 씨
+DOCX, 디 오 씨 엑스
+PPT, 피 피 티
+PPTX, 피 피 티 엑스
+XLS, 엑스 엘 에스
+XLSX, 엑스 엘 에스 엑스
+TXT, 티 엑스 티
+ZIP, 지 아이 피
+RAR, 알 에이 알
+7Z, 세븐 집
+EXE, 이 엑스 이
+DLL, 디 엘 엘
+BAT, 비 에이 티
+SH, 에스 에이치
+PS1, 피 에스 원
+PY, 피 와이
+GO, 지 오
+RB, 알 비
+PHP, 피 에이치 피
+JAVA, 제이 에이 비 에이
+C, 씨
+CPP, 씨 피 피
+CS, 씨 에스
+HTML, 에이치 티 엠 엘
+CSS, 씨 에스 에스
+JS, 제이에스
+PNG, 피 엔 지
+JPG, 제이 피 지
+JPEG, 제이 피 이 지
+GIF, 지 아이 에프
+MP3, 엠 피 쓰리
+MP4, 엠 피 포
+WAV, 웨이브
+PDF, 피 디 에프
+DOC, 디 오 씨
+DOCX, 디 오 씨 엑스
+PPT, 피 피 티
+PPTX, 피 피 티 엑스
+XLS, 엑스 엘 에스
+XLSX, 엑스 엘 에스 엑스
+TXT, 티 엑스 티
+ZIP, 지 아이 피
+RAR, 알 에이 알
+7Z, 세븐 집
+EXE, 이 엑스 이
+DLL, 디 엘 엘
+BAT, 비 에이 티
+SH, 에스 에이치
+PS1, 피 에스 원
+PY, 피 와이
+GO, 지 오
+RB, 알 비
+PHP, 피 에이치 피
+JAVA, 제이 에이 비 에이
+C, 씨
+CPP, 씨 피 피
+CS, 씨 에스
+HTML, 에이치 티 엠 엘
+CSS, 씨 에스 에스
+JS, 제이에스
+PNG, 피 엔 지
+JPG, 제이 피 지
+JPEG, 제이 피 이 지
+GIF, 지 아이 에프
+MP3, 엠 피 쓰리
+MP4, 엠 피 포
+WAV, 웨이브
+PDF, 피 디 에프
+DOC, 디 오 씨
+DOCX, 디 오 씨 엑스
+PPT, 피 피 티
+PPTX, 피 피 티 엑스
+XLS, 엑스 엘 에스
+XLSX, 엑스 엘 에스 엑스
+TXT, 티 엑스 티
+ZIP, 지 아이 피
+RAR, 알 에이 알
+7Z, 세븐 집
+EXE, 이 엑스 이
+DLL, 디 엘 엘
+BAT, 비 에이 티
+SH, 에스 에이치
+PS1, 피 에스 원
+PY, 피 와이
+GO, 지 오
+RB, 알 비
+PHP, 피 에이치 피
+JAVA, 제이 에이 비 에이
+C, 씨
+CPP, 씨 피 피
+CS, 씨 에스
+HTML, 에이치 티 엠 엘
+CSS, 씨 에스 에스
+JS, 제이에스
+PNG, 피 엔 지
+JPG, 제이 피 지
+JPEG, 제이 피 이 지
+GIF, 지 아이 에프
+MP3, 엠 피 쓰리
+MP4, 엠 피 포
+WAV, 웨이브
+PDF, 피 디 에프
+DOC, 디 오 씨
+DOCX, 디 오 씨 엑스
+PPT, 피 피 티
+PPTX, 피 피 티 엑스
+XLS, 엑스 엘 에스
+XLSX, 엑스 엘 에스 엑스
+TXT, 티 엑스 티
+ZIP, 지 아이 피
+RAR, 알 에이 알
+7Z, 세븐 집
+EXE, 이 엑스 이
+DLL, 디 엘 엘
+BAT, 비 에이 티
+SH, 에스 에이치
+PS1, 피 에스 원
+PY, 피 와이
+GO, 지 오
+RB, 알 비
+PHP, 피 에이치 피
+JAVA, 제이 에이 비 에이
+C, 씨
+CPP, 씨 피 피
+CS, 씨 에스
+HTML, 에이치 티 엠 엘
+CSS, 씨 에스 에스
+JS, 제이에스
+PNG, 피 엔 지
+JPG, 제이 피 지
+JPEG, 제이 피 이 지
+GIF, 지 아이 에프
+MP3, 엠 피 쓰리
+MP4, 엠 피 포
+WAV, 웨이브
+PDF, 피 디 에프
+DOC, 디 오 씨
+DOCX, 디 오 씨 엑스
+PPT, 피 피 티
+PPTX, 피 피 티 엑스
+XLS, 엑스 엘 에스
+XLSX, 엑스 엘 에스 엑스
+TXT, 티 엑스 티
+ZIP, 지 아이 피
+RAR, 알 에이 알
+7Z, 세븐 집
+EXE, 이 엑스 이
+DLL, 디 엘 엘
+BAT, 비 에이 티
+SH, 에스 에이치
+PS1, 피 에스 원
+PY, 피 와이
+GO, 지 오
+RB, 알 비
+PHP, 피 에이치 피
+JAVA, 제이 에이 비 에이
+C, 씨
+CPP, 씨 피 피
+CS, 씨 에스
+HTML, 에이치 티 엠 엘
+CSS, 씨 에스 에스
+JS, 제이에스
+PNG, 피 엔 지
+JPG, 제이 피 지
+JPEG, 제이 피 이 지
+GIF, 지 아이 에프
+MP3, 엠 피 쓰리
+MP4, 엠 피 포
+WAV, 웨이브
+PDF, 피 디 에프
+DOC, 디 오 씨
+DOCX, 디 오 씨 엑스
+PPT, 피 피 티
+PPTX, 피 피 티 엑스
+XLS, 엑스 엘 에스
+XLSX, 엑스 엘 에스 엑스
+TXT, 티 엑스 티
+ZIP, 지 아이 피
+RAR, 알 에이 알
+7Z, 세븐 집
+EXE, 이 엑스 이
+DLL, 디 엘 엘
+BAT, 비 에이 티
+SH, 에스 에이치
+PS1, 피 에스 원
+PY, 피 와이
+GO, 지 오
+RB, 알 비
+PHP, 피 에이치 피
+JAVA, 제이 에이 비 에이
+C, 씨
+CPP, 씨 피 피
+CS,

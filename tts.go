@@ -947,8 +947,13 @@ func InitializeONNXRuntime() error {
 	ort.SetSharedLibraryPath(libPath)
 
 	if err := ort.InitializeEnvironment(); err != nil {
-		log.Printf("Failed to initialize ONNX environment: %v", err)
-		return fmt.Errorf("failed to initialize ONNX Runtime: %w", err)
+		// Ignore if already initialized
+		if strings.Contains(err.Error(), "already been initialized") {
+			log.Printf("ONNX environment already initialized, proceeding")
+		} else {
+			log.Printf("Failed to initialize ONNX environment: %v", err)
+			return fmt.Errorf("failed to initialize ONNX Runtime: %w", err)
+		}
 	}
 	log.Println("ONNX Runtime initialized successfully")
 	return nil

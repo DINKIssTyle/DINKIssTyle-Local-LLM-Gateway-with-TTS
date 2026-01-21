@@ -76,6 +76,11 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	mux.HandleFunc("/api/models", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
 		handleModels(w, r, app.llmEndpoint)
 	}))
+	mux.HandleFunc("/api/dictionary", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
+		lang := r.URL.Query().Get("lang")
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(app.GetTTSDictionary(lang))
+	}))
 
 	// Admin-only endpoints
 	mux.HandleFunc("/api/users", AdminMiddleware(authMgr, handleUsers(authMgr)))
@@ -413,6 +418,9 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 	if req.VoiceStyle != "" {
 		styleName = req.VoiceStyle
 	}
+	if !strings.HasSuffix(styleName, ".json") {
+		styleName += ".json"
+	}
 	voiceStylePath := GetResourcePath(filepath.Join("assets", "voice_styles", styleName))
 
 	// Check Cache
@@ -499,7 +507,7 @@ func handleTTSStyles(w http.ResponseWriter, r *http.Request) {
 	var styles []string
 	for _, f := range files {
 		if !f.IsDir() && strings.HasSuffix(f.Name(), ".json") {
-			styles = append(styles, f.Name())
+			styles = append(styles, strings.TrimSuffix(f.Name(), ".json"))
 		}
 	}
 

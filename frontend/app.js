@@ -597,10 +597,111 @@ function loadConfig() {
     }
 
     // Apply i18n translations
+    // Apply i18n translations
     applyTranslations();
+
+    // Initialize System Prompt Presets
+    initSystemPromptPresets();
+
+    // Load TTS Dictionary
+    loadTTSDictionary();
+
+    // Setup settings listeners
+    setupSettingsListeners();
 }
 
-function saveConfig() {
+function setupSettingsListeners() {
+    // Save button explicit handler
+    const saveBtn = document.getElementById('save-cfg-btn');
+    if (saveBtn) {
+        saveBtn.onclick = () => saveConfig(true);
+    }
+
+    // Sliders: update label on input, save on change
+    const sliders = [
+        { id: 'cfg-tts-speed', val: 'speed-val' },
+        { id: 'cfg-tts-steps', val: 'steps-val' },
+        { id: 'cfg-tts-threads', val: 'threads-val' }
+    ];
+
+    sliders.forEach(item => {
+        const el = document.getElementById(item.id);
+        const valEl = document.getElementById(item.val);
+        if (el) {
+            el.oninput = () => { if (valEl) valEl.textContent = el.value; };
+            el.onchange = () => saveConfig(false);
+        }
+    });
+
+    // Selects & Inputs: save on change
+    const autoSaveIds = ['cfg-tts-lang', 'cfg-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt'];
+    autoSaveIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.onchange = () => saveConfig(false);
+    });
+}
+
+// Global Dictionary State
+let ttsDictionary = {};
+let ttsDictionaryRegex = null;
+
+async function loadTTSDictionary(lang) {
+    // Default to config language or 'ko' if undefined
+    const targetLang = lang || config.ttsLang || 'ko';
+    try {
+        if (window.go && window.go.main && window.go.main.App) {
+            ttsDictionary = await window.go.main.App.GetTTSDictionary(targetLang);
+        } else {
+            const res = await fetch(`/api/dictionary?lang=${targetLang}`);
+            if (res.ok) ttsDictionary = await res.json();
+        }
+
+        // Build optimized regex for performance (O(N) replacement)
+        const keys = Object.keys(ttsDictionary);
+        if (keys.length > 0) {
+            // Escape special chars in keys
+            const escapedKeys = keys.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+            // Create regex matching any of the keys with word boundaries
+            // Note: If keys contain spaces (e.g. "Mac OS"), \b might behave differently depending on chars
+            // But user example "macOS" -> "Mac OS" is single word key. 
+            // If user has "Mobile Phone", \bMobile Phone\b works.
+            ttsDictionaryRegex = new RegExp(`\\b(${escapedKeys.join('|')})\\b`, 'g');
+            console.log(`[TTS] Dictionary loaded with ${keys.length} entries.`);
+        }
+    } catch (e) {
+        console.error("Failed to load dictionary:", e);
+    }
+}
+
+const SYSTEM_PROMPT_PRESETS = {
+    "default": "You are a helpful AI assistant.",
+    "영어 회화 선생님": "당신은 나의 영어 선생님입니다 내가 입력하는 한국어를 영어 회화로 만들고 구문별 학습시켜 주세요",
+};
+
+function applySystemPromptPreset(key) {
+    if (SYSTEM_PROMPT_PRESETS[key]) {
+        document.getElementById('cfg-system-prompt').value = SYSTEM_PROMPT_PRESETS[key];
+    }
+}
+
+function initSystemPromptPresets() {
+    const selector = document.getElementById('cfg-system-prompt-preset');
+    if (!selector) return;
+
+    // Clear existing options (except first)
+    while (selector.options.length > 1) {
+        selector.remove(1);
+    }
+
+    for (const [key, value] of Object.entries(SYSTEM_PROMPT_PRESETS)) {
+        const option = document.createElement('option');
+        option.value = key;
+        option.textContent = key;
+        selector.appendChild(option);
+    }
+}
+
+function saveConfig(closeModal = true) {
     const cfgApiEl = document.getElementById('cfg-api');
     config.apiEndpoint = cfgApiEl ? cfgApiEl.value.trim() : config.apiEndpoint;
     config.model = document.getElementById('cfg-model').value.trim();
@@ -612,6 +713,10 @@ function saveConfig() {
     config.enableTTS = document.getElementById('cfg-enable-tts').checked;
     config.autoTTS = document.getElementById('cfg-auto-tts').checked;
     config.ttsLang = document.getElementById('cfg-tts-lang').value;
+
+    // Reload dictionary since language changes
+    loadTTSDictionary(config.ttsLang);
+
     config.chunkSize = parseInt(document.getElementById('cfg-chunk-size').value) || 300;
     config.systemPrompt = document.getElementById('cfg-system-prompt').value.trim() || 'You are a helpful AI assistant.';
     config.ttsVoice = document.getElementById('cfg-tts-voice').value;
@@ -637,8 +742,10 @@ function saveConfig() {
         headerModelName.textContent = config.model || 'No Model Set';
     }
 
-    // Close modal and show feedback
-    closeSettingsModal();
+    // Close modal only if requested
+    if (closeModal) {
+        closeSettingsModal();
+    }
     showToast(t('action.save') + ' ✓');
 }
 
@@ -664,8 +771,9 @@ async function loadVoiceStyles() {
             const styles = await response.json();
             const select = document.getElementById('cfg-tts-voice');
             select.innerHTML = styles.map(s => `<option value="${s}">${s}</option>`).join('');
-            if (config.ttsVoice && styles.includes(config.ttsVoice)) {
-                select.value = config.ttsVoice;
+            const saved = config.ttsVoice ? config.ttsVoice.replace('.json', '') : null;
+            if (saved && styles.includes(saved)) {
+                select.value = saved;
             } else if (styles.length > 0) {
                 select.value = styles[0];
                 config.ttsVoice = styles[0];
@@ -679,7 +787,10 @@ async function loadVoiceStyles() {
 
 function toggleSwitch(id) {
     const el = document.getElementById(id);
-    if (el) el.checked = !el.checked;
+    if (el) {
+        el.checked = !el.checked;
+        saveConfig(false);
+    }
 }
 
 function setupEventListeners() {
@@ -1296,8 +1407,24 @@ function cleanTextForTTS(text) {
 
     let cleaned = text;
 
+    // Apply Dictionary Corrections (Optimized with Regex)
+    if (ttsDictionaryRegex) {
+        cleaned = cleaned.replace(ttsDictionaryRegex, (match) => {
+            return ttsDictionary[match] || match;
+        });
+    }
+
     // Remove HTML tags
     cleaned = cleaned.replace(/<[^>]*>/g, '');
+
+    // IMPROVED: Add pauses for Markdown structure (Headers, Horizontal Rules)
+    // Replace headers (# Title) with "Title." for pause
+    cleaned = cleaned.replace(/^(#{1,6})\s+(.+)$/gm, '$2.');
+    // Replace horizontal rules (---) with pause
+    cleaned = cleaned.replace(/^([-*_]){3,}\s*$/gm, '.');
+    // Replace list items (* Item) - optional, but might help
+    // cleaned = cleaned.replace(/^[\*\-]\s+(.+)$/gm, '$1,'); 
+
 
     // Remove emoji (comprehensive Unicode ranges)
     cleaned = cleaned.replace(/[\u{1F600}-\u{1F64F}]/gu, ''); // Emoticons

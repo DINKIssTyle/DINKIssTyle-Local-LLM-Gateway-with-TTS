@@ -73,6 +73,10 @@
                         <label data-i18n="setting.systemPrompt.label">System Prompt</label>
                         <p class="setting-desc" data-i18n="setting.systemPrompt.desc">LLM의 역할을 지정하세요. 예: "당신은 나의 영어
                             선생님입니다."</p>
+                        <select id="cfg-system-prompt-preset" onchange="applySystemPromptPreset(this.value)"
+                            style="margin-bottom: 8px; width: 100%; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-color); padding: 8px; border-radius: 6px;">
+                            <option value="">Select a preset...</option>
+                        </select>
                         <textarea id="cfg-system-prompt" rows="3"
                             placeholder="You are my AI assistant that responds using voice. Please answer in a way that is suitable for text-to-speech, and avoid using tables or other formats that are not suitable for TTS."></textarea>
                     </div>

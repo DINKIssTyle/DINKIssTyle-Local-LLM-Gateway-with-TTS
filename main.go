@@ -9,6 +9,7 @@ import (
 	"context"
 	"embed"
 	"log"
+	"os"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/menu"
@@ -41,6 +42,7 @@ func main() {
 			Assets: assets,
 		},
 		OnStartup:         app.startup,
+		OnShutdown:        app.shutdown,
 		HideWindowOnClose: false, // Handled by OnBeforeClose
 		OnBeforeClose: func(ctx context.Context) (prevent bool) {
 			minimize := app.GetMinimizeToTray()
@@ -62,6 +64,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// Explicitly exit to ensure all resources and goroutines are cleaned up
+	os.Exit(0)
 }
 
 func createAppMenu(app *App) *menu.Menu {
