@@ -113,12 +113,12 @@ $WAILS_CMD build -platform linux/amd64 $BUILD_TAGS
 APP_CONTENT_DIR="build/bin"
 if [ -d "$APP_CONTENT_DIR" ]; then
     echo "Organizing artifacts..."
-    mkdir -p "$APP_CONTENT_DIR/onnxruntime"
-    
     # Copy ONNX Runtime lib if exists
     if [ -f "onnxruntime/libonnxruntime.so" ]; then
-        cp onnxruntime/libonnxruntime.so "$APP_CONTENT_DIR/onnxruntime/libonnxruntime.so"
+        cp onnxruntime/libonnxruntime.so "$APP_CONTENT_DIR/libonnxruntime.so"
+        mkdir -p "$APP_CONTENT_DIR/onnxruntime"
         cp onnxruntime/LICENSE.txt "$APP_CONTENT_DIR/onnxruntime/LICENSE.txt"
+        cp onnxruntime/ThirdPartyNotices.txt "$APP_CONTENT_DIR/onnxruntime/ThirdPartyNotices.txt"
     else
         echo "Warning: libonnxruntime.so not found in project root."
     fi
