@@ -2,22 +2,23 @@
 """
 DKST Dictionary Editor (PyQt6)
 
-Edits these files:
-  dictionary_en.txt, dictionary_ko.txt, dictionary_es.txt,
-  dictionary_pt.txt, dictionary_fr.txt
+Edits:
+  dictionary_en.txt, dictionary_ko.txt, dictionary_es.txt, dictionary_pt.txt, dictionary_fr.txt
 
-File location:
-  - Linux/Windows: same folder as this script
-  - macOS: ~/Documents/DKST LLM Chat/
-
-Text format per line:
+Line format:
   key, replacement
-
-Rules:
   - key is case-sensitive
-  - on save: remove blank rows
-  - on save: remove duplicate keys, keeping the first occurrence and removing later ones
-  - search box filters in real-time
+  - split at first comma only
+
+Save rules:
+  - remove empty rows
+  - remove duplicate keys (keep first, remove later)
+  - write UTF-8 with LF
+
+UI:
+  - Search filters in real time
+  - Language dropdown loads selected file
+  - Shows active folder path
 """
 
 import os
@@ -25,7 +26,7 @@ import sys
 import signal
 from dataclasses import dataclass
 
-from PyQt6.QtCore import Qt, QSortFilterProxyModel, QRegularExpression
+from PyQt6.QtCore import Qt, QSortFilterProxyModel
 from PyQt6.QtGui import QAction, QKeySequence, QStandardItem, QStandardItemModel
 from PyQt6.QtWidgets import (
     QApplication,
@@ -56,41 +57,85 @@ DICT_OPTIONS = [
     DictOption("FR", "FR (Français)", "dictionary_fr.txt"),
 ]
 
-
-def is_macos() -> bool:
-    return sys.platform == "darwin"
+DICT_FILENAMES = [o.filename for o in DICT_OPTIONS]
 
 
-def get_base_dir() -> str:
-    if is_macos():
-        return os.path.expanduser("~/Documents/DKST LLM Chat")
-    return os.path.abspath(os.path.dirname(__file__))
+def script_dir() -> str:
+    try:
+        return os.path.abspath(os.path.dirname(__file__))
+    except Exception:
+        return os.path.abspath(os.getcwd())
+
+
+def cwd_dir() -> str:
+    return os.path.abspath(os.getcwd())
 
 
 def ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
 
+def dir_has_any_dict_files(path: str) -> bool:
+    for fn in DICT_FILENAMES:
+        if os.path.exists(os.path.join(path, fn)):
+            return True
+    return False
+
+
+def choose_base_dir() -> str:
+    cd = cwd_dir()
+    sd = script_dir()
+    if dir_has_any_dict_files(cd):
+        return cd
+    if dir_has_any_dict_files(sd):
+        return sd
+    return cd
+
+
+def read_text_lines(path: str) -> list[str]:
+    encodings = ["utf-8-sig", "utf-8", "utf-16", "cp949"]
+    last_err = None
+    for enc in encodings:
+        try:
+            with open(path, "r", encoding=enc) as f:
+                return f.read().splitlines()
+        except Exception as e:
+            last_err = e
+    raise last_err
+
+
+def normalize_commas(s: str) -> str:
+    return (s or "").replace("，", ",").replace("\ufeff", "")
+
+
+def unquote(s: str) -> str:
+    s = s.strip()
+    if len(s) >= 2 and ((s[0] == s[-1] == '"') or (s[0] == s[-1] == "'")):
+        return s[1:-1].strip()
+    return s
+
+
 def parse_line(line: str):
-    """
-    Parse 'key, replacement' splitting only at the first comma.
-    Returns (key, value) or None if invalid/blank.
-    """
-    raw = line.strip()
+    raw = (line or "").strip()
     if not raw:
         return None
     if raw.startswith("#"):
         return None
 
+    raw = normalize_commas(raw)
+
     if "," not in raw:
         return None
 
     key, val = raw.split(",", 1)
-    key = key.strip()
-    val = val.strip()
+    key = unquote(key.strip())
+    val = unquote(val.strip())
 
     if not key and not val:
         return None
+    if not key:
+        return None
+
     return key, val
 
 
@@ -100,16 +145,14 @@ class ContainsFilterProxy(QSortFilterProxyModel):
         self._pattern = ""
 
     def set_filter_text(self, text: str):
-        self._pattern = (text or "").strip()
+        self._pattern = (text or "").strip().lower()
         self.invalidateFilter()
 
     def filterAcceptsRow(self, source_row: int, source_parent) -> bool:
         if not self._pattern:
             return True
-
         model = self.sourceModel()
-        pat = self._pattern.lower()
-
+        pat = self._pattern
         for col in range(model.columnCount()):
             idx = model.index(source_row, col, source_parent)
             data = model.data(idx, Qt.ItemDataRole.DisplayRole)
@@ -122,14 +165,15 @@ class DictionaryEditor(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("DKST Dictionary Editor")
-        self.resize(900, 600)
+        self.resize(920, 620)
 
-        self.base_dir = get_base_dir()
+        self.base_dir = choose_base_dir()
         ensure_dir(self.base_dir)
 
         self.current_option: DictOption | None = None
         self.current_path: str | None = None
         self.dirty = False
+        self.loading = False
 
         root = QWidget()
         self.setCentralWidget(root)
@@ -154,6 +198,14 @@ class DictionaryEditor(QMainWindow):
         top_bar.addWidget(self.lang_combo)
 
         outer.addLayout(top_bar)
+
+        path_bar = QHBoxLayout()
+        path_bar.setSpacing(10)
+        self.path_label = QLabel("")
+        self.path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        path_bar.addWidget(QLabel("Folder"))
+        path_bar.addWidget(self.path_label, 1)
+        outer.addLayout(path_bar)
 
         self.model = QStandardItemModel(0, 2)
         self.model.setHorizontalHeaderLabels(["Key", "Replacement"])
@@ -198,8 +250,11 @@ class DictionaryEditor(QMainWindow):
 
         outer.addLayout(btn_bar)
 
+        self.status_label = QLabel("")
+        outer.addWidget(self.status_label)
+
         self._setup_shortcuts()
-        self.load_from_combo_initial()
+        self._load_initial()
 
     def _setup_shortcuts(self):
         save_action = QAction(self)
@@ -212,17 +267,21 @@ class DictionaryEditor(QMainWindow):
         find_action.triggered.connect(lambda: self.search.setFocus())
         self.addAction(find_action)
 
-    def on_item_changed(self, _item):
-        self.dirty = True
-
-    def on_search_changed(self, text: str):
-        self.proxy.set_filter_text(text)
-
-    def load_from_combo_initial(self):
+    def _load_initial(self):
         opt = self.lang_combo.currentData()
         if isinstance(opt, DictOption):
             self.set_current_option(opt)
             self.load_file(opt)
+
+    def on_item_changed(self, _item):
+        if self.loading:
+            return
+        self.dirty = True
+        self._update_status()
+
+    def on_search_changed(self, text: str):
+        self.proxy.set_filter_text(text)
+        self._update_status()
 
     def on_lang_changed(self, _index: int):
         opt = self.lang_combo.currentData()
@@ -269,13 +328,22 @@ class DictionaryEditor(QMainWindow):
     def set_current_option(self, opt: DictOption):
         self.current_option = opt
         self.current_path = os.path.join(self.base_dir, opt.filename)
+        self.path_label.setText(self.base_dir)
+        self.setWindowTitle(f"DKST Dictionary Editor - {opt.label}")
 
     def clear_model(self):
-        self.model.blockSignals(True)
+        self.loading = True
         try:
             self.model.setRowCount(0)
         finally:
-            self.model.blockSignals(False)
+            self.loading = False
+
+    def _append_row_items(self, key: str, val: str):
+        it_key = QStandardItem(key)
+        it_val = QStandardItem(val)
+        it_key.setEditable(True)
+        it_val.setEditable(True)
+        self.model.appendRow([it_key, it_val])
 
     def load_file(self, opt: DictOption):
         self.clear_model()
@@ -284,42 +352,39 @@ class DictionaryEditor(QMainWindow):
         self.current_path = path
 
         if not os.path.exists(path):
-            with open(path, "w", encoding="utf-8") as f:
-                f.write("")
+            try:
+                with open(path, "w", encoding="utf-8", newline="\n") as f:
+                    f.write("")
+            except Exception as e:
+                QMessageBox.critical(self, "Create Failed", f"Could not create:\n{path}\n\n{e}")
+                self.dirty = False
+                self._update_status()
+                return
+
+        try:
+            lines = read_text_lines(path)
+        except Exception as e:
+            QMessageBox.critical(self, "Load Failed", f"Could not read:\n{path}\n\n{e}")
             self.dirty = False
-            self.setWindowTitle(f"DKST Dictionary Editor - {opt.label}")
+            self._update_status()
             return
 
         rows = []
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                for line in f:
-                    parsed = parse_line(line)
-                    if not parsed:
-                        continue
-                    rows.append(parsed)
-        except Exception as e:
-            QMessageBox.critical(self, "Load Failed", f"Could not load file:\n{path}\n\n{e}")
-            self.dirty = False
-            return
+        for line in lines:
+            parsed = parse_line(line)
+            if parsed:
+                rows.append(parsed)
 
-        self.model.blockSignals(True)
+        self.loading = True
         try:
             for key, val in rows:
                 self._append_row_items(key, val)
         finally:
-            self.model.blockSignals(False)
+            self.loading = False
 
         self.dirty = False
         self.search.clear()
-        self.setWindowTitle(f"DKST Dictionary Editor - {opt.label}")
-
-    def _append_row_items(self, key: str, val: str):
-        it_key = QStandardItem(key)
-        it_val = QStandardItem(val)
-        it_key.setEditable(True)
-        it_val.setEditable(True)
-        self.model.appendRow([it_key, it_val])
+        self._update_status()
 
     def add_row(self):
         self._append_row_items("", "")
@@ -331,23 +396,22 @@ class DictionaryEditor(QMainWindow):
             self.table.selectRow(proxy_row)
             self.table.setCurrentIndex(self.proxy.index(proxy_row, 0))
             self.table.edit(self.proxy.index(proxy_row, 0))
+        self._update_status()
 
     def delete_selected(self):
         idx = self.table.currentIndex()
         if not idx.isValid():
             return
-
         src_idx = self.proxy.mapToSource(idx)
         if not src_idx.isValid():
             return
-
         self.model.removeRow(src_idx.row())
         self.dirty = True
+        self._update_status()
 
     def reload_current(self):
         if not self.current_option:
             return
-
         if self.dirty:
             res = QMessageBox.question(
                 self,
@@ -357,28 +421,23 @@ class DictionaryEditor(QMainWindow):
             )
             if res != QMessageBox.StandardButton.Yes:
                 return
-
         self.load_file(self.current_option)
 
     def _collect_rows_cleaned(self):
-        """
-        Returns list of (key, val) after:
-          - removing blank rows
-          - removing duplicates by key (case-sensitive), keeping first occurrence
-        """
         seen = set()
         cleaned = []
 
         for r in range(self.model.rowCount()):
-            key = (self.model.item(r, 0).text() if self.model.item(r, 0) else "").strip()
-            val = (self.model.item(r, 1).text() if self.model.item(r, 1) else "").strip()
+            key_item = self.model.item(r, 0)
+            val_item = self.model.item(r, 1)
+
+            key = normalize_commas((key_item.text() if key_item else "")).strip()
+            val = normalize_commas((val_item.text() if val_item else "")).strip()
 
             if not key and not val:
                 continue
-
             if not key:
                 continue
-
             if key in seen:
                 continue
 
@@ -398,22 +457,27 @@ class DictionaryEditor(QMainWindow):
                 for key, val in cleaned:
                     f.write(f"{key}, {val}\n")
         except Exception as e:
-            QMessageBox.critical(self, "Save Failed", f"Could not save file:\n{self.current_path}\n\n{e}")
+            QMessageBox.critical(self, "Save Failed", f"Could not save:\n{self.current_path}\n\n{e}")
             return False
 
-        self._reload_from_cleaned(cleaned)
-        self.dirty = False
-        QMessageBox.information(self, "Saved", "Saved successfully.")
-        return True
-
-    def _reload_from_cleaned(self, cleaned):
-        self.clear_model()
-        self.model.blockSignals(True)
+        self.loading = True
         try:
+            self.model.setRowCount(0)
             for key, val in cleaned:
                 self._append_row_items(key, val)
         finally:
-            self.model.blockSignals(False)
+            self.loading = False
+
+        self.dirty = False
+        self._update_status()
+        QMessageBox.information(self, "Saved", "Saved successfully.")
+        return True
+
+    def _update_status(self):
+        total = self.model.rowCount()
+        shown = self.proxy.rowCount()
+        file_part = self.current_option.filename if self.current_option else "-"
+        self.status_label.setText(f"File: {file_part} | Rows loaded: {total} | Rows shown: {shown}")
 
     def closeEvent(self, event):
         if not self.dirty:
