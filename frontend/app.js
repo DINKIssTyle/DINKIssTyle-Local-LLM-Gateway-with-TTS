@@ -904,15 +904,12 @@ async function streamResponse(payload, elementId) {
 }
 
 // Helper to process the stream reader (shared by direct and proxy)
+// Helper to process the stream reader (shared by direct and proxy)
 async function processStream(response, elementId) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
     let fullText = '';
-
-    // Think detection state for TTS
-    let thinkTagDetected = false;      // True if <think> was seen (suppress TTS)
-    let thinkEndHandled = false;       // True after we handled </think> (restart TTS)
 
     // Initialize streaming TTS if enabled
     const useStreamingTTS = config.enableTTS && config.autoTTS;
@@ -947,12 +944,7 @@ async function processStream(response, elementId) {
                         fullText += content;
                         let displayText = fullText;
 
-                        // Detect <think> tag for TTS suppression
-                        if (config.hideThink && !thinkTagDetected && fullText.includes('<think>')) {
-                            thinkTagDetected = true;
-                            console.log('[TTS] <think> detected - suppressing TTS until </think>');
-                        }
-
+                        // UI Display Logic (Depends on config.hideThink)
                         if (config.hideThink) {
                             // Remove complete <think>...</think> blocks
                             displayText = fullText.replace(/<think>[\s\S]*?<\/think>/g, '');
@@ -961,38 +953,32 @@ async function processStream(response, elementId) {
                                 displayText = displayText.split('</think>').pop().trim();
                             }
                             // Handle incomplete <think> tag (still being streamed)
-                            if (displayText.includes('<think>')) displayText = displayText.split('<think>')[0];
+                            if (displayText.includes('<think>')) {
+                                displayText = displayText.split('<think>')[0];
+                            }
                         }
                         updateMessageContent(elementId, displayText);
 
-                        // Smart TTS feeding with think detection
-                        if (useStreamingTTS && config.hideThink) {
-                            // Check if </think> just appeared (first time)
-                            if (!thinkEndHandled && fullText.includes('</think>')) {
-                                thinkEndHandled = true;
-                                console.log('[TTS] </think> detected - restarting TTS with response only');
+                        // TTS Logic (ALWAYS filter <think> regardless of settings)
+                        if (useStreamingTTS) {
+                            // Remove complete <think>...</think> blocks
+                            let ttsText = fullText.replace(/<think>[\s\S]*?<\/think>/g, '');
 
-                                // Stop any currently playing TTS and clear queue
-                                stopAllAudio();
-
-                                // Re-initialize streaming TTS
-                                initStreamingTTS(elementId);
-
-                                // Feed clean content
-                                if (displayText.trim()) {
-                                    feedStreamingTTS(displayText);
-                                }
-                            } else if (thinkEndHandled) {
-                                // Already handled </think>, continue feeding normally
-                                feedStreamingTTS(displayText);
-                            } else if (!thinkTagDetected) {
-                                // No <think> seen yet, feed normally (non-thinking model)
-                                feedStreamingTTS(displayText);
+                            // Handle incomplete <think> tag (ongoing thought)
+                            if (ttsText.includes('<think>')) {
+                                ttsText = ttsText.split('<think>')[0];
                             }
-                            // If thinkTagDetected but not thinkEndHandled, suppress TTS
-                        } else if (useStreamingTTS) {
-                            // hideThink is off, feed everything
-                            feedStreamingTTS(displayText);
+
+                            // Handle case where </think> exists without opening tag
+                            if (ttsText.includes('</think>')) {
+                                ttsText = ttsText.split('</think>').pop();
+                            }
+
+                            // Feed the filtered text to TTS engine
+                            // feedStreamingTTS uses an index tracker, so we pass the cumulative filtered text
+                            if (ttsText) {
+                                feedStreamingTTS(ttsText);
+                            }
                         }
                     }
                 } catch (e) {
@@ -1015,16 +1001,16 @@ async function processStream(response, elementId) {
 
         // Finalize streaming TTS (commit any remaining text)
         if (useStreamingTTS) {
-            let finalDisplayText = fullText;
-            if (config.hideThink) {
-                // Remove complete <think>...</think> blocks
-                finalDisplayText = fullText.replace(/<think>[\s\S]*?<\/think>/g, '');
-                // Handle case where </think> exists without opening tag
-                if (finalDisplayText.includes('</think>')) {
-                    finalDisplayText = finalDisplayText.split('</think>').pop().trim();
-                }
+            let finalTTSText = fullText;
+            // ALWAYS filter think tags for TTS finalization too
+            finalTTSText = fullText.replace(/<think>[\s\S]*?<\/think>/g, '');
+            if (finalTTSText.includes('<think>')) {
+                finalTTSText = finalTTSText.split('<think>')[0];
             }
-            finalizeStreamingTTS(finalDisplayText);
+            if (finalTTSText.includes('</think>')) {
+                finalTTSText = finalTTSText.split('</think>').pop();
+            }
+            finalizeStreamingTTS(finalTTSText);
         }
         releaseWakeLock(); // Release screen lock after generation and TTS streaming is done
     }
