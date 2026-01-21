@@ -193,12 +193,17 @@
                         <span class="material-icons-round">close</span>
                         <span data-i18n="action.cancel">취소</span>
                     </button>
+                    <button class="btn btn-secondary btn-lg" onclick="reloadExternalFiles()"
+                        title="Reload prompts and dictionary">
+                        <span class="material-icons-round">refresh</span>
+                        <span data-i18n="action.reload">새로고침</span>
+                    </button>
                     <button class="btn btn-primary btn-lg" id="save-cfg-btn">
                         <span class="material-icons-round">save</span>
                         <span data-i18n="action.save">저장</span>
                     </button>
                 </div>
-                <button class="btn btn-logout" onclick="logout()">
+                <button class="btn btn-logout" onclick="logout()" style="margin-top: 8px;">
                     <span class="material-icons-round">logout</span>
                     <span data-i18n="action.logout">로그아웃</span>
                 </button>

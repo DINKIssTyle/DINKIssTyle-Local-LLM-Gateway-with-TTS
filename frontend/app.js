@@ -48,6 +48,7 @@ const translations = {
         'action.logout': '로그아웃',
         'action.save': '저장',
         'action.cancel': '취소',
+        'action.reload': '새로고침',
         // Settings - LLM
         'setting.llmEndpoint.label': 'LLM 엔드포인트',
         'setting.model.label': '모델 이름',
@@ -102,6 +103,7 @@ const translations = {
         'action.logout': 'Logout',
         'action.save': 'Save Settings',
         'action.cancel': 'Cancel',
+        'action.reload': 'Reload',
         // Settings - LLM
         'setting.llmEndpoint.label': 'LLM Endpoint',
         'setting.model.label': 'Model Name',
@@ -726,6 +728,18 @@ function initSystemPromptPresets() {
         option.value = preset.title;
         option.textContent = preset.title;
         selector.appendChild(option);
+    }
+}
+
+// 외부 파일(system_prompts.json, dictionary_*.txt) 새로고침
+async function reloadExternalFiles() {
+    try {
+        await loadSystemPrompts();
+        await loadTTSDictionary(config.ttsLang);
+        showToast(t('action.reload') + ' ✓');
+    } catch (e) {
+        console.error("Failed to reload external files:", e);
+        showToast('Reload failed');
     }
 }
 
