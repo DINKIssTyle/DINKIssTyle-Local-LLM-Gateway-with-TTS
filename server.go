@@ -501,7 +501,19 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 	// Return audio
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(audioBytes)))
-	w.Write(audioBytes)
+
+	startTransfer := time.Now()
+	n, err := w.Write(audioBytes)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	elapsedTransfer := time.Since(startTransfer)
+
+	if err != nil {
+		log.Printf("[TTS] Network transfer failed after %d bytes: %v", n, err)
+	} else {
+		log.Printf("[TTS] Network transfer complete: %d bytes sent in %v", n, elapsedTransfer)
+	}
 }
 
 // handleTTSStyles returns list of available voice styles
