@@ -46,6 +46,15 @@ type AppConfig struct {
 	AutoStartServer bool            `json:"autoStartServer"`
 }
 
+// HealthCheckResult holds the result of system health checks
+type HealthCheckResult struct {
+	LLMStatus   string `json:"llmStatus"`   // "ok", "error"
+	LLMMessage  string `json:"llmMessage"`  // details
+	TTSStatus   string `json:"ttsStatus"`   // "ok", "disabled", "error"
+	TTSMessage  string `json:"ttsMessage"`  // details
+	ServerModel string `json:"serverModel"` // Loaded model name if available
+}
+
 var configFile = "config.json"
 
 // GetAppDataDir returns the application data directory
@@ -640,6 +649,59 @@ func (a *App) CheckAssets() bool {
 		}
 	}
 	return true
+}
+
+// CheckHealth performs a system health check (exposed to Wails)
+func (a *App) CheckHealth() HealthCheckResult {
+	result := HealthCheckResult{
+		LLMStatus:  "ok",
+		TTSStatus:  "ok",
+		TTSMessage: "Ready",
+	}
+
+	// 1. Check LLM Connectivity
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(a.llmEndpoint + "/v1/models")
+	if err != nil {
+		result.LLMStatus = "error"
+		result.LLMMessage = fmt.Sprintf("Unreachable: %v", err)
+	} else {
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			result.LLMStatus = "error"
+			result.LLMMessage = fmt.Sprintf("Error: HTTP %d", resp.StatusCode)
+		} else {
+			// Try to parse model name
+			var modelResp struct {
+				Data []struct {
+					ID string `json:"id"`
+				} `json:"data"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&modelResp); err == nil && len(modelResp.Data) > 0 {
+				result.ServerModel = modelResp.Data[0].ID
+				result.LLMMessage = "Connected"
+			} else {
+				result.LLMMessage = "Connected (No models)"
+			}
+		}
+	}
+
+	// 2. Check TTS Status
+	if !a.enableTTS {
+		result.TTSStatus = "disabled"
+		result.TTSMessage = "Disabled in settings"
+	} else {
+		globalTTSMutex.RLock()
+		isInit := globalTTS != nil
+		globalTTSMutex.RUnlock()
+
+		if !isInit {
+			result.TTSStatus = "error"
+			result.TTSMessage = "Not initialized (Check assets)"
+		}
+	}
+
+	return result
 }
 
 // DownloadAssets downloads missing assets

@@ -48,6 +48,10 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	mux.HandleFunc("/api/login", handleLogin(authMgr))
 	mux.HandleFunc("/api/logout", handleLogout(authMgr))
 	mux.HandleFunc("/api/auth/check", handleAuthCheck(authMgr))
+	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(app.CheckHealth())
+	})
 
 	// Protected API endpoints
 	mux.HandleFunc("/api/chat", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {

@@ -84,7 +84,19 @@ const translations = {
         'setting.format.desc': 'MP3는 WAV를 변환하여 재생합니다.',
         // Chat
         'chat.welcome': '안녕하세요! 채팅할 준비가 되었습니다. 우측 상단 기어 아이콘에서 설정하세요.',
-        'input.placeholder': '메시지를 입력하세요...'
+        'chat.instruction': '우측 상단 메뉴에서 설정을 변경할 수 있습니다.',
+        'input.placeholder': '메시지를 입력하세요...',
+        // Health Check
+        'health.systemReady': '시스템 준비 완료',
+        'health.checkRequired': '시스템 점검 필요',
+        'health.checkFailed': '시스템 점검 실패',
+        'health.backendError': '백엔드와 통신할 수 없습니다 (Wails 및 API 응답 없음).',
+        'health.llm': 'LLM',
+        'health.tts': 'TTS',
+        'health.status.connected': '연결됨',
+        'health.status.ready': '준비됨',
+        'health.status.disabled': '비활성화됨',
+        'health.status.unreachable': '연결 불가'
     },
     en: {
         // Modal
@@ -139,7 +151,19 @@ const translations = {
         'setting.format.desc': 'MP3 is converted from WAV.',
         // Chat
         'chat.welcome': 'Hello! I am ready to chat. Configure settings using the gear icon.',
-        'input.placeholder': 'Type a message...'
+        'chat.instruction': 'You can configure settings in the top right menu.',
+        'input.placeholder': 'Type a message...',
+        // Health Check
+        'health.systemReady': 'System Ready',
+        'health.checkRequired': 'System Check Required',
+        'health.checkFailed': 'System Check Failed',
+        'health.backendError': 'Could not communicate with backend (neither Wails nor API).',
+        'health.llm': 'LLM',
+        'health.tts': 'TTS',
+        'health.status.connected': 'Connected',
+        'health.status.ready': 'Ready',
+        'health.status.disabled': 'Disabled',
+        'health.status.unreachable': 'Unreachable'
     }
 };
 
@@ -363,6 +387,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     await syncServerConfig(); // Sync with server
     setupEventListeners();
     initServerControl();
+
+    // Initial System Check
+    setTimeout(checkSystemHealth, 500);
+
 
     // Setup Markdown
     marked.setOptions({
@@ -1999,6 +2027,83 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+async function checkSystemHealth() {
+    let health;
+
+    // 1. Try Wails (Desktop)
+    if (typeof window.go !== 'undefined' && window.go.main && window.go.main.App) {
+        try {
+            health = await window.go.main.App.CheckHealth();
+        } catch (e) {
+            console.error("Wails health check failed:", e);
+        }
+    }
+
+    // 2. Fallback to API (Web Mode)
+    if (!health) {
+        try {
+            const res = await fetch('/api/health');
+            if (res.ok) {
+                health = await res.json();
+            }
+        } catch (e) {
+            console.error("API health check failed:", e);
+        }
+    }
+
+    if (!health) {
+        const errorMsg = {
+            role: 'assistant',
+            content: `### ❌ ${t('health.checkFailed')}\n\n${t('health.backendError')}`
+        };
+        appendMessage(errorMsg);
+        return;
+    }
+
+    try {
+        let statusIcon = "✅";
+        let statusTitle = t('health.systemReady');
+        let statusDetails = "";
+
+        // Analyze health
+        if (health.llmStatus !== 'ok') {
+            statusIcon = "⚠️";
+            statusTitle = t('health.checkRequired');
+            // If message implies unreachability/error, keep raw message for debug, or use generic
+            statusDetails += `\n- **${t('health.llm')}**: ${health.llmMessage}`;
+        } else {
+            // Translate "Connected" if exact match, otherwise keep
+            let llmDisplay = health.llmMessage === 'Connected' ? t('health.status.connected') : health.llmMessage;
+            statusDetails += `\n- **${t('health.llm')}**: ${llmDisplay}`;
+            if (health.serverModel) {
+                statusDetails += ` (${health.serverModel})`;
+            }
+        }
+
+        if (health.ttsStatus !== 'ok') {
+            if (health.ttsStatus === 'disabled') {
+                statusDetails += `\n- **${t('health.tts')}**: ${t('health.status.disabled')}`;
+            } else {
+                statusIcon = "⚠️";
+                if (statusTitle === t('health.systemReady')) statusTitle = t('health.checkRequired');
+                statusDetails += `\n- **${t('health.tts')}**: ${health.ttsMessage}`;
+            }
+        } else {
+            statusDetails += `\n- **${t('health.tts')}**: ${t('health.status.ready')}`;
+        }
+
+        const healthMsg = {
+            role: 'assistant',
+            content: `### ${statusIcon} ${statusTitle}\n${statusDetails}\n\n${t('chat.instruction') || 'You can configure settings in the top right menu.'}`
+        };
+
+        appendMessage(healthMsg);
+
+    } catch (e) {
+        console.error("Health check rendering failed:", e);
+    }
 }
 
 
