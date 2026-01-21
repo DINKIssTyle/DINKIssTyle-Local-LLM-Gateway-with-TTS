@@ -648,12 +648,21 @@ let ttsDictionaryRegex = null;
 async function loadTTSDictionary(lang) {
     // Default to config language or 'ko' if undefined
     const targetLang = lang || config.ttsLang || 'ko';
+    let rawDict = {};
     try {
         if (window.go && window.go.main && window.go.main.App) {
-            ttsDictionary = await window.go.main.App.GetTTSDictionary(targetLang);
+            rawDict = await window.go.main.App.GetTTSDictionary(targetLang);
         } else {
             const res = await fetch(`/api/dictionary?lang=${targetLang}`);
-            if (res.ok) ttsDictionary = await res.json();
+            if (res.ok) rawDict = await res.json();
+        }
+
+        // Normalize keys to lowercase for case-insensitive lookup
+        ttsDictionary = {};
+        if (rawDict) {
+            for (const [k, v] of Object.entries(rawDict)) {
+                ttsDictionary[k.toLowerCase()] = v;
+            }
         }
 
         // Build optimized regex for performance (O(N) replacement)
@@ -665,7 +674,11 @@ async function loadTTSDictionary(lang) {
             // Note: If keys contain spaces (e.g. "Mac OS"), \b might behave differently depending on chars
             // But user example "macOS" -> "Mac OS" is single word key. 
             // If user has "Mobile Phone", \bMobile Phone\b works.
-            ttsDictionaryRegex = new RegExp(`\\b(${escapedKeys.join('|')})\\b`, 'g');
+
+            // 대소문자 구분을 하지 않기 위해 'g' 대신 'gi' 플래그 사용
+            // ttsDictionaryRegex = new RegExp(`\\b(${escapedKeys.join('|')})\\b`, 'g');
+            ttsDictionaryRegex = new RegExp(`\\b(${escapedKeys.join('|')})\\b`, 'gi');
+
             console.log(`[TTS] Dictionary loaded with ${keys.length} entries.`);
         }
     } catch (e) {
@@ -1410,7 +1423,7 @@ function cleanTextForTTS(text) {
     // Apply Dictionary Corrections (Optimized with Regex)
     if (ttsDictionaryRegex) {
         cleaned = cleaned.replace(ttsDictionaryRegex, (match) => {
-            return ttsDictionary[match] || match;
+            return ttsDictionary[match.toLowerCase()] || match;
         });
     }
 
