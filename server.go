@@ -81,6 +81,10 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(app.GetTTSDictionary(lang))
 	}))
+	mux.HandleFunc("/api/prompts", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(app.GetSystemPrompts())
+	}))
 
 	// Admin-only endpoints
 	mux.HandleFunc("/api/users", AdminMiddleware(authMgr, handleUsers(authMgr)))

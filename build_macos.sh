@@ -42,6 +42,7 @@ if [ $? -eq 0 ]; then
     cp config.json "$APP_CONTENT_DIR" 2>/dev/null || true
     cp dictionary_*.txt "$APP_CONTENT_DIR" 2>/dev/null || true
     cp Dictionary_editor.py "$APP_CONTENT_DIR" 2>/dev/null || true
+    cp system_prompts.json "$APP_CONTENT_DIR" 2>/dev/null || true
     
     # Clean up unnecessary files from bundle
     rm -rf "$APP_CONTENT_DIR/assets/.git"

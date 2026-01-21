@@ -20,6 +20,7 @@ if exist "build\bin\DKST LLM Chat Server.exe" (
     copy /Y "config.json" "build\bin\" 2>nul
     copy /Y "dictionary_*.txt" "build\bin\" 2>nul
     copy /Y "Dictionary_editor.py" "build\bin\" 2>nul
+    copy /Y "system_prompts.json" "build\bin\" 2>nul
     echo Build success!
 ) else (
     echo Build failed!

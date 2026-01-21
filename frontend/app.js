@@ -600,8 +600,8 @@ function loadConfig() {
     // Apply i18n translations
     applyTranslations();
 
-    // Initialize System Prompt Presets
-    initSystemPromptPresets();
+    // Initialize System Prompt Presets (loads from external file)
+    loadSystemPrompts();
 
     // Load TTS Dictionary
     loadTTSDictionary();
@@ -686,14 +686,29 @@ async function loadTTSDictionary(lang) {
     }
 }
 
-const SYSTEM_PROMPT_PRESETS = {
-    "default": "You are a helpful AI assistant.",
-    "영어 회화 선생님": "당신은 나의 영어 선생님입니다 내가 입력하는 한국어를 영어 회화로 만들고 구문별 학습시켜 주세요",
-};
+// 시스템 프롬프트 프리셋 (외부 파일에서 로드)
+let systemPromptPresets = [];
+
+async function loadSystemPrompts() {
+    try {
+        if (window.go && window.go.main && window.go.main.App) {
+            systemPromptPresets = await window.go.main.App.GetSystemPrompts();
+        } else {
+            const res = await fetch('/api/prompts');
+            if (res.ok) systemPromptPresets = await res.json();
+        }
+        console.log(`[Prompts] Loaded ${systemPromptPresets.length} system prompts.`);
+        initSystemPromptPresets(); // Re-initialize dropdown with loaded data
+    } catch (e) {
+        console.error("Failed to load system prompts:", e);
+        systemPromptPresets = [{ title: "Default", prompt: "You are a helpful AI assistant." }];
+    }
+}
 
 function applySystemPromptPreset(key) {
-    if (SYSTEM_PROMPT_PRESETS[key]) {
-        document.getElementById('cfg-system-prompt').value = SYSTEM_PROMPT_PRESETS[key];
+    const preset = systemPromptPresets.find(p => p.title === key);
+    if (preset) {
+        document.getElementById('cfg-system-prompt').value = preset.prompt;
     }
 }
 
@@ -706,10 +721,10 @@ function initSystemPromptPresets() {
         selector.remove(1);
     }
 
-    for (const [key, value] of Object.entries(SYSTEM_PROMPT_PRESETS)) {
+    for (const preset of systemPromptPresets) {
         const option = document.createElement('option');
-        option.value = key;
-        option.textContent = key;
+        option.value = preset.title;
+        option.textContent = preset.title;
         selector.appendChild(option);
     }
 }
@@ -1576,9 +1591,10 @@ function initStreamingTTS(elementId) {
 function feedStreamingTTS(displayText) {
     if (!streamingTTSActive) return;
 
-    // Minimum length before we commit a chunk for TTS
-    const MIN_STREAMING_CHUNK_LENGTH = 50;
-    const MIN_SENTENCE_LENGTH = 10;
+    // 최적화된 청킹 로직:
+    // - 첫 청크: 줄바꿈 발견 즉시 커밋 (빠른 시작)
+    // - 중간 청크: chunkSize 이상 + 줄바꿈 발견 시 커밋
+    // - 마지막 청크: finalizeStreamingTTS()에서 길이 무관 커밋
 
     // Process all available committed segments in a loop
     let iterations = 0;
@@ -1594,72 +1610,63 @@ function feedStreamingTTS(displayText) {
         let committed = null;
         let advanceBy = 0;
 
-        // Priority 1: Check for paragraph boundaries (double newline)
-        // Always commit on paragraph break regardless of length if > 5 chars (Short headlines)
+        // 우선순위 1: 문단 경계 (줄바꿈 두 개) - 첫 청크는 길이 무관, 이후는 chunkSize 적용
         const paragraphMatch = newText.match(/^([\s\S]*?\n\s*\n)/);
         if (paragraphMatch && paragraphMatch[1].trim()) {
-            const cleaned = cleanTextForTTS(paragraphMatch[1]);
-            if (cleaned && cleaned.length >= 5) {
-                committed = cleaned;
+            const potentialCommit = streamingTTSBuffer + cleanTextForTTS(paragraphMatch[1]);
+            const isFirstChunk = (ttsQueue.length === 0 && !isPlayingQueue);
+
+            // 첫 청크는 즉시 커밋, 이후는 chunkSize 이상일 때만
+            if (isFirstChunk || potentialCommit.length >= config.chunkSize) {
+                committed = potentialCommit;
+                streamingTTSBuffer = "";
                 advanceBy = paragraphMatch[0].length;
+            } else {
+                // 버퍼에 누적
+                streamingTTSBuffer = potentialCommit + " ";
+                streamingTTSCommittedIndex += paragraphMatch[0].length;
+                continue;
             }
         }
 
-        // Priority 2: Check for sentence endings followed by new sentence start
-        // Use smart pattern that avoids numbered lists like "1.", "2."
+        // 우선순위 2: 단일 줄바꿈 - 첫 청크는 즉시, 이후는 chunkSize 이상
         if (!committed) {
-            // Look for sentence end followed by space and uppercase/Korean char
-            const sentenceMatch = newText.match(/^([\s\S]*?[.!?])(\s+[A-Z가-힣])/);
-            if (sentenceMatch && sentenceMatch[1].trim()) {
-                const potentialCommit = streamingTTSBuffer + cleanTextForTTS(sentenceMatch[1]);
+            const lineMatch = newText.match(/^([^\n]+)\n/);
+            if (lineMatch) {
+                const cleanedLine = cleanTextForTTS(lineMatch[1]);
+                const potentialCommit = streamingTTSBuffer + cleanedLine;
+                const isFirstChunk = (ttsQueue.length === 0 && !isPlayingQueue);
 
-                // Allow short sentences if they are clearly complete (>10 chars)
-                const isLongEnough = potentialCommit.length >= MIN_STREAMING_CHUNK_LENGTH;
-                const isValidShortSentence = potentialCommit.length >= MIN_SENTENCE_LENGTH && /[가-힣A-Za-z]{2,}/.test(potentialCommit);
-
-                if (isLongEnough || isValidShortSentence) {
+                // 첫 청크: 5자 이상이면 즉시 커밋 (빠른 시작)
+                // 중간 청크: chunkSize 이상일 때만 커밋
+                if ((isFirstChunk && potentialCommit.length >= 5) || potentialCommit.length >= config.chunkSize) {
                     committed = potentialCommit;
                     streamingTTSBuffer = "";
-                    advanceBy = sentenceMatch[1].length;
+                    advanceBy = lineMatch[0].length;
                 } else {
-                    // Add to buffer and continue accumulating
+                    // 버퍼에 누적하고 계속 진행
                     streamingTTSBuffer = potentialCommit + " ";
-                    streamingTTSCommittedIndex += sentenceMatch[1].length;
-                    continue; // Try to find more content
-                }
-            }
-        }
-
-        // Priority 3: Check for colon followed by newline (common in lists/explanations)
-        if (!committed) {
-            const colonMatch = newText.match(/^([\s\S]*?:)\s*\n/);
-            if (colonMatch && colonMatch[1].trim().length > 5) {
-                const potentialCommit = streamingTTSBuffer + cleanTextForTTS(colonMatch[1]);
-                if (potentialCommit.length >= MIN_STREAMING_CHUNK_LENGTH || (potentialCommit.length >= 10)) {
-                    committed = potentialCommit;
-                    streamingTTSBuffer = "";
-                    advanceBy = colonMatch[0].length;
-                } else {
-                    streamingTTSBuffer = potentialCommit + " ";
-                    streamingTTSCommittedIndex += colonMatch[0].length;
+                    streamingTTSCommittedIndex += lineMatch[0].length;
                     continue;
                 }
             }
         }
 
-        // Priority 4: Check for single newline (Headlines, short list items)
+        // 우선순위 3: 문장 종료 (.!?) + 다음 문장 시작 - chunkSize 누적 시 커밋
         if (!committed) {
-            // Match any line ending with \n that has some content (>5 chars check below)
-            const lineMatch = newText.match(/^([^\n]+)\n/);
-            if (lineMatch) {
-                const cleanedLine = cleanTextForTTS(lineMatch[1]);
-                const potentialCommit = streamingTTSBuffer + cleanedLine;
+            const sentenceMatch = newText.match(/^([\s\S]*?[.!?])(\s+[A-Z가-힣])/);
+            if (sentenceMatch && sentenceMatch[1].trim()) {
+                const potentialCommit = streamingTTSBuffer + cleanTextForTTS(sentenceMatch[1]);
 
-                // Allow if it's a headline (>5 chars) OR long enough regular text
-                if (potentialCommit.length >= 5) {
+                if (potentialCommit.length >= config.chunkSize) {
                     committed = potentialCommit;
                     streamingTTSBuffer = "";
-                    advanceBy = lineMatch[0].length;
+                    advanceBy = sentenceMatch[1].length;
+                } else {
+                    // 버퍼에 누적
+                    streamingTTSBuffer = potentialCommit + " ";
+                    streamingTTSCommittedIndex += sentenceMatch[1].length;
+                    continue;
                 }
             }
         }
@@ -1668,8 +1675,8 @@ function feedStreamingTTS(displayText) {
         if (!committed) break;
 
         // Commit the segment
-        console.log(`[Streaming TTS] Committing: "${committed.substring(0, 50)}..."`);
-        pushToStreamingTTSQueue(committed, true); // Force output (feedStreamingTTS already handles buffering logic)
+        console.log(`[Streaming TTS] Committing (${committed.length} chars): "${committed.substring(0, 50)}..."`);
+        pushToStreamingTTSQueue(committed, true);
         streamingTTSCommittedIndex += advanceBy;
     }
 }
