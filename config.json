@@ -1,6 +1,15 @@
 {
   "port": "8080",
   "llmEndpoint": "http://127.0.0.1:1234",
+  "llmApiToken": "",
+  "llmMode": "standard",
   "enableTTS": true,
-}
+  "tts": {
+    "voiceStyle": "M1.json",
+    "speed": 1.0,
+    "threads": 4
+  },
+  "startOnBoot": false,
+  "minimizeToTray": false,
+  "autoStartServer": true
 }

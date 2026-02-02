@@ -23,7 +23,12 @@ let config = {
     ttsFormat: 'wav',
     ttsSteps: 5,
     ttsThreads: 2,
-    language: 'ko' // UI language
+    ttsFormat: 'wav',
+    ttsSteps: 5,
+    ttsThreads: 2,
+    language: 'ko', // UI language
+    apiToken: '',
+    llmMode: 'standard' // 'standard' or 'stateful'
 };
 
 // ============================================================================
@@ -49,6 +54,7 @@ const translations = {
         'action.save': '저장',
         'action.cancel': '취소',
         'action.reload': '새로고침',
+        'action.clearContext': '문맥 초기화',
         // Settings - LLM
         'setting.llmEndpoint.label': 'LLM 엔드포인트',
         'setting.model.label': '모델 이름',
@@ -61,8 +67,13 @@ const translations = {
         'setting.temperature.desc': '(기본값: 0.7) 값이 낮을수록 평범한 대답, 높을수록 창의적인 대답',
         'setting.maxTokens.label': 'Max Tokens',
         'setting.maxTokens.desc': '(기본값: 4096) LLM이 생성할 최대 토큰 수',
+        'setting.maxTokens.desc': '(기본값: 4096) LLM이 생성할 최대 토큰 수',
         'setting.history.label': 'History Count',
         'setting.history.desc': '(기본값: 10) 대화 기억 횟수',
+        'setting.apiToken.label': 'API Token',
+        'setting.apiToken.desc': 'LM Studio API Token (인증 활성화 시 필요, 빈칸이면 무시)',
+        'setting.llmMode.label': '연결 모드',
+        'setting.llmMode.desc': 'Standard (Stateless) 또는 LM Studio (Stateful) 선택',
         // Settings - TTS
         'setting.enableTTS.label': 'TTS 활성화',
         'setting.enableTTS.desc': '응답을 음성으로 재생합니다.',
@@ -116,6 +127,7 @@ const translations = {
         'action.save': 'Save Settings',
         'action.cancel': 'Cancel',
         'action.reload': 'Reload',
+        'action.clearContext': 'Reset Context',
         // Settings - LLM
         'setting.llmEndpoint.label': 'LLM Endpoint',
         'setting.model.label': 'Model Name',
@@ -128,8 +140,13 @@ const translations = {
         'setting.temperature.desc': '(Default: 0.7) Lower = predictable, Higher = creative',
         'setting.maxTokens.label': 'Max Tokens',
         'setting.maxTokens.desc': '(Default: 4096) Maximum tokens to generate',
+        'setting.maxTokens.desc': '(Default: 4096) Maximum tokens to generate',
         'setting.history.label': 'History Count',
         'setting.history.desc': '(Default: 10) Number of messages to remember',
+        'setting.apiToken.label': 'API Token',
+        'setting.apiToken.desc': 'LM Studio API Token (Required if Auth is enabled)',
+        'setting.llmMode.label': 'Connection Mode',
+        'setting.llmMode.desc': 'Select between Standard (Stateless) or LM Studio (Stateful)',
         // Settings - TTS
         'setting.enableTTS.label': 'Enable TTS',
         'setting.enableTTS.desc': 'Play responses as audio.',
@@ -320,6 +337,7 @@ let messages = [];
 let pendingImage = null;
 let isGenerating = false;
 let abortController = null;
+let lastResponseId = null; // For Stateful Chat
 
 // Audio State
 let currentAudio = null;
@@ -600,7 +618,8 @@ function loadConfig() {
     document.getElementById('cfg-temp').value = config.temperature;
     document.getElementById('cfg-max-tokens').value = config.maxTokens;
     document.getElementById('cfg-history').value = config.historyCount;
-    document.getElementById('cfg-enable-tts').checked = config.enableTTS;
+    document.getElementById('cfg-api-token').value = config.apiToken || '';
+    document.getElementById('cfg-llm-mode').value = config.llmMode || 'standard';
     document.getElementById('cfg-enable-tts').checked = config.enableTTS;
     document.getElementById('cfg-auto-tts').checked = config.autoTTS || false;
     document.getElementById('cfg-tts-lang').value = config.ttsLang;
@@ -664,7 +683,7 @@ function setupSettingsListeners() {
     });
 
     // Selects & Inputs: save on change
-    const autoSaveIds = ['cfg-tts-lang', 'cfg-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt'];
+    const autoSaveIds = ['cfg-api', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-api-token'];
     autoSaveIds.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.onchange = () => saveConfig(false);
@@ -780,9 +799,12 @@ function saveConfig(closeModal = true) {
     config.maxTokens = parseInt(document.getElementById('cfg-max-tokens').value);
     config.historyCount = parseInt(document.getElementById('cfg-history').value);
     config.enableTTS = document.getElementById('cfg-enable-tts').checked;
-    config.enableTTS = document.getElementById('cfg-enable-tts').checked;
     config.autoTTS = document.getElementById('cfg-auto-tts').checked;
     config.ttsLang = document.getElementById('cfg-tts-lang').value;
+
+    // New fields
+    config.apiToken = document.getElementById('cfg-api-token').value.trim();
+    config.llmMode = document.getElementById('cfg-llm-mode').value;
 
     // Reload dictionary since language changes
     loadTTSDictionary(config.ttsLang);
@@ -797,11 +819,30 @@ function saveConfig(closeModal = true) {
 
     localStorage.setItem('appConfig', JSON.stringify(config));
 
-    // Sync threads to server (triggers reload)
+    // Sync configs to server
+    if (window.go && window.go.main && window.go.main.App) {
+        window.go.main.App.SetLLMEndpoint(config.apiEndpoint).catch(console.error);
+        window.go.main.App.SetLLMApiToken(config.apiToken).catch(console.error);
+        window.go.main.App.SetLLMMode(config.llmMode).catch(console.error);
+        window.go.main.App.SetEnableTTS(config.enableTTS);
+
+        // This is separate from saveConfig in app.go, but SetTTSThreads triggers reload
+        if (config.ttsThreads) {
+            window.go.main.App.SetTTSThreads(config.ttsThreads);
+        }
+    }
+
+    // Also try fetch for web mode or as backup
     fetch('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tts_threads: config.ttsThreads })
+        body: JSON.stringify({
+            api_endpoint: config.apiEndpoint,
+            api_token: config.apiToken,
+            llm_mode: config.llmMode,
+            enable_tts: config.enableTTS,
+            tts_threads: config.ttsThreads
+        })
     }).then(r => {
         if (!r.ok) console.warn('Failed to sync settings');
     }).catch(e => console.warn('Sync error:', e));
@@ -821,6 +862,7 @@ function saveConfig(closeModal = true) {
 
 async function syncServerConfig() {
     try {
+        const response = await fetch('/api/config'); // Fetch current server config
         if (response.ok) {
             const serverCfg = await response.json();
             if (serverCfg.enable_tts !== undefined) {
@@ -991,35 +1033,62 @@ async function sendMessage() {
         messages = messages.slice(-maxMessages);
     }
 
-    // Map all current messages to API format
-    const history = messages.map(m => {
-        if (m.image) {
-            // Vision format
-            return {
-                role: m.role,
-                content: [
-                    { type: 'text', text: m.content || 'Please describe this image.' },
-                    { type: 'image_url', image_url: { url: m.image } }
-                ]
-            };
-        } else {
-            // Clean content for history
-            let content = m.content || '';
-            if (m.role === 'assistant') {
-                // Remove think tags from history to prevent recursion/confusion
-                content = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-            }
-            return { role: m.role, content: content };
-        }
-    });
+    let payload = {};
 
-    const payload = {
-        model: config.model,
-        messages: [systemMsg, ...history], // Prepend system message
-        temperature: config.temperature,
-        max_tokens: config.maxTokens,
-        stream: true
-    };
+    if (config.llmMode === 'stateful') {
+        // Stateful Chat Mode
+        payload = {
+            model: config.model,
+            input: text, // Only current input
+            temperature: config.temperature,
+            stream: true
+        };
+        // Add image if present
+        if (pendingImage) {
+            // LM Studio Stateful chat might support array input for images? 
+            // The docs example is just 'input': "string". 
+            // If vision is needed, we might need a complex input object or standard stateless for vision.
+            // For now, assume simple text input for stateful.
+            // If user attached image, we might force stateless or warn?
+            // Let's attach it as text for now to avoid breaking.
+            // Actually, Stateful Chat docs don't explicitly show vision examples.
+            // We'll stick to text input. If vision is critical, we might need Standard mode.
+        }
+
+        if (lastResponseId) {
+            payload.previous_response_id = lastResponseId;
+        }
+    } else {
+        // Standard Stateless Mode (Default)
+        const payloadHistory = messages.map(m => {
+            if (m.image) {
+                // Vision format
+                return {
+                    role: m.role,
+                    content: [
+                        { type: 'text', text: m.content || 'Please describe this image.' },
+                        { type: 'image_url', image_url: { url: m.image } }
+                    ]
+                };
+            } else {
+                // Clean content for history
+                let content = m.content || '';
+                if (m.role === 'assistant') {
+                    // Remove think tags from history to prevent recursion/confusion
+                    content = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+                }
+                return { role: m.role, content: content };
+            }
+        });
+
+        payload = {
+            model: config.model,
+            messages: [systemMsg, ...payloadHistory],
+            temperature: config.temperature,
+            max_tokens: config.maxTokens,
+            stream: true
+        };
+    }
 
     // Debug: Log payload to verify what's being sent
     console.log('=== LLM Request Payload ===');
@@ -1085,7 +1154,6 @@ async function streamResponse(payload, elementId) {
 }
 
 // Helper to process the stream reader (shared by direct and proxy)
-// Helper to process the stream reader (shared by direct and proxy)
 async function processStream(response, elementId) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -1111,18 +1179,54 @@ async function processStream(response, elementId) {
 
             for (const line of lines) {
                 const trimmed = line.trim();
-                if (!trimmed.startsWith('data: ')) continue;
+                if (!trimmed) continue;
 
-                const dataStr = trimmed.substring(6);
-                if (dataStr === '[DONE]') break;
-
+                let json = null;
                 try {
-                    const json = JSON.parse(dataStr);
-                    const delta = json.choices[0].delta;
-                    const content = delta.content || '';
+                    if (trimmed.startsWith('data: ')) {
+                        const dataStr = trimmed.substring(6);
+                        if (dataStr === '[DONE]') break;
+                        json = JSON.parse(dataStr);
+                    } else if (trimmed.startsWith('{')) {
+                        // Handle raw JSON (non-streaming or Stateful response)
+                        json = JSON.parse(trimmed);
+                    } else {
+                        continue;
+                    }
 
-                    if (content) {
-                        fullText += content;
+                    // Capture response_id if present (Stateful Chat)
+                    if (json.response_id) {
+                        lastResponseId = json.response_id;
+                        console.log(`[Stateful] Captured response_id: ${lastResponseId}`);
+                    }
+
+                    let contentToAdd = '';
+
+                    // Handle Standard/SSE format
+                    if (json.choices && json.choices.length > 0) {
+                        const delta = json.choices[0].delta || {};
+                        const message = json.choices[0].message || {}; // Non-streaming fallback
+                        contentToAdd = delta.content || message.content || '';
+                    }
+                    // Handle Stateful Chat JSON format (output array mechanism - legacy/alternative?)
+                    else if (json.output && Array.isArray(json.output)) {
+                        for (const item of json.output) {
+                            if (item.content) {
+                                contentToAdd += item.content;
+                            }
+                        }
+                    }
+                    // Handle LM Studio Stateful Chat Streaming Format (based on logs)
+                    else if (json.type === 'message.delta' && json.content) {
+                        contentToAdd = json.content;
+                    }
+                    else if (json.type === 'chat.end' && json.result && json.result.response_id) {
+                        lastResponseId = json.result.response_id;
+                        console.log(`[Stateful] Captured response_id from chat.end: ${lastResponseId}`);
+                    }
+
+                    if (contentToAdd) {
+                        fullText += contentToAdd;
                         let displayText = fullText;
 
                         // UI Display Logic (Depends on config.hideThink)
@@ -1156,7 +1260,6 @@ async function processStream(response, elementId) {
                             }
 
                             // Feed the filtered text to TTS engine
-                            // feedStreamingTTS uses an index tracker, so we pass the cumulative filtered text
                             if (ttsText) {
                                 feedStreamingTTS(ttsText);
                             }

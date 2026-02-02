@@ -54,10 +54,34 @@
                     <div class="setting-section-title" data-i18n="section.llm">LLM Settings</div>
 
                     <div class="setting-item">
+                        <label data-i18n="setting.apiEndpoint.label">API Endpoint</label>
+                        <p class="setting-desc" data-i18n="setting.apiEndpoint.desc">LLM API 주소 (예:
+                            http://127.0.0.1:1234)</p>
+                        <input type="text" id="cfg-api" placeholder="http://127.0.0.1:1234">
+                    </div>
+
+                    <div class="setting-item">
                         <label data-i18n="setting.model.label">Model Name</label>
                         <p class="setting-desc" data-i18n="setting.model.desc">LLM서버에서 현재 로드되어 있는 모델 이름을 적어주세요.</p>
                         <select id="cfg-model">
                             <option value="">Loading models...</option>
+                        </select>
+                    </div>
+
+                    <div class="setting-item">
+                        <label data-i18n="setting.apiToken.label">API Token</label>
+                        <p class="setting-desc" data-i18n="setting.apiToken.desc">LM Studio API Token (Require Auth
+                            enabled)</p>
+                        <input type="password" id="cfg-api-token" placeholder="Leaving empty uses default">
+                    </div>
+
+                    <div class="setting-item">
+                        <label data-i18n="setting.llmMode.label">Connection Mode</label>
+                        <p class="setting-desc" data-i18n="setting.llmMode.desc">Select between Standard (OpenAI-like)
+                            or Stateful (LM Studio optimized).</p>
+                        <select id="cfg-llm-mode">
+                            <option value="standard">Standard (Stateless)</option>
+                            <option value="stateful">LM Studio (Stateful)</option>
                         </select>
                     </div>
 

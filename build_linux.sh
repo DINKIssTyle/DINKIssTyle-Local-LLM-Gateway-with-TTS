@@ -127,7 +127,7 @@ if [ -d "$APP_CONTENT_DIR" ]; then
     # cp -r assets "$APP_CONTENT_DIR"
 
     cp users.json "$APP_CONTENT_DIR" 2>/dev/null || echo "{}" > "$APP_CONTENT_DIR/users.json"
-    cp config.json "$APP_CONTENT_DIR" 2>/dev/null || true
+    cp -f config.json "$APP_CONTENT_DIR"
     cp dictionary_*.txt "$APP_CONTENT_DIR" 2>/dev/null || true
     cp Dictionary_editor.py "$APP_CONTENT_DIR" 2>/dev/null || true
     cp system_prompts.json "$APP_CONTENT_DIR" 2>/dev/null || true

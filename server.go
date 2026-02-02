@@ -55,16 +55,34 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 
 	// Protected API endpoints
 	mux.HandleFunc("/api/chat", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
-		handleChat(w, r, app.llmEndpoint)
+		handleChat(w, r, app)
 	}))
 	mux.HandleFunc("/api/tts", AuthMiddleware(authMgr, handleTTS))
 	mux.HandleFunc("/api/config", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			var newCfg struct {
-				TTSThreads int `json:"tts_threads"`
+				TTSThreads  int    `json:"tts_threads"`
+				ApiEndpoint string `json:"api_endpoint"`
+				ApiToken    string `json:"api_token"`
+				LLMMode     string `json:"llm_mode"`
+				EnableTTS   *bool  `json:"enable_tts"`
 			}
-			if err := json.NewDecoder(r.Body).Decode(&newCfg); err == nil && newCfg.TTSThreads > 0 {
-				app.SetTTSThreads(newCfg.TTSThreads)
+			if err := json.NewDecoder(r.Body).Decode(&newCfg); err == nil {
+				if newCfg.TTSThreads > 0 {
+					app.SetTTSThreads(newCfg.TTSThreads)
+				}
+				if newCfg.ApiEndpoint != "" {
+					app.SetLLMEndpoint(newCfg.ApiEndpoint)
+				}
+				// Allow empty token to clear it? Or just update if present?
+				// Usually better to update. frontend sends current value.
+				app.SetLLMApiToken(newCfg.ApiToken)
+				if newCfg.LLMMode != "" {
+					app.SetLLMMode(newCfg.LLMMode)
+				}
+				if newCfg.EnableTTS != nil {
+					app.SetEnableTTS(*newCfg.EnableTTS)
+				}
 			}
 		}
 
@@ -78,7 +96,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	}))
 	mux.HandleFunc("/api/tts/styles", AuthMiddleware(authMgr, handleTTSStyles))
 	mux.HandleFunc("/api/models", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
-		handleModels(w, r, app.llmEndpoint)
+		handleModels(w, r, app)
 	}))
 	mux.HandleFunc("/api/dictionary", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
 		lang := r.URL.Query().Get("lang")
@@ -281,19 +299,32 @@ func handleDeleteUser(am *AuthManager) http.HandlerFunc {
 }
 
 // handleModels proxies model list requests to LLM server
-func handleModels(w http.ResponseWriter, r *http.Request, llmEndpoint string) {
+func handleModels(w http.ResponseWriter, r *http.Request, app *App) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	modelsURL := llmEndpoint + "/v1/models"
+	// Models endpoint typically remains at /v1/models regardless of Chat Mode?
+	// LM Studio Stateful docs don't say /api/v1/models. Usually models are global.
+	// But check if we need to use /api/v1/models? Accessing standard is safer for now.
+	modelsURL := app.llmEndpoint + "/v1/models"
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequestWithContext(r.Context(), "GET", modelsURL, nil)
 	if err != nil {
 		http.Error(w, "Failed to create request", http.StatusInternalServerError)
 		return
+	}
+
+	// Add Auth Token if present
+	if app.llmApiToken != "" {
+		req.Header.Set("Authorization", "Bearer "+app.llmApiToken)
+	} else {
+		// Default behavior or "lm-studio" if needed?
+		// LM Studio usually doesn't require auth for local unless configured.
+		// If configured, we must send it.
+		// If user didn't set token, but server requires it, this will 401.
 	}
 
 	resp, err := client.Do(req)
@@ -311,7 +342,8 @@ func handleModels(w http.ResponseWriter, r *http.Request, llmEndpoint string) {
 }
 
 // handleChat proxies chat requests to LM Studio with SSE streaming
-func handleChat(w http.ResponseWriter, r *http.Request, llmEndpoint string) {
+// handleChat proxies chat requests to LM Studio with SSE streaming
+func handleChat(w http.ResponseWriter, r *http.Request, app *App) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -324,7 +356,17 @@ func handleChat(w http.ResponseWriter, r *http.Request, llmEndpoint string) {
 	}
 	defer r.Body.Close()
 
-	llmURL := llmEndpoint + "/v1/chat/completions"
+	var llmURL string
+
+	// DEBUG LOG
+	log.Printf("[handleChat] Mode: %s, Endpoint: %s, HasToken: %v", app.llmMode, app.llmEndpoint, app.llmApiToken != "")
+
+	if app.llmMode == "stateful" {
+		llmURL = app.llmEndpoint + "/api/v1/chat"
+	} else {
+		llmURL = app.llmEndpoint + "/v1/chat/completions"
+	}
+
 	// Use r.Context() to propagate cancellation from frontend
 	req, err := http.NewRequestWithContext(r.Context(), "POST", llmURL, bytes.NewReader(body))
 	if err != nil {
@@ -333,7 +375,11 @@ func handleChat(w http.ResponseWriter, r *http.Request, llmEndpoint string) {
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer lm-studio")
+	if app.llmApiToken != "" {
+		req.Header.Set("Authorization", "Bearer "+app.llmApiToken)
+	} else {
+		req.Header.Set("Authorization", "Bearer lm-studio")
+	}
 
 	client := &http.Client{Timeout: 5 * time.Minute}
 	resp, err := client.Do(req)

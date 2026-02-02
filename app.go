@@ -30,6 +30,8 @@ type App struct {
 	isRunning   bool
 	port        string
 	llmEndpoint string
+	llmApiToken string
+	llmMode     string // "standard" or "stateful"
 	enableTTS   bool
 	authMgr     *AuthManager
 	assets      embed.FS
@@ -39,6 +41,8 @@ type App struct {
 type AppConfig struct {
 	Port            string          `json:"port"`
 	LLMEndpoint     string          `json:"llmEndpoint"`
+	LLMApiToken     string          `json:"llmApiToken"`
+	LLMMode         string          `json:"llmMode"`
 	EnableTTS       bool            `json:"enableTTS"`
 	TTS             ServerTTSConfig `json:"tts"`
 	StartOnBoot     bool            `json:"startOnBoot"`
@@ -225,13 +229,16 @@ func (a *App) loadConfig() {
 	ttsConfig = ServerTTSConfig{VoiceStyle: "M1.json", Speed: 1.0, Threads: 4}
 
 	cfgPath := GetResourcePath(configFile)
+	fmt.Printf("Loading config from: %s\n", cfgPath)
 	data, err := os.ReadFile(cfgPath)
 	if err != nil {
+		fmt.Printf("Config file not found, using defaults\n")
 		return // Use defaults
 	}
 
 	var cfg AppConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
+		fmt.Printf("Failed to parse config: %v\n", err)
 		return
 	}
 
@@ -241,7 +248,15 @@ func (a *App) loadConfig() {
 	if cfg.LLMEndpoint != "" {
 		a.llmEndpoint = cfg.LLMEndpoint
 	}
+	// Default to standard if empty
+	a.llmMode = "standard"
+	if cfg.LLMMode != "" {
+		a.llmMode = cfg.LLMMode
+	}
+	a.llmApiToken = cfg.LLMApiToken
 	a.enableTTS = cfg.EnableTTS
+
+	fmt.Printf("Loaded Config - Port: %s, Endpoint: %s, Mode: %s\n", a.port, a.llmEndpoint, a.llmMode)
 
 	// Update global TTS config if loaded values are valid
 	if cfg.TTS.VoiceStyle != "" {
@@ -268,6 +283,8 @@ func (a *App) saveConfig() {
 	// Update fields managed by this function
 	cfg.Port = a.port
 	cfg.LLMEndpoint = a.llmEndpoint
+	cfg.LLMMode = a.llmMode
+	cfg.LLMApiToken = a.llmApiToken
 	cfg.EnableTTS = a.enableTTS
 	cfg.TTS = ttsConfig
 
@@ -362,6 +379,8 @@ func (a *App) GetServerStatus() map[string]interface{} {
 		"running":     a.isRunning,
 		"port":        a.port,
 		"llmEndpoint": a.llmEndpoint,
+		"llmMode":     a.llmMode,
+		"hasApiToken": a.llmApiToken != "",
 		"enableTTS":   a.enableTTS,
 	}
 }
@@ -371,6 +390,22 @@ func (a *App) SetLLMEndpoint(url string) {
 	a.serverMux.Lock()
 	defer a.serverMux.Unlock()
 	a.llmEndpoint = url
+	a.saveConfig()
+}
+
+// SetLLMApiToken sets the LLM API Token
+func (a *App) SetLLMApiToken(token string) {
+	a.serverMux.Lock()
+	defer a.serverMux.Unlock()
+	a.llmApiToken = token
+	a.saveConfig()
+}
+
+// SetLLMMode sets the LLM Mode (standard/stateful)
+func (a *App) SetLLMMode(mode string) {
+	a.serverMux.Lock()
+	defer a.serverMux.Unlock()
+	a.llmMode = mode
 	a.saveConfig()
 }
 
@@ -467,6 +502,12 @@ func (a *App) saveStartupSetting(key string, value bool) {
 	if cfg.LLMEndpoint == "" {
 		cfg.LLMEndpoint = a.llmEndpoint
 	}
+	if cfg.LLMMode == "" {
+		cfg.LLMMode = a.llmMode
+	}
+	// Note: We don't necessarily force Token persist here if it's missing in loaded config
+	// but for consistency let's ensure current state is preserved
+	cfg.LLMApiToken = a.llmApiToken
 	cfg.EnableTTS = a.enableTTS
 	cfg.TTS = ttsConfig
 
