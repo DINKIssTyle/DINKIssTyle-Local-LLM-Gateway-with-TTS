@@ -68,7 +68,7 @@
                         </select>
                     </div>
 
-                    <div class="setting-item">
+                    <div class="setting-item" id="container-api-token">
                         <label data-i18n="setting.apiToken.label">API Token</label>
                         <p class="setting-desc" data-i18n="setting.apiToken.desc">LM Studio API Token (Require Auth
                             enabled)</p>
@@ -79,10 +79,19 @@
                         <label data-i18n="setting.llmMode.label">Connection Mode</label>
                         <p class="setting-desc" data-i18n="setting.llmMode.desc">Select between Standard (OpenAI-like)
                             or Stateful (LM Studio optimized).</p>
-                        <select id="cfg-llm-mode">
-                            <option value="standard">Standard (Stateless)</option>
-                            <option value="stateful">LM Studio (Stateful)</option>
+                        <select id="cfg-llm-mode" onchange="updateSettingsVisibility()">
+                            <option value="standard">OpenAI Compatible</option>
+                            <option value="stateful">LM Studio</option>
                         </select>
+                    </div>
+
+                    <div class="setting-item" id="container-disable-stateful" style="display: none;">
+                        <div class="setting-toggle" onclick="toggleSwitch('cfg-disable-stateful')">
+                            <span data-i18n="setting.disableStateful.label">Disable Stateful Storage</span>
+                            <input type="checkbox" id="cfg-disable-stateful">
+                        </div>
+                        <p class="setting-desc" data-i18n="setting.disableStateful.desc">대화 내용을 서버에 저장하지 않습니다 (LM
+                            Studio).</p>
                     </div>
 
                     <div class="setting-item">
@@ -118,7 +127,7 @@
                         <input type="number" id="cfg-max-tokens" value="2048">
                     </div>
 
-                    <div class="setting-item">
+                    <div class="setting-item" id="container-history">
                         <label data-i18n="setting.history.label">History Count</label>
                         <p class="setting-desc" data-i18n="setting.history.desc">(기본값: 10) 대화 기억 횟수</p>
                         <input type="number" id="cfg-history" value="10">

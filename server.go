@@ -305,10 +305,11 @@ func handleModels(w http.ResponseWriter, r *http.Request, app *App) {
 		return
 	}
 
-	// Models endpoint typically remains at /v1/models regardless of Chat Mode?
-	// LM Studio Stateful docs don't say /api/v1/models. Usually models are global.
-	// But check if we need to use /api/v1/models? Accessing standard is safer for now.
-	modelsURL := app.llmEndpoint + "/v1/models"
+	// User requested to use /api/v1/models for both OpenAI Compatible and LM Studio modes
+	// to get the list of ALL available models, not just the loaded one.
+	modelsURL := app.llmEndpoint + "/api/v1/models"
+
+	log.Printf("[handleModels] Fetching from: %s (Mode: %s)", modelsURL, app.llmMode)
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequestWithContext(r.Context(), "GET", modelsURL, nil)
@@ -320,11 +321,6 @@ func handleModels(w http.ResponseWriter, r *http.Request, app *App) {
 	// Add Auth Token if present
 	if app.llmApiToken != "" {
 		req.Header.Set("Authorization", "Bearer "+app.llmApiToken)
-	} else {
-		// Default behavior or "lm-studio" if needed?
-		// LM Studio usually doesn't require auth for local unless configured.
-		// If configured, we must send it.
-		// If user didn't set token, but server requires it, this will 401.
 	}
 
 	resp, err := client.Do(req)
@@ -335,10 +331,20 @@ func handleModels(w http.ResponseWriter, r *http.Request, app *App) {
 	}
 	defer resp.Body.Close()
 
+	// Read body to log it
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("Failed to read response body: %v", err)
+		http.Error(w, "Failed to read response body", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[handleModels] Response (%d): %s", resp.StatusCode, string(bodyBytes))
+
 	// Copy response headers and body
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	w.Write(bodyBytes)
 }
 
 // handleChat proxies chat requests to LM Studio with SSE streaming

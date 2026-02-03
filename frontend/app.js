@@ -28,7 +28,8 @@ let config = {
     ttsThreads: 2,
     language: 'ko', // UI language
     apiToken: '',
-    llmMode: 'standard' // 'standard' or 'stateful'
+    llmMode: 'standard', // 'standard' or 'stateful'
+    disableStateful: false // LM Studio specific
 };
 
 // ============================================================================
@@ -72,8 +73,10 @@ const translations = {
         'setting.history.desc': '(기본값: 10) 대화 기억 횟수',
         'setting.apiToken.label': 'API Token',
         'setting.apiToken.desc': 'LM Studio API Token (인증 활성화 시 필요, 빈칸이면 무시)',
-        'setting.llmMode.label': '연결 모드',
-        'setting.llmMode.desc': 'Standard (Stateless) 또는 LM Studio (Stateful) 선택',
+        'setting.llmMode.label': 'Connection Mode',
+        'setting.llmMode.desc': 'Select OpenAI Compatible or LM Studio (Stateful)',
+        'setting.disableStateful.label': 'Disable Stateful Storage',
+        'setting.disableStateful.desc': 'Do not store conversation history on server (LM Studio).',
         // Settings - TTS
         'setting.enableTTS.label': 'TTS 활성화',
         'setting.enableTTS.desc': '응답을 음성으로 재생합니다.',
@@ -146,7 +149,9 @@ const translations = {
         'setting.apiToken.label': 'API Token',
         'setting.apiToken.desc': 'LM Studio API Token (Required if Auth is enabled)',
         'setting.llmMode.label': 'Connection Mode',
-        'setting.llmMode.desc': 'Select between Standard (Stateless) or LM Studio (Stateful)',
+        'setting.llmMode.desc': 'Select between OpenAI Compatible or LM Studio',
+        'setting.disableStateful.label': 'Disable Stateful Storage',
+        'setting.disableStateful.desc': 'Do not store conversation on server (LM Studio).',
         // Settings - TTS
         'setting.enableTTS.label': 'Enable TTS',
         'setting.enableTTS.desc': 'Play responses as audio.',
@@ -287,7 +292,24 @@ async function fetchModels() {
         }
 
         const data = await response.json();
-        const models = data.data || [];
+        console.log('[Models] Raw response:', data);
+
+        let models = [];
+        if (Array.isArray(data)) {
+            models = data;
+        } else if (data.data && Array.isArray(data.data)) {
+            models = data.data;
+        } else if (data.object === 'list' && Array.isArray(data.data)) {
+            models = data.data;
+        } else if (data.models && Array.isArray(data.models)) {
+            // LM Studio /api/v1/models format
+            models = data.models.map(m => ({
+                id: m.key, // Map key to id
+                ...m
+            }));
+        } else {
+            console.warn('[Models] Unexpected format:', data);
+        }
 
         // Clear existing options
         select.innerHTML = '';
@@ -620,6 +642,8 @@ function loadConfig() {
     document.getElementById('cfg-history').value = config.historyCount;
     document.getElementById('cfg-api-token').value = config.apiToken || '';
     document.getElementById('cfg-llm-mode').value = config.llmMode || 'standard';
+    document.getElementById('cfg-disable-stateful').checked = config.disableStateful || false;
+    updateSettingsVisibility(); // Update UI visibility based on mode
     document.getElementById('cfg-enable-tts').checked = config.enableTTS;
     document.getElementById('cfg-auto-tts').checked = config.autoTTS || false;
     document.getElementById('cfg-tts-lang').value = config.ttsLang;
@@ -659,6 +683,29 @@ function loadConfig() {
     setupSettingsListeners();
 }
 
+function updateSettingsVisibility() {
+    const mode = document.getElementById('cfg-llm-mode').value;
+    const tokenContainer = document.getElementById('container-api-token');
+    const historyContainer = document.getElementById('container-history');
+    const disableStatefulContainer = document.getElementById('container-disable-stateful');
+
+    // Default (Standard/OpenAI Compatible)
+    let showToken = false;
+    let showHistory = true;
+    let showDisableStateful = false;
+
+    if (mode === 'stateful') {
+        // LM Studio Mode
+        showToken = true;
+        showHistory = false; // LM Studio handles history via response_id
+        showDisableStateful = true;
+    }
+
+    if (tokenContainer) tokenContainer.style.display = showToken ? 'block' : 'none';
+    if (historyContainer) historyContainer.style.display = showHistory ? 'block' : 'none';
+    if (disableStatefulContainer) disableStatefulContainer.style.display = showDisableStateful ? 'flex' : 'none';
+}
+
 function setupSettingsListeners() {
     // Save button explicit handler
     const saveBtn = document.getElementById('save-cfg-btn');
@@ -683,7 +730,7 @@ function setupSettingsListeners() {
     });
 
     // Selects & Inputs: save on change
-    const autoSaveIds = ['cfg-api', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-api-token'];
+    const autoSaveIds = ['cfg-api', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-api-token', 'cfg-disable-stateful'];
     autoSaveIds.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.onchange = () => saveConfig(false);
@@ -805,6 +852,10 @@ function saveConfig(closeModal = true) {
     // New fields
     config.apiToken = document.getElementById('cfg-api-token').value.trim();
     config.llmMode = document.getElementById('cfg-llm-mode').value;
+    config.disableStateful = document.getElementById('cfg-disable-stateful').checked;
+
+    // Update visibility immediately
+    updateSettingsVisibility();
 
     // Reload dictionary since language changes
     loadTTSDictionary(config.ttsLang);
@@ -1043,6 +1094,10 @@ async function sendMessage() {
             temperature: config.temperature,
             stream: true
         };
+
+        if (config.disableStateful) {
+            payload.store = false;
+        }
         // Add image if present
         if (pendingImage) {
             // LM Studio Stateful chat might support array input for images? 
