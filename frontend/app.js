@@ -98,7 +98,7 @@ const translations = {
         'setting.format.desc': 'MP3는 WAV를 변환하여 재생합니다.',
         // Chat
         'chat.welcome': '안녕하세요! 채팅할 준비가 되었습니다. 우측 상단 기어 아이콘에서 설정하세요.',
-        'chat.instruction': '우측 상단 메뉴에서 설정을 변경할 수 있습니다.',
+        'chat.instruction': '우측 상단 설정(⚙️)에서 연결 모드 및 API Token을 확인해주세요.',
         'input.placeholder': '메시지를 입력하세요...',
         // Health Check
         'health.systemReady': '시스템 준비 완료',
@@ -422,7 +422,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     await checkAuth();
 
-    loadConfig();
+    // Initial Config Load
+    try {
+        loadConfig();
+    } catch (e) {
+        console.error("Config load failed, using defaults:", e);
+    }
+
+    fetchModels().catch(console.warn); // Fetch models in background
+
     await loadVoiceStyles(); // Fetch voice styles
     await syncServerConfig(); // Sync with server
     setupEventListeners();
@@ -595,8 +603,8 @@ async function toggleServer() {
             updateServerUI(false, port);
         } else {
             // Also update LLM endpoint
-            const llmEndpoint = document.getElementById('cfg-api').value;
-            await window.go.main.App.SetLLMEndpoint(llmEndpoint);
+            // const llmEndpoint = document.getElementById('cfg-api').value; // UI Element removed
+            await window.go.main.App.SetLLMEndpoint(config.apiEndpoint);
             await window.go.main.App.StartServer(port);
             updateServerUI(true, port);
         }
@@ -629,7 +637,12 @@ function updateServerUI(running, port) {
 function loadConfig() {
     const saved = localStorage.getItem('appConfig');
     if (saved) {
-        config = { ...config, ...JSON.parse(saved) };
+        try {
+            config = { ...config, ...JSON.parse(saved) };
+        } catch (e) {
+            console.error('Failed to parse saved config:', e);
+            // Optional: localStorage.removeItem('appConfig');
+        }
     }
 
     // Update UI
@@ -703,7 +716,7 @@ function updateSettingsVisibility() {
 
     if (tokenContainer) tokenContainer.style.display = showToken ? 'block' : 'none';
     if (historyContainer) historyContainer.style.display = showHistory ? 'block' : 'none';
-    if (disableStatefulContainer) disableStatefulContainer.style.display = showDisableStateful ? 'flex' : 'none';
+    if (disableStatefulContainer) disableStatefulContainer.style.display = showDisableStateful ? 'block' : 'none';
 }
 
 function setupSettingsListeners() {
@@ -1274,6 +1287,26 @@ async function processStream(response, elementId) {
                     // Handle LM Studio Stateful Chat Streaming Format (based on logs)
                     else if (json.type === 'message.delta' && json.content) {
                         contentToAdd = json.content;
+                    }
+                    // Handle Reasoning (Thinking)
+                    else if (json.type === 'reasoning.start') {
+                        contentToAdd = '<think>';
+                    }
+                    else if (json.type === 'reasoning.delta' && json.content) {
+                        contentToAdd = json.content;
+                    }
+                    else if (json.type === 'reasoning.end') {
+                        contentToAdd = '</think>\n';
+                    }
+                    // Handle MCP Tool Calls
+                    else if (json.type === 'tool_call.start') {
+                        contentToAdd = `\n> **🛠️ Tool Call:** \`${json.tool}\`\n`;
+                    }
+                    else if (json.type === 'tool_call.success') {
+                        contentToAdd = `> ✅ **Tool Finished**\n\n`;
+                    }
+                    else if (json.type === 'tool_call.failure') {
+                        contentToAdd = `\n> ❌ **Tool Failed:** ${json.reason || 'Unknown error'}\n\n`;
                     }
                     else if (json.type === 'chat.end' && json.result && json.result.response_id) {
                         lastResponseId = json.result.response_id;
@@ -2225,12 +2258,23 @@ async function checkSystemHealth() {
         let statusTitle = t('health.systemReady');
         let statusDetails = "";
 
+        // Display Current Mode
+        const modeLabel = config.llmMode === 'stateful' ? 'LM Studio' : 'OpenAI Compatible';
+        statusDetails += `\n- **모드**: ${modeLabel}`;
+
         // Analyze health
         if (health.llmStatus !== 'ok') {
             statusIcon = "⚠️";
             statusTitle = t('health.checkRequired');
-            // If message implies unreachability/error, keep raw message for debug, or use generic
-            statusDetails += `\n- **${t('health.llm')}**: ${health.llmMessage}`;
+
+            let errorDetail = health.llmMessage;
+            if (errorDetail.includes('401')) {
+                errorDetail += " -> **API Token**을 확인해주세요.";
+            } else if (errorDetail.includes('connect') || errorDetail.includes('refused')) {
+                errorDetail += " -> **LM Studio 서버**가 실행 중인지 확인해주세요.";
+            }
+
+            statusDetails += `\n- **${t('health.llm')}**: ${errorDetail}`;
         } else {
             // Translate "Connected" if exact match, otherwise keep
             let llmDisplay = health.llmMessage === 'Connected' ? t('health.status.connected') : health.llmMessage;

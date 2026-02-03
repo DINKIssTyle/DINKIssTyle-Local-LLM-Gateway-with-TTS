@@ -702,27 +702,38 @@ func (a *App) CheckHealth() HealthCheckResult {
 
 	// 1. Check LLM Connectivity
 	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get(a.llmEndpoint + "/v1/models")
+	req, err := http.NewRequest("GET", a.llmEndpoint+"/v1/models", nil)
 	if err != nil {
 		result.LLMStatus = "error"
-		result.LLMMessage = fmt.Sprintf("Unreachable: %v", err)
+		result.LLMMessage = fmt.Sprintf("Request Error: %v", err)
 	} else {
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
+		// Add API Token if present
+		if a.llmApiToken != "" {
+			req.Header.Set("Authorization", "Bearer "+a.llmApiToken)
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
 			result.LLMStatus = "error"
-			result.LLMMessage = fmt.Sprintf("Error: HTTP %d", resp.StatusCode)
+			result.LLMMessage = fmt.Sprintf("Unreachable: %v", err)
 		} else {
-			// Try to parse model name
-			var modelResp struct {
-				Data []struct {
-					ID string `json:"id"`
-				} `json:"data"`
-			}
-			if err := json.NewDecoder(resp.Body).Decode(&modelResp); err == nil && len(modelResp.Data) > 0 {
-				result.ServerModel = modelResp.Data[0].ID
-				result.LLMMessage = "Connected"
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				result.LLMStatus = "error"
+				result.LLMMessage = fmt.Sprintf("Error: HTTP %d", resp.StatusCode)
 			} else {
-				result.LLMMessage = "Connected (No models)"
+				// Try to parse model name
+				var modelResp struct {
+					Data []struct {
+						ID string `json:"id"`
+					} `json:"data"`
+				}
+				if err := json.NewDecoder(resp.Body).Decode(&modelResp); err == nil && len(modelResp.Data) > 0 {
+					result.ServerModel = modelResp.Data[0].ID
+					result.LLMMessage = "Connected"
+				} else {
+					result.LLMMessage = "Connected (No models)"
+				}
 			}
 		}
 	}

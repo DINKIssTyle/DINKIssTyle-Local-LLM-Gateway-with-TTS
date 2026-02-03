@@ -54,13 +54,6 @@
                     <div class="setting-section-title" data-i18n="section.llm">LLM Settings</div>
 
                     <div class="setting-item">
-                        <label data-i18n="setting.apiEndpoint.label">API Endpoint</label>
-                        <p class="setting-desc" data-i18n="setting.apiEndpoint.desc">LLM API 주소 (예:
-                            http://127.0.0.1:1234)</p>
-                        <input type="text" id="cfg-api" placeholder="http://127.0.0.1:1234">
-                    </div>
-
-                    <div class="setting-item">
                         <label data-i18n="setting.model.label">Model Name</label>
                         <p class="setting-desc" data-i18n="setting.model.desc">LLM서버에서 현재 로드되어 있는 모델 이름을 적어주세요.</p>
                         <select id="cfg-model">
@@ -94,6 +87,12 @@
                             Studio).</p>
                     </div>
 
+                    <div class="setting-item" id="container-history">
+                        <label data-i18n="setting.history.label">History Count</label>
+                        <p class="setting-desc" data-i18n="setting.history.desc">(기본값: 10) 대화 기억 횟수</p>
+                        <input type="number" id="cfg-history" value="10">
+                    </div>
+
                     <div class="setting-item">
                         <div class="setting-toggle" onclick="toggleSwitch('cfg-hide-think')">
                             <span data-i18n="setting.hideThink.label">Hide &lt;think&gt;</span>
@@ -125,12 +124,6 @@
                         <label data-i18n="setting.maxTokens.label">Max Tokens</label>
                         <p class="setting-desc" data-i18n="setting.maxTokens.desc">(기본값: 4096) LLM이 생성할 최대 토큰 수</p>
                         <input type="number" id="cfg-max-tokens" value="2048">
-                    </div>
-
-                    <div class="setting-item" id="container-history">
-                        <label data-i18n="setting.history.label">History Count</label>
-                        <p class="setting-desc" data-i18n="setting.history.desc">(기본값: 10) 대화 기억 횟수</p>
-                        <input type="number" id="cfg-history" value="10">
                     </div>
                 </div>
 
