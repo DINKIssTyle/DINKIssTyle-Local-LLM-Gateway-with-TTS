@@ -1104,6 +1104,7 @@ async function sendMessage() {
         payload = {
             model: config.model,
             input: text, // Only current input
+            system_prompt: config.systemPrompt, // Explicitly pass system prompt
             temperature: config.temperature,
             stream: true
         };
