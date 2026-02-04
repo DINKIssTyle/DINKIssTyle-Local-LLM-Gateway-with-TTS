@@ -1,0 +1,5 @@
+mcp
+playwright
+beautifulsoup4
+nest_asyncio
+duckduckgo-search
