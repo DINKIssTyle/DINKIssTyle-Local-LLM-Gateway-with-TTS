@@ -150,6 +150,7 @@ body {
   background-color: var(--ai-bubble-bg);
   color: var(--ai-text-color);
   border-bottom-left-radius: 2px;
+  white-space: normal;
 }
 
 .message-inner {

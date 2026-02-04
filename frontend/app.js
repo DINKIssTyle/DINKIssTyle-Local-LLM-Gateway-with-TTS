@@ -294,7 +294,8 @@ async function fetchModels() {
     try {
         const response = await fetch('/api/models');
         if (!response.ok) {
-            throw new Error('Failed to fetch models');
+            const errText = await response.text();
+            throw new Error(errText || `HTTP ${response.status}`);
         }
 
         const data = await response.json();
@@ -342,8 +343,10 @@ async function fetchModels() {
         }
     } catch (err) {
         console.error('[Models] Failed to fetch:', err);
-        select.innerHTML = '<option value="">Connection error</option>';
-        // Add a manual input option as fallback
+        // Show specific error in dropdown
+        select.innerHTML = `<option value="">Error: ${err.message}</option>`;
+
+        // Also add a manual input option
         const manualOption = document.createElement('option');
         manualOption.value = config.model || '';
         manualOption.textContent = config.model || 'Enter model manually';
@@ -859,7 +862,13 @@ async function reloadExternalFiles() {
 
 function saveConfig(closeModal = true) {
     const cfgApiEl = document.getElementById('cfg-api');
-    config.apiEndpoint = cfgApiEl ? cfgApiEl.value.trim() : config.apiEndpoint;
+    // Sanitize Endpoint: Trim whitespace and trailing slash
+    let endpoint = cfgApiEl ? cfgApiEl.value.trim() : config.apiEndpoint;
+    if (endpoint.endsWith('/')) {
+        endpoint = endpoint.slice(0, -1);
+    }
+    config.apiEndpoint = endpoint;
+
     config.model = document.getElementById('cfg-model').value.trim();
     config.hideThink = document.getElementById('cfg-hide-think').checked;
     config.temperature = parseFloat(document.getElementById('cfg-temp').value);
@@ -869,7 +878,7 @@ function saveConfig(closeModal = true) {
     config.autoTTS = document.getElementById('cfg-auto-tts').checked;
     config.ttsLang = document.getElementById('cfg-tts-lang').value;
 
-    // New fields
+    // New fields - Sanitize Token
     config.apiToken = document.getElementById('cfg-api-token').value.trim();
     config.llmMode = document.getElementById('cfg-llm-mode').value;
     config.disableStateful = document.getElementById('cfg-disable-stateful').checked;
@@ -936,11 +945,28 @@ async function syncServerConfig() {
         const response = await fetch('/api/config'); // Fetch current server config
         if (response.ok) {
             const serverCfg = await response.json();
+            console.log('[Config] Synced from server:', serverCfg);
+
+            if (serverCfg.llm_endpoint) {
+                config.apiEndpoint = serverCfg.llm_endpoint;
+                const cfgApi = document.getElementById('cfg-api');
+                if (cfgApi) cfgApi.value = config.apiEndpoint;
+            }
+            if (serverCfg.llm_mode) {
+                config.llmMode = serverCfg.llm_mode;
+                const cfgMode = document.getElementById('cfg-llm-mode');
+                if (cfgMode) {
+                    cfgMode.value = config.llmMode;
+                    updateSettingsVisibility();
+                }
+            }
             if (serverCfg.enable_tts !== undefined) {
                 config.enableTTS = serverCfg.enable_tts;
                 document.getElementById('cfg-enable-tts').checked = config.enableTTS;
-                localStorage.setItem('appConfig', JSON.stringify(config));
             }
+
+            // Save to localStorage so next reload uses these
+            localStorage.setItem('appConfig', JSON.stringify(config));
         }
     } catch (e) {
         console.warn('Failed to sync server config:', e);

@@ -348,7 +348,7 @@
                     <div class="form-group">
                         <label>LLM Endpoint</label>
                         <input type="text" id="llm-endpoint" value="http://127.0.0.1:1234"
-                            placeholder="http://127.0.0.1:1234">
+                            placeholder="http://127.0.0.1:1234" onchange="saveLLMEndpoint()">
                     </div>
                 </div>
 
@@ -691,6 +691,16 @@
                 await window.go.main.App.SetPort(port);
             } catch (e) {
                 console.error('Failed to save port:', e);
+            }
+        }
+
+        async function saveLLMEndpoint() {
+            const endpoint = document.getElementById('llm-endpoint').value;
+            try {
+                await window.go.main.App.SetLLMEndpoint(endpoint);
+                console.log('LLM Endpoint saved:', endpoint);
+            } catch (e) {
+                console.error('Failed to save LLM Endpoint:', e);
             }
         }
 

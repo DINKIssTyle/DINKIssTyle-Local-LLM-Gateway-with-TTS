@@ -36,6 +36,11 @@ type App struct {
 	authMgr     *AuthManager
 	assets      embed.FS
 	isQuitting  bool
+
+	// Server-side Model Cache
+	modelCache     []byte
+	modelCacheMux  sync.RWMutex
+	modelCacheTime time.Time
 }
 
 // AppConfig holds the persistent application configuration
@@ -257,7 +262,8 @@ func (a *App) loadConfig() {
 	a.llmApiToken = cfg.LLMApiToken
 	a.enableTTS = cfg.EnableTTS
 
-	fmt.Printf("Loaded Config - Port: %s, Endpoint: %s, Mode: %s\n", a.port, a.llmEndpoint, a.llmMode)
+	fmt.Printf("[loadConfig] Loaded Config from %s\n", cfgPath)
+	fmt.Printf("   -> Port: %s, Endpoint: %s, Mode: %s\n", a.port, a.llmEndpoint, a.llmMode)
 
 	// Update global TTS config if loaded values are valid
 	if cfg.TTS.VoiceStyle != "" {
@@ -273,6 +279,7 @@ func (a *App) loadConfig() {
 
 func (a *App) saveConfig() {
 	cfgPath := GetResourcePath(configFile)
+	fmt.Printf("[saveConfig] Saving config to: %s\n", cfgPath)
 
 	// Read existing config to preserve other fields
 	var cfg AppConfig
@@ -396,6 +403,7 @@ func (a *App) GetServerStatus() map[string]interface{} {
 func (a *App) SetLLMEndpoint(url string) {
 	a.serverMux.Lock()
 	defer a.serverMux.Unlock()
+	fmt.Printf("[Config] Changing LLM Endpoint from '%s' to '%s'\n", a.llmEndpoint, url)
 	a.llmEndpoint = url
 	a.saveConfig()
 }
@@ -701,6 +709,7 @@ func (a *App) CheckAssets() bool {
 
 // CheckHealth performs a system health check (exposed to Wails)
 func (a *App) CheckHealth() HealthCheckResult {
+	// ... existing implementation ...
 	result := HealthCheckResult{
 		LLMStatus:  "ok",
 		TTSStatus:  "ok",
@@ -761,6 +770,76 @@ func (a *App) CheckHealth() HealthCheckResult {
 	}
 
 	return result
+}
+
+// FetchAndCacheModels fetches models from the LLM server and caches them
+func (a *App) FetchAndCacheModels() ([]byte, error) {
+	a.serverMux.Lock()
+	endpoint := strings.TrimSuffix(a.llmEndpoint, "/")
+	endpoint = strings.TrimSuffix(endpoint, "/v1")
+	mode := a.llmMode
+	token := strings.TrimSpace(a.llmApiToken)
+	a.serverMux.Unlock()
+
+	// Sanitize token
+	if strings.HasPrefix(strings.ToLower(token), "bearer ") {
+		token = strings.TrimSpace(token[7:])
+	}
+
+	fmt.Printf("[FetchAndCacheModels] Using LLM Endpoint: '%s' (Original: '%s') Mode: %s\n", endpoint, a.llmEndpoint, mode)
+
+	modelsURL := endpoint + "/v1/models"
+	if mode == "stateful" {
+		modelsURL = endpoint + "/api/v1/models"
+	}
+
+	fmt.Printf("[App] Fetching models from: %s (Mode: %s)\n", modelsURL, mode)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("GET", modelsURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %v", err)
+	}
+
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("connection failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read body: %v", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("server returned HTTP %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	// Success - Update Cache
+	a.modelCacheMux.Lock()
+	a.modelCache = bodyBytes
+	a.modelCacheTime = time.Now()
+	a.modelCacheMux.Unlock()
+
+	return bodyBytes, nil
+}
+
+// GetCachedModels returns the cached models or nil if empty
+func (a *App) GetCachedModels() []byte {
+	a.modelCacheMux.RLock()
+	defer a.modelCacheMux.RUnlock()
+	if len(a.modelCache) == 0 {
+		return nil
+	}
+	// Return a copy to be safe
+	dst := make([]byte, len(a.modelCache))
+	copy(dst, a.modelCache)
+	return dst
 }
 
 // DownloadAssets downloads missing assets

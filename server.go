@@ -72,11 +72,21 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 					app.SetTTSThreads(newCfg.TTSThreads)
 				}
 				if newCfg.ApiEndpoint != "" {
-					app.SetLLMEndpoint(newCfg.ApiEndpoint)
+					cleanEndpoint := strings.TrimSuffix(strings.TrimSpace(newCfg.ApiEndpoint), "/")
+					cleanEndpoint = strings.TrimSuffix(cleanEndpoint, "/v1")
+					app.SetLLMEndpoint(cleanEndpoint)
 				}
 				// Allow empty token to clear it? Or just update if present?
 				// Usually better to update. frontend sends current value.
-				app.SetLLMApiToken(newCfg.ApiToken)
+				if newCfg.ApiToken != "" { // Only sanitizing if provided, but frontend sends empty string too?
+					// Actually frontend sends current value.
+					// Let's sanitize unconditionally.
+					token := strings.TrimSpace(newCfg.ApiToken)
+					if strings.HasPrefix(strings.ToLower(token), "bearer ") {
+						token = strings.TrimSpace(token[7:])
+					}
+					app.SetLLMApiToken(token)
+				}
 				if newCfg.LLMMode != "" {
 					app.SetLLMMode(newCfg.LLMMode)
 				}
@@ -88,10 +98,13 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-cache")
+
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"llm_endpoint": app.llmEndpoint,
+			"llm_mode":     app.llmMode,
 			"enable_tts":   app.enableTTS,
 			"tts_config":   ttsConfig,
+			"has_token":    app.llmApiToken != "",
 		})
 	}))
 	mux.HandleFunc("/api/tts/styles", AuthMiddleware(authMgr, handleTTSStyles))
@@ -305,45 +318,39 @@ func handleModels(w http.ResponseWriter, r *http.Request, app *App) {
 		return
 	}
 
-	// User requested to use /v1/models for both OpenAI Compatible and LM Studio modes
-	// to get the list of ALL available models, not just the loaded one.
-	modelsURL := app.llmEndpoint + "/v1/models"
+	// Add CORS headers
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 
-	log.Printf("[handleModels] Fetching from: %s (Mode: %s)", modelsURL, app.llmMode)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequestWithContext(r.Context(), "GET", modelsURL, nil)
-	if err != nil {
-		http.Error(w, "Failed to create request", http.StatusInternalServerError)
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 
-	// Add Auth Token if present
-	if app.llmApiToken != "" {
-		req.Header.Set("Authorization", "Bearer "+app.llmApiToken)
-	}
-
-	resp, err := client.Do(req)
+	// Try to fetch fresh models
+	bodyBytes, err := app.FetchAndCacheModels()
 	if err != nil {
-		log.Printf("Failed to connect to LLM server: %v", err)
-		http.Error(w, "Failed to connect to LLM server", http.StatusBadGateway)
+		log.Printf("[handleModels] Fetch failed: %v", err)
+
+		// Fallback to cache if available
+		cached := app.GetCachedModels()
+		if cached != nil {
+			log.Printf("[handleModels] Returning cached models (fallback)")
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Model-Source", "cache-fallback")
+			w.Write(cached)
+			return
+		}
+
+		// No cache and fetch failed
+		http.Error(w, fmt.Sprintf("Failed to fetch models: %v", err), http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close()
 
-	// Read body to log it
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("Failed to read response body: %v", err)
-		http.Error(w, "Failed to read response body", http.StatusInternalServerError)
-		return
-	}
-
-	log.Printf("[handleModels] Response (%d): %s", resp.StatusCode, string(bodyBytes))
-
-	// Copy response headers and body
+	// Success
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(resp.StatusCode)
+	w.Header().Set("X-Model-Source", "live")
 	w.Write(bodyBytes)
 }
 
@@ -364,13 +371,23 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App) {
 
 	var llmURL string
 
+	// Sanitize endpoint: Remove trailing slash and optional /v1 suffix if user included it
+	endpoint := strings.TrimSuffix(app.llmEndpoint, "/")
+	endpoint = strings.TrimSuffix(endpoint, "/v1")
+	token := strings.TrimSpace(app.llmApiToken)
+
+	// Sanitize token: Remove "Bearer " prefix if user pasted it
+	if strings.HasPrefix(strings.ToLower(token), "bearer ") {
+		token = strings.TrimSpace(token[7:])
+	}
+
 	// DEBUG LOG
-	log.Printf("[handleChat] Mode: %s, Endpoint: %s, HasToken: %v", app.llmMode, app.llmEndpoint, app.llmApiToken != "")
+	log.Printf("[handleChat] Mode: %s, Endpoint: %s, HasToken: %v", app.llmMode, endpoint, token != "")
 
 	if app.llmMode == "stateful" {
-		llmURL = app.llmEndpoint + "/api/v1/chat"
+		llmURL = endpoint + "/api/v1/chat"
 	} else {
-		llmURL = app.llmEndpoint + "/v1/chat/completions"
+		llmURL = endpoint + "/v1/chat/completions"
 	}
 
 	// Use r.Context() to propagate cancellation from frontend
@@ -381,9 +398,10 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App) {
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	if app.llmApiToken != "" {
-		req.Header.Set("Authorization", "Bearer "+app.llmApiToken)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	} else {
+		// Only set default LM Studio bearer if user hasn't provided one (though usually empty is fine)
 		req.Header.Set("Authorization", "Bearer lm-studio")
 	}
 
