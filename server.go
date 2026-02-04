@@ -61,11 +61,11 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	mux.HandleFunc("/api/config", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			var newCfg struct {
-				TTSThreads  int    `json:"tts_threads"`
-				ApiEndpoint string `json:"api_endpoint"`
-				ApiToken    string `json:"api_token"`
-				LLMMode     string `json:"llm_mode"`
-				EnableTTS   *bool  `json:"enable_tts"`
+				TTSThreads  int     `json:"tts_threads"`
+				ApiEndpoint string  `json:"api_endpoint"`
+				ApiToken    *string `json:"api_token"`
+				LLMMode     string  `json:"llm_mode"`
+				EnableTTS   *bool   `json:"enable_tts"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&newCfg); err == nil {
 				if newCfg.TTSThreads > 0 {
@@ -76,12 +76,10 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 					cleanEndpoint = strings.TrimSuffix(cleanEndpoint, "/v1")
 					app.SetLLMEndpoint(cleanEndpoint)
 				}
-				// Allow empty token to clear it? Or just update if present?
-				// Usually better to update. frontend sends current value.
-				if newCfg.ApiToken != "" { // Only sanitizing if provided, but frontend sends empty string too?
-					// Actually frontend sends current value.
-					// Let's sanitize unconditionally.
-					token := strings.TrimSpace(newCfg.ApiToken)
+				// Allow empty token to clear it
+				if newCfg.ApiToken != nil {
+					log.Printf("[handleConfig] Raw Received Token: '%s'", *newCfg.ApiToken)
+					token := strings.TrimSpace(*newCfg.ApiToken)
 					if strings.HasPrefix(strings.ToLower(token), "bearer ") {
 						token = strings.TrimSpace(token[7:])
 					}
@@ -399,10 +397,12 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App) {
 
 	req.Header.Set("Content-Type", "application/json")
 	if token != "" {
+		if len(token) > 4 {
+			log.Printf("[handleChat] Using Token: %s...", token[:4])
+		} else {
+			log.Printf("[handleChat] Using Token (short)")
+		}
 		req.Header.Set("Authorization", "Bearer "+token)
-	} else {
-		// Only set default LM Studio bearer if user hasn't provided one (though usually empty is fine)
-		req.Header.Set("Authorization", "Bearer lm-studio")
 	}
 
 	client := &http.Client{Timeout: 5 * time.Minute}

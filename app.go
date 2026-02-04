@@ -412,6 +412,15 @@ func (a *App) SetLLMEndpoint(url string) {
 func (a *App) SetLLMApiToken(token string) {
 	a.serverMux.Lock()
 	defer a.serverMux.Unlock()
+
+	masked := ""
+	if len(token) > 8 {
+		masked = token[:4] + "..." + token[len(token)-4:]
+	} else if len(token) > 0 {
+		masked = "***"
+	}
+	fmt.Printf("[Config] Setting API Token: %s (Len: %d)\n", masked, len(token))
+
 	a.llmApiToken = token
 	a.saveConfig()
 }

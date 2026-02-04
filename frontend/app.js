@@ -880,6 +880,7 @@ function saveConfig(closeModal = true) {
 
     // New fields - Sanitize Token
     config.apiToken = document.getElementById('cfg-api-token').value.trim();
+    console.log('[Debug] Token Value from Input:', config.apiToken); // Debug Log
     config.llmMode = document.getElementById('cfg-llm-mode').value;
     config.disableStateful = document.getElementById('cfg-disable-stateful').checked;
 
