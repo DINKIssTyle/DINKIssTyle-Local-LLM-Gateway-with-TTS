@@ -73,10 +73,13 @@ const translations = {
         'setting.history.desc': '(기본값: 10) 대화 기억 횟수',
         'setting.apiToken.label': 'API Token',
         'setting.apiToken.desc': 'LM Studio API Token (인증 활성화 시 필요, 빈칸이면 무시)',
-        'setting.llmMode.label': 'Connection Mode',
-        'setting.llmMode.desc': 'Select OpenAI Compatible or LM Studio (Stateful)',
-        'setting.disableStateful.label': 'Disable Stateful Storage',
-        'setting.disableStateful.desc': 'Do not store conversation history on server (LM Studio).',
+        'setting.apiToken.placeholder': '빈칸이면 기본값 사용',
+        'setting.llmMode.label': '연결 모드',
+        'setting.llmMode.desc': 'OpenAI 호환 모드 또는 LM Studio 모드를 선택하세요.',
+        'setting.llmMode.option.standard': 'OpenAI 호환',
+        'setting.llmMode.option.stateful': 'LM Studio',
+        'setting.disableStateful.label': '서버 저장 비활성화 (Stateful)',
+        'setting.disableStateful.desc': '대화 내용을 서버에 저장하지 않습니다 (LM Studio).',
         // Settings - TTS
         'setting.enableTTS.label': 'TTS 활성화',
         'setting.enableTTS.desc': '응답을 음성으로 재생합니다.',
@@ -148,8 +151,11 @@ const translations = {
         'setting.history.desc': '(Default: 10) Number of messages to remember',
         'setting.apiToken.label': 'API Token',
         'setting.apiToken.desc': 'LM Studio API Token (Required if Auth is enabled)',
+        'setting.apiToken.placeholder': 'Leaving empty uses default',
         'setting.llmMode.label': 'Connection Mode',
         'setting.llmMode.desc': 'Select between OpenAI Compatible or LM Studio',
+        'setting.llmMode.option.standard': 'OpenAI Compatible',
+        'setting.llmMode.option.stateful': 'LM Studio',
         'setting.disableStateful.label': 'Disable Stateful Storage',
         'setting.disableStateful.desc': 'Do not store conversation on server (LM Studio).',
         // Settings - TTS
@@ -843,6 +849,7 @@ async function reloadExternalFiles() {
     try {
         await loadSystemPrompts();
         await loadTTSDictionary(config.ttsLang);
+        await fetchModels(); // Reload models
         showToast(t('action.reload') + ' ✓');
     } catch (e) {
         console.error("Failed to reload external files:", e);

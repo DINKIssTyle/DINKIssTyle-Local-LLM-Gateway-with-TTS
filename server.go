@@ -305,9 +305,9 @@ func handleModels(w http.ResponseWriter, r *http.Request, app *App) {
 		return
 	}
 
-	// User requested to use /api/v1/models for both OpenAI Compatible and LM Studio modes
+	// User requested to use /v1/models for both OpenAI Compatible and LM Studio modes
 	// to get the list of ALL available models, not just the loaded one.
-	modelsURL := app.llmEndpoint + "/api/v1/models"
+	modelsURL := app.llmEndpoint + "/v1/models"
 
 	log.Printf("[handleModels] Fetching from: %s (Mode: %s)", modelsURL, app.llmMode)
 
