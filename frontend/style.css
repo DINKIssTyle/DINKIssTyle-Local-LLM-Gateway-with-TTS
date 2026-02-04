@@ -157,15 +157,11 @@ body {
   flex-direction: column;
   max-width: 85%;
   gap: 4px;
+  overflow: hidden;
+  /* Added to contain children */
 }
 
-.message.user .message-inner {
-  align-items: flex-end;
-}
-
-.message.assistant .message-inner {
-  align-items: flex-start;
-}
+/* ... */
 
 .message-bubble {
   max-width: 100%;
@@ -174,6 +170,12 @@ body {
   border-radius: 12px;
   line-height: 1.5;
   position: relative;
+  word-break: break-word;
+  /* Force break for long words */
+  overflow-wrap: break-word;
+  /* Standard property */
+  white-space: pre-wrap;
+  /* Preserve whitespace but wrap */
 }
 
 .message-actions {

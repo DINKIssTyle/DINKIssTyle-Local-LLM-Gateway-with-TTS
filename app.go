@@ -35,6 +35,7 @@ type App struct {
 	enableTTS   bool
 	authMgr     *AuthManager
 	assets      embed.FS
+	isQuitting  bool
 }
 
 // AppConfig holds the persistent application configuration
@@ -369,6 +370,12 @@ func (a *App) shutdown(ctx context.Context) {
 	fmt.Println("Shutting down application...")
 	a.StopServer()
 	QuitSystemTray()
+}
+
+// Quit initiates the application shutdown
+func (a *App) Quit() {
+	a.isQuitting = true
+	wruntime.Quit(a.ctx)
 }
 
 // GetServerStatus returns the current server status

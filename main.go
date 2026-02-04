@@ -60,6 +60,9 @@ func main() {
 		OnShutdown:        app.shutdown,
 		HideWindowOnClose: false, // Handled by OnBeforeClose
 		OnBeforeClose: func(ctx context.Context) (prevent bool) {
+			if app.isQuitting {
+				return false
+			}
 			minimize := app.GetMinimizeToTray()
 			if minimize {
 				wruntime.WindowHide(ctx)
@@ -99,9 +102,7 @@ func createAppMenu(app *App) *menu.Menu {
 	})
 	appMenu.AddSeparator()
 	appMenu.AddText("Quit", keys.CmdOrCtrl("q"), func(_ *menu.CallbackData) {
-		if app.ctx != nil {
-			wruntime.Quit(app.ctx)
-		}
+		app.Quit()
 	})
 
 	// Edit Menu
