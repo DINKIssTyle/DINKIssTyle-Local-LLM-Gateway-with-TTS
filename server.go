@@ -400,6 +400,36 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App) {
 		token = strings.TrimSpace(token[7:])
 	}
 
+	// Inject MCP integration if enabled
+	if app.enableMCP {
+		var reqMap map[string]interface{}
+		if err := json.Unmarshal(body, &reqMap); err == nil {
+			var integrations []interface{}
+			if existing, ok := reqMap["integrations"].([]interface{}); ok {
+				integrations = existing
+			}
+
+			// Add our MCP server if not present
+			targetMCP := "mcp/dinkisstyle-gateway"
+			hasMCP := false
+			for _, v := range integrations {
+				if str, ok := v.(string); ok && str == targetMCP {
+					hasMCP = true
+					break
+				}
+			}
+
+			if !hasMCP {
+				integrations = append(integrations, targetMCP)
+				reqMap["integrations"] = integrations
+				if newBody, err := json.Marshal(reqMap); err == nil {
+					body = newBody
+					log.Println("[handleChat] Injected MCP integration into request")
+				}
+			}
+		}
+	}
+
 	// DEBUG LOG
 	log.Printf("[handleChat] Mode: %s, Endpoint: %s, HasToken: %v", app.llmMode, endpoint, token != "")
 
