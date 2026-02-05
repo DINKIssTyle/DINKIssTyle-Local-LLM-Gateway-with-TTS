@@ -328,6 +328,18 @@ func (a *App) startup(ctx context.Context) {
 		go a.StartServerWithCurrentConfig()
 	}
 
+	// Initialize Model Cache
+	a.loadModelCacheFromDisk()
+	// Background fetch to update cache
+	go func() {
+		fmt.Println("[startup] Starting background model fetch...")
+		if _, err := a.FetchAndCacheModels(); err != nil {
+			fmt.Printf("[startup] Background model fetch failed: %v\n", err)
+		} else {
+			fmt.Println("[startup] Background model fetch success")
+		}
+	}()
+
 	// Initialize TTS if enabled
 	if a.enableTTS {
 		if !a.CheckAssets() {
@@ -855,7 +867,28 @@ func (a *App) FetchAndCacheModels() ([]byte, error) {
 	a.modelCacheTime = time.Now()
 	a.modelCacheMux.Unlock()
 
+	// Persist to disk
+	cachePath := GetResourcePath("models_cache.json")
+	if err := os.WriteFile(cachePath, bodyBytes, 0644); err != nil {
+		fmt.Printf("[FetchAndCacheModels] Failed to write cache to disk: %v\n", err)
+	} else {
+		fmt.Printf("[FetchAndCacheModels] Models cached to %s\n", cachePath)
+	}
+
 	return bodyBytes, nil
+}
+
+// loadModelCacheFromDisk loads the model cache from the file
+func (a *App) loadModelCacheFromDisk() {
+	cachePath := GetResourcePath("models_cache.json")
+	data, err := os.ReadFile(cachePath)
+	if err == nil && len(data) > 0 {
+		a.modelCacheMux.Lock()
+		a.modelCache = data
+		a.modelCacheTime = time.Now() // Effectively "old" but loaded
+		a.modelCacheMux.Unlock()
+		fmt.Printf("[loadModelCacheFromDisk] Loaded %d bytes from %s\n", len(data), cachePath)
+	}
 }
 
 // GetCachedModels returns the cached models or nil if empty

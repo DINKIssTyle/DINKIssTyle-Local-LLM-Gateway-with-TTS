@@ -56,7 +56,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 
 	// Protected API endpoints
 	mux.HandleFunc("/api/chat", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
-		handleChat(w, r, app)
+		handleChat(w, r, app, authMgr)
 	}))
 	mux.HandleFunc("/api/tts", AuthMiddleware(authMgr, handleTTS))
 
@@ -85,31 +85,91 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 				EnableMCP   *bool   `json:"enable_mcp"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&newCfg); err == nil {
-				if newCfg.TTSThreads > 0 {
-					app.SetTTSThreads(newCfg.TTSThreads)
+				// Check for authenticated user
+				userID := r.Header.Get("X-User-ID")
+				var user *User
+				if userID != "" {
+					authMgr.mu.Lock()
+					user = authMgr.users[userID]
+					authMgr.mu.Unlock()
 				}
-				if newCfg.ApiEndpoint != "" {
-					cleanEndpoint := strings.TrimSuffix(strings.TrimSpace(newCfg.ApiEndpoint), "/")
-					cleanEndpoint = strings.TrimSuffix(cleanEndpoint, "/v1")
-					app.SetLLMEndpoint(cleanEndpoint)
-				}
-				// Allow empty token to clear it
-				if newCfg.ApiToken != nil {
-					log.Printf("[handleConfig] Raw Received Token: '%s'", *newCfg.ApiToken)
-					token := strings.TrimSpace(*newCfg.ApiToken)
-					if strings.HasPrefix(strings.ToLower(token), "bearer ") {
-						token = strings.TrimSpace(token[7:])
+
+				if user != nil {
+					// User-specific save
+					updated := false
+					if newCfg.ApiEndpoint != "" {
+						cleanEndpoint := strings.TrimSuffix(strings.TrimSpace(newCfg.ApiEndpoint), "/")
+						cleanEndpoint = strings.TrimSuffix(cleanEndpoint, "/v1")
+						user.Settings.ApiEndpoint = &cleanEndpoint
+						updated = true
 					}
-					app.SetLLMApiToken(token)
-				}
-				if newCfg.LLMMode != "" {
-					app.SetLLMMode(newCfg.LLMMode)
-				}
-				if newCfg.EnableTTS != nil {
-					app.SetEnableTTS(*newCfg.EnableTTS)
-				}
-				if newCfg.EnableMCP != nil {
-					app.SetEnableMCP(*newCfg.EnableMCP)
+					if newCfg.ApiToken != nil {
+						token := strings.TrimSpace(*newCfg.ApiToken)
+						if strings.HasPrefix(strings.ToLower(token), "bearer ") {
+							token = strings.TrimSpace(token[7:])
+						}
+						user.Settings.ApiToken = &token
+						updated = true
+					}
+					if newCfg.LLMMode != "" {
+						user.Settings.LLMMode = &newCfg.LLMMode
+						updated = true
+					}
+					if newCfg.EnableTTS != nil {
+						user.Settings.EnableTTS = newCfg.EnableTTS
+						updated = true
+					}
+					if newCfg.EnableMCP != nil {
+						user.Settings.EnableMCP = newCfg.EnableMCP
+						updated = true
+					}
+					// Handle TTS Config partial updates if needed, for now simplistic
+					if newCfg.TTSThreads > 0 {
+						if user.Settings.TTSConfig == nil {
+							user.Settings.TTSConfig = &ServerTTSConfig{}
+						}
+						user.Settings.TTSConfig.Threads = newCfg.TTSThreads
+						updated = true
+					}
+
+					if updated {
+						if err := authMgr.SaveUsers(); err != nil {
+							log.Printf("[handleConfig] Failed to save user settings: %v", err)
+						} else {
+							log.Printf("[handleConfig] Saved settings for user %s", userID)
+						}
+					}
+				} else {
+					// Global config save (Admin or fallback) - Only if no user context or explicitly desired?
+					// For now, keeping legacy behavior for unauthenticated or admin might be confusing.
+					// Let's assume if X-User-ID is missing (local mode) we save global.
+					// If X-User-ID is present, we ONLY save to user.
+					if userID == "" {
+						if newCfg.TTSThreads > 0 {
+							app.SetTTSThreads(newCfg.TTSThreads)
+						}
+						if newCfg.ApiEndpoint != "" {
+							cleanEndpoint := strings.TrimSuffix(strings.TrimSpace(newCfg.ApiEndpoint), "/")
+							cleanEndpoint = strings.TrimSuffix(cleanEndpoint, "/v1")
+							app.SetLLMEndpoint(cleanEndpoint)
+						}
+						if newCfg.ApiToken != nil {
+							token := strings.TrimSpace(*newCfg.ApiToken)
+							if strings.HasPrefix(strings.ToLower(token), "bearer ") {
+								token = strings.TrimSpace(token[7:])
+							}
+							app.SetLLMApiToken(token)
+						}
+						if newCfg.LLMMode != "" {
+							app.SetLLMMode(newCfg.LLMMode)
+						}
+						if newCfg.EnableTTS != nil {
+							app.SetEnableTTS(*newCfg.EnableTTS)
+						}
+						if newCfg.EnableMCP != nil {
+							app.SetEnableMCP(*newCfg.EnableMCP)
+						}
+					}
 				}
 			}
 		}
@@ -117,16 +177,55 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-cache")
 
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		// Prepare response (Merge global + user)
+		resp := map[string]interface{}{
 			"llm_endpoint": app.llmEndpoint,
 			"llm_mode":     app.llmMode,
 			"enable_tts":   app.enableTTS,
 			"enable_mcp":   app.enableMCP,
 			"tts_config":   ttsConfig,
 			"has_token":    app.llmApiToken != "",
-		})
+		}
+
+		// Overlay User Settings
+		userID := r.Header.Get("X-User-ID")
+		if userID != "" {
+			authMgr.mu.RLock()
+			user := authMgr.users[userID]
+			authMgr.mu.RUnlock()
+
+			if user != nil {
+				if user.Settings.ApiEndpoint != nil {
+					resp["llm_endpoint"] = *user.Settings.ApiEndpoint
+				}
+				if user.Settings.LLMMode != nil {
+					resp["llm_mode"] = *user.Settings.LLMMode
+				}
+				if user.Settings.EnableTTS != nil {
+					resp["enable_tts"] = *user.Settings.EnableTTS
+				}
+				if user.Settings.EnableMCP != nil {
+					resp["enable_mcp"] = *user.Settings.EnableMCP
+				}
+				if user.Settings.ApiToken != nil && *user.Settings.ApiToken != "" {
+					resp["has_token"] = true
+				}
+				// Note: We don't return the actul token for security, just has_token status
+				// If the user wants to clear it, they send empty string.
+				// But we assume if they set it, they know it.
+			}
+		}
+
+		json.NewEncoder(w).Encode(resp)
 	}))
 	mux.HandleFunc("/api/tts/styles", AuthMiddleware(authMgr, handleTTSStyles))
+	mux.HandleFunc("/v1/chat/completions", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
+		// Pass authMgr to allow user settings lookup
+		handleChat(w, r, app, authMgr)
+	}))
+	mux.HandleFunc("/api/v1/chat", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
+		handleChat(w, r, app, authMgr)
+	}))
 	mux.HandleFunc("/api/models", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
 		handleModels(w, r, app)
 	}))
@@ -375,7 +474,7 @@ func handleModels(w http.ResponseWriter, r *http.Request, app *App) {
 
 // handleChat proxies chat requests to LM Studio with SSE streaming
 // handleChat proxies chat requests to LM Studio with SSE streaming
-func handleChat(w http.ResponseWriter, r *http.Request, app *App) {
+func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthManager) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -390,10 +489,38 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App) {
 
 	var llmURL string
 
+	// Default configuration (Global)
+	endpointRaw := app.llmEndpoint
+	tokenRaw := app.llmApiToken
+	llmMode := app.llmMode
+	enableMCP := app.enableMCP
+
+	// Override with User Settings
+	userID := r.Header.Get("X-User-ID")
+	if userID != "" {
+		authMgr.mu.RLock()
+		user := authMgr.users[userID]
+		authMgr.mu.RUnlock()
+		if user != nil {
+			if user.Settings.ApiEndpoint != nil {
+				endpointRaw = *user.Settings.ApiEndpoint
+			}
+			if user.Settings.ApiToken != nil {
+				tokenRaw = *user.Settings.ApiToken
+			}
+			if user.Settings.LLMMode != nil {
+				llmMode = *user.Settings.LLMMode
+			}
+			if user.Settings.EnableMCP != nil {
+				enableMCP = *user.Settings.EnableMCP
+			}
+		}
+	}
+
 	// Sanitize endpoint: Remove trailing slash and optional /v1 suffix if user included it
-	endpoint := strings.TrimSuffix(app.llmEndpoint, "/")
+	endpoint := strings.TrimSuffix(endpointRaw, "/")
 	endpoint = strings.TrimSuffix(endpoint, "/v1")
-	token := strings.TrimSpace(app.llmApiToken)
+	token := strings.TrimSpace(tokenRaw)
 
 	// Sanitize token: Remove "Bearer " prefix if user pasted it
 	if strings.HasPrefix(strings.ToLower(token), "bearer ") {
@@ -401,7 +528,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App) {
 	}
 
 	// Inject MCP integration if enabled
-	if app.enableMCP {
+	if enableMCP {
 		var reqMap map[string]interface{}
 		if err := json.Unmarshal(body, &reqMap); err == nil {
 			var integrations []interface{}
@@ -431,9 +558,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App) {
 	}
 
 	// DEBUG LOG
-	log.Printf("[handleChat] Mode: %s, Endpoint: %s, HasToken: %v", app.llmMode, endpoint, token != "")
+	log.Printf("[handleChat] User: %s, Mode: %s, Endpoint: %s, HasToken: %v", userID, llmMode, endpoint, token != "")
 
-	if app.llmMode == "stateful" {
+	if llmMode == "stateful" {
 		llmURL = endpoint + "/api/v1/chat"
 	} else {
 		llmURL = endpoint + "/v1/chat/completions"

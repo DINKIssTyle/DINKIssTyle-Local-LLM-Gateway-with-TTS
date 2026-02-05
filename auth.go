@@ -18,12 +18,23 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// UserSettings holds user-specific overrides
+type UserSettings struct {
+	ApiEndpoint *string          `json:"api_endpoint,omitempty"`
+	ApiToken    *string          `json:"api_token,omitempty"`
+	LLMMode     *string          `json:"llm_mode,omitempty"`
+	EnableTTS   *bool            `json:"enable_tts,omitempty"`
+	EnableMCP   *bool            `json:"enable_mcp,omitempty"`
+	TTSConfig   *ServerTTSConfig `json:"tts_config,omitempty"`
+}
+
 // User represents a user account
 type User struct {
-	ID           string `json:"id"`
-	PasswordHash string `json:"password_hash"`
-	Role         string `json:"role"` // "admin" or "user"
-	CreatedAt    string `json:"created_at"`
+	ID           string       `json:"id"`
+	PasswordHash string       `json:"password_hash"`
+	Role         string       `json:"role"` // "admin" or "user"
+	CreatedAt    string       `json:"created_at"`
+	Settings     UserSettings `json:"settings"`
 }
 
 // Session represents an active user session
