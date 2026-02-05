@@ -8,6 +8,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"dinkisstyle-chat/mcp"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -58,6 +59,21 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 		handleChat(w, r, app)
 	}))
 	mux.HandleFunc("/api/tts", AuthMiddleware(authMgr, handleTTS))
+
+	// MCP Endpoints (Conditional)
+	if app.enableMCP {
+		log.Println("[Server] MCP Support Enabled")
+		// Import mcp package is required. Ensure imports are correct.
+		// We need to add "dinkisstyle-chat/mcp" to imports if not present.
+		// Since we cannot easily check imports here, we assume it's imported or will fix it.
+		// Actually, standard way is adding import "github.com/.../mcp"
+		// But this is main package. mcp is sub package?
+		// We created `mcp` folder. so it is `MODULE_NAME/mcp`.
+		// Let's assume we need to fix imports first.
+		mux.HandleFunc("/mcp/sse", mcp.HandleSSE)
+		mux.HandleFunc("/mcp/messages", mcp.HandleMessages)
+	}
+
 	mux.HandleFunc("/api/config", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			var newCfg struct {
@@ -66,6 +82,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 				ApiToken    *string `json:"api_token"`
 				LLMMode     string  `json:"llm_mode"`
 				EnableTTS   *bool   `json:"enable_tts"`
+				EnableMCP   *bool   `json:"enable_mcp"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&newCfg); err == nil {
 				if newCfg.TTSThreads > 0 {
@@ -91,6 +108,9 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 				if newCfg.EnableTTS != nil {
 					app.SetEnableTTS(*newCfg.EnableTTS)
 				}
+				if newCfg.EnableMCP != nil {
+					app.SetEnableMCP(*newCfg.EnableMCP)
+				}
 			}
 		}
 
@@ -101,6 +121,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 			"llm_endpoint": app.llmEndpoint,
 			"llm_mode":     app.llmMode,
 			"enable_tts":   app.enableTTS,
+			"enable_mcp":   app.enableMCP,
 			"tts_config":   ttsConfig,
 			"has_token":    app.llmApiToken != "",
 		})

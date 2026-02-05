@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -33,6 +34,7 @@ type App struct {
 	llmApiToken string
 	llmMode     string // "standard" or "stateful"
 	enableTTS   bool
+	enableMCP   bool
 	authMgr     *AuthManager
 	assets      embed.FS
 	isQuitting  bool
@@ -50,6 +52,7 @@ type AppConfig struct {
 	LLMApiToken     string          `json:"llmApiToken"`
 	LLMMode         string          `json:"llmMode"`
 	EnableTTS       bool            `json:"enableTTS"`
+	EnableMCP       bool            `json:"enableMCP"`
 	TTS             ServerTTSConfig `json:"tts"`
 	StartOnBoot     bool            `json:"startOnBoot"`
 	MinimizeToTray  bool            `json:"minimizeToTray"`
@@ -261,9 +264,10 @@ func (a *App) loadConfig() {
 	}
 	a.llmApiToken = cfg.LLMApiToken
 	a.enableTTS = cfg.EnableTTS
+	a.enableMCP = cfg.EnableMCP
 
 	fmt.Printf("[loadConfig] Loaded Config from %s\n", cfgPath)
-	fmt.Printf("   -> Port: %s, Endpoint: %s, Mode: %s\n", a.port, a.llmEndpoint, a.llmMode)
+	fmt.Printf("   -> Port: %s, Endpoint: %s, Mode: %s, MCP: %v\n", a.port, a.llmEndpoint, a.llmMode, a.enableMCP)
 
 	// Update global TTS config if loaded values are valid
 	if cfg.TTS.VoiceStyle != "" {
@@ -294,6 +298,7 @@ func (a *App) saveConfig() {
 	cfg.LLMMode = a.llmMode
 	cfg.LLMApiToken = a.llmApiToken
 	cfg.EnableTTS = a.enableTTS
+	cfg.EnableMCP = a.enableMCP
 	cfg.TTS = ttsConfig
 
 	data, err = json.MarshalIndent(cfg, "", "  ")
@@ -448,6 +453,14 @@ func (a *App) SetEnableTTS(enabled bool) {
 	a.saveConfig()
 }
 
+// SetEnableMCP sets the MCP enabled state
+func (a *App) SetEnableMCP(enabled bool) {
+	a.serverMux.Lock()
+	defer a.serverMux.Unlock()
+	a.enableMCP = enabled
+	a.saveConfig()
+}
+
 // Startup Settings - exposed to Wails frontend
 
 // SetStartOnBoot enables/disables start on boot
@@ -573,9 +586,16 @@ func (a *App) StartServer(port string) error {
 
 	a.port = port
 	mux := createServerMux(a, a.authMgr)
+
+	// Wrap mux with logging middleware
+	loggingMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("[HTTP] %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+		mux.ServeHTTP(w, r)
+	})
+
 	a.server = &http.Server{
 		Addr:    ":" + port,
-		Handler: mux,
+		Handler: loggingMux,
 	}
 
 	go func() {

@@ -374,6 +374,11 @@
                             <input type="checkbox" id="auto-start-server" style="width: auto;"
                                 onchange="toggleAutoStartServer()">
                         </div>
+                        <div class="setting-row"
+                            style="display: flex; align-items: center; justify-content: space-between; margin-top: 12px; padding: 4px 0; border-top: 1px solid var(--border-color);">
+                            <label style="margin:0; font-weight: 500;">Enable MCP Features</label>
+                            <input type="checkbox" id="enable-mcp" style="width: auto;" onchange="toggleEnableMCP()">
+                        </div>
                     </div>
                 </div>
             </div>
@@ -671,6 +676,15 @@
             }
         }
 
+        async function toggleEnableMCP() {
+            const enabled = document.getElementById('enable-mcp').checked;
+            try {
+                await window.go.main.App.SetEnableMCP(enabled);
+            } catch (e) {
+                console.error('Failed to set Enable MCP:', e);
+            }
+        }
+
         async function loadStartupSettings() {
             try {
                 const startOnBoot = await window.go.main.App.GetStartOnBoot();
@@ -680,6 +694,10 @@
                 document.getElementById('start-on-boot').checked = startOnBoot;
                 document.getElementById('minimize-to-tray').checked = minimizeToTray;
                 document.getElementById('auto-start-server').checked = autoStartServer;
+
+                // Load MCP status from ServerStatus since it's loaded at startup
+                const status = await window.go.main.App.GetServerStatus();
+                document.getElementById('enable-mcp').checked = status.enableMCP;
             } catch (e) {
                 console.error('Failed to load startup settings:', e);
             }
