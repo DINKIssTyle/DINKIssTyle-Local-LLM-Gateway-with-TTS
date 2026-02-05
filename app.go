@@ -787,7 +787,14 @@ func (a *App) CheckHealth() HealthCheckResult {
 					} `json:"data"`
 				}
 				if err := json.NewDecoder(resp.Body).Decode(&modelResp); err == nil && len(modelResp.Data) > 0 {
-					result.ServerModel = modelResp.Data[0].ID
+					// Only report ServerModel if there is exactly one (typical for single-model loaders like LM Studio)
+					// If multiple, we can't guess which one is active/intended without more info.
+					if len(modelResp.Data) == 1 {
+						result.ServerModel = modelResp.Data[0].ID
+					} else {
+						// Multiple models available, don't confuse user by picking first one
+						result.ServerModel = ""
+					}
 					result.LLMMessage = "Connected"
 				} else {
 					result.LLMMessage = "Connected (No models)"

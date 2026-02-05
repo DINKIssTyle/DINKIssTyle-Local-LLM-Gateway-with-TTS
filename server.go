@@ -669,9 +669,16 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		if resp.StatusCode == http.StatusUnauthorized || strings.Contains(errorMsg, "invalid_api_key") || strings.Contains(errorMsg, "Malformed LM Studio API token") {
 			// Frontend will detect this prefix and show translated message
 			http.Error(w, "LM_STUDIO_AUTH_ERROR: "+errorMsg, resp.StatusCode)
-		} else {
-			http.Error(w, fmt.Sprintf("LLM error: %s", errorMsg), resp.StatusCode)
+			return
 		}
+
+		// Check for MCP Permission Error (403)
+		if resp.StatusCode == http.StatusForbidden && strings.Contains(errorMsg, "Permission denied to use plugin") {
+			http.Error(w, "LM_STUDIO_MCP_ERROR: "+errorMsg, resp.StatusCode)
+			return
+		}
+
+		http.Error(w, fmt.Sprintf("LLM error: %s", errorMsg), resp.StatusCode)
 		return
 	}
 

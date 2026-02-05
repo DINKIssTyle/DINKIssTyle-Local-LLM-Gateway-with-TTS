@@ -116,8 +116,10 @@ const translations = {
         'health.mode': '모드',
         'health.checkToken': ' -> **API Token**을 확인해주세요.',
         'health.checkServer': ' -> **LM Studio 서버**가 실행 중인지 확인해주세요.',
+        'health.checkServer': ' -> **LM Studio 서버**가 실행 중인지 확인해주세요.',
         // Errors
-        'error.authFailed': 'LM Studio 인증 실패.\n\n해결 방법:\n1. LM Studio -> Developer(사이드바) -> Server Settings\n2. \'Require Authentication\' 끄기\n3. 또는 \'Manage Tokens\'에서 \'Create new token\' API Key를 생성해서 우측 상단 설정(⚙️)에 입력하세요.\n\n원본 오류: '
+        'error.authFailed': 'LM Studio 인증 실패.\n\n해결 방법:\n1. LM Studio -> Developer(사이드바) -> Server Settings\n2. \'Require Authentication\' 끄기\n3. 또는 \'Manage Tokens\'에서 \'Create new token\' API Key를 생성해서 우측 상단 설정(⚙️)에 입력하세요.\n\n원본 오류: ',
+        'error.mcpFailed': 'LM Studio MCP 연결 실패.\n\n해결 방법:\n1. LM Studio -> Developer(사이드바) -> Server Settings\n2. \'Allow calling servers from mcp.json\' 옵션 켜기\n3. 또는 우측 상단 설정(⚙️)에서 \'MCP 기능 활성화\' 옵션을 꺼주세요.\n\n원본 오류: '
     },
     en: {
         // Modal
@@ -200,8 +202,10 @@ const translations = {
         'health.mode': 'Mode',
         'health.checkToken': ' -> Check **API Token**.',
         'health.checkServer': ' -> Check if **LM Studio Server** is running.',
+        'health.checkServer': ' -> Check if **LM Studio Server** is running.',
         // Errors
-        'error.authFailed': 'LM Studio Authentication Failed.\n\nSolution:\n1. Open LM Studio -> Developer (sidebar) -> Server Settings\n2. Turn OFF \'Require Authentication\'\n3. Or go to \'Manage Tokens\' -> \'Create new token\' and enter it in Settings.\n\nOriginal Error: '
+        'error.authFailed': 'LM Studio Authentication Failed.\n\nSolution:\n1. Open LM Studio -> Developer (sidebar) -> Server Settings\n2. Turn OFF \'Require Authentication\'\n3. Or go to \'Manage Tokens\' -> \'Create new token\' and enter it in Settings.\n\nOriginal Error: ',
+        'error.mcpFailed': 'LM Studio MCP Connection Failed.\n\nSolution:\n1. Open LM Studio -> Developer (sidebar) -> Server Settings\n2. Turn ON \'Allow calling servers from mcp.json\'\n3. Or turn OFF \'Enable MCP Features\' in the top right settings (⚙️).\n\nOriginal Error: '
     }
 };
 
@@ -1330,6 +1334,15 @@ async function streamResponse(payload, elementId) {
                 // Throwing here will be caught by sendMessage catch block
                 throw new Error(errorDetails);
             }
+
+            // Check for localized MCP permission error
+            if (errorBody.startsWith("LM_STUDIO_MCP_ERROR: ")) {
+                const originalMsg = errorBody.replace("LM_STUDIO_MCP_ERROR: ", "");
+                const localizedMsg = t('error.mcpFailed');
+                errorDetails = localizedMsg + originalMsg;
+                throw new Error(errorDetails);
+            }
+
             errorDetails += ` - ${errorBody}`;
         }
         throw new Error(errorDetails);
@@ -2438,12 +2451,6 @@ async function checkSystemHealth() {
             statusDetails += `\n- **${t('health.llm')}**: ${llmDisplay}`;
             if (health.serverModel) {
                 statusDetails += ` (${health.serverModel})`;
-
-                // Sync header model name if successfully connected
-                const headerModelName = document.getElementById('header-model-name');
-                if (headerModelName && health.serverModel !== 'loading') {
-                    headerModelName.textContent = health.serverModel;
-                }
             }
         }
 
