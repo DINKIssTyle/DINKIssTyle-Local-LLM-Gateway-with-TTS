@@ -717,6 +717,11 @@ function updateSettingsVisibility() {
     let showHistory = true;
     let showDisableStateful = false;
     let showMCP = false; // Hidden in OpenAI mode per request
+    let fullText = '';
+    let readingBuffer = '';
+    let lastResponseId = null;
+    let ttsReceived = false;
+    let lastToolCallHtml = ''; // Track last tool call HTML to update in-place
 
     if (mode === 'stateful') {
         // LM Studio Mode
@@ -1282,6 +1287,7 @@ async function processStream(response, elementId) {
     const decoder = new TextDecoder();
     let buffer = '';
     let fullText = '';
+    let speechBuffer = ''; // Dedicated buffer for speech content (no HTML/Tools)
 
     // Initialize streaming TTS if enabled
     const useStreamingTTS = config.enableTTS && config.autoTTS;
@@ -1327,26 +1333,31 @@ async function processStream(response, elementId) {
                     }
 
                     let contentToAdd = '';
+                    let speechToAdd = ''; // Content that should be spoken
 
                     // Handle Standard/SSE format
                     if (json.choices && json.choices.length > 0) {
                         const delta = json.choices[0].delta || {};
                         const message = json.choices[0].message || {}; // Non-streaming fallback
-                        contentToAdd = delta.content || message.content || '';
+                        const part = delta.content || message.content || '';
+                        contentToAdd = part;
+                        speechToAdd = part;
                     }
                     // Handle Stateful Chat JSON format (output array mechanism - legacy/alternative?)
                     else if (json.output && Array.isArray(json.output)) {
                         for (const item of json.output) {
                             if (item.content) {
                                 contentToAdd += item.content;
+                                speechToAdd += item.content;
                             }
                         }
                     }
                     // Handle LM Studio Stateful Chat Streaming Format (based on logs)
                     else if (json.type === 'message.delta' && json.content) {
                         contentToAdd = json.content;
+                        speechToAdd = json.content;
                     }
-                    // Handle Reasoning (Thinking)
+                    // Handle Reasoning (Thinking) - Display only, NO SPEECH
                     else if (json.type === 'reasoning.start') {
                         contentToAdd = '<think>';
                     }
@@ -1356,10 +1367,64 @@ async function processStream(response, elementId) {
                     else if (json.type === 'reasoning.end') {
                         contentToAdd = '</think>\n';
                     }
-                    // Handle MCP Tool Calls
+                    // Handle MCP Tool Calls - Display only, NO SPEECH
                     else if (json.type === 'tool_call.start') {
                         const toolName = json.tool || 'Running...';
-                        contentToAdd = `<span class="tool-status" style="font-size: small; color: gray; display: block; margin: 4px 0;">🛠️ Tool Call: ${toolName}</span>`;
+                        // Store the exact HTML to be able to replace it later
+                        lastToolCallHtml = `<span class="tool-status" style="font-size: small; color: gray; display: block; margin: 4px 0;">🛠️ Tool Call: ${toolName}</span>`;
+                        contentToAdd = lastToolCallHtml;
+                    }
+                    else if (json.type === 'tool_call.arguments' && json.arguments) {
+                        // Update the last tool call line with arguments
+                        const toolName = json.tool || 'Tool';
+                        let argsDisplay = '';
+
+                        // Extract specific interesting fields (like 'query' for search)
+                        if (json.arguments.query) {
+                            argsDisplay = ` <span style="font-size: 0.9em;">(Query: "${json.arguments.query}")</span>`;
+                        } else {
+                            // Generic fallback for other args? 
+                            // Only show if small, otherwise might be huge JSON.
+                            // For now, prioritize 'query'.
+                            const keys = Object.keys(json.arguments);
+                            if (keys.length === 1 && typeof json.arguments[keys[0]] === 'string') {
+                                argsDisplay = ` <span style="font-size: 0.9em;">(${keys[0]}: "${json.arguments[keys[0]]}")</span>`;
+                            }
+                        }
+
+                        if (lastToolCallHtml && argsDisplay) {
+                            const newToolCallHtml = `<span class="tool-status" style="font-size: small; color: gray; display: block; margin: 4px 0;">🛠️ Tool Call: ${toolName}${argsDisplay}</span>`;
+
+                            // Replace in fullText
+                            if (fullText.endsWith(lastToolCallHtml)) {
+                                // Calculate start index of the tool call line
+                                const startIndex = fullText.length - lastToolCallHtml.length;
+
+                                fullText = fullText.slice(0, -lastToolCallHtml.length) + newToolCallHtml;
+                                lastToolCallHtml = newToolCallHtml; // Update for next chunk
+                                contentToAdd = null; // Already updated fullText manually
+
+                                // Rewind TTS index if it has already passed the start of this line
+                                // This ensures we re-process the full tag so the regex can strip it cleanly
+                                if (typeof streamingTTSCommittedIndex !== 'undefined' && streamingTTSCommittedIndex > startIndex) {
+                                    // console.log(`[TTS Debug] Rewinding index from ${streamingTTSCommittedIndex} to ${startIndex}`);
+                                    streamingTTSCommittedIndex = startIndex;
+                                    if (typeof streamingTTSBuffer !== 'undefined') {
+                                        streamingTTSBuffer = ""; // Clear buffer to avoid duplication
+                                    }
+                                }
+
+                                // Force UI update since we modified fullText directly
+                                let displayText = fullText;
+                                if (config.hideThink) {
+                                    // ... logic duplicated from below ...
+                                    displayText = displayText.replace(/<think>[\s\S]*?<\/think>/g, '');
+                                    if (displayText.includes('</think>')) displayText = displayText.split('</think>').pop().trim();
+                                    if (displayText.includes('<think>')) displayText = displayText.split('<think>')[0];
+                                }
+                                updateMessageContent(elementId, displayText);
+                            }
+                        }
                     }
                     else if (json.type === 'tool_call.success') {
                         contentToAdd = `<span class="tool-status" style="font-size: small; color: gray; display: block; margin: 4px 0;">✅ Tool Finished</span>\n`;
@@ -1391,7 +1456,7 @@ async function processStream(response, elementId) {
                                 progressEl.style.fontSize = '0.8em';
                                 progressEl.style.color = '#888';
                                 progressEl.style.marginTop = '4px';
-                                progressEl.style.fontStyle = 'italic';
+                                // progressEl.style.fontStyle = 'italic';
                                 const bubbleContent = msgBubble.querySelector('.message-bubble');
                                 if (bubbleContent) {
                                     bubbleContent.prepend(progressEl); // Prepend to top
@@ -1427,30 +1492,13 @@ async function processStream(response, elementId) {
                             }
                         }
                         updateMessageContent(elementId, displayText);
+                    }
 
-                        // TTS Logic (ALWAYS filter <think> regardless of settings)
-                        if (useStreamingTTS) {
-                            // Remove complete <think>...</think> blocks
-                            let ttsText = fullText.replace(/<think>[\s\S]*?<\/think>/g, '');
-
-                            // Remove tool status messages
-                            ttsText = ttsText.replace(/<span class="tool-status"[\s\S]*?<\/span>/g, '');
-
-                            // Handle incomplete <think> tag (ongoing thought)
-                            if (ttsText.includes('<think>')) {
-                                ttsText = ttsText.split('<think>')[0];
-                            }
-
-                            // Handle case where </think> exists without opening tag
-                            if (ttsText.includes('</think>')) {
-                                ttsText = ttsText.split('</think>').pop();
-                            }
-
-                            // Feed the filtered text to TTS engine
-                            if (ttsText) {
-                                feedStreamingTTS(ttsText);
-                            }
-                        }
+                    // Separate TTS Logic using speechBuffer
+                    if (useStreamingTTS && speechToAdd) {
+                        speechBuffer += speechToAdd;
+                        // We can skip heavy regex cleaning for tools since they aren't in speechBuffer!
+                        feedStreamingTTS(speechBuffer);
                     }
                 } catch (e) {
                     console.error('JSON Parse Error', e);
@@ -1472,16 +1520,7 @@ async function processStream(response, elementId) {
 
         // Finalize streaming TTS (commit any remaining text)
         if (useStreamingTTS) {
-            let finalTTSText = fullText;
-            // ALWAYS filter think tags for TTS finalization too
-            finalTTSText = fullText.replace(/<think>[\s\S]*?<\/think>/g, '');
-            if (finalTTSText.includes('<think>')) {
-                finalTTSText = finalTTSText.split('<think>')[0];
-            }
-            if (finalTTSText.includes('</think>')) {
-                finalTTSText = finalTTSText.split('</think>').pop();
-            }
-            finalizeStreamingTTS(finalTTSText);
+            finalizeStreamingTTS(speechBuffer); // Pass final speech buffer
         }
         releaseWakeLock(); // Release screen lock after generation and TTS streaming is done
     }
