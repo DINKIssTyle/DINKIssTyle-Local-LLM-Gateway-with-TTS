@@ -1335,13 +1335,14 @@ async function processStream(response, elementId) {
                     }
                     // Handle MCP Tool Calls
                     else if (json.type === 'tool_call.start') {
-                        contentToAdd = `\n> **🛠️ Tool Call:** \`${json.tool}\`\n`;
+                        const toolName = json.tool || 'Running...';
+                        contentToAdd = `<span class="tool-status" style="font-size: 0.8em; color: #888; display: block; margin: 4px 0;">🛠️ Tool Call: ${toolName}</span>`;
                     }
                     else if (json.type === 'tool_call.success') {
-                        contentToAdd = `> ✅ **Tool Finished**\n\n`;
+                        contentToAdd = `<span class="tool-status" style="font-size: 0.8em; color: #888; display: block; margin: 4px 0;">✅ Tool Finished</span>\n`;
                     }
                     else if (json.type === 'tool_call.failure') {
-                        contentToAdd = `\n> ❌ **Tool Failed:** ${json.reason || 'Unknown error'}\n\n`;
+                        contentToAdd = `<span class="tool-status" style="font-size: 0.8em; color: #ff6b6b; display: block; margin: 4px 0;">❌ Tool Failed: ${json.reason || 'Unknown error'}</span>\n`;
                     }
                     else if (json.type === 'chat.end' && json.result && json.result.response_id) {
                         lastResponseId = json.result.response_id;
@@ -1371,6 +1372,9 @@ async function processStream(response, elementId) {
                         if (useStreamingTTS) {
                             // Remove complete <think>...</think> blocks
                             let ttsText = fullText.replace(/<think>[\s\S]*?<\/think>/g, '');
+
+                            // Remove tool status messages
+                            ttsText = ttsText.replace(/<span class="tool-status"[\s\S]*?<\/span>/g, '');
 
                             // Handle incomplete <think> tag (ongoing thought)
                             if (ttsText.includes('<think>')) {
@@ -1702,6 +1706,9 @@ function cleanTextForTTS(text) {
     if (!text) return '';
 
     let cleaned = text;
+
+    // Remove tool status messages (MCP)
+    cleaned = cleaned.replace(/<span class="tool-status"[\s\S]*?<\/span>/g, '');
 
     // Apply Dictionary Corrections (Optimized with Regex)
     if (ttsDictionaryRegex) {
