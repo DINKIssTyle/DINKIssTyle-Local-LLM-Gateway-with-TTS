@@ -14,6 +14,7 @@ let config = {
     maxTokens: 4096,
     historyCount: 10,
     enableTTS: true,
+    enableMCP: false, // Default false
     ttsLang: 'ko',
     chunkSize: 150,
     systemPrompt: 'You are a helpful AI assistant.',
@@ -667,6 +668,10 @@ function loadConfig() {
     document.getElementById('cfg-disable-stateful').checked = config.disableStateful || false;
     updateSettingsVisibility(); // Update UI visibility based on mode
     document.getElementById('cfg-enable-tts').checked = config.enableTTS;
+    // Load MCP setting
+    const mcpEl = document.getElementById('cfg-enable-mcp');
+    if (mcpEl) mcpEl.checked = config.enableMCP || false;
+
     document.getElementById('cfg-auto-tts').checked = config.autoTTS || false;
     document.getElementById('cfg-tts-lang').value = config.ttsLang;
     document.getElementById('cfg-chunk-size').value = config.chunkSize || 300;
@@ -875,6 +880,11 @@ function saveConfig(closeModal = true) {
     config.maxTokens = parseInt(document.getElementById('cfg-max-tokens').value);
     config.historyCount = parseInt(document.getElementById('cfg-history').value);
     config.enableTTS = document.getElementById('cfg-enable-tts').checked;
+
+    // Save MCP setting
+    const mcpEl = document.getElementById('cfg-enable-mcp');
+    config.enableMCP = mcpEl ? mcpEl.checked : false;
+
     config.autoTTS = document.getElementById('cfg-auto-tts').checked;
     config.ttsLang = document.getElementById('cfg-tts-lang').value;
 
@@ -906,6 +916,7 @@ function saveConfig(closeModal = true) {
         window.go.main.App.SetLLMApiToken(config.apiToken).catch(console.error);
         window.go.main.App.SetLLMMode(config.llmMode).catch(console.error);
         window.go.main.App.SetEnableTTS(config.enableTTS);
+        window.go.main.App.SetEnableMCP(config.enableMCP);
 
         // This is separate from saveConfig in app.go, but SetTTSThreads triggers reload
         if (config.ttsThreads) {
@@ -922,6 +933,7 @@ function saveConfig(closeModal = true) {
             api_token: config.apiToken,
             llm_mode: config.llmMode,
             enable_tts: config.enableTTS,
+            enable_mcp: config.enableMCP,
             tts_threads: config.ttsThreads
         })
     }).then(r => {
@@ -964,6 +976,11 @@ async function syncServerConfig() {
             if (serverCfg.enable_tts !== undefined) {
                 config.enableTTS = serverCfg.enable_tts;
                 document.getElementById('cfg-enable-tts').checked = config.enableTTS;
+            }
+            if (serverCfg.enable_mcp !== undefined) {
+                config.enableMCP = serverCfg.enable_mcp;
+                const mcpEl = document.getElementById('cfg-enable-mcp');
+                if (mcpEl) mcpEl.checked = config.enableMCP;
             }
 
             // Save to localStorage so next reload uses these

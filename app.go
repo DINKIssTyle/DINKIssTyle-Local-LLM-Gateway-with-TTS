@@ -1009,3 +1009,10 @@ func (a *App) GetSystemPrompts() []SystemPrompt {
 
 	return prompts
 }
+
+// Show makes the window visible
+func (a *App) Show() {
+	if a.ctx != nil {
+		wruntime.WindowShow(a.ctx)
+	}
+}
