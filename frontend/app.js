@@ -1317,6 +1317,9 @@ async function processStream(response, elementId) {
                         continue;
                     }
 
+                    // DEBUG: Log all event types
+                    // console.log('[SSE Event]', json.type); 
+
                     // Capture response_id if present (Stateful Chat)
                     if (json.response_id) {
                         lastResponseId = json.response_id;
@@ -1356,20 +1359,57 @@ async function processStream(response, elementId) {
                     // Handle MCP Tool Calls
                     else if (json.type === 'tool_call.start') {
                         const toolName = json.tool || 'Running...';
-                        contentToAdd = `<span class="tool-status" style="font-size: 0.8em; color: #888; display: block; margin: 4px 0;">🛠️ Tool Call: ${toolName}</span>`;
+                        contentToAdd = `<span class="tool-status" style="font-size: small; color: gray; display: block; margin: 4px 0;">🛠️ Tool Call: ${toolName}</span>`;
                     }
                     else if (json.type === 'tool_call.success') {
-                        contentToAdd = `<span class="tool-status" style="font-size: 0.8em; color: #888; display: block; margin: 4px 0;">✅ Tool Finished</span>\n`;
+                        contentToAdd = `<span class="tool-status" style="font-size: small; color: gray; display: block; margin: 4px 0;">✅ Tool Finished</span>\n`;
                     }
                     else if (json.type === 'tool_call.failure') {
-                        contentToAdd = `<span class="tool-status" style="font-size: 0.8em; color: #ff6b6b; display: block; margin: 4px 0;">❌ Tool Failed: ${json.reason || 'Unknown error'}</span>\n`;
+                        contentToAdd = `<span class="tool-status" style="font-size: small; color: #ff6b6b; display: block; margin: 4px 0;">❌ Tool Failed: ${json.reason || 'Unknown error'}</span>\n`;
                     }
                     else if (json.type === 'chat.end' && json.result && json.result.response_id) {
                         lastResponseId = json.result.response_id;
                         console.log(`[Stateful] Captured response_id from chat.end: ${lastResponseId}`);
                     }
+                    // Handle Prompt Processing Progress
+                    else if (json.type === 'prompt_processing.progress') {
+                        // console.log('[Progress Debug] Event Received:', json.progress);
+                        const progress = (json.progress * 100).toFixed(2);
+                        const progressId = `progress-${elementId}`;
+                        let progressEl = document.getElementById(progressId);
 
+                        // FIX: elementId already includes 'msg-' prefix
+                        let msgBubble = document.getElementById(elementId);
+                        // console.log('[Progress Debug] MsgBubble:', msgBubble ? 'Found' : 'Not Found');
+
+                        if (msgBubble) {
+                            if (!progressEl) {
+                                // console.log('[Progress Debug] Creating new progress element');
+                                progressEl = document.createElement('div');
+                                progressEl.id = progressId;
+                                progressEl.className = 'progress-status';
+                                progressEl.style.fontSize = '0.8em';
+                                progressEl.style.color = '#888';
+                                progressEl.style.marginTop = '4px';
+                                progressEl.style.fontStyle = 'italic';
+                                const bubbleContent = msgBubble.querySelector('.message-bubble');
+                                if (bubbleContent) {
+                                    bubbleContent.prepend(progressEl); // Prepend to top
+                                }
+                            }
+                            progressEl.textContent = `⏳ Processing Prompt: ${progress}%`;
+                        }
+                    }
+
+                    // If we have content, remove the progress indicator
                     if (contentToAdd) {
+                        // Remove progress indicator if exists
+                        const progressId = `progress-${elementId}`;
+                        const progressEl = document.getElementById(progressId);
+                        if (progressEl) {
+                            progressEl.remove();
+                        }
+
                         fullText += contentToAdd;
                         let displayText = fullText;
 
@@ -1729,6 +1769,7 @@ function cleanTextForTTS(text) {
 
     // Remove tool status messages (MCP)
     cleaned = cleaned.replace(/<span class="tool-status"[\s\S]*?<\/span>/g, '');
+    cleaned = cleaned.replace(/Tool Call:.*?(?:[.!?\n]|$)+/gi, ''); // Remove raw Tool Call logs
 
     // Apply Dictionary Corrections (Optimized with Regex)
     if (ttsDictionaryRegex) {
