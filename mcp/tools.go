@@ -7,7 +7,10 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
@@ -126,4 +129,81 @@ func ReadPage(pageURL string) (string, error) {
 	}
 
 	return res, nil
+}
+
+// ManageMemory handles reading and writing to the user's memory file.
+// action: "read", "append", "rewrite"
+func ManageMemory(filePath string, action string, content string) (string, error) {
+	log.Printf("[MCP] ManageMemory Action: %s, Path: %s", action, filePath)
+
+	// Ensure directory exists
+	dir := filepath.Dir(filePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create directory: %v", err)
+	}
+
+	switch action {
+	case "read":
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return "Memory is empty.", nil
+			}
+			return "", fmt.Errorf("failed to read memory: %v", err)
+		}
+		if len(data) == 0 {
+			return "Memory is empty.", nil
+		}
+		return string(data), nil
+
+	case "append":
+		f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			return "", fmt.Errorf("failed to open memory file: %v", err)
+		}
+		defer f.Close()
+
+		timestamp := time.Now().Format("2006-01-02 15:04:05")
+		entry := fmt.Sprintf("\n[%s] %s", timestamp, content)
+		if _, err := f.WriteString(entry); err != nil {
+			return "", fmt.Errorf("failed to append to memory: %v", err)
+		}
+		return "Memory updated successfully.", nil
+
+	case "rewrite":
+		// Overwrite the file completely
+		if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+			return "", fmt.Errorf("failed to rewrite memory: %v", err)
+		}
+		return "Memory rewritten successfully.", nil
+
+	default:
+		return "", fmt.Errorf("unknown action: %s", action)
+	}
+}
+
+// GetUserMemoryPath resolves the memory file path based on OS and User ID.
+func GetUserMemoryPath(userID string) (string, error) {
+	if userID == "" {
+		userID = "default"
+	}
+
+	var baseDir string
+	if runtime.GOOS == "darwin" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		baseDir = filepath.Join(home, "Documents", "DKST LLM Chat")
+	} else {
+		// Windows/Linux: Executable directory
+		ex, err := os.Executable()
+		if err != nil {
+			return "", err
+		}
+		baseDir = filepath.Join(filepath.Dir(ex), "memory")
+	}
+
+	filename := fmt.Sprintf("%s.md", userID)
+	return filepath.Join(baseDir, filename), nil
 }

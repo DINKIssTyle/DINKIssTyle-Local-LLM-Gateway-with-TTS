@@ -99,6 +99,33 @@
                             Protocol (web search, browsing)</p>
                     </div>
 
+                    <!-- Personal Memory Settings -->
+                    <div class="setting-item" id="container-enable-memory">
+                        <div class="setting-toggle" onclick="toggleSwitch('setting-enable-memory')">
+                            <span data-i18n="setting.enableMemory.label">Enable Personal Memory</span>
+                            <input type="checkbox" id="setting-enable-memory">
+                        </div>
+                        <p class="setting-desc" data-i18n="setting.enableMemory.desc">Allow LLM to remember personal
+                            details in a local file.</p>
+
+                        <div id="memory-controls" style="display: none; margin-top: 10px;">
+                            <p class="setting-desc" style="color: var(--error-color); font-weight: bold;"
+                                data-i18n="setting.memory.warning">
+                                Warning: Personal data is stored unencrypted on local disk.
+                            </p>
+                            <div style="display: flex; gap: 8px; margin-top: 8px;">
+                                <button class="btn btn-secondary btn-sm" id="btn-open-memory" style="flex: 1;">
+                                    <span class="material-icons-round" style="font-size: 16px;">folder_open</span>
+                                    <span data-i18n="setting.memory.open">Open File</span>
+                                </button>
+                                <button class="btn btn-secondary btn-sm" id="btn-reset-memory" style="flex: 1;">
+                                    <span class="material-icons-round" style="font-size: 16px;">delete_forever</span>
+                                    <span data-i18n="setting.memory.reset">Reset Memory</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="setting-item" id="container-history">
                         <label data-i18n="setting.history.label">History Count</label>
                         <p class="setting-desc" data-i18n="setting.history.desc">(기본값: 10) 대화 기억 횟수</p>

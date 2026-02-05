@@ -8,6 +8,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"dinkisstyle-chat/mcp"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -26,19 +27,20 @@ import (
 
 // App struct for Wails binding
 type App struct {
-	ctx         context.Context
-	server      *http.Server
-	serverMux   sync.Mutex
-	isRunning   bool
-	port        string
-	llmEndpoint string
-	llmApiToken string
-	llmMode     string // "standard" or "stateful"
-	enableTTS   bool
-	enableMCP   bool
-	authMgr     *AuthManager
-	assets      embed.FS
-	isQuitting  bool
+	ctx          context.Context
+	server       *http.Server
+	serverMux    sync.Mutex
+	isRunning    bool
+	port         string
+	llmEndpoint  string
+	llmApiToken  string
+	llmMode      string // "standard" or "stateful"
+	enableTTS    bool
+	enableMCP    bool
+	enableMemory bool
+	authMgr      *AuthManager
+	assets       embed.FS
+	isQuitting   bool
 
 	// Server-side Model Cache
 	modelCache     []byte
@@ -54,6 +56,7 @@ type AppConfig struct {
 	LLMMode         string          `json:"llmMode"`
 	EnableTTS       bool            `json:"enableTTS"`
 	EnableMCP       bool            `json:"enableMCP"`
+	EnableMemory    bool            `json:"enableMemory"`
 	TTS             ServerTTSConfig `json:"tts"`
 	StartOnBoot     bool            `json:"startOnBoot"`
 	MinimizeToTray  bool            `json:"minimizeToTray"`
@@ -266,9 +269,10 @@ func (a *App) loadConfig() {
 	a.llmApiToken = cfg.LLMApiToken
 	a.enableTTS = cfg.EnableTTS
 	a.enableMCP = cfg.EnableMCP
+	a.enableMemory = cfg.EnableMemory
 
 	fmt.Printf("[loadConfig] Loaded Config from %s\n", cfgPath)
-	fmt.Printf("   -> Port: %s, Endpoint: %s, Mode: %s, MCP: %v\n", a.port, a.llmEndpoint, a.llmMode, a.enableMCP)
+	fmt.Printf("   -> Port: %s, Endpoint: %s, Mode: %s, MCP: %v, Memory: %v\n", a.port, a.llmEndpoint, a.llmMode, a.enableMCP, a.enableMemory)
 
 	// Update global TTS config if loaded values are valid
 	if cfg.TTS.VoiceStyle != "" {
@@ -280,6 +284,9 @@ func (a *App) loadConfig() {
 	if cfg.TTS.Threads > 0 {
 		ttsConfig.Threads = cfg.TTS.Threads
 	}
+
+	// Proactively sync to MCP context
+	mcp.SetContext("default", a.enableMemory)
 }
 
 func (a *App) saveConfig() {
@@ -300,6 +307,7 @@ func (a *App) saveConfig() {
 	cfg.LLMApiToken = a.llmApiToken
 	cfg.EnableTTS = a.enableTTS
 	cfg.EnableMCP = a.enableMCP
+	cfg.EnableMemory = a.enableMemory
 	cfg.TTS = ttsConfig
 
 	data, err = json.MarshalIndent(cfg, "", "  ")
@@ -408,12 +416,14 @@ func (a *App) GetServerStatus() map[string]interface{} {
 	a.serverMux.Lock()
 	defer a.serverMux.Unlock()
 	return map[string]interface{}{
-		"running":     a.isRunning,
-		"port":        a.port,
-		"llmEndpoint": a.llmEndpoint,
-		"llmMode":     a.llmMode,
-		"hasApiToken": a.llmApiToken != "",
-		"enableTTS":   a.enableTTS,
+		"running":      a.isRunning,
+		"port":         a.port,
+		"llmEndpoint":  a.llmEndpoint,
+		"llmMode":      a.llmMode,
+		"hasApiToken":  a.llmApiToken != "",
+		"enableTTS":    a.enableTTS,
+		"enableMCP":    a.enableMCP,
+		"enableMemory": a.enableMemory,
 	}
 }
 
@@ -472,6 +482,17 @@ func (a *App) SetEnableMCP(enabled bool) {
 	defer a.serverMux.Unlock()
 	a.enableMCP = enabled
 	a.saveConfig()
+}
+
+// SetEnableMemory sets the Personal Memory enabled state
+func (a *App) SetEnableMemory(enabled bool) {
+	a.serverMux.Lock()
+	defer a.serverMux.Unlock()
+	a.enableMemory = enabled
+	a.saveConfig()
+
+	// Proactively sync to MCP context
+	mcp.SetContext("default", enabled)
 }
 
 // Startup Settings - exposed to Wails frontend
@@ -1119,4 +1140,48 @@ func (a *App) Show() {
 	if a.ctx != nil {
 		wruntime.WindowShow(a.ctx)
 	}
+}
+
+// OpenMemoryFolder opens the folder containing the user's memory file
+func (a *App) OpenMemoryFolder(userID string) string {
+	path, err := mcp.GetUserMemoryPath(userID)
+	if err != nil {
+		return fmt.Sprintf("Error determining path: %v", err)
+	}
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Sprintf("Error creating directory: %v", err)
+	}
+
+	// Open the directory
+	if runtime.GOOS == "darwin" {
+		wruntime.BrowserOpenURL(a.ctx, "file://"+dir)
+	} else if runtime.GOOS == "windows" {
+		wruntime.BrowserOpenURL(a.ctx, dir) // Windows usually works with path
+	} else {
+		wruntime.BrowserOpenURL(a.ctx, "file://"+dir)
+	}
+	return ""
+}
+
+// ResetMemory clears or deletes the user's memory file
+func (a *App) ResetMemory(userID string) string {
+	path, err := mcp.GetUserMemoryPath(userID)
+	if err != nil {
+		return fmt.Sprintf("Error determining path: %v", err)
+	}
+
+	// Option 1: Delete file
+	// if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	// 	return fmt.Sprintf("Error deleting file: %v", err)
+	// }
+
+	// Option 2: Truncate file (keep file exist)
+	// Better to just delete or truncate. Let's truncate to keep permissions.
+	if err := os.WriteFile(path, []byte(""), 0644); err != nil {
+		return fmt.Sprintf("Error resetting memory: %v", err)
+	}
+
+	return "Memory reset successfully."
 }

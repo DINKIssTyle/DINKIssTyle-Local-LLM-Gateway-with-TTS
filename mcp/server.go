@@ -42,7 +42,74 @@ type Tool struct {
 var (
 	clients   = make(map[chan string]bool)
 	clientsMu sync.Mutex
+
+	// Current Context (Hacky solution for local single-user gateway)
+	// Since LM Studio doesn't pass user context back to MCP, we rely on the
+	// most recent chat request setting these values.
+	currentUserID       = "default"
+	currentEnableMemory = false
+	contextMu           sync.RWMutex
 )
+
+func SetContext(userID string, enableMemory bool) {
+	contextMu.Lock()
+	defer contextMu.Unlock()
+	currentUserID = userID
+	currentEnableMemory = enableMemory
+	log.Printf("[MCP] Set Context -> User: %s, Memory: %v", userID, enableMemory)
+}
+
+func GetContext() (string, bool) {
+	contextMu.RLock()
+	defer contextMu.RUnlock()
+	return currentUserID, currentEnableMemory
+}
+
+func GetToolList() []Tool {
+	return []Tool{
+		{
+			Name:        "search_web",
+			Description: "Search the internet using DuckDuckGo. Use this to find current information.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"query": map[string]interface{}{"type": "string", "description": "Search query"},
+				},
+				"required": []string{"query"},
+			},
+		},
+		{
+			Name:        "read_web_page",
+			Description: "Read the text content of a specific URL. Use this to read articles or documentation.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"url": map[string]interface{}{"type": "string", "description": "URL to visit"},
+				},
+				"required": []string{"url"},
+			},
+		},
+		{
+			Name:        "personal_memory",
+			Description: "Manage the user's long-term personal memory (v4). Use this to remember user details, preferences, names, or important information for future conversations. Use 'read' to view existing memory, 'append' to add new facts, or 'rewrite' for cleanup.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"action": map[string]interface{}{
+						"type":        "string",
+						"description": "The action to perform: 'read', 'append', or 'rewrite'.",
+						"enum":        []string{"read", "append", "rewrite"},
+					},
+					"content": map[string]interface{}{
+						"type":        "string",
+						"description": "The content for append or rewrite.",
+					},
+				},
+				"required": []string{"action"},
+			},
+		},
+	}
+}
 
 func AddClient(ch chan string) {
 	clientsMu.Lock()
@@ -115,10 +182,7 @@ func HandleSSE(w http.ResponseWriter, r *http.Request) {
 				if r.TLS != nil {
 					scheme = "https"
 				}
-				host := r.Host
-				if strings.Contains(host, "localhost") {
-					host = strings.Replace(host, "localhost", "127.0.0.1", 1)
-				}
+				host := strings.Replace(r.Host, "localhost", "127.0.0.1", 1)
 				endpointURL := fmt.Sprintf("%s://%s/mcp/messages", scheme, host)
 				log.Printf("[MCP-DEBUG] Advertised Endpoint: %s", endpointURL)
 
@@ -181,6 +245,9 @@ func HandleSSE(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("Access-Control-Allow-Origin", "*")
 
+				// Capture User ID and Memory Setting from Global Context
+				userID, enableMemory := GetContext()
+
 				var res JSONRPCResponse
 				res.JSONRPC = "2.0"
 				res.ID = req.ID
@@ -188,30 +255,7 @@ func HandleSSE(w http.ResponseWriter, r *http.Request) {
 				switch req.Method {
 				case "tools/list":
 					res.Result = map[string]interface{}{
-						"tools": []Tool{
-							{
-								Name:        "search_web",
-								Description: "Search the internet using DuckDuckGo. Use this to find current information.",
-								InputSchema: map[string]interface{}{
-									"type": "object",
-									"properties": map[string]interface{}{
-										"query": map[string]string{"type": "string", "description": "Search query"},
-									},
-									"required": []string{"query"},
-								},
-							},
-							{
-								Name:        "read_web_page",
-								Description: "Read the text content of a specific URL. Use this to read articles or documentation.",
-								InputSchema: map[string]interface{}{
-									"type": "object",
-									"properties": map[string]interface{}{
-										"url": map[string]string{"type": "string", "description": "URL to visit"},
-									},
-									"required": []string{"url"},
-								},
-							},
-						},
+						"tools": GetToolList(),
 					}
 				case "notifications/initialized":
 					// Just ack
@@ -224,12 +268,7 @@ func HandleSSE(w http.ResponseWriter, r *http.Request) {
 					// For tools/call, we need the RawMessage.
 					// Since we parsed into 'req', we have req.Params
 					if req.Method == "tools/call" {
-						// ... Reuse logic from HandleMessages ...
-						// Copy-pasting logic for robustness or extract to shared function?
-						// Let's call HandleMessagesLogic(w, req) to avoid duplication
-						// But for now, let's keep it inline-patched as requested
-						// Actually, better to route tools/call here too.
-						handleToolCall(&req, &res)
+						handleToolCall(&req, &res, userID, enableMemory)
 					} else {
 						res.Error = &JSONRPCError{Code: -32601, Message: "Method not found"}
 					}
@@ -268,7 +307,10 @@ func HandleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[MCP] Received Method: %s (ID: %v)", req.Method, req.ID)
+	// Capture User ID and Memory Setting from Global Context
+	userID, enableMemory := GetContext()
+
+	log.Printf("[MCP] Received Method: %s (ID: %v) User: %s Memory: %v", req.Method, req.ID, userID, enableMemory)
 
 	// Acknowledge receipt immediately (MCP Spec)
 	w.WriteHeader(http.StatusAccepted)
@@ -295,87 +337,12 @@ func HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 		case "tools/list":
 			res.Result = map[string]interface{}{
-				"tools": []Tool{
-					{
-						Name:        "search_web",
-						Description: "Search the internet using DuckDuckGo. Use this to find current information.",
-						InputSchema: map[string]interface{}{
-							"type": "object",
-							"properties": map[string]interface{}{
-								"query": map[string]string{"type": "string", "description": "Search query"},
-							},
-							"required": []string{"query"},
-						},
-					},
-					{
-						Name:        "read_web_page",
-						Description: "Read the text content of a specific URL. Use this to read articles or documentation.",
-						InputSchema: map[string]interface{}{
-							"type": "object",
-							"properties": map[string]interface{}{
-								"url": map[string]string{"type": "string", "description": "URL to visit"},
-							},
-							"required": []string{"url"},
-						},
-					},
-				},
+				"tools": GetToolList(),
 			}
 
 		case "tools/call":
-			var params struct {
-				Name      string          `json:"name"`
-				Arguments json.RawMessage `json:"arguments"`
-			}
-			if err := json.Unmarshal(req.Params, &params); err != nil {
-				res.Error = &JSONRPCError{Code: -32602, Message: "Invalid parameters"}
-				break
-			}
-
-			log.Printf("[MCP] Tool Call: %s", params.Name)
-
-			if params.Name == "search_web" {
-				var args struct {
-					Query string `json:"query"`
-				}
-				json.Unmarshal(params.Arguments, &args)
-				content, err := SearchWeb(args.Query)
-				if err != nil {
-					res.Result = map[string]interface{}{
-						"content": []map[string]interface{}{
-							{"type": "text", "text": fmt.Sprintf("Error: %v", err)},
-						},
-						"isError": true,
-					}
-				} else {
-					res.Result = map[string]interface{}{
-						"content": []map[string]interface{}{
-							{"type": "text", "text": content},
-						},
-					}
-				}
-			} else if params.Name == "read_web_page" {
-				var args struct {
-					URL string `json:"url"`
-				}
-				json.Unmarshal(params.Arguments, &args)
-				content, err := ReadPage(args.URL)
-				if err != nil {
-					res.Result = map[string]interface{}{
-						"content": []map[string]interface{}{
-							{"type": "text", "text": fmt.Sprintf("Error: %v", err)},
-						},
-						"isError": true,
-					}
-				} else {
-					res.Result = map[string]interface{}{
-						"content": []map[string]interface{}{
-							{"type": "text", "text": content},
-						},
-					}
-				}
-			} else {
-				res.Error = &JSONRPCError{Code: -32601, Message: "Tool not found"}
-			}
+			// Pass context manually since we are in a goroutine
+			handleToolCall(&req, &res, userID, enableMemory)
 
 		case "notifications/initialized":
 			log.Println("[MCP] Client Initialized")
@@ -396,7 +363,7 @@ func HandleMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 // Helper to handle tool calls
-func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse) {
+func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, enableMemory bool) {
 	var params struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
@@ -448,6 +415,45 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse) {
 				},
 			}
 		}
+	} else if params.Name == "personal_memory" {
+		if !enableMemory {
+			res.Error = &JSONRPCError{Code: -32601, Message: "Memory feature is disabled by user settings."}
+			return
+		}
+
+		var args struct {
+			Action  string `json:"action"`
+			Content string `json:"content"`
+		}
+		json.Unmarshal(params.Arguments, &args)
+
+		filePath, err := GetUserMemoryPath(userID)
+		if err != nil {
+			res.Result = map[string]interface{}{
+				"content": []map[string]interface{}{
+					{"type": "text", "text": fmt.Sprintf("Error resolving memory path: %v", err)},
+				},
+				"isError": true,
+			}
+			return
+		}
+
+		content, err := ManageMemory(filePath, args.Action, args.Content)
+		if err != nil {
+			res.Result = map[string]interface{}{
+				"content": []map[string]interface{}{
+					{"type": "text", "text": fmt.Sprintf("Error: %v", err)},
+				},
+				"isError": true,
+			}
+		} else {
+			res.Result = map[string]interface{}{
+				"content": []map[string]interface{}{
+					{"type": "text", "text": content},
+				},
+			}
+		}
+
 	} else {
 		res.Error = &JSONRPCError{Code: -32601, Message: "Tool not found"}
 	}

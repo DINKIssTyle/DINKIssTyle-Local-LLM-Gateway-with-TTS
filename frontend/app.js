@@ -14,7 +14,9 @@ let config = {
     maxTokens: 4096,       // Default: 4096
     historyCount: 10,
     enableTTS: true,       // Default: True
+    enableTTS: true,       // Default: True
     enableMCP: true,       // Default: True
+    enableMemory: false,   // Default: False
     ttsLang: 'ko',
     chunkSize: 200,        // Default: 200 (Smart Chunking)
     systemPrompt: 'You are a helpful AI assistant.',
@@ -79,6 +81,13 @@ const translations = {
         'setting.disableStateful.desc': '대화 내용을 서버에 저장하지 않습니다 (LM Studio).',
         'setting.enableMCP.label': 'MCP 기능 활성화',
         'setting.enableMCP.desc': 'Model Context Protocol 기능(웹 검색, 브라우징)을 활성화합니다.',
+        'setting.enableMemory.label': '개인 메모리 활성화',
+        'setting.enableMemory.desc': 'LLM이 사용자 정보를 파일에 기록하고 기억할 수 있게 합니다.',
+        'setting.memory.warning': '주의: 개인 정보가 PC에 평문으로 저장됩니다.',
+        'setting.memory.open': '파일 열기',
+        'setting.memory.reset': '메모리 초기화',
+        'setting.memory.reset.confirm': '개인 메모리를 초기화하시겠습니까? 이 작업은 되돌릴 수 없습니다.',
+        'setting.memory.reset.success': '메모리가 초기화되었습니다.',
         // Settings - TTS
         'setting.enableTTS.label': 'TTS 활성화',
         'setting.enableTTS.desc': '응답을 음성으로 재생합니다.',
@@ -165,6 +174,13 @@ const translations = {
         'setting.disableStateful.desc': 'Do not store conversation on server (LM Studio).',
         'setting.enableMCP.label': 'Enable MCP Features',
         'setting.enableMCP.desc': 'Enable integration with Model Context Protocol (web search, browsing)',
+        'setting.enableMemory.label': 'Enable Personal Memory',
+        'setting.enableMemory.desc': 'Allow LLM to remember personal details in a local file.',
+        'setting.memory.warning': 'Warning: Personal data is stored unencrypted on local disk.',
+        'setting.memory.open': 'Open File',
+        'setting.memory.reset': 'Reset Memory',
+        'setting.memory.reset.confirm': 'Are you sure you want to reset your personal memory? This cannot be undone.',
+        'setting.memory.reset.success': 'Memory reset successfully.',
         // Settings - TTS
         'setting.enableTTS.label': 'Enable TTS',
         'setting.enableTTS.desc': 'Play responses as audio.',
@@ -685,6 +701,12 @@ function loadConfig() {
     const mcpEl = document.getElementById('cfg-enable-mcp');
     if (mcpEl) mcpEl.checked = config.enableMCP || false;
 
+    // Load Memory Setting
+    const memEl = document.getElementById('setting-enable-memory');
+    if (memEl) memEl.checked = config.enableMemory || false;
+    const memControls = document.getElementById('memory-controls');
+    if (memControls) memControls.style.display = config.enableMemory ? 'block' : 'none';
+
     document.getElementById('cfg-auto-tts').checked = config.autoTTS || false;
     document.getElementById('cfg-tts-lang').value = config.ttsLang;
     document.getElementById('cfg-chunk-size').value = config.chunkSize || 300;
@@ -729,6 +751,7 @@ function updateSettingsVisibility() {
     const historyContainer = document.getElementById('container-history');
     const disableStatefulContainer = document.getElementById('container-disable-stateful');
     const mcpContainer = document.getElementById('container-enable-mcp');
+    const memContainer = document.getElementById('container-enable-memory');
 
     // Default (Standard/OpenAI Compatible)
     let showToken = true; // User requested API Token visible in BOTH modes
@@ -757,6 +780,7 @@ function updateSettingsVisibility() {
     if (historyContainer) historyContainer.style.display = showHistory ? 'block' : 'none';
     if (disableStatefulContainer) disableStatefulContainer.style.display = showDisableStateful ? 'block' : 'none';
     if (mcpContainer) mcpContainer.style.display = showMCP ? 'block' : 'none';
+    if (memContainer) memContainer.style.display = showMCP ? 'block' : 'none'; // Memory also follows MCP visibility (LM Studio mode)
 }
 
 function setupSettingsListeners() {
@@ -788,6 +812,46 @@ function setupSettingsListeners() {
         const el = document.getElementById(id);
         if (el) el.onchange = () => saveConfig(false);
     });
+
+    // Enable Memory Checkbox
+    const memCheck = document.getElementById('setting-enable-memory');
+    if (memCheck) {
+        memCheck.onchange = () => {
+            config.enableMemory = memCheck.checked;
+            const controls = document.getElementById('memory-controls');
+            if (controls) controls.style.display = config.enableMemory ? 'block' : 'none';
+            saveConfig(false);
+        };
+    }
+
+    // Memory Buttons
+    const openMemBtn = document.getElementById('btn-open-memory');
+    if (openMemBtn) {
+        openMemBtn.onclick = async () => {
+            const uid = (typeof currentUser !== 'undefined' && currentUser) ? currentUser.id : "default";
+            try {
+                const err = await window.go.main.App.OpenMemoryFolder(uid);
+                if (err) alert(err);
+            } catch (e) {
+                alert("Error opening folder: " + e);
+            }
+        };
+    }
+
+    const resetMemBtn = document.getElementById('btn-reset-memory');
+    if (resetMemBtn) {
+        resetMemBtn.onclick = async () => {
+            const confirmation = t('setting.memory.reset.confirm') || "Are you sure you want to reset your personal memory? This cannot be undone.";
+            if (!confirm(confirmation)) return;
+            const uid = (typeof currentUser !== 'undefined' && currentUser) ? currentUser.id : "default";
+            try {
+                const res = await window.go.main.App.ResetMemory(uid);
+                alert(t('setting.memory.reset.success') || res);
+            } catch (e) {
+                alert("Error resetting memory: " + e);
+            }
+        };
+    }
 }
 
 // Global Dictionary State
@@ -911,6 +975,10 @@ function saveConfig(closeModal = true) {
     const mcpEl = document.getElementById('cfg-enable-mcp');
     config.enableMCP = mcpEl ? mcpEl.checked : false;
 
+    // Save Memory setting
+    const memEl = document.getElementById('setting-enable-memory');
+    config.enableMemory = memEl ? memEl.checked : false;
+
     config.autoTTS = document.getElementById('cfg-auto-tts').checked;
     config.ttsLang = document.getElementById('cfg-tts-lang').value;
 
@@ -958,6 +1026,7 @@ function saveConfig(closeModal = true) {
         window.go.main.App.SetLLMMode(config.llmMode).catch(console.error);
         window.go.main.App.SetEnableTTS(config.enableTTS);
         window.go.main.App.SetEnableMCP(config.enableMCP);
+        window.go.main.App.SetEnableMemory(config.enableMemory);
 
         // This is separate from saveConfig in app.go, but SetTTSThreads triggers reload
         if (config.ttsThreads) {
@@ -975,6 +1044,7 @@ function saveConfig(closeModal = true) {
             llm_mode: config.llmMode,
             enable_tts: config.enableTTS,
             enable_mcp: config.enableMCP,
+            enable_memory: config.enableMemory,
             tts_threads: config.ttsThreads
         })
     }).then(r => {
@@ -1039,6 +1109,13 @@ async function syncServerConfig() {
                 config.enableMCP = serverCfg.enable_mcp;
                 const mcpEl = document.getElementById('cfg-enable-mcp');
                 if (mcpEl) mcpEl.checked = config.enableMCP;
+            }
+            if (serverCfg.enable_memory !== undefined) {
+                config.enableMemory = serverCfg.enable_memory;
+                const memEl = document.getElementById('setting-enable-memory');
+                if (memEl) memEl.checked = config.enableMemory;
+                const memControls = document.getElementById('memory-controls');
+                if (memControls) memControls.style.display = config.enableMemory ? 'block' : 'none';
             }
 
             // Save to localStorage so next reload uses these

@@ -20,12 +20,13 @@ import (
 
 // UserSettings holds user-specific overrides
 type UserSettings struct {
-	ApiEndpoint *string          `json:"api_endpoint,omitempty"`
-	ApiToken    *string          `json:"api_token,omitempty"`
-	LLMMode     *string          `json:"llm_mode,omitempty"`
-	EnableTTS   *bool            `json:"enable_tts,omitempty"`
-	EnableMCP   *bool            `json:"enable_mcp,omitempty"`
-	TTSConfig   *ServerTTSConfig `json:"tts_config,omitempty"`
+	ApiEndpoint  *string          `json:"api_endpoint,omitempty"`
+	ApiToken     *string          `json:"api_token,omitempty"`
+	LLMMode      *string          `json:"llm_mode,omitempty"`
+	EnableTTS    *bool            `json:"enable_tts,omitempty"`
+	EnableMCP    *bool            `json:"enable_mcp,omitempty"`
+	EnableMemory *bool            `json:"enable_memory,omitempty"`
+	TTSConfig    *ServerTTSConfig `json:"tts_config,omitempty"`
 }
 
 // User represents a user account
@@ -165,8 +166,9 @@ func (am *AuthManager) AddUser(id, password, role string) error {
 		CreatedAt:    time.Now().Format(time.RFC3339),
 		Settings: UserSettings{
 			// Initialize with pointers to defaults
-			EnableMCP: &enableMCP,
-			EnableTTS: &enableTTS,
+			EnableMCP:    &enableMCP,
+			EnableTTS:    &enableTTS,
+			EnableMemory: &enableMCP, // Default to same as MCP for new users, or false? Let's default true if new user.
 			TTSConfig: &ServerTTSConfig{
 				VoiceStyle: voiceStyle,
 				Speed:      speed,

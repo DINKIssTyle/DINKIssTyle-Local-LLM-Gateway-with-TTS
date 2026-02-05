@@ -69,12 +69,13 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	mux.HandleFunc("/api/config", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			var newCfg struct {
-				TTSThreads  int     `json:"tts_threads"`
-				ApiEndpoint string  `json:"api_endpoint"`
-				ApiToken    *string `json:"api_token"`
-				LLMMode     string  `json:"llm_mode"`
-				EnableTTS   *bool   `json:"enable_tts"`
-				EnableMCP   *bool   `json:"enable_mcp"`
+				TTSThreads   int     `json:"tts_threads"`
+				ApiEndpoint  string  `json:"api_endpoint"`
+				ApiToken     *string `json:"api_token"`
+				LLMMode      string  `json:"llm_mode"`
+				EnableTTS    *bool   `json:"enable_tts"`
+				EnableMCP    *bool   `json:"enable_mcp"`
+				EnableMemory *bool   `json:"enable_memory"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&newCfg); err == nil {
 				// Check for authenticated user
@@ -114,6 +115,12 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 					if newCfg.EnableMCP != nil {
 						user.Settings.EnableMCP = newCfg.EnableMCP
 						updated = true
+					}
+					if newCfg.EnableMemory != nil {
+						user.Settings.EnableMemory = newCfg.EnableMemory
+						updated = true
+						// Sync to MCP context
+						mcp.SetContext(user.ID, *newCfg.EnableMemory)
 					}
 					// Handle TTS Config partial updates if needed, for now simplistic
 					if newCfg.TTSThreads > 0 {
@@ -161,6 +168,9 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 						if newCfg.EnableMCP != nil {
 							app.SetEnableMCP(*newCfg.EnableMCP)
 						}
+						if newCfg.EnableMemory != nil {
+							app.SetEnableMemory(*newCfg.EnableMemory)
+						}
 					}
 				}
 			}
@@ -171,12 +181,13 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 
 		// Prepare response (Merge global + user)
 		resp := map[string]interface{}{
-			"llm_endpoint": app.llmEndpoint,
-			"llm_mode":     app.llmMode,
-			"enable_tts":   app.enableTTS,
-			"enable_mcp":   app.enableMCP,
-			"tts_config":   ttsConfig,
-			"has_token":    app.llmApiToken != "",
+			"llm_endpoint":  app.llmEndpoint,
+			"llm_mode":      app.llmMode,
+			"enable_tts":    app.enableTTS,
+			"enable_mcp":    app.enableMCP,
+			"enable_memory": app.enableMemory,
+			"tts_config":    ttsConfig,
+			"has_token":     app.llmApiToken != "",
 		}
 
 		// Overlay User Settings
@@ -198,6 +209,9 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 				}
 				if user.Settings.EnableMCP != nil {
 					resp["enable_mcp"] = *user.Settings.EnableMCP
+				}
+				if user.Settings.EnableMemory != nil {
+					resp["enable_memory"] = *user.Settings.EnableMemory
 				}
 				if user.Settings.ApiToken != nil && *user.Settings.ApiToken != "" {
 					resp["has_token"] = true
@@ -512,6 +526,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	tokenRaw := app.llmApiToken
 	llmMode := app.llmMode
 	enableMCP := app.enableMCP
+	enableMemory := app.enableMemory // Default global setting
 
 	// Override with User Settings
 	userID := r.Header.Get("X-User-ID")
@@ -532,8 +547,15 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			if user.Settings.EnableMCP != nil {
 				enableMCP = *user.Settings.EnableMCP
 			}
+			if user.Settings.EnableMemory != nil {
+				enableMemory = *user.Settings.EnableMemory
+			}
 		}
 	}
+
+	// Set MCP Context for this user interaction
+	// This ensures that when LM Studio calls back to MCP, it has the correct context
+	mcp.SetContext(userID, enableMemory)
 
 	// Sanitize endpoint: Remove trailing slash and optional /v1 suffix if user included it
 	endpoint := strings.TrimRight(endpointRaw, "/")
@@ -594,6 +616,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 							// Append instruction to existing system prompt
 							if content, ok := m["content"].(string); ok {
 								newContent := content + "\n\nIMPORTANT: When using tools, output a SINGLE valid <tool_call> block. Do NOT nest tool_call tags. Ensure strict XML syntax."
+								if enableMemory {
+									newContent += "\n- You have a personal memory tool (`personal_memory`). Use 'read' to view known user details at the start of conversation. Use 'append' to save new facts, preferences, or names provided by the user (e.g., '내 이름은 ...'). This information persists across sessions."
+								}
 								m["content"] = newContent
 								messages[i] = m
 								foundSystem = true
@@ -603,14 +628,25 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 					}
 				}
 
-				// If no system prompt found, maybe add one?
-				// Better not to force it if user didn't set one, but usually there is one.
+				// If no system prompt found, prepend one
+				if !foundSystem {
+					instr := "You are a helpful AI assistant. IMPORTANT: When using tools, output a SINGLE valid <tool_call> block. Do NOT nest tool_call tags. Ensure strict XML syntax."
+					if enableMemory {
+						instr += "\n- You have a personal memory tool (`personal_memory`). Use 'read' to view known user details at the start of conversation. Use 'append' to save new facts, preferences, or names provided by the user (e.g., '내 이름은 ...'). This information persists across sessions."
+					}
+					newMsg := map[string]interface{}{
+						"role":    "system",
+						"content": instr,
+					}
+					messages = append([]interface{}{newMsg}, messages...)
+					foundSystem = true
+				}
 
 				if foundSystem {
 					reqMap["messages"] = messages
 					if newBody, err := json.Marshal(reqMap); err == nil {
 						body = newBody
-						log.Println("[handleChat] Injected Tool Safety Instruction into System Prompt")
+						log.Println("[handleChat] Injected/Prepended Tool Safety Instruction into System Prompt")
 					}
 				}
 			}
