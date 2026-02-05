@@ -157,6 +157,9 @@ func ManageMemory(filePath string, action string, content string) (string, error
 		return string(data), nil
 
 	case "append":
+		if strings.TrimSpace(content) == "" {
+			return "", fmt.Errorf("content cannot be empty for append")
+		}
 		f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
 			return "", fmt.Errorf("failed to open memory file: %v", err)
@@ -171,11 +174,125 @@ func ManageMemory(filePath string, action string, content string) (string, error
 		return "Memory updated successfully.", nil
 
 	case "rewrite":
+		// Safeguard: Never rewrite with empty content via tool calls
+		if strings.TrimSpace(content) == "" {
+			return "", fmt.Errorf("content cannot be empty for rewrite. If you want to clear memory, use a specific phrase or handle carefully.")
+		}
 		// Overwrite the file completely
 		if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
 			return "", fmt.Errorf("failed to rewrite memory: %v", err)
 		}
 		return "Memory rewritten successfully.", nil
+
+	case "search":
+		if strings.TrimSpace(content) == "" {
+			return "", fmt.Errorf("search query (content) cannot be empty")
+		}
+		// Simple case-insensitive line search to save context tokens
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return "Memory is empty.", nil
+			}
+			return "", fmt.Errorf("failed to read memory for search: %v", err)
+		}
+
+		lines := strings.Split(string(data), "\n")
+		var results []string
+		query := strings.ToLower(content)
+
+		for _, line := range lines {
+			if strings.Contains(strings.ToLower(line), query) {
+				results = append(results, line)
+			}
+		}
+
+		if len(results) == 0 {
+			return fmt.Sprintf("No matches found for '%s'.", content), nil
+		}
+		return strings.Join(results, "\n"), nil
+
+	case "replace":
+		// Syntax: "old_text|new_text"
+		parts := strings.Split(content, "|")
+		if len(parts) != 2 {
+			return "", fmt.Errorf("invalid replace syntax. Use 'old_text|new_text'")
+		}
+		oldText, newText := parts[0], parts[1]
+
+		if strings.TrimSpace(oldText) == "" {
+			return "", fmt.Errorf("old text cannot be empty")
+		}
+
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return "", fmt.Errorf("failed to read memory for replacement: %v", err)
+		}
+
+		fileContent := string(data)
+		if !strings.Contains(fileContent, oldText) {
+			return fmt.Sprintf("Text '%s' not found in memory. Use 'search' to find the exact text first.", oldText), nil
+		}
+
+		newFileContent := strings.ReplaceAll(fileContent, oldText, newText)
+		if err := os.WriteFile(filePath, []byte(newFileContent), 0644); err != nil {
+			return "", fmt.Errorf("failed to save memory after replacement: %v", err)
+		}
+		return fmt.Sprintf("Successfully replaced '%s' with '%s'.", oldText, newText), nil
+
+	case "upsert":
+		// Syntax: "Key: Value"
+		sepIdx := strings.Index(content, ":")
+		if sepIdx == -1 {
+			return "", fmt.Errorf("invalid upsert syntax. Use 'Key: Value'")
+		}
+		key := strings.TrimSpace(content[:sepIdx])
+		if key == "" {
+			return "", fmt.Errorf("key cannot be empty for upsert")
+		}
+
+		data, err := os.ReadFile(filePath)
+		var fileContent string
+		if err != nil {
+			if !os.IsNotExist(err) {
+				return "", fmt.Errorf("failed to read memory for upsert: %v", err)
+			}
+			fileContent = ""
+		} else {
+			fileContent = string(data)
+		}
+
+		timestamp := time.Now().Format("2006-01-02 15:04:05")
+		newLine := fmt.Sprintf("[%s] %s", timestamp, strings.TrimSpace(content))
+
+		lines := strings.Split(fileContent, "\n")
+		found := false
+		keyPattern := " " + key + ":"
+		startPattern := key + ":"
+
+		for i, line := range lines {
+			// Check if line contains " Key:" or starts with "Key:"
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, startPattern) || strings.Contains(line, keyPattern) {
+				lines[i] = newLine
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			if len(fileContent) > 0 && !strings.HasSuffix(fileContent, "\n") {
+				fileContent += "\n"
+			}
+			fileContent += newLine
+		} else {
+			fileContent = strings.Join(lines, "\n")
+		}
+
+		if err := os.WriteFile(filePath, []byte(fileContent), 0644); err != nil {
+			return "", fmt.Errorf("failed to save memory after upsert: %v", err)
+		}
+		return fmt.Sprintf("Successfully upserted '%s'.", key), nil
 
 	default:
 		return "", fmt.Errorf("unknown action: %s", action)

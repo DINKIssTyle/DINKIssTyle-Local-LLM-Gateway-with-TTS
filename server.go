@@ -617,7 +617,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 							if content, ok := m["content"].(string); ok {
 								newContent := content + "\n\nIMPORTANT: When using tools, output a SINGLE valid <tool_call> block. Do NOT nest tool_call tags. Ensure strict XML syntax."
 								if enableMemory {
-									newContent += "\n- You have a personal memory tool (`personal_memory`). Use 'read' to view known user details at the start of conversation. Use 'append' to save new facts, preferences, or names provided by the user (e.g., '내 이름은 ...'). This information persists across sessions."
+									newContent += "\n- PROACTIVE: If you don't know the user's details, use `personal_memory` (action='search').\n- FACTS: Use `personal_memory` (action='upsert', content='Key: Value') for user details (e.g., '이름: 원빈'). It prevents duplicates."
 								}
 								m["content"] = newContent
 								messages[i] = m
@@ -630,9 +630,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 				// If no system prompt found, prepend one
 				if !foundSystem {
-					instr := "You are a helpful AI assistant. IMPORTANT: When using tools, output a SINGLE valid <tool_call> block. Do NOT nest tool_call tags. Ensure strict XML syntax."
+					instr := "You are a helpful assistant. IMPORTANT: For tools, use a SINGLE <tool_call> block. No nesting."
 					if enableMemory {
-						instr += "\n- You have a personal memory tool (`personal_memory`). Use 'read' to view known user details at the start of conversation. Use 'append' to save new facts, preferences, or names provided by the user (e.g., '내 이름은 ...'). This information persists across sessions."
+						instr += "\n- PROACTIVE: If you don't know the user's details, use `personal_memory` (action='search').\n- FACTS: Use `personal_memory` (action='upsert', content='Key: Value') for user details (e.g., '이름: 원빈'). It prevents duplicates."
 					}
 					newMsg := map[string]interface{}{
 						"role":    "system",
@@ -736,6 +736,19 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
+
+		// Filter out model-specific reasoning tags if it's a data line
+		if strings.HasPrefix(line, "data: ") && line != "data: [DONE]" {
+			// Strip common internal reasoning/channel tags observed in Qwen/other models
+			line = strings.ReplaceAll(line, "<|channel|>analysis|message|>", "")
+			line = strings.ReplaceAll(line, "<|channel|>final|message|>", "")
+			line = strings.ReplaceAll(line, "<|channel|>thought|message|>", "")
+			line = strings.ReplaceAll(line, "<|end|>", "")
+
+			// Generic regex-like cleanup for any <|channel|>...|> pattern if needed,
+			// but careful not to break JSON structure. Simple Replacements are safer for now.
+		}
+
 		fmt.Fprintf(w, "%s\n\n", line)
 		flusher.Flush()
 	}
