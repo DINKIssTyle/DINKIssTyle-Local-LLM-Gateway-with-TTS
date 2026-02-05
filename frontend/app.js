@@ -1820,6 +1820,31 @@ function cleanTextForTTS(text) {
     // Remove HTML tags
     cleaned = cleaned.replace(/<[^>]*>/g, '');
 
+    // 1. Remove Internet URLs (http/https)
+    // Replaces "Visit https://example.com" with "Visit"
+    cleaned = cleaned.replace(/https?:\/\/[^\s]+/g, '');
+
+    // 2. Process Markdown Links [Text](URL) -> Text
+    // Replaces "[Google](https://google.com)" with "Google"
+    cleaned = cleaned.replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1');
+
+    // 3. Clean Markdown Syntax (Bold, Italic, Code, Blockquotes)
+    // Remove bold/italic markers (*, **, _, __)
+    cleaned = cleaned.replace(/(\*\*|__)(.*?)\1/g, '$2'); // Bold
+    cleaned = cleaned.replace(/(\*|_)(.*?)\1/g, '$2');   // Italic
+
+    // Remove code block backticks (inline and block) but KEEP content
+    // Users usually want to hear the code, just not "backtick backtick backtick"
+    cleaned = cleaned.replace(/```[\w]*\n?/g, ''); // Remove opening fence + lang
+    cleaned = cleaned.replace(/```/g, '');          // Remove closing fence
+    cleaned = cleaned.replace(/`/g, '');            // Remove inline backticks
+
+    // Remove blockquote markers (>)
+    cleaned = cleaned.replace(/^>\s+/gm, '');
+
+    // Remove images ![Alt](URL) -> Alt
+    cleaned = cleaned.replace(/!\[([^\]]*)\]\([^\)]+\)/g, '$1');
+
     // IMPROVED: Add pauses for Markdown structure (Headers, Horizontal Rules)
     // Replace headers (# Title) with "Title." for pause
     cleaned = cleaned.replace(/^(#{1,6})\s+(.+)$/gm, '$2.');
