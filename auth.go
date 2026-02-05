@@ -147,11 +147,32 @@ func (am *AuthManager) AddUser(id, password, role string) error {
 		return err
 	}
 
+	// Default User Settings
+	// User requested defaults:
+	// Enable MCP: true
+	// Enable TTS: true
+	// TTS Config: Voice F1, Speed 1.1, Threads 2
+	enableMCP := true
+	enableTTS := true
+	voiceStyle := "F1" // F1.json usually
+	speed := float32(1.1)
+	threads := 2
+
 	am.users[id] = &User{
 		ID:           id,
 		PasswordHash: string(hash),
 		Role:         role,
 		CreatedAt:    time.Now().Format(time.RFC3339),
+		Settings: UserSettings{
+			// Initialize with pointers to defaults
+			EnableMCP: &enableMCP,
+			EnableTTS: &enableTTS,
+			TTSConfig: &ServerTTSConfig{
+				VoiceStyle: voiceStyle,
+				Speed:      speed,
+				Threads:    threads,
+			},
+		},
 	}
 
 	// Save while still holding lock

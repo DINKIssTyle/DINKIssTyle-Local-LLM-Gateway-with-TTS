@@ -61,18 +61,10 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	mux.HandleFunc("/api/tts", AuthMiddleware(authMgr, handleTTS))
 
 	// MCP Endpoints (Conditional)
-	if app.enableMCP {
-		log.Println("[Server] MCP Support Enabled")
-		// Import mcp package is required. Ensure imports are correct.
-		// We need to add "dinkisstyle-chat/mcp" to imports if not present.
-		// Since we cannot easily check imports here, we assume it's imported or will fix it.
-		// Actually, standard way is adding import "github.com/.../mcp"
-		// But this is main package. mcp is sub package?
-		// We created `mcp` folder. so it is `MODULE_NAME/mcp`.
-		// Let's assume we need to fix imports first.
-		mux.HandleFunc("/mcp/sse", mcp.HandleSSE)
-		mux.HandleFunc("/mcp/messages", mcp.HandleMessages)
-	}
+	// MCP Endpoints (Always Enabled if server runs)
+	log.Println("[Server] MCP Support Active")
+	mux.HandleFunc("/mcp/sse", mcp.HandleSSE)
+	mux.HandleFunc("/mcp/messages", mcp.HandleMessages)
 
 	mux.HandleFunc("/api/config", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
@@ -549,12 +541,21 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			if !hasMCP {
 				integrations = append(integrations, targetMCP)
 				reqMap["integrations"] = integrations
+				// Important: Must update body for the request
 				if newBody, err := json.Marshal(reqMap); err == nil {
 					body = newBody
 					log.Println("[handleChat] Injected MCP integration into request")
+				} else {
+					log.Printf("[handleChat] Failed to marshal new body with MCP: %v", err)
 				}
+			} else {
+				log.Println("[handleChat] MCP integration already present")
 			}
+		} else {
+			log.Printf("[handleChat] Failed to unmarshal body for MCP injection: %v", err)
 		}
+	} else {
+		log.Println("[handleChat] MCP injection skipped (EnableMCP=false)")
 	}
 
 	// DEBUG LOG

@@ -9,24 +9,21 @@
 let config = {
     apiEndpoint: 'http://127.0.0.1:1234',
     model: 'qwen/qwen3-vl-30b',
-    hideThink: true,
-    temperature: 0.7,
-    maxTokens: 4096,
+    hideThink: true,       // Default: True
+    temperature: 0.7,      // Default: 0.7
+    maxTokens: 4096,       // Default: 4096
     historyCount: 10,
-    enableTTS: true,
-    enableMCP: false, // Default false
+    enableTTS: true,       // Default: True
+    enableMCP: true,       // Default: True
     ttsLang: 'ko',
-    chunkSize: 150,
+    chunkSize: 200,        // Default: 200 (Smart Chunking)
     systemPrompt: 'You are a helpful AI assistant.',
-    ttsVoice: '',
-    ttsSpeed: 1.1,
-    autoTTS: true,
-    ttsFormat: 'wav',
-    ttsSteps: 5,
-    ttsThreads: 2,
-    ttsFormat: 'wav',
-    ttsSteps: 5,
-    ttsThreads: 2,
+    ttsVoice: 'F1',        // Default: F1
+    ttsSpeed: 1.1,         // Default: 1.1
+    autoTTS: true,         // Default: True (Auto-play)
+    ttsFormat: 'wav',      // Default: wav
+    ttsSteps: 5,           // Default: 5
+    ttsThreads: 2,         // Default: 2
     language: 'ko', // UI language
     apiToken: '',
     llmMode: 'standard', // 'standard' or 'stateful'
@@ -69,7 +66,6 @@ const translations = {
         'setting.temperature.desc': '(기본값: 0.7) 값이 낮을수록 평범한 대답, 높을수록 창의적인 대답',
         'setting.maxTokens.label': 'Max Tokens',
         'setting.maxTokens.desc': '(기본값: 4096) LLM이 생성할 최대 토큰 수',
-        'setting.maxTokens.desc': '(기본값: 4096) LLM이 생성할 최대 토큰 수',
         'setting.history.label': 'History Count',
         'setting.history.desc': '(기본값: 10) 대화 기억 횟수',
         'setting.apiToken.label': 'API Token',
@@ -97,7 +93,7 @@ const translations = {
         'setting.steps.label': '추론 단계',
         'setting.steps.desc': '(추천값: 2~8, 기본값: 5) 높을수록 자연스러운 음성',
         'setting.threads.label': 'CPU 사용',
-        'setting.threads.desc': '(기본값: 4) TTS 생성에 할당하는 CPU 스레드',
+        'setting.threads.desc': '(기본값: 2) TTS 생성에 할당하는 CPU 스레드',
         'setting.format.label': '재생 형식',
         'setting.format.desc': 'MP3는 WAV를 변환하여 재생합니다.',
         // Chat
@@ -147,7 +143,6 @@ const translations = {
         'setting.temperature.desc': '(Default: 0.7) Lower = predictable, Higher = creative',
         'setting.maxTokens.label': 'Max Tokens',
         'setting.maxTokens.desc': '(Default: 4096) Maximum tokens to generate',
-        'setting.maxTokens.desc': '(Default: 4096) Maximum tokens to generate',
         'setting.history.label': 'History Count',
         'setting.history.desc': '(Default: 10) Number of messages to remember',
         'setting.apiToken.label': 'API Token',
@@ -175,7 +170,7 @@ const translations = {
         'setting.steps.label': 'Inference Steps',
         'setting.steps.desc': '(Recommended: 2~8, Default: 5) Higher = more natural voice',
         'setting.threads.label': 'CPU Threads',
-        'setting.threads.desc': '(Default: 4) CPU threads for TTS generation',
+        'setting.threads.desc': '(Default: 2) CPU threads for TTS generation',
         'setting.format.label': 'Audio Format',
         'setting.format.desc': 'MP3 is converted from WAV.',
         // Chat
@@ -293,7 +288,7 @@ async function fetchModels() {
     if (!select) return;
 
     try {
-        const response = await fetch('/api/models');
+        const response = await fetch('/api/models', { credentials: 'include' });
         if (!response.ok) {
             const errText = await response.text();
             throw new Error(errText || `HTTP ${response.status}`);
@@ -466,7 +461,7 @@ let currentUser = null;
 // Check authentication status
 async function checkAuth() {
     try {
-        const response = await fetch('/api/auth/check');
+        const response = await fetch('/api/auth/check', { credentials: 'include' });
         const data = await response.json();
 
         if (!data.authenticated) {
@@ -715,22 +710,30 @@ function updateSettingsVisibility() {
     const tokenContainer = document.getElementById('container-api-token');
     const historyContainer = document.getElementById('container-history');
     const disableStatefulContainer = document.getElementById('container-disable-stateful');
+    const mcpContainer = document.getElementById('container-enable-mcp');
 
     // Default (Standard/OpenAI Compatible)
     let showToken = false;
     let showHistory = true;
     let showDisableStateful = false;
+    let showMCP = false; // Hidden in OpenAI mode per request
 
     if (mode === 'stateful') {
         // LM Studio Mode
         showToken = true;
         showHistory = false; // LM Studio handles history via response_id
         showDisableStateful = true;
+        showMCP = true; // Show MCP only in LM Studio/Stateful mode? 
+        // User said: "OpenAI 호환 모드일 때 Enable MCP Features 는 안보여야 합니다."
+        // So we default showMCP = false for standard, true for stateful.
+    } else {
+        // Standard mode -> MCP Hidden
     }
 
     if (tokenContainer) tokenContainer.style.display = showToken ? 'block' : 'none';
     if (historyContainer) historyContainer.style.display = showHistory ? 'block' : 'none';
     if (disableStatefulContainer) disableStatefulContainer.style.display = showDisableStateful ? 'block' : 'none';
+    if (mcpContainer) mcpContainer.style.display = showMCP ? 'block' : 'none';
 }
 
 function setupSettingsListeners() {
@@ -955,7 +958,7 @@ function saveConfig(closeModal = true) {
 
 async function syncServerConfig() {
     try {
-        const response = await fetch('/api/config'); // Fetch current server config
+        const response = await fetch('/api/config', { credentials: 'include' }); // Fetch current server config
         if (response.ok) {
             const serverCfg = await response.json();
             console.log('[Config] Synced from server:', serverCfg);
