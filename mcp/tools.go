@@ -188,7 +188,7 @@ func ManageMemory(filePath string, action string, content string) (string, error
 		if strings.TrimSpace(content) == "" {
 			return "", fmt.Errorf("search query (content) cannot be empty")
 		}
-		// Simple case-insensitive line search to save context tokens
+
 		data, err := os.ReadFile(filePath)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -197,18 +197,49 @@ func ManageMemory(filePath string, action string, content string) (string, error
 			return "", fmt.Errorf("failed to read memory for search: %v", err)
 		}
 
-		lines := strings.Split(string(data), "\n")
+		fileContent := string(data)
+		fileSize := len(fileContent)
+		lines := strings.Split(fileContent, "\n")
 		var results []string
-		query := strings.ToLower(content)
 
+		// 1. Precise check: Substring match
+		query := strings.ToLower(content)
 		for _, line := range lines {
 			if strings.Contains(strings.ToLower(line), query) {
 				results = append(results, line)
 			}
 		}
 
+		// 2. Keyword check: If no precise match, split query into words
 		if len(results) == 0 {
-			return fmt.Sprintf("No matches found for '%s'.", content), nil
+			keywords := strings.Fields(query)
+			if len(keywords) > 1 {
+				for _, line := range lines {
+					lineLower := strings.ToLower(line)
+					matchCount := 0
+					for _, k := range keywords {
+						if len(k) < 2 {
+							continue
+						} // Skip very short keywords
+						if strings.Contains(lineLower, k) {
+							matchCount++
+						}
+					}
+					// If at least 50% of keywords match, include the line
+					if matchCount > 0 && float64(matchCount)/float64(len(keywords)) >= 0.5 {
+						results = append(results, line)
+					}
+				}
+			}
+		}
+
+		// 3. Fallback: If still no results and file is small (< 5KB), return everything
+		if len(results) == 0 && fileSize < 5120 {
+			return fmt.Sprintf("[AUTOMATIC READ FALLBACK - No direct matches for '%s']\n%s", content, fileContent), nil
+		}
+
+		if len(results) == 0 {
+			return fmt.Sprintf("No matches found for '%s' in a large memory file. Try different keywords.", content), nil
 		}
 		return strings.Join(results, "\n"), nil
 

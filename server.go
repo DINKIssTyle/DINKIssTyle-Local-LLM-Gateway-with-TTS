@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -617,7 +618,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 							if content, ok := m["content"].(string); ok {
 								newContent := content + "\n\nIMPORTANT: When using tools, output a SINGLE valid <tool_call> block. Do NOT nest tool_call tags. Ensure strict XML syntax."
 								if enableMemory {
-									newContent += "\n- PROACTIVE: If you don't know the user's details, use `personal_memory` (action='search').\n- FACTS: Use `personal_memory` (action='upsert', content='Key: Value') for user details (e.g., '이름: 원빈'). It prevents duplicates."
+									newContent += "\n- PROACTIVE: At the START of a conversation, you MUST use `personal_memory` (action='read') to load context. For later specific lookups, use `personal_memory` (action='search').\n- FACTS: Use `personal_memory` (action='upsert', content='Key: Value') for user details."
 								}
 								m["content"] = newContent
 								messages[i] = m
@@ -632,7 +633,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				if !foundSystem {
 					instr := "You are a helpful assistant. IMPORTANT: For tools, use a SINGLE <tool_call> block. No nesting."
 					if enableMemory {
-						instr += "\n- PROACTIVE: If you don't know the user's details, use `personal_memory` (action='search').\n- FACTS: Use `personal_memory` (action='upsert', content='Key: Value') for user details (e.g., '이름: 원빈'). It prevents duplicates."
+						instr += "\n- PROACTIVE: At the START of a conversation, you MUST use `personal_memory` (action='read') to load context. For later specific lookups, use `personal_memory` (action='search').\n- FACTS: Use `personal_memory` (action='upsert', content='Key: Value') for user details."
 					}
 					newMsg := map[string]interface{}{
 						"role":    "system",
@@ -739,14 +740,11 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 		// Filter out model-specific reasoning tags if it's a data line
 		if strings.HasPrefix(line, "data: ") && line != "data: [DONE]" {
-			// Strip common internal reasoning/channel tags observed in Qwen/other models
-			line = strings.ReplaceAll(line, "<|channel|>analysis|message|>", "")
-			line = strings.ReplaceAll(line, "<|channel|>final|message|>", "")
-			line = strings.ReplaceAll(line, "<|channel|>thought|message|>", "")
-			line = strings.ReplaceAll(line, "<|end|>", "")
-
-			// Generic regex-like cleanup for any <|channel|>...|> pattern if needed,
-			// but careful not to break JSON structure. Simple Replacements are safer for now.
+			// Strip common internal reasoning/channel/special tags observed in models (DeepSeek, Qwen, etc.)
+			// We use a regex that handles both <|token|> and <|channel|>style<|message|> patterns.
+			// Specifically targeting: <|channel|>, <|message|>, <|start|>, <|end|>, <|thought|>, etc.
+			re := regexp.MustCompile(`(?i)<\|(?:channel|message|start|end|thought|analysis|final|start_header_id|end_header_id|assistant|user|system)[^>]*\|?>`)
+			line = re.ReplaceAllString(line, "")
 		}
 
 		fmt.Fprintf(w, "%s\n\n", line)
