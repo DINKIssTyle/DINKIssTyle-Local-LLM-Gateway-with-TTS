@@ -423,18 +423,44 @@ func handleDeleteUser(am *AuthManager) http.HandlerFunc {
 
 // handleModels proxies model list requests to LLM server
 func handleModels(w http.ResponseWriter, r *http.Request, app *App) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	// Add CORS headers
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		// Handle Model Load Request
+		var req struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+			return
+		}
+
+		if req.Model == "" {
+			http.Error(w, "Model ID required", http.StatusBadRequest)
+			return
+		}
+
+		if err := app.LoadModel(req.Model); err != nil {
+			log.Printf("[handleModels] Load failed: %v", err)
+			http.Error(w, fmt.Sprintf("Failed to load model: %v", err), http.StatusBadGateway)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "Model loaded"})
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -510,7 +536,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	}
 
 	// Sanitize endpoint: Remove trailing slash and optional /v1 suffix if user included it
-	endpoint := strings.TrimSuffix(endpointRaw, "/")
+	endpoint := strings.TrimRight(endpointRaw, "/")
 	endpoint = strings.TrimSuffix(endpoint, "/v1")
 	token := strings.TrimSpace(tokenRaw)
 
@@ -519,9 +545,11 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		token = strings.TrimSpace(token[7:])
 	}
 
-	// Inject MCP integration if enabled
-	if enableMCP {
+	// Inject MCP integration if enabled AND NOT IN STANDARD MODE
+	// Standard Mode (OpenAI compliant) with 'integrations' field might trigger strict auth in LM Studio.
+	if enableMCP && llmMode != "standard" {
 		var reqMap map[string]interface{}
+
 		if err := json.Unmarshal(body, &reqMap); err == nil {
 			var integrations []interface{}
 			if existing, ok := reqMap["integrations"].([]interface{}); ok {
@@ -554,8 +582,41 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		} else {
 			log.Printf("[handleChat] Failed to unmarshal body for MCP injection: %v", err)
 		}
+
+		// EXTRA SAFEGUARD: Inject System Prompt instruction for cleaner Tool Calls
+		// Qwen/VL models often mess up XML tags (nested or unclosed).
+		if err := json.Unmarshal(body, &reqMap); err == nil {
+			if messages, ok := reqMap["messages"].([]interface{}); ok {
+				foundSystem := false
+				for i, msg := range messages {
+					if m, ok := msg.(map[string]interface{}); ok {
+						if role, ok := m["role"].(string); ok && role == "system" {
+							// Append instruction to existing system prompt
+							if content, ok := m["content"].(string); ok {
+								newContent := content + "\n\nIMPORTANT: When using tools, output a SINGLE valid <tool_call> block. Do NOT nest tool_call tags. Ensure strict XML syntax."
+								m["content"] = newContent
+								messages[i] = m
+								foundSystem = true
+								break
+							}
+						}
+					}
+				}
+
+				// If no system prompt found, maybe add one?
+				// Better not to force it if user didn't set one, but usually there is one.
+
+				if foundSystem {
+					reqMap["messages"] = messages
+					if newBody, err := json.Marshal(reqMap); err == nil {
+						body = newBody
+						log.Println("[handleChat] Injected Tool Safety Instruction into System Prompt")
+					}
+				}
+			}
+		}
 	} else {
-		log.Println("[handleChat] MCP injection skipped (EnableMCP=false)")
+		log.Printf("[handleChat] MCP injection skipped (EnableMCP=%v, Mode=%s)", enableMCP, llmMode)
 	}
 
 	// DEBUG LOG
@@ -566,6 +627,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	} else {
 		llmURL = endpoint + "/v1/chat/completions"
 	}
+	log.Printf("[handleChat] Proxying to LLM URL: %s", llmURL)
 
 	// Use r.Context() to propagate cancellation from frontend
 	req, err := http.NewRequestWithContext(r.Context(), "POST", llmURL, bytes.NewReader(body))
@@ -575,13 +637,17 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	if token != "" {
-		if len(token) > 4 {
-			log.Printf("[handleChat] Using Token: %s...", token[:4])
-		} else {
-			log.Printf("[handleChat] Using Token (short)")
-		}
+
+	// Check if token is effectively empty or just "bearer", OR IS A MASKED VALUE
+	token = strings.TrimSpace(token)
+	isMasked := strings.HasPrefix(token, "***") || strings.HasSuffix(token, "...")
+	if token != "" && !isMasked {
 		req.Header.Set("Authorization", "Bearer "+token)
+	} else {
+		// Default to lm-studio (standard, no hacks).
+		// If this fails with 401, we will handle the error response to guide the user.
+		log.Printf("[handleChat] Empty/Invalid/Masked Token detected ('%s'), using Default: lm-studio", token)
+		req.Header.Set("Authorization", "Bearer lm-studio")
 	}
 
 	client := &http.Client{Timeout: 5 * time.Minute}
@@ -595,8 +661,17 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		log.Printf("LLM error response: %s", string(bodyBytes))
-		http.Error(w, fmt.Sprintf("LLM error: %s", string(bodyBytes)), resp.StatusCode)
+		errorMsg := string(bodyBytes)
+		log.Printf("LLM error response: %s", errorMsg)
+
+		// Check for specific LM Studio auth error
+		// We return a text starting with "LM_STUDIO_AUTH_ERROR:" so frontend can localize it.
+		if resp.StatusCode == http.StatusUnauthorized || strings.Contains(errorMsg, "invalid_api_key") || strings.Contains(errorMsg, "Malformed LM Studio API token") {
+			// Frontend will detect this prefix and show translated message
+			http.Error(w, "LM_STUDIO_AUTH_ERROR: "+errorMsg, resp.StatusCode)
+		} else {
+			http.Error(w, fmt.Sprintf("LLM error: %s", errorMsg), resp.StatusCode)
+		}
 		return
 	}
 

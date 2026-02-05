@@ -77,6 +77,8 @@ const translations = {
         'setting.llmMode.option.stateful': 'LM Studio',
         'setting.disableStateful.label': '서버 저장 비활성화 (Stateful)',
         'setting.disableStateful.desc': '대화 내용을 서버에 저장하지 않습니다 (LM Studio).',
+        'setting.enableMCP.label': 'MCP 기능 활성화',
+        'setting.enableMCP.desc': 'Model Context Protocol 기능(웹 검색, 브라우징)을 활성화합니다.',
         // Settings - TTS
         'setting.enableTTS.label': 'TTS 활성화',
         'setting.enableTTS.desc': '응답을 음성으로 재생합니다.',
@@ -110,7 +112,12 @@ const translations = {
         'health.status.connected': '연결됨',
         'health.status.ready': '준비됨',
         'health.status.disabled': '비활성화됨',
-        'health.status.unreachable': '연결 불가'
+        'health.status.unreachable': '연결 불가',
+        'health.mode': '모드',
+        'health.checkToken': ' -> **API Token**을 확인해주세요.',
+        'health.checkServer': ' -> **LM Studio 서버**가 실행 중인지 확인해주세요.',
+        // Errors
+        'error.authFailed': 'LM Studio 인증 실패.\n\n해결 방법:\n1. LM Studio -> Developer(사이드바) -> Server Settings\n2. \'Require Authentication\' 끄기\n3. 또는 \'Manage Tokens\'에서 \'Create new token\' API Key를 생성해서 우측 상단 설정(⚙️)에 입력하세요.\n\n원본 오류: '
     },
     en: {
         // Modal
@@ -154,6 +161,8 @@ const translations = {
         'setting.llmMode.option.stateful': 'LM Studio',
         'setting.disableStateful.label': 'Disable Stateful Storage',
         'setting.disableStateful.desc': 'Do not store conversation on server (LM Studio).',
+        'setting.enableMCP.label': 'Enable MCP Features',
+        'setting.enableMCP.desc': 'Enable integration with Model Context Protocol (web search, browsing)',
         // Settings - TTS
         'setting.enableTTS.label': 'Enable TTS',
         'setting.enableTTS.desc': 'Play responses as audio.',
@@ -187,7 +196,12 @@ const translations = {
         'health.status.connected': 'Connected',
         'health.status.ready': 'Ready',
         'health.status.disabled': 'Disabled',
-        'health.status.unreachable': 'Unreachable'
+        'health.status.unreachable': 'Unreachable',
+        'health.mode': 'Mode',
+        'health.checkToken': ' -> Check **API Token**.',
+        'health.checkServer': ' -> Check if **LM Studio Server** is running.',
+        // Errors
+        'error.authFailed': 'LM Studio Authentication Failed.\n\nSolution:\n1. Open LM Studio -> Developer (sidebar) -> Server Settings\n2. Turn OFF \'Require Authentication\'\n3. Or go to \'Manage Tokens\' -> \'Create new token\' and enter it in Settings.\n\nOriginal Error: '
     }
 };
 
@@ -713,7 +727,7 @@ function updateSettingsVisibility() {
     const mcpContainer = document.getElementById('container-enable-mcp');
 
     // Default (Standard/OpenAI Compatible)
-    let showToken = false;
+    let showToken = true; // User requested API Token visible in BOTH modes
     let showHistory = true;
     let showDisableStateful = false;
     let showMCP = false; // Hidden in OpenAI mode per request
@@ -732,7 +746,7 @@ function updateSettingsVisibility() {
         // User said: "OpenAI 호환 모드일 때 Enable MCP Features 는 안보여야 합니다."
         // So we default showMCP = false for standard, true for stateful.
     } else {
-        // Standard mode -> MCP Hidden
+        // Standard mode -> MCP Hidden, but Token Visible
     }
 
     if (tokenContainer) tokenContainer.style.display = showToken ? 'block' : 'none';
@@ -897,8 +911,23 @@ function saveConfig(closeModal = true) {
     config.ttsLang = document.getElementById('cfg-tts-lang').value;
 
     // New fields - Sanitize Token
-    config.apiToken = document.getElementById('cfg-api-token').value.trim();
-    console.log('[Debug] Token Value from Input:', config.apiToken); // Debug Log
+    const rawToken = document.getElementById('cfg-api-token').value.trim();
+    // Only update if it's not a masked value (simple check for now)
+    // If user enters a real token starting with ***, well, edge case.
+    // Usually masked is *** or ends with ...
+    if (rawToken && !rawToken.startsWith('***') && !rawToken.includes('...')) {
+        config.apiToken = rawToken;
+        console.log('[Debug] Token Value Updated:', config.apiToken);
+    } else if (rawToken === '') {
+        // Explicit clear
+        config.apiToken = '';
+    } else {
+        console.log('[Debug] Token value is masked, keeping existing config.apiToken');
+        // If config.apiToken is somehow also masked (from load), we are in trouble.
+        // But usually config in runtime holds the real value if entered in this session,
+        // or we need to ensure we don't send the masked value back to server.
+    }
+
     config.llmMode = document.getElementById('cfg-llm-mode').value;
     config.disableStateful = document.getElementById('cfg-disable-stateful').checked;
 
@@ -952,6 +981,23 @@ function saveConfig(closeModal = true) {
     const headerModelName = document.getElementById('header-model-name');
     if (headerModelName) {
         headerModelName.textContent = config.model || 'No Model Set';
+    }
+
+    // Trigger explicit model load via backend
+    if (config.model && config.apiEndpoint && config.apiEndpoint.includes('localhost')) {
+        // Only try to auto-load if it looks like a local server (speed optimization)
+        // Or we can just try always. Let's try always but non-blocking.
+        fetch('/api/models', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: config.model })
+        }).then(async r => {
+            if (r.ok) {
+                console.log('[Model] Explicitly loaded:', config.model);
+            } else {
+                console.warn('[Model] Load skipped/failed:', await r.text());
+            }
+        }).catch(e => console.error('[Model] Load req error:', e));
     }
 
     // Close modal only if requested
@@ -1273,6 +1319,17 @@ async function streamResponse(payload, elementId) {
         let errorDetails = `Server Error ${response.status}: ${response.statusText}`;
         const errorBody = await response.text();
         if (errorBody) {
+            // Check for localized auth error
+            if (errorBody.startsWith("LM_STUDIO_AUTH_ERROR: ")) {
+                const originalMsg = errorBody.replace("LM_STUDIO_AUTH_ERROR: ", "");
+                // Translate using i18n key 'error.authFailed'
+                // t() function is available globally
+                const localizedMsg = t('error.authFailed');
+                errorDetails = localizedMsg + originalMsg;
+
+                // Throwing here will be caught by sendMessage catch block
+                throw new Error(errorDetails);
+            }
             errorDetails += ` - ${errorBody}`;
         }
         throw new Error(errorDetails);
@@ -1801,165 +1858,96 @@ async function speakMessage(text, btn = null) {
 /**
  * Clean text for TTS - removes emojis, markdown, and non-speakable characters
  */
+/**
+ * Clean text for TTS - removes emojis, markdown, and non-speakable characters
+ * Optimized to prevent duplicates and improve performance
+ */
 function cleanTextForTTS(text) {
     if (!text) return '';
 
     let cleaned = text;
 
-    // Remove tool status messages (MCP)
+    // 1. Remove Structural Artifacts (Tools, Thinking, HTML)
+    // Remove tool status messages (content validation)
     cleaned = cleaned.replace(/<span class="tool-status"[\s\S]*?<\/span>/g, '');
-    cleaned = cleaned.replace(/Tool Call:.*?(?:[.!?\n]|$)+/gi, ''); // Remove raw Tool Call logs
+    // Remove raw Tool Call logs
+    cleaned = cleaned.replace(/Tool Call:.*?(?:[.!?\n]|$)+/gi, '');
+    // Remove <think> blocks if any remain
+    cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/g, '');
+    // Remove all HTML tags
+    cleaned = cleaned.replace(/<[^>]*>/g, '');
 
-    // Apply Dictionary Corrections (Optimized with Regex)
-    if (ttsDictionaryRegex) {
+    // 2. Apply Custom Dictionary Corrections
+    if (typeof ttsDictionaryRegex !== 'undefined' && ttsDictionaryRegex) {
         cleaned = cleaned.replace(ttsDictionaryRegex, (match) => {
             return ttsDictionary[match.toLowerCase()] || match;
         });
     }
 
-    // Remove HTML tags
-    cleaned = cleaned.replace(/<[^>]*>/g, '');
-
-    // 1. Remove Internet URLs (http/https)
-    // Replaces "Visit https://example.com" with "Visit"
+    // 3. Remove URLs and Links
+    // Remove raw URLs (http://...) but keep the text
     cleaned = cleaned.replace(/https?:\/\/[^\s]+/g, '');
-
-    // 2. Process Markdown Links [Text](URL) -> Text
-    // Replaces "[Google](https://google.com)" with "Google"
+    // Convert Markdown links [Text](URL) -> Text
     cleaned = cleaned.replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1');
-
-    // 3. Clean Markdown Syntax (Bold, Italic, Code, Blockquotes)
-    // Remove bold/italic markers (*, **, _, __)
-    cleaned = cleaned.replace(/(\*\*|__)(.*?)\1/g, '$2'); // Bold
-    cleaned = cleaned.replace(/(\*|_)(.*?)\1/g, '$2');   // Italic
-
-    // Remove code block backticks (inline and block) but KEEP content
-    // Users usually want to hear the code, just not "backtick backtick backtick"
-    cleaned = cleaned.replace(/```[\w]*\n?/g, ''); // Remove opening fence + lang
-    cleaned = cleaned.replace(/```/g, '');          // Remove closing fence
-    cleaned = cleaned.replace(/`/g, '');            // Remove inline backticks
-
-    // Remove blockquote markers (>)
-    cleaned = cleaned.replace(/^>\s+/gm, '');
-
-    // Remove images ![Alt](URL) -> Alt
+    // Remove Images ![Alt](URL) -> Alt
     cleaned = cleaned.replace(/!\[([^\]]*)\]\([^\)]+\)/g, '$1');
 
-    // IMPROVED: Add pauses for Markdown structure (Headers, Horizontal Rules)
-    // Replace headers (# Title) with "Title." for pause
-    cleaned = cleaned.replace(/^(#{1,6})\s+(.+)$/gm, '$2.');
-    // Replace horizontal rules (---) with pause
+    // 4. Clean Markdown Syntax (Preserving Content)
+    // Remove Code Blocks entirely (fence + content)
+    // User requested to skip source code reading
+    cleaned = cleaned.replace(/```[\s\S]*?```/g, '');
+    // Remove inline code if it looks like variable names (optional, but requested "exclude source code")
+    // Let's keep inline code for now as it might be relevant words, but strict block removal is key.
+    cleaned = cleaned.replace(/`[^`]+`/g, ''); // Remove inline code too for cleaner reading?
+    // User said "source code", usually implies blocks.
+    // But inline `text` often contains variable names that disrupt flow.
+    // Let's stick to removing blocks first. Inline: remove backticks but keep text?
+    // Previous logic was "remove backticks keep text".
+    // User complaint was about "source code".
+    // Let's remove blocks entirely. Inline: keep text.
+    cleaned = cleaned.replace(/`/g, ''); // Remove inline backticks
+
+    // Remove Header Hashes (# Title -> Title.)
+    // Add period if missing to ensure pause
+    cleaned = cleaned.replace(/^(#{1,6})\s+(.+?)([.!?]?)$/gm, '$2$3.');
+
+    // Remove Bold/Italic wrappers (**text**, __text__, *text*, _text_)
+    cleaned = cleaned.replace(/(\*\*|__)(.*?)\1/g, '$2');
+    cleaned = cleaned.replace(/(\*|_)(.*?)\1/g, '$2');
+
+    // Remove Blockquotes (>)
+    cleaned = cleaned.replace(/^>\s+/gm, '');
+    // Remove Horizontal Rules (---)
     cleaned = cleaned.replace(/^([-*_]){3,}\s*$/gm, '.');
-    // Replace list items (* Item) - optional, but might help
-    // cleaned = cleaned.replace(/^[\*\-]\s+(.+)$/gm, '$1,'); 
+    // Remove List Markers (-, *, 1.)
+    cleaned = cleaned.replace(/^\s*[-*+]\s+/gm, '');
+    cleaned = cleaned.replace(/^\s*\d+\.\s+/gm, '');
 
+    // 5. Remove Emojis and Symbols (Consolidated Regex)
+    // Ranges: Emoticons, Symbols, Transport, Flags, Dingbats, Shapes, Arrows, etc.
+    const symbolRegex = /[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{FE00}-\u{FE0F}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2300}-\u{23FF}\u{25A0}-\u{25FF}\u{2B00}-\u{2BFF}\u{2190}-\u{21FF}\u{2900}-\u{297F}\u{3290}-\u{329F}\u{3030}\u{303D}]/gu;
+    cleaned = cleaned.replace(symbolRegex, '');
 
-    // Remove emoji (comprehensive Unicode ranges)
-    cleaned = cleaned.replace(/[\u{1F600}-\u{1F64F}]/gu, ''); // Emoticons
-    cleaned = cleaned.replace(/[\u{1F300}-\u{1F5FF}]/gu, ''); // Misc Symbols and Pictographs
-    cleaned = cleaned.replace(/[\u{1F680}-\u{1F6FF}]/gu, ''); // Transport and Map
-    cleaned = cleaned.replace(/[\u{1F1E0}-\u{1F1FF}]/gu, ''); // Flags
-    cleaned = cleaned.replace(/[\u{2600}-\u{26FF}]/gu, '');   // Misc symbols
-    cleaned = cleaned.replace(/[\u{2700}-\u{27BF}]/gu, '');   // Dingbats
-    cleaned = cleaned.replace(/[\u{FE00}-\u{FE0F}]/gu, '');   // Variation Selectors
-    cleaned = cleaned.replace(/[\u{1F900}-\u{1F9FF}]/gu, ''); // Supplemental Symbols and Pictographs
-    cleaned = cleaned.replace(/[\u{1FA00}-\u{1FA6F}]/gu, ''); // Chess Symbols
-    cleaned = cleaned.replace(/[\u{1FA70}-\u{1FAFF}]/gu, ''); // Symbols and Pictographs Extended-A
-    cleaned = cleaned.replace(/[\u{231A}-\u{231B}]/gu, '');   // Watch, Hourglass
-    cleaned = cleaned.replace(/[\u{23E9}-\u{23F3}]/gu, '');   // Various symbols
-    cleaned = cleaned.replace(/[\u{23F8}-\u{23FA}]/gu, '');   // Various symbols
-    cleaned = cleaned.replace(/[\u{25AA}-\u{25AB}]/gu, '');   // Squares
-    cleaned = cleaned.replace(/[\u{25B6}]/gu, '');            // Play button
-    cleaned = cleaned.replace(/[\u{25C0}]/gu, '');            // Reverse button
-    cleaned = cleaned.replace(/[\u{25FB}-\u{25FE}]/gu, '');   // Squares
-    cleaned = cleaned.replace(/[\u{2614}-\u{2615}]/gu, '');   // Umbrella, Hot beverage
-    cleaned = cleaned.replace(/[\u{2648}-\u{2653}]/gu, '');   // Zodiac
-    cleaned = cleaned.replace(/[\u{267F}]/gu, '');            // Wheelchair
-    cleaned = cleaned.replace(/[\u{2693}]/gu, '');            // Anchor
-    cleaned = cleaned.replace(/[\u{26A1}]/gu, '');            // High voltage
-    cleaned = cleaned.replace(/[\u{26AA}-\u{26AB}]/gu, '');   // Circles
-    cleaned = cleaned.replace(/[\u{26BD}-\u{26BE}]/gu, '');   // Sports
-    cleaned = cleaned.replace(/[\u{26C4}-\u{26C5}]/gu, '');   // Weather
-    cleaned = cleaned.replace(/[\u{26CE}]/gu, '');            // Ophiuchus
-    cleaned = cleaned.replace(/[\u{26D4}]/gu, '');            // No entry
-    cleaned = cleaned.replace(/[\u{26EA}]/gu, '');            // Church
-    cleaned = cleaned.replace(/[\u{26F2}-\u{26F3}]/gu, '');   // Fountain, Golf
-    cleaned = cleaned.replace(/[\u{26F5}]/gu, '');            // Sailboat
-    cleaned = cleaned.replace(/[\u{26FA}]/gu, '');            // Tent
-    cleaned = cleaned.replace(/[\u{26FD}]/gu, '');            // Fuel pump
-    cleaned = cleaned.replace(/[\u{2702}]/gu, '');            // Scissors
-    cleaned = cleaned.replace(/[\u{2705}]/gu, '');            // Check mark
-    cleaned = cleaned.replace(/[\u{2708}-\u{270D}]/gu, '');   // Various
-    cleaned = cleaned.replace(/[\u{270F}]/gu, '');            // Pencil
-    cleaned = cleaned.replace(/[\u{2712}]/gu, '');            // Black nib
-    cleaned = cleaned.replace(/[\u{2714}]/gu, '');            // Check mark
-    cleaned = cleaned.replace(/[\u{2716}]/gu, '');            // X mark
-    cleaned = cleaned.replace(/[\u{271D}]/gu, '');            // Latin cross
-    cleaned = cleaned.replace(/[\u{2721}]/gu, '');            // Star of David
-    cleaned = cleaned.replace(/[\u{2728}]/gu, '');            // Sparkles
-    cleaned = cleaned.replace(/[\u{2733}-\u{2734}]/gu, '');   // Eight spoked asterisk
-    cleaned = cleaned.replace(/[\u{2744}]/gu, '');            // Snowflake
-    cleaned = cleaned.replace(/[\u{2747}]/gu, '');            // Sparkle
-    cleaned = cleaned.replace(/[\u{274C}]/gu, '');            // Cross mark
-    cleaned = cleaned.replace(/[\u{274E}]/gu, '');            // Cross mark
-    cleaned = cleaned.replace(/[\u{2753}-\u{2755}]/gu, '');   // Question marks
-    cleaned = cleaned.replace(/[\u{2757}]/gu, '');            // Exclamation mark
-    cleaned = cleaned.replace(/[\u{2763}-\u{2764}]/gu, '');   // Hearts
-    cleaned = cleaned.replace(/[\u{2795}-\u{2797}]/gu, '');   // Math symbols
-    cleaned = cleaned.replace(/[\u{27A1}]/gu, '');            // Right arrow
-    cleaned = cleaned.replace(/[\u{27B0}]/gu, '');            // Curly loop
-    cleaned = cleaned.replace(/[\u{27BF}]/gu, '');            // Double curly loop
-    cleaned = cleaned.replace(/[\u{2934}-\u{2935}]/gu, '');   // Arrows
-    cleaned = cleaned.replace(/[\u{2B05}-\u{2B07}]/gu, '');   // Arrows
-    cleaned = cleaned.replace(/[\u{2B1B}-\u{2B1C}]/gu, '');   // Squares
-    cleaned = cleaned.replace(/[\u{2B50}]/gu, '');            // Star
-    cleaned = cleaned.replace(/[\u{2B55}]/gu, '');            // Circle
-    cleaned = cleaned.replace(/[\u{3030}]/gu, '');            // Wavy dash
-    cleaned = cleaned.replace(/[\u{303D}]/gu, '');            // Part alternation mark
-    cleaned = cleaned.replace(/[\u{3297}]/gu, '');            // Circled Ideograph Congratulation
-    cleaned = cleaned.replace(/[\u{3299}]/gu, '');            // Circled Ideograph Secret
+    // 6. Normalization and Punctuation
+    // Fancy quotes to space or simple quotes
+    cleaned = cleaned.replace(/[«»""„‚]/g, ' ');
+    // Separators to comma/pause
+    cleaned = cleaned.replace(/[=→—–]/g, ', ');
+    cleaned = cleaned.replace(/\s*[-•◦▪▸►]\s*/g, ', ');
+    // Ellipsis
+    cleaned = cleaned.replace(/\.{3,}/g, '.');
 
-    // FIRST: Add punctuation to markdown elements that typically don't have them
-    // Headlines (# text) - add period at end if no punctuation
-    cleaned = cleaned.replace(/^(#{1,6})\s*([^\n]+?)([.!?]?)$/gm, (match, hashes, text, punct) => {
-        // If headline doesn't end with punctuation, add a period
-        if (!punct) {
-            return `${hashes} ${text}.`;
-        }
-        return match;
-    });
+    // Remove specific unwanted characters if any remain
+    cleaned = cleaned.replace(/[*~|]/g, '');
 
-    // Bold/Italic text that ends a line without punctuation
-    cleaned = cleaned.replace(/(\*\*[^*]+\*\*|\*[^*]+\*)(\s*)$/gm, '$1.$2');
-
-    // Remove markdown formatting (AFTER adding punctuation)
-    cleaned = cleaned.replace(/#{1,6}\s*/gm, ''); // Headlines - remove # but keep text
-    cleaned = cleaned.replace(/[*`_~|]/g, ''); // Other markdown syntax characters
-    cleaned = cleaned.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1'); // [link text](url) -> link text
-    cleaned = cleaned.replace(/!\[[^\]]*\]\([^)]*\)/g, ''); // Remove image markdown
-    cleaned = cleaned.replace(/```[\s\S]*?```/g, ''); // Code blocks
-    cleaned = cleaned.replace(/`[^`]*`/g, ''); // Inline code
-    cleaned = cleaned.replace(/^>\s*/gm, ''); // Blockquotes
-    cleaned = cleaned.replace(/^-{3,}$/gm, ''); // Horizontal rules
-    cleaned = cleaned.replace(/^\s*[-*+]\s+/gm, ''); // List markers
-    cleaned = cleaned.replace(/^\s*\d+\.\s+/gm, ''); // Numbered lists
-
-    // Remove special characters that shouldn't be spoken
-    cleaned = cleaned.replace(/[«»""„‚]/g, ' '); // Fancy quotes -> space (prevent stuck words)
-    cleaned = cleaned.replace(/[=→]/g, ', '); // Equals and arrows to pauses
-    cleaned = cleaned.replace(/[—–]/g, ', '); // Dashes to pauses
-    cleaned = cleaned.replace(/\.{3,}/g, '.'); // Ellipsis
-    cleaned = cleaned.replace(/\s*[-•◦▪▸►]\s*/g, ', '); // Bullet points to pauses
-
-    // Ensure space after punctuation to prevent stuck sentences
-    // e.g., "word.Next" -> "word. Next"
+    // Ensure sentence spacing (e.g. "end.Next" -> "end. Next")
     cleaned = cleaned.replace(/([.!?])(?=[^ \n])/g, '$1 ');
 
-    // Normalize whitespace
-    cleaned = cleaned.replace(/\r\n/g, '\n'); // Normalize line endings
+    // Normalize Whitespace
+    cleaned = cleaned.replace(/\r\n/g, '\n');
     cleaned = cleaned.replace(/\n{3,}/g, '\n\n'); // Max 2 newlines
-    cleaned = cleaned.replace(/[ \t]+/g, ' '); // Multiple spaces to single
-    cleaned = cleaned.replace(/^\s+|\s+$/gm, ''); // Trim each line
+    cleaned = cleaned.replace(/[ \t]+/g, ' ');    // Collapse spaces
+    cleaned = cleaned.replace(/^\s+|\s+$/gm, ''); // Trim lines
 
     return cleaned.trim();
 }
@@ -2010,68 +1998,69 @@ function feedStreamingTTS(displayText) {
         let committed = null;
         let advanceBy = 0;
 
-        // 우선순위 1: 문단 경계 (줄바꿈 두 개) - 첫 청크는 길이 무관, 이후는 chunkSize 적용
-        const paragraphMatch = newText.match(/^([\s\S]*?\n\s*\n)/);
-        if (paragraphMatch && paragraphMatch[1].trim()) {
-            const potentialCommit = streamingTTSBuffer + cleanTextForTTS(paragraphMatch[1]);
-            const isFirstChunk = (ttsQueue.length === 0 && !isPlayingQueue);
+        // PRIORITY 1: Check for Code Blocks (Skip them entirely)
+        const codeBlockMatch = newText.match(/(.*?)```[\s\S]*?```/);
 
-            // 첫 청크는 즉시 커밋, 이후는 chunkSize 이상일 때만
-            if (isFirstChunk || potentialCommit.length >= config.chunkSize) {
-                committed = potentialCommit;
-                streamingTTSBuffer = "";
-                advanceBy = paragraphMatch[0].length;
+        if (codeBlockMatch) {
+            const textBefore = codeBlockMatch[1];
+            const fullMatch = codeBlockMatch[0];
+
+            if (textBefore.trim()) {
+                const cleanedBefore = cleanTextForTTS(textBefore);
+                // If cleaned text is substantial, commit it.
+                if (cleanedBefore.trim()) {
+                    committed = streamingTTSBuffer + cleanedBefore;
+                    streamingTTSBuffer = ""; // Reset buffer
+                }
+            }
+
+            if (committed) {
+                advanceBy = fullMatch.length;
             } else {
-                // 버퍼에 누적
-                streamingTTSBuffer = potentialCommit + " ";
-                streamingTTSCommittedIndex += paragraphMatch[0].length;
+                streamingTTSCommittedIndex += fullMatch.length;
+                // Flush buffer if any
+                if (streamingTTSBuffer.trim()) {
+                    const toSpeak = streamingTTSBuffer;
+                    streamingTTSBuffer = "";
+                    pushToStreamingTTSQueue(toSpeak, true);
+                }
                 continue;
             }
         }
 
-        // 우선순위 2: 단일 줄바꿈 - 첫 청크는 즉시, 이후는 chunkSize 이상
+        // PRIORITY 2: Newlines (Fast response)
         if (!committed) {
-            const lineMatch = newText.match(/^([^\n]+)\n/);
-            if (lineMatch) {
-                const cleanedLine = cleanTextForTTS(lineMatch[1]);
-                const potentialCommit = streamingTTSBuffer + cleanedLine;
-                const isFirstChunk = (ttsQueue.length === 0 && !isPlayingQueue);
-
-                // 첫 청크: 5자 이상이면 즉시 커밋 (빠른 시작)
-                // 중간 청크: chunkSize 이상일 때만 커밋
-                if ((isFirstChunk && potentialCommit.length >= 5) || potentialCommit.length >= config.chunkSize) {
+            const newlineMatch = newText.match(/^([\s\S]*?\n)/);
+            if (newlineMatch && newlineMatch[1].trim()) {
+                const potentialCommit = streamingTTSBuffer + cleanTextForTTS(newlineMatch[1]);
+                if (potentialCommit.length >= 10 || streamingTTSBuffer.length > 0) {
                     committed = potentialCommit;
                     streamingTTSBuffer = "";
-                    advanceBy = lineMatch[0].length;
+                    advanceBy = newlineMatch[1].length;
                 } else {
-                    // 버퍼에 누적하고 계속 진행
-                    streamingTTSBuffer = potentialCommit + " ";
-                    streamingTTSCommittedIndex += lineMatch[0].length;
+                    streamingTTSBuffer = potentialCommit + " "; // Keep buffering
+                    streamingTTSCommittedIndex += newlineMatch[1].length;
                     continue;
                 }
             }
         }
 
-        // 우선순위 3: 문장 종료 (.!?) + 다음 문장 시작 - chunkSize 누적 시 커밋
+        // PRIORITY 3: Sentence Endings (.!?)
         if (!committed) {
             const sentenceMatch = newText.match(/^([\s\S]*?[.!?])(\s+[A-Z가-힣])/);
             if (sentenceMatch && sentenceMatch[1].trim()) {
                 const potentialCommit = streamingTTSBuffer + cleanTextForTTS(sentenceMatch[1]);
-
                 if (potentialCommit.length >= config.chunkSize) {
                     committed = potentialCommit;
                     streamingTTSBuffer = "";
                     advanceBy = sentenceMatch[1].length;
                 } else {
-                    // 버퍼에 누적
                     streamingTTSBuffer = potentialCommit + " ";
                     streamingTTSCommittedIndex += sentenceMatch[1].length;
                     continue;
                 }
             }
-        }
-
-        // If nothing matched, stop the loop
+        }      // If nothing matched, stop the loop
         if (!committed) break;
 
         // Commit the segment
@@ -2080,6 +2069,7 @@ function feedStreamingTTS(displayText) {
         streamingTTSCommittedIndex += advanceBy;
     }
 }
+
 
 /**
  * Finalize streaming TTS when LLM stream ends
@@ -2427,7 +2417,7 @@ async function checkSystemHealth() {
 
         // Display Current Mode
         const modeLabel = config.llmMode === 'stateful' ? 'LM Studio' : 'OpenAI Compatible';
-        statusDetails += `\n- **모드**: ${modeLabel}`;
+        statusDetails += `\n- **${t('health.mode')}**: ${modeLabel}`;
 
         // Analyze health
         if (health.llmStatus !== 'ok') {
@@ -2436,9 +2426,9 @@ async function checkSystemHealth() {
 
             let errorDetail = health.llmMessage;
             if (errorDetail.includes('401')) {
-                errorDetail += " -> **API Token**을 확인해주세요.";
+                errorDetail += t('health.checkToken');
             } else if (errorDetail.includes('connect') || errorDetail.includes('refused')) {
-                errorDetail += " -> **LM Studio 서버**가 실행 중인지 확인해주세요.";
+                errorDetail += t('health.checkServer');
             }
 
             statusDetails += `\n- **${t('health.llm')}**: ${errorDetail}`;
@@ -2448,6 +2438,12 @@ async function checkSystemHealth() {
             statusDetails += `\n- **${t('health.llm')}**: ${llmDisplay}`;
             if (health.serverModel) {
                 statusDetails += ` (${health.serverModel})`;
+
+                // Sync header model name if successfully connected
+                const headerModelName = document.getElementById('header-model-name');
+                if (headerModelName && health.serverModel !== 'loading') {
+                    headerModelName.textContent = health.serverModel;
+                }
             }
         }
 

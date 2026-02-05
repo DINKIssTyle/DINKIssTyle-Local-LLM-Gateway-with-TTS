@@ -6,6 +6,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"encoding/json"
@@ -844,6 +845,8 @@ func (a *App) FetchAndCacheModels() ([]byte, error) {
 
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
+	} else {
+		req.Header.Set("Authorization", "Bearer lm-studio")
 	}
 
 	resp, err := client.Do(req)
@@ -876,6 +879,67 @@ func (a *App) FetchAndCacheModels() ([]byte, error) {
 	}
 
 	return bodyBytes, nil
+}
+
+// LoadModel sends a request to load a specific model
+func (a *App) LoadModel(modelID string) error {
+	a.serverMux.Lock()
+	endpoint := strings.TrimSuffix(a.llmEndpoint, "/")
+	endpoint = strings.TrimSuffix(endpoint, "/v1")
+	mode := a.llmMode
+	token := strings.TrimSpace(a.llmApiToken)
+	a.serverMux.Unlock()
+
+	// Sanitize token
+	if strings.HasPrefix(strings.ToLower(token), "bearer ") {
+		token = strings.TrimSpace(token[7:])
+	}
+
+	loadURL := endpoint + "/v1/models/load"
+	// Some servers might use different endpoints.
+	if mode == "stateful" {
+		// LM Studio defines /v1/models/load for both?
+		// Let's assume standard extension unless API varies.
+		// Stateful API usually implies chat endpoint behavior, but loading is often global.
+		// We'll stick to /v1/models/load as it's the common extension.
+	}
+
+	fmt.Printf("[LoadModel] Requesting load for model: %s to %s\n", modelID, loadURL)
+
+	payload := map[string]interface{}{
+		"model": modelID,
+		// "context_length": ... optional
+	}
+	body, _ := json.Marshal(payload)
+
+	client := &http.Client{Timeout: 30 * time.Second} // Loading takes time
+	req, err := http.NewRequest("POST", loadURL, bytes.NewBuffer(body))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %v", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	isMasked := strings.HasPrefix(token, "***") || strings.HasSuffix(token, "...")
+	if token != "" && !isMasked {
+		req.Header.Set("Authorization", "Bearer "+token)
+	} else {
+		req.Header.Set("Authorization", "Bearer lm-studio")
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("connection failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("server returned HTTP %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	fmt.Printf("[LoadModel] Successfully loaded model: %s\n", modelID)
+	return nil
 }
 
 // loadModelCacheFromDisk loads the model cache from the file

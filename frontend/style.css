@@ -990,3 +990,18 @@ body.is-desktop .desktop-only {
   padding-top: 12px;
   border-top: 1px solid var(--border-color);
 }
+
+/* Link Visibility Improvements */
+a {
+  color: #58a6ff;
+  text-decoration: none;
+}
+
+a:visited {
+  color: #bc8cff;
+}
+
+a:hover {
+  text-decoration: underline;
+  color: #79c0ff;
+}
