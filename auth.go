@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -257,6 +258,110 @@ func (am *AuthManager) GetUsers() []map[string]string {
 		})
 	}
 	return users
+}
+
+// GetUserDetail returns detailed info for a specific user (without password)
+func (am *AuthManager) GetUserDetail(id string) (map[string]interface{}, error) {
+	am.mu.RLock()
+	defer am.mu.RUnlock()
+
+	user, exists := am.users[id]
+	if !exists {
+		return nil, fmt.Errorf("user not found")
+	}
+
+	// Return user info with masked API token
+	apiToken := ""
+	if user.Settings.ApiToken != nil && *user.Settings.ApiToken != "" {
+		// Mask the token, show only last 4 characters
+		token := *user.Settings.ApiToken
+		if len(token) > 4 {
+			apiToken = "••••••••" + token[len(token)-4:]
+		} else {
+			apiToken = "••••"
+		}
+	}
+
+	return map[string]interface{}{
+		"id":             user.ID,
+		"role":           user.Role,
+		"created_at":     user.CreatedAt,
+		"has_api_key":    user.Settings.ApiToken != nil && *user.Settings.ApiToken != "",
+		"api_key_masked": apiToken,
+	}, nil
+}
+
+// UpdatePassword changes a user's password (admin action, no current password required)
+func (am *AuthManager) UpdatePassword(id, newPassword string) error {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+
+	user, exists := am.users[id]
+	if !exists {
+		return fmt.Errorf("user not found")
+	}
+
+	// Hash new password
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+
+	user.PasswordHash = string(hash)
+
+	return am.saveUsersLocked()
+}
+
+// UpdateUserRole changes a user's role (admin/user)
+func (am *AuthManager) UpdateUserRole(id, role string) error {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+
+	user, exists := am.users[id]
+	if !exists {
+		return fmt.Errorf("user not found")
+	}
+
+	// Validate role
+	if role != "admin" && role != "user" {
+		return fmt.Errorf("invalid role: must be 'admin' or 'user'")
+	}
+
+	user.Role = role
+
+	return am.saveUsersLocked()
+}
+
+// SetUserApiToken sets the API token for a specific user
+func (am *AuthManager) SetUserApiToken(id, token string) error {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+
+	user, exists := am.users[id]
+	if !exists {
+		return fmt.Errorf("user not found")
+	}
+
+	user.Settings.ApiToken = &token
+
+	return am.saveUsersLocked()
+}
+
+// GetUserApiToken returns the API token for a specific user (full token, not masked)
+func (am *AuthManager) GetUserApiToken(id string) (string, error) {
+	am.mu.RLock()
+	defer am.mu.RUnlock()
+
+	user, exists := am.users[id]
+	if !exists {
+		return "", fmt.Errorf("user not found")
+	}
+
+	if user.Settings.ApiToken == nil {
+		return "", nil
+	}
+
+	return *user.Settings.ApiToken, nil
 }
 
 // generateToken creates a random session token

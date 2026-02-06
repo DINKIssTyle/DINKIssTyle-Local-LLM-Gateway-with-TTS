@@ -708,6 +708,31 @@ func (a *App) DeleteUser(id string) error {
 	return a.authMgr.DeleteUser(id)
 }
 
+// GetUserDetail returns detailed info for a specific user (exposed to Wails)
+func (a *App) GetUserDetail(id string) (map[string]interface{}, error) {
+	return a.authMgr.GetUserDetail(id)
+}
+
+// UpdateUserPassword changes a user's password (exposed to Wails)
+func (a *App) UpdateUserPassword(id, newPassword string) error {
+	return a.authMgr.UpdatePassword(id, newPassword)
+}
+
+// UpdateUserRole changes a user's role (exposed to Wails)
+func (a *App) UpdateUserRole(id, role string) error {
+	return a.authMgr.UpdateUserRole(id, role)
+}
+
+// SetUserApiToken sets API token for a specific user (exposed to Wails)
+func (a *App) SetUserApiToken(id, token string) error {
+	return a.authMgr.SetUserApiToken(id, token)
+}
+
+// GetUserApiToken returns API token for a specific user (exposed to Wails)
+func (a *App) GetUserApiToken(id string) (string, error) {
+	return a.authMgr.GetUserApiToken(id)
+}
+
 // GetVoiceStyles returns a list of available voice style files (JSON)
 func (a *App) GetVoiceStyles() []string {
 	var styles []string
@@ -1149,14 +1174,13 @@ func (a *App) Show() {
 	}
 }
 
-// OpenMemoryFolder opens the folder containing the user's memory file
+// OpenMemoryFolder opens the folder containing the user's memory files
 func (a *App) OpenMemoryFolder(userID string) string {
-	path, err := mcp.GetUserMemoryPath(userID)
+	dir, err := mcp.GetUserMemoryDir(userID)
 	if err != nil {
 		return fmt.Sprintf("Error determining path: %v", err)
 	}
 
-	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Sprintf("Error creating directory: %v", err)
 	}
@@ -1172,22 +1196,20 @@ func (a *App) OpenMemoryFolder(userID string) string {
 	return ""
 }
 
-// ResetMemory clears or deletes the user's memory file
+// ResetMemory clears all memory files in the user's memory folder
 func (a *App) ResetMemory(userID string) string {
-	path, err := mcp.GetUserMemoryPath(userID)
+	dir, err := mcp.GetUserMemoryDir(userID)
 	if err != nil {
 		return fmt.Sprintf("Error determining path: %v", err)
 	}
 
-	// Option 1: Delete file
-	// if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-	// 	return fmt.Sprintf("Error deleting file: %v", err)
-	// }
-
-	// Option 2: Truncate file (keep file exist)
-	// Better to just delete or truncate. Let's truncate to keep permissions.
-	if err := os.WriteFile(path, []byte(""), 0644); err != nil {
-		return fmt.Sprintf("Error resetting memory: %v", err)
+	// Reset all .md files in the directory
+	files := []string{"personal.md", "work.md", "log.md", "index.md", "index.json"}
+	for _, f := range files {
+		filePath := filepath.Join(dir, f)
+		if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+			log.Printf("[Memory] Failed to remove %s: %v", f, err)
+		}
 	}
 
 	return "Memory reset successfully."

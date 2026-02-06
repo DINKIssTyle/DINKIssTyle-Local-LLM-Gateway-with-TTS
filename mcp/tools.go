@@ -151,7 +151,8 @@ func ManageMemory(filePath string, action string, content string) (string, error
 	}
 
 	// Extract userID from filePath for index operations
-	userID := strings.TrimSuffix(filepath.Base(filePath), ".md")
+	// New structure: /path/to/memory/{userID}/log.md -> extract {userID} from parent dir
+	userID := filepath.Base(filepath.Dir(filePath))
 
 	switch action {
 	case "read":
@@ -350,8 +351,10 @@ func ManageMemory(filePath string, action string, content string) (string, error
 	}
 }
 
-// GetUserMemoryPath resolves the memory file path based on OS and User ID.
-func GetUserMemoryPath(userID string) (string, error) {
+// GetUserMemoryDir returns the memory directory path for a user based on OS.
+// macOS: ~/Documents/DKST LLM Chat/memory/{userID}/
+// Windows/Linux: {executable_dir}/memory/{userID}/
+func GetUserMemoryDir(userID string) (string, error) {
 	if userID == "" {
 		userID = "default"
 	}
@@ -362,7 +365,7 @@ func GetUserMemoryPath(userID string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		baseDir = filepath.Join(home, "Documents", "DKST LLM Chat")
+		baseDir = filepath.Join(home, "Documents", "DKST LLM Chat", "memory")
 	} else {
 		// Windows/Linux: Executable directory
 		ex, err := os.Executable()
@@ -372,6 +375,108 @@ func GetUserMemoryPath(userID string) (string, error) {
 		baseDir = filepath.Join(filepath.Dir(ex), "memory")
 	}
 
-	filename := fmt.Sprintf("%s.md", userID)
-	return filepath.Join(baseDir, filename), nil
+	return filepath.Join(baseDir, userID), nil
+}
+
+// GetUserMemoryFilePath returns the path to a specific memory file for a user.
+// filename can be: "personal.md", "work.md", "index.md", "log.md"
+func GetUserMemoryFilePath(userID, filename string) (string, error) {
+	dir, err := GetUserMemoryDir(userID)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, filename), nil
+}
+
+// GetUserMemoryPath is kept for backward compatibility - returns log.md path
+func GetUserMemoryPath(userID string) (string, error) {
+	return GetUserMemoryFilePath(userID, "log.md")
+}
+
+// ListUserMemoryFiles returns all .md files in the user's memory directory
+func ListUserMemoryFiles(userID string) ([]string, error) {
+	dir, err := GetUserMemoryDir(userID)
+	if err != nil {
+		return nil, err
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []string{}, nil
+		}
+		return nil, err
+	}
+
+	var files []string
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".md") {
+			files = append(files, entry.Name())
+		}
+	}
+	return files, nil
+}
+
+// ReadUserDocument reads a specific document from user's memory folder
+func ReadUserDocument(userID, filename string) (string, error) {
+	// Validate filename to prevent directory traversal
+	if strings.Contains(filename, "..") || strings.Contains(filename, "/") || strings.Contains(filename, "\\") {
+		return "", fmt.Errorf("invalid filename: %s", filename)
+	}
+
+	filePath, err := GetUserMemoryFilePath(userID, filename)
+	if err != nil {
+		return "", err
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("document '%s' not found", filename)
+		}
+		return "", err
+	}
+
+	return string(data), nil
+}
+
+// WriteUserDocument writes content to a specific document in user's memory folder
+func WriteUserDocument(userID, filename, content string) error {
+	// Validate filename
+	if strings.Contains(filename, "..") || strings.Contains(filename, "/") || strings.Contains(filename, "\\") {
+		return fmt.Errorf("invalid filename: %s", filename)
+	}
+
+	filePath, err := GetUserMemoryFilePath(userID, filename)
+	if err != nil {
+		return err
+	}
+
+	// Ensure directory exists
+	dir := filepath.Dir(filePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
+	return os.WriteFile(filePath, []byte(content), 0644)
+}
+
+// DetermineCategory analyzes content and determines if it's personal or work-related
+func DetermineCategory(content string) string {
+	contentLower := strings.ToLower(content)
+
+	workKeywords := []string{
+		"project", "프로젝트", "work", "업무", "회사", "company", "job", "직장",
+		"task", "deadline", "마감", "meeting", "회의", "client", "고객",
+		"code", "코드", "programming", "프로그래밍", "development", "개발",
+		"report", "보고서", "presentation", "발표", "team", "팀",
+	}
+
+	for _, kw := range workKeywords {
+		if strings.Contains(contentLower, kw) {
+			return "work"
+		}
+	}
+
+	return "personal"
 }

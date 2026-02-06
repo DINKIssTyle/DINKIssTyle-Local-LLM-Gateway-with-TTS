@@ -116,6 +116,20 @@ func GetToolList() []Tool {
 				"properties": map[string]interface{}{},
 			},
 		},
+		{
+			Name:        "read_user_document",
+			Description: "Read a specific document from the user's memory folder. Available files: personal.md, work.md, index.md, log.md. Use index.md first to understand available information.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"filename": map[string]interface{}{
+						"type":        "string",
+						"description": "The filename to read (e.g., 'personal.md', 'work.md', 'index.md')",
+					},
+				},
+				"required": []string{"filename"},
+			},
+		},
 	}
 }
 
@@ -468,6 +482,47 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 			"content": []map[string]interface{}{
 				{"type": "text", "text": content},
 			},
+		}
+	} else if params.Name == "read_user_document" {
+		if !enableMemory {
+			res.Error = &JSONRPCError{Code: -32601, Message: "Memory feature is disabled by user settings."}
+			return
+		}
+
+		var args struct {
+			Filename string `json:"filename"`
+		}
+		json.Unmarshal(params.Arguments, &args)
+
+		if args.Filename == "" {
+			// Default to index.md
+			args.Filename = "index.md"
+		}
+
+		// Regenerate index.md if requested
+		if args.Filename == "index.md" {
+			if err := GenerateIndexMD(userID); err != nil {
+				log.Printf("[MCP] Failed to regenerate index.md: %v", err)
+			}
+		}
+
+		content, err := ReadUserDocument(userID, args.Filename)
+		if err != nil {
+			// If document not found, list available files
+			files, _ := ListUserMemoryFiles(userID)
+			availableFiles := strings.Join(files, ", ")
+			res.Result = map[string]interface{}{
+				"content": []map[string]interface{}{
+					{"type": "text", "text": fmt.Sprintf("Error: %v. Available files: %s", err, availableFiles)},
+				},
+				"isError": true,
+			}
+		} else {
+			res.Result = map[string]interface{}{
+				"content": []map[string]interface{}{
+					{"type": "text", "text": content},
+				},
+			}
 		}
 	} else {
 		res.Error = &JSONRPCError{Code: -32601, Message: "Tool not found"}

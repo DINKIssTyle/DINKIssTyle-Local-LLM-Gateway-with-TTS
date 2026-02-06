@@ -526,6 +526,66 @@
         </div>
     </div>
 
+    <!-- Edit User Modal -->
+    <div class="modal-overlay" id="edit-user-modal">
+        <div class="modal" style="max-width: 400px;">
+            <div class="modal-header">
+                <div class="modal-title">Edit User: <span id="edit-user-id-display"></span></div>
+                <button class="icon-btn" onclick="closeEditUserModal()">
+                    <span class="material-icons-round">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="edit-user-id">
+
+                <!-- Change Password Section -->
+                <div style="margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border-color);">
+                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);">Change Password</div>
+                    <div class="form-group">
+                        <label>New Password</label>
+                        <input type="password" id="edit-new-password" placeholder="Enter new password">
+                    </div>
+                    <div class="form-group">
+                        <label>Confirm New Password</label>
+                        <input type="password" id="edit-confirm-password" placeholder="Confirm new password">
+                    </div>
+                    <button class="btn btn-primary" style="width: 100%;" onclick="changeUserPassword()">
+                        <span class="material-icons-round" style="font-size: 16px;">lock</span>
+                        Change Password
+                    </button>
+                </div>
+
+                <!-- Admin Role Section -->
+                <div style="margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border-color);">
+                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);">User Role</div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                            <input type="checkbox" id="edit-user-admin" style="width: 18px; height: 18px;">
+                            <span style="color: #e6edf3; font-size: 14px;">Admin Role</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- API Key Section -->
+                <div>
+                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);">API Key</div>
+                    <div class="form-group">
+                        <label>LLM API Key</label>
+                        <input type="password" id="edit-user-api-key" placeholder="Enter API key for this user">
+                    </div>
+                    <div style="font-size: 11px; color: var(--text-secondary); margin-top: -8px;">
+                        This API key will be used when this user makes LLM requests.
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer" style="display: flex; gap: 8px; justify-content: flex-end;">
+                <button class="btn" style="background: var(--border-color);"
+                    onclick="closeEditUserModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="saveUserSettings()">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         // Adjust layout to match column heights
         function adjustLayout() {
@@ -789,9 +849,9 @@
                 const users = await window.go.main.App.GetUsers();
                 const list = document.getElementById('user-list');
                 list.innerHTML = users.map(u => `
-                    <div class="user-item">
+                    <div class="user-item" onclick="openEditUserModal('${u.id}')" style="cursor: pointer;" title="Click to edit">
                         <span>${u.id} <span style="color: var(--text-secondary);">(${u.role})</span></span>
-                        <button class="icon-btn" onclick="deleteUser('${u.id}')" title="Delete">
+                        <button class="icon-btn" onclick="event.stopPropagation(); deleteUser('${u.id}')" title="Delete">
                             <span class="material-icons-round" style="font-size: 18px;">delete</span>
                         </button>
                     </div>
@@ -891,6 +951,90 @@
 
         function closeAbout() {
             document.getElementById('about-modal').style.display = 'none';
+        }
+
+        // Edit User Modal Functions
+        let editUserOriginalRole = '';
+
+        async function openEditUserModal(userId) {
+            if (typeof window.go === 'undefined') return;
+
+            try {
+                // Load user details
+                const userDetail = await window.go.main.App.GetUserDetail(userId);
+
+                document.getElementById('edit-user-id').value = userId;
+                document.getElementById('edit-user-id-display').textContent = userId;
+
+                // Reset password fields
+                document.getElementById('edit-new-password').value = '';
+                document.getElementById('edit-confirm-password').value = '';
+
+                // Set admin role checkbox
+                document.getElementById('edit-user-admin').checked = (userDetail.role === 'admin');
+                editUserOriginalRole = userDetail.role;
+
+                // Load API Key (full token)
+                const apiKey = await window.go.main.App.GetUserApiToken(userId);
+                document.getElementById('edit-user-api-key').value = apiKey || '';
+
+                document.getElementById('edit-user-modal').style.display = 'flex';
+            } catch (e) {
+                console.error('Failed to load user details:', e);
+                showAlert('Failed to load user details: ' + e.message);
+            }
+        }
+
+        function closeEditUserModal() {
+            document.getElementById('edit-user-modal').style.display = 'none';
+        }
+
+        async function changeUserPassword() {
+            const userId = document.getElementById('edit-user-id').value;
+            const newPassword = document.getElementById('edit-new-password').value;
+            const confirmPassword = document.getElementById('edit-confirm-password').value;
+
+            if (!newPassword) {
+                showAlert('Please enter a new password.');
+                return;
+            }
+            if (newPassword !== confirmPassword) {
+                showAlert('New password and confirmation do not match.');
+                return;
+            }
+
+            try {
+                await window.go.main.App.UpdateUserPassword(userId, newPassword);
+                showAlert('Password changed successfully.');
+                // Clear password fields
+                document.getElementById('edit-new-password').value = '';
+                document.getElementById('edit-confirm-password').value = '';
+            } catch (e) {
+                showAlert('Failed to change password: ' + e.message);
+            }
+        }
+
+        async function saveUserSettings() {
+            const userId = document.getElementById('edit-user-id').value;
+            const isAdmin = document.getElementById('edit-user-admin').checked;
+            const apiKey = document.getElementById('edit-user-api-key').value;
+            const newRole = isAdmin ? 'admin' : 'user';
+
+            try {
+                // Update role if changed
+                if (newRole !== editUserOriginalRole) {
+                    await window.go.main.App.UpdateUserRole(userId, newRole);
+                }
+
+                // Update API key
+                await window.go.main.App.SetUserApiToken(userId, apiKey);
+
+                closeEditUserModal();
+                loadUsers();
+                showAlert('User settings saved successfully.');
+            } catch (e) {
+                showAlert('Failed to save settings: ' + e.message);
+            }
         }
 
         init();

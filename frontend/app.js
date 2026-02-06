@@ -692,7 +692,8 @@ function loadConfig() {
     document.getElementById('cfg-temp').value = config.temperature;
     document.getElementById('cfg-max-tokens').value = config.maxTokens;
     document.getElementById('cfg-history').value = config.historyCount;
-    document.getElementById('cfg-api-token').value = config.apiToken || '';
+    const apiTokenEl = document.getElementById('cfg-api-token');
+    if (apiTokenEl) apiTokenEl.value = config.apiToken || '';
     document.getElementById('cfg-llm-mode').value = config.llmMode || 'standard';
     document.getElementById('cfg-disable-stateful').checked = config.disableStateful || false;
     updateSettingsVisibility(); // Update UI visibility based on mode
@@ -807,7 +808,7 @@ function setupSettingsListeners() {
     });
 
     // Selects & Inputs: save on change
-    const autoSaveIds = ['cfg-api', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-api-token', 'cfg-disable-stateful'];
+    const autoSaveIds = ['cfg-api', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-disable-stateful'];
     autoSaveIds.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.onchange = () => saveConfig(false);
@@ -982,22 +983,15 @@ function saveConfig(closeModal = true) {
     config.autoTTS = document.getElementById('cfg-auto-tts').checked;
     config.ttsLang = document.getElementById('cfg-tts-lang').value;
 
-    // New fields - Sanitize Token
-    const rawToken = document.getElementById('cfg-api-token').value.trim();
-    // Only update if it's not a masked value (simple check for now)
-    // If user enters a real token starting with ***, well, edge case.
-    // Usually masked is *** or ends with ...
-    if (rawToken && !rawToken.startsWith('***') && !rawToken.includes('...')) {
-        config.apiToken = rawToken;
-        console.log('[Debug] Token Value Updated:', config.apiToken);
-    } else if (rawToken === '') {
-        // Explicit clear
-        config.apiToken = '';
-    } else {
-        console.log('[Debug] Token value is masked, keeping existing config.apiToken');
-        // If config.apiToken is somehow also masked (from load), we are in trouble.
-        // But usually config in runtime holds the real value if entered in this session,
-        // or we need to ensure we don't send the masked value back to server.
+    // API Token handling - skip if element not present (web.html removed it)
+    const apiTokenEl = document.getElementById('cfg-api-token');
+    if (apiTokenEl) {
+        const rawToken = apiTokenEl.value.trim();
+        if (rawToken && !rawToken.startsWith('***') && !rawToken.includes('...')) {
+            config.apiToken = rawToken;
+        } else if (rawToken === '') {
+            config.apiToken = '';
+        }
     }
 
     config.llmMode = document.getElementById('cfg-llm-mode').value;

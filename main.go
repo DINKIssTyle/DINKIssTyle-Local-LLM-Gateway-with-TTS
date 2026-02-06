@@ -105,39 +105,8 @@ func createAppMenu(app *App) *menu.Menu {
 		app.Quit()
 	})
 
-	// Edit Menu
-	editMenu := men.AddSubmenu("Edit")
-	editMenu.AddText("Undo", keys.CmdOrCtrl("z"), func(_ *menu.CallbackData) {
-		if app.ctx != nil {
-			wruntime.WindowExecJS(app.ctx, "document.execCommand('undo')")
-		}
-	})
-	editMenu.AddText("Redo", keys.CmdOrCtrl("shift+z"), func(_ *menu.CallbackData) {
-		if app.ctx != nil {
-			wruntime.WindowExecJS(app.ctx, "document.execCommand('redo')")
-		}
-	})
-	editMenu.AddSeparator()
-	editMenu.AddText("Cut", keys.CmdOrCtrl("x"), func(_ *menu.CallbackData) {
-		if app.ctx != nil {
-			wruntime.WindowExecJS(app.ctx, "document.execCommand('cut')")
-		}
-	})
-	editMenu.AddText("Copy", keys.CmdOrCtrl("c"), func(_ *menu.CallbackData) {
-		if app.ctx != nil {
-			wruntime.WindowExecJS(app.ctx, "document.execCommand('copy')")
-		}
-	})
-	editMenu.AddText("Paste", keys.CmdOrCtrl("v"), func(_ *menu.CallbackData) {
-		if app.ctx != nil {
-			wruntime.WindowExecJS(app.ctx, "document.execCommand('paste')")
-		}
-	})
-	editMenu.AddText("Select All", keys.CmdOrCtrl("a"), func(_ *menu.CallbackData) {
-		if app.ctx != nil {
-			wruntime.WindowExecJS(app.ctx, "document.execCommand('selectAll')")
-		}
-	})
+	// Edit Menu - Use Wails built-in EditMenu for proper clipboard support
+	men.Append(menu.EditMenu())
 
 	// Window Menu
 	windowMenu := men.AddSubmenu("Window")

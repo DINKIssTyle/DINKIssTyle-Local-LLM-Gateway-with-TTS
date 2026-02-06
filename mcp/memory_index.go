@@ -37,14 +37,9 @@ type MemoryLogEntry struct {
 var indexCache = make(map[string]*MemoryIndex)
 var indexCacheMu sync.RWMutex
 
-// GetMemoryIndexPath returns the path to the index file for a user
+// GetMemoryIndexPath returns the path to the index.json file for a user
 func GetMemoryIndexPath(userID string) (string, error) {
-	logPath, err := GetUserMemoryPath(userID)
-	if err != nil {
-		return "", err
-	}
-	dir := filepath.Dir(logPath)
-	return filepath.Join(dir, userID+"_index.json"), nil
+	return GetUserMemoryFilePath(userID, "index.json")
 }
 
 // ParseMemoryLog reads the log file and parses all entries
@@ -203,7 +198,7 @@ func LoadIndex(indexPath string) (*MemoryIndex, error) {
 	return &index, nil
 }
 
-// RebuildAndSaveIndex rebuilds the index from the log file
+// RebuildAndSaveIndex rebuilds the index from the log file and updates MD files
 func RebuildAndSaveIndex(userID string) (*MemoryIndex, error) {
 	logPath, err := GetUserMemoryPath(userID)
 	if err != nil {
@@ -222,9 +217,42 @@ func RebuildAndSaveIndex(userID string) (*MemoryIndex, error) {
 
 	index := BuildIndex(entries)
 
+	// Update individual category files (personal.md, work.md)
+	personalPath, _ := GetUserMemoryFilePath(userID, "personal.md")
+	workPath, _ := GetUserMemoryFilePath(userID, "work.md")
+
+	var personalLines []string
+	var workLines []string
+
+	for k, v := range index.Facts {
+		// Use the context/key/value to determine category
+		category := DetermineCategory(k + " " + v)
+		line := fmt.Sprintf("- **%s**: %s", k, v)
+		if category == "work" {
+			workLines = append(workLines, line)
+		} else {
+			personalLines = append(personalLines, line)
+		}
+	}
+
+	// Write category files
+	if len(personalLines) > 0 {
+		content := "# Personal Memory\n\n" + strings.Join(personalLines, "\n") + "\n"
+		os.WriteFile(personalPath, []byte(content), 0644)
+	}
+	if len(workLines) > 0 {
+		content := "# Work Memory\n\n" + strings.Join(workLines, "\n") + "\n"
+		os.WriteFile(workPath, []byte(content), 0644)
+	}
+
+	// Update index.json (system use)
 	if err := SaveIndex(indexPath, index); err != nil {
 		log.Printf("[Memory] Failed to save index: %v", err)
-		// Continue even if save fails
+	}
+
+	// Update index.md (human readable / MCP guide)
+	if err := GenerateIndexMD(userID); err != nil {
+		log.Printf("[Memory] Failed to generate index.md: %v", err)
 	}
 
 	// Update cache
@@ -332,4 +360,83 @@ func GetIndexSummaryForPrompt(userID string) string {
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+// GenerateIndexMD creates or updates the index.md file that summarizes all user memory
+// This file lists available documents and their summaries for quick lookup
+func GenerateIndexMD(userID string) error {
+	dir, err := GetUserMemoryDir(userID)
+	if err != nil {
+		return err
+	}
+
+	// Ensure directory exists
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
+	indexPath := filepath.Join(dir, "index.md")
+
+	// Build markdown content
+	var sb strings.Builder
+	sb.WriteString("# User Memory Index\n\n")
+	sb.WriteString(fmt.Sprintf("*Updated: %s*\n\n", time.Now().Format("2006-01-02 15:04:05")))
+
+	// List available files
+	files, err := ListUserMemoryFiles(userID)
+	if err != nil {
+		log.Printf("[Memory] Failed to list files: %v", err)
+	}
+
+	sb.WriteString("## Available Documents\n\n")
+	if len(files) == 0 {
+		sb.WriteString("- No documents yet\n")
+	} else {
+		for _, f := range files {
+			if f == "index.md" {
+				continue // Skip self
+			}
+			sb.WriteString(fmt.Sprintf("- **%s**\n", f))
+		}
+	}
+
+	// Add facts summary from index.json
+	jsonIndex, _ := LoadIndex(filepath.Join(dir, "index.json"))
+	if len(jsonIndex.Facts) > 0 {
+		sb.WriteString("\n## Quick Facts\n\n")
+		count := 0
+		for k, v := range jsonIndex.Facts {
+			if count >= 15 {
+				sb.WriteString("- *(more facts available in log.md)*\n")
+				break
+			}
+			sb.WriteString(fmt.Sprintf("- **%s**: %s\n", k, v))
+			count++
+		}
+	}
+
+	// Add file summaries
+	personalPath := filepath.Join(dir, "personal.md")
+	if data, err := os.ReadFile(personalPath); err == nil && len(data) > 0 {
+		lines := strings.Split(string(data), "\n")
+		preview := strings.Join(lines[:min(5, len(lines))], "\n")
+		sb.WriteString("\n## Personal (Preview)\n\n")
+		sb.WriteString(preview)
+		if len(lines) > 5 {
+			sb.WriteString("\n*...more in personal.md*\n")
+		}
+	}
+
+	workPath := filepath.Join(dir, "work.md")
+	if data, err := os.ReadFile(workPath); err == nil && len(data) > 0 {
+		lines := strings.Split(string(data), "\n")
+		preview := strings.Join(lines[:min(5, len(lines))], "\n")
+		sb.WriteString("\n## Work (Preview)\n\n")
+		sb.WriteString(preview)
+		if len(lines) > 5 {
+			sb.WriteString("\n*...more in work.md*\n")
+		}
+	}
+
+	return os.WriteFile(indexPath, []byte(sb.String()), 0644)
 }
