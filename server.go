@@ -36,6 +36,44 @@ var (
 	globalTTSMutex sync.RWMutex
 )
 
+// preloadUserMemory reads the user's memory file and returns its content for injection.
+// This ensures the LLM has access to stored user preferences even without tool calls.
+// Returns empty string if memory is disabled, file doesn't exist, or is empty.
+func preloadUserMemory(userID string, enableMemory bool) string {
+	if !enableMemory {
+		return ""
+	}
+
+	filePath, err := mcp.GetUserMemoryPath(userID)
+	if err != nil {
+		log.Printf("[preloadUserMemory] Failed to get path for user %s: %v", userID, err)
+		return ""
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "" // No memory yet
+		}
+		log.Printf("[preloadUserMemory] Failed to read memory for user %s: %v", userID, err)
+		return ""
+	}
+
+	content := strings.TrimSpace(string(data))
+	if content == "" {
+		return ""
+	}
+
+	// Truncate if too large to avoid context overflow (max ~4000 chars)
+	maxLen := 4000
+	if len(content) > maxLen {
+		content = content[:maxLen] + "\n... (memory truncated)"
+	}
+
+	log.Printf("[preloadUserMemory] Loaded %d bytes of memory for user %s", len(content), userID)
+	return content
+}
+
 type ServerTTSConfig struct {
 	VoiceStyle string  `json:"voiceStyle"`
 	Speed      float32 `json:"speed"`
@@ -611,6 +649,10 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		if err := json.Unmarshal(body, &reqMap); err == nil {
 			if messages, ok := reqMap["messages"].([]interface{}); ok {
 				foundSystem := false
+
+				// Preload user memory for injection
+				preloadedMemory := preloadUserMemory(userID, enableMemory)
+
 				for i, msg := range messages {
 					if m, ok := msg.(map[string]interface{}); ok {
 						if role, ok := m["role"].(string); ok && role == "system" {
@@ -619,7 +661,14 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 								newContent := content + "\n\nIMPORTANT: When using tools, output a SINGLE valid <tool_call> block. Do NOT nest tool_call tags. Ensure strict XML syntax."
 								newContent += "\n- CURRENT_TIME: " + time.Now().Format("2006-01-02 15:04:05 Monday")
 								if enableMemory {
-									newContent += "\n- PROACTIVE: At the START of a conversation, you MUST use `personal_memory` (action='read') to load context. For later specific lookups, use `personal_memory` (action='search').\n- FACTS: Use `personal_memory` (action='upsert', content='Key: Value') for user details."
+									if preloadedMemory != "" {
+										// Inject actual memory content
+										newContent += "\n\n=== USER'S SAVED MEMORY (already loaded) ===\n" + preloadedMemory + "\n=== END OF SAVED MEMORY ===\n"
+										newContent += "Use this information to personalize your responses. To update memory, use `personal_memory` (action='upsert', content='Key: Value')."
+									} else {
+										// No saved memory yet
+										newContent += "\n- USER_MEMORY: Empty or not yet created. When user shares facts about themselves, use `personal_memory` (action='upsert', content='Key: Value') to save them."
+									}
 								}
 								m["content"] = newContent
 								messages[i] = m
@@ -635,7 +684,14 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 					instr := "You are a helpful assistant. IMPORTANT: For tools, use a SINGLE <tool_call> block. No nesting."
 					instr += "\n- CURRENT_TIME: " + time.Now().Format("2006-01-02 15:04:05 Monday")
 					if enableMemory {
-						instr += "\n- PROACTIVE: At the START of a conversation, you MUST use `personal_memory` (action='read') to load context. For later specific lookups, use `personal_memory` (action='search').\n- FACTS: Use `personal_memory` (action='upsert', content='Key: Value') for user details."
+						if preloadedMemory != "" {
+							// Inject actual memory content
+							instr += "\n\n=== USER'S SAVED MEMORY (already loaded) ===\n" + preloadedMemory + "\n=== END OF SAVED MEMORY ===\n"
+							instr += "Use this information to personalize your responses. To update memory, use `personal_memory` (action='upsert', content='Key: Value')."
+						} else {
+							// No saved memory yet
+							instr += "\n- USER_MEMORY: Empty or not yet created. When user shares facts about themselves, use `personal_memory` (action='upsert', content='Key: Value') to save them."
+						}
 					}
 					newMsg := map[string]interface{}{
 						"role":    "system",
@@ -649,7 +705,11 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 					reqMap["messages"] = messages
 					if newBody, err := json.Marshal(reqMap); err == nil {
 						body = newBody
-						log.Println("[handleChat] Injected/Prepended Tool Safety Instruction into System Prompt")
+						if preloadedMemory != "" {
+							log.Println("[handleChat] Injected preloaded memory into System Prompt")
+						} else {
+							log.Println("[handleChat] Injected Tool Safety Instruction (no memory to preload)")
+						}
 					}
 				}
 			}
