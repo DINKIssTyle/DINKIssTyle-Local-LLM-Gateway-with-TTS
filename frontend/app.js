@@ -29,7 +29,8 @@ let config = {
     language: 'ko', // UI language
     apiToken: '',
     llmMode: 'standard', // 'standard' or 'stateful'
-    disableStateful: false // LM Studio specific
+    disableStateful: false, // LM Studio specific
+    micLayout: 'none' // 'none', 'left', 'right', 'bottom'
 };
 
 // ============================================================================
@@ -88,6 +89,8 @@ const translations = {
         'setting.memory.reset': '메모리 초기화',
         'setting.memory.reset.confirm': '개인 메모리를 초기화하시겠습니까? 이 작업은 되돌릴 수 없습니다.',
         'setting.memory.reset.success': '메모리가 초기화되었습니다.',
+        'setting.micLayout.label': '마이크 레이아웃',
+        'setting.micLayout.desc': '화면에 거대 마이크 버튼을 배치합니다.',
         // Settings - TTS
         'setting.enableTTS.label': 'TTS 활성화',
         'setting.enableTTS.desc': '응답을 음성으로 재생합니다.',
@@ -181,6 +184,8 @@ const translations = {
         'setting.memory.reset': 'Reset Memory',
         'setting.memory.reset.confirm': 'Are you sure you want to reset your personal memory? This cannot be undone.',
         'setting.memory.reset.success': 'Memory reset successfully.',
+        'setting.micLayout.label': 'Mic Layout',
+        'setting.micLayout.desc': 'Place a giant microphone button on the screen.',
         // Settings - TTS
         'setting.enableTTS.label': 'Enable TTS',
         'setting.enableTTS.desc': 'Play responses as audio.',
@@ -723,6 +728,10 @@ function loadConfig() {
     if (format === 'mp3') format = 'mp3-high'; // Legacy mapping
     document.getElementById('cfg-tts-format').value = format;
 
+    // Mic Layout
+    document.getElementById('cfg-mic-layout').value = config.micLayout || 'none';
+    updateMicLayout();
+
     // Language selector
     document.getElementById('cfg-lang').value = config.language || 'ko';
 
@@ -996,9 +1005,11 @@ function saveConfig(closeModal = true) {
 
     config.llmMode = document.getElementById('cfg-llm-mode').value;
     config.disableStateful = document.getElementById('cfg-disable-stateful').checked;
+    config.micLayout = document.getElementById('cfg-mic-layout').value;
 
     // Update visibility immediately
     updateSettingsVisibility();
+    updateMicLayout();
 
     // Reload dictionary since language changes
     loadTTSDictionary(config.ttsLang);
@@ -1397,7 +1408,11 @@ function updateSendButtonState() {
         sendBtn.title = "Send Message";
         sendBtn.classList.remove('stop-btn');
     }
+
+    // Also update giant mic icon if layout is active
+    updateMicUIForGeneration(isGenerating);
 }
+
 
 async function streamResponse(payload, elementId) {
     // Use the Go server's API endpoint
@@ -2807,5 +2822,133 @@ async function checkSystemHealth() {
         console.error("Health check rendering failed:", e);
     }
 }
+
+/**
+ * Updates UI layout based on mic layout setting
+ */
+function updateMicLayout() {
+    const container = document.getElementById('mic-layout-container');
+    if (!container) return;
+
+    // Reset classes
+    container.className = '';
+    document.body.classList.remove('layout-mic-bottom');
+
+    if (!config.micLayout || config.micLayout === 'none') {
+        container.style.display = 'none';
+    } else {
+        container.style.display = 'flex';
+        container.classList.add(`mic-layout-${config.micLayout}`);
+        if (config.micLayout === 'bottom') {
+            document.body.classList.add('layout-mic-bottom');
+        }
+    }
+}
+
+// Global STT state
+let recognition = null;
+let isSTTActive = false;
+
+/**
+ * Toggles Speech-to-Text (STT) recognition
+ */
+function toggleSTT() {
+    // 1. If generating response, stop it (Mic acts as stop button)
+    if (isGenerating) {
+        stopGeneration();
+        return;
+    }
+
+    // 2. STT Logic
+    if (isSTTActive) {
+        stopSTT();
+    } else {
+        startSTT();
+    }
+}
+
+function startSTT() {
+    if (!('webkitSpeechRecognition' in window)) {
+        alert("Speech Recognition is not supported by this browser.");
+        return;
+    }
+
+    if (!recognition) {
+        recognition = new webkitSpeechRecognition();
+        recognition.continuous = false;
+        recognition.interimResults = true;
+
+        recognition.lang = config.language === 'ko' ? 'ko-KR' : 'en-US';
+
+        recognition.onstart = () => {
+            isSTTActive = true;
+            document.getElementById('giant-mic-btn').classList.add('stt-active');
+            console.log("[STT] Recording started");
+        };
+
+        recognition.onresult = (event) => {
+            let interimTranscript = '';
+            let finalTranscript = '';
+
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+                if (event.results[i].isFinal) {
+                    finalTranscript += event.results[i][0].transcript;
+                } else {
+                    interimTranscript += event.results[i][0].transcript;
+                }
+            }
+
+            if (finalTranscript || interimTranscript) {
+                const input = document.getElementById('message-input');
+                // Real-time update message input
+                input.value = finalTranscript || interimTranscript;
+                input.dispatchEvent(new Event('input')); // Auto-resize textarea
+            }
+        };
+
+        recognition.onerror = (event) => {
+            console.error("[STT] Error:", event.error);
+            stopSTT();
+        };
+
+        recognition.onend = () => {
+            isSTTActive = false;
+            document.getElementById('giant-mic-btn').classList.remove('stt-active');
+            console.log("[STT] Recording ended");
+
+            // Auto-send if there is content
+            const input = document.getElementById('message-input');
+            if (input.value.trim()) {
+                sendMessage();
+            }
+        };
+    }
+
+    recognition.start();
+}
+
+function stopSTT() {
+    if (recognition) {
+        recognition.stop();
+    }
+}
+
+
+/**
+ * Hook into global state to update giant mic icon if generating
+ */
+function updateMicUIForGeneration(generating) {
+    const micBtn = document.getElementById('giant-mic-btn');
+    if (!micBtn) return;
+
+    if (generating) {
+        micBtn.classList.add('gen-active');
+        micBtn.querySelector('.material-icons-round').textContent = 'stop';
+    } else {
+        micBtn.classList.remove('gen-active');
+        micBtn.querySelector('.material-icons-round').textContent = 'mic';
+    }
+}
+
 
 

@@ -134,6 +134,18 @@
                     </div>
 
                     <div class="setting-item">
+                        <label data-i18n="setting.micLayout.label">Mic Layout</label>
+                        <p class="setting-desc" data-i18n="setting.micLayout.desc">화면에 거대 마이크 버튼을 배치합니다.</p>
+                        <select id="cfg-mic-layout" onchange="updateSettingsVisibility()">
+                            <option value="none">None</option>
+                            <option value="left">Left Side</option>
+                            <option value="right">Right Side</option>
+                            <option value="bottom">Bottom</option>
+                        </select>
+                    </div>
+
+
+                    <div class="setting-item">
                         <label data-i18n="setting.systemPrompt.label">System Prompt</label>
                         <p class="setting-desc" data-i18n="setting.systemPrompt.desc">LLM의 역할을 지정하세요. 예: "당신은 나의 영어
                             선생님입니다."</p>
@@ -272,8 +284,18 @@
         </div>
     </div>
 
+    <!-- Mic Layout Support -->
+    <div id="mic-layout-container" class="mic-layout-none" onclick="toggleSTT()">
+        <div id="giant-mic-btn">
+            <span class="material-icons-round">mic</span>
+            <div class="mic-status-ring"></div>
+        </div>
+    </div>
+
+
     <!-- Main Chat -->
     <div id="main-chat">
+
         <div id="chat-header">
             <span id="header-model-name" class="header-model-name">Loading...</span>
             <div style="display: flex; gap: 4px;">

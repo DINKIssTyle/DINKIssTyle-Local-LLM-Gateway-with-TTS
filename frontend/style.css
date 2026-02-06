@@ -1031,3 +1031,136 @@ a:hover {
 .progress-status {
   display: inline-block;
 }
+
+/* Mic Layout Support */
+#mic-layout-container {
+  display: none;
+  background-color: var(--sidebar-bg);
+  border-color: var(--border-color);
+  justify-content: center;
+  align-items: center;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  user-select: none;
+}
+
+#mic-layout-container:hover {
+  background-color: rgba(255, 255, 255, 0.03);
+}
+
+#mic-layout-container:active {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+#mic-layout-container.mic-layout-left,
+#mic-layout-container.mic-layout-right {
+  width: 25vw;
+  min-width: 200px;
+  max-width: 400px;
+  height: 100vh;
+  display: flex;
+}
+
+#mic-layout-container.mic-layout-bottom {
+  width: 100vw;
+  height: 25vh;
+  min-height: 150px;
+  display: flex;
+  order: 2;
+  border-top: 1px solid var(--border-color);
+}
+
+
+#mic-layout-container.mic-layout-left {
+  order: -1;
+  border-right: 1px solid var(--border-color);
+}
+
+#mic-layout-container.mic-layout-right {
+  order: 1;
+  border-left: 1px solid var(--border-color);
+}
+
+/* Modifying body to support row/column based on mic layout */
+body.layout-mic-bottom {
+  flex-direction: column;
+}
+
+#giant-mic-btn {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  background-color: var(--ai-bubble-bg);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  position: relative;
+  transition: transform 0.2s, background-color 0.2s;
+}
+
+#giant-mic-btn .material-icons-round {
+  font-size: 60px;
+  color: var(--text-secondary);
+  z-index: 2;
+}
+
+#mic-layout-container:hover #giant-mic-btn {
+  background-color: var(--border-color);
+  transform: scale(1.05);
+}
+
+#mic-layout-container:active #giant-mic-btn {
+  transform: scale(0.95);
+}
+
+/* STT Active State */
+#giant-mic-btn.stt-active {
+  background-color: rgba(var(--accent-color-rgb), 0.1);
+}
+
+#giant-mic-btn.stt-active .material-icons-round {
+  color: var(--accent-color);
+}
+
+#giant-mic-btn .mic-status-ring {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  right: 0;
+  border-radius: 50%;
+  border: 4px solid var(--accent-color);
+  opacity: 0;
+  transform: scale(0.8);
+  pointer-events: none;
+}
+
+#giant-mic-btn.stt-active .mic-status-ring {
+  animation: micPulse 1.5s infinite;
+}
+
+@keyframes micPulse {
+  0% {
+    opacity: 0.6;
+    transform: scale(0.8);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(1.5);
+  }
+}
+
+/* Response Generation Active State (Mic acts as stop button) */
+#giant-mic-btn.gen-active .material-icons-round {
+  color: var(--danger-color);
+}
+
+#giant-mic-btn.gen-active::after {
+  content: 'stop';
+  font-family: 'Material Icons Round';
+  font-size: 30px;
+  position: absolute;
+  color: var(--danger-color);
+  z-index: 3;
+}
