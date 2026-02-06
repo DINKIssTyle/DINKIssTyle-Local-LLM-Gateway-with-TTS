@@ -1600,7 +1600,7 @@ async function processStream(response, elementId) {
                                 // progressEl.style.fontStyle = 'italic';
                                 const bubbleContent = msgBubble.querySelector('.message-bubble');
                                 if (bubbleContent) {
-                                    bubbleContent.prepend(progressEl); // Prepend to top
+                                    bubbleContent.append(progressEl); // Append to bottom
                                 }
                             }
                             progressEl.textContent = `⏳ Processing Prompt: ${progress}%`;
@@ -1627,7 +1627,7 @@ async function processStream(response, elementId) {
                                 </div>`;
                             const bubbleContent = msgBubble.querySelector('.message-bubble');
                             if (bubbleContent) {
-                                bubbleContent.prepend(loadEl);
+                                bubbleContent.append(loadEl); // Append to bottom
                             }
                         }
                     }
@@ -1892,10 +1892,18 @@ function updateMessageContent(id, text) {
     if (!el) return;
 
     const bubble = el.querySelector('.message-bubble');
-    bubble.innerHTML = `<div class="markdown-body">${marked.parse(text)}</div>`;
+    let mdBody = bubble.querySelector('.markdown-body');
+    if (!mdBody) {
+        // Create if doesn't exist (ensure text stays at top if other status elements exist)
+        mdBody = document.createElement('div');
+        mdBody.className = 'markdown-body';
+        bubble.prepend(mdBody);
+    }
+
+    mdBody.innerHTML = marked.parse(text);
 
     // Re-highlight code blocks
-    bubble.querySelectorAll('pre code').forEach((block) => {
+    mdBody.querySelectorAll('pre code').forEach((block) => {
         highlight.highlightElement(block);
     });
 
