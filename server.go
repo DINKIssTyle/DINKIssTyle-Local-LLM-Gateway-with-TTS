@@ -8,12 +8,19 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"dinkisstyle-chat/mcp"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"io/fs"
 	"log"
+	"math/big"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -35,6 +42,92 @@ var (
 	// Global TTS Mutex
 	globalTTSMutex sync.RWMutex
 )
+
+// ensureSelfSignedCert check if cert.pem and key.pem exist in AppDataDir, if not create them.
+func ensureSelfSignedCert(appDataDir string) (string, string, error) {
+	certPath := filepath.Join(appDataDir, "cert.pem")
+	keyPath := filepath.Join(appDataDir, "key.pem")
+
+	// If both files exist, return them
+	if _, err := os.Stat(certPath); err == nil {
+		if _, err := os.Stat(keyPath); err == nil {
+			return certPath, keyPath, nil
+		}
+	}
+
+	log.Println("[HTTPS] Generating self-signed certificate...")
+
+	// Generate a new private key
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to generate private key: %v", err)
+	}
+
+	// Create a certificate template
+	notBefore := time.Now()
+	notAfter := notBefore.Add(365 * 24 * time.Hour) // 1 year validity
+
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to generate serial number: %v", err)
+	}
+
+	template := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			Organization: []string{"DINKI'ssTyle Local LLM Gateway"},
+			CommonName:   "localhost",
+		},
+		NotBefore: notBefore,
+		NotAfter:  notAfter,
+
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+	}
+
+	// Add local IP and localhost to SANs
+	template.IPAddresses = append(template.IPAddresses, net.ParseIP("127.0.0.1"), net.ParseIP("::1"))
+	template.DNSNames = append(template.DNSNames, "localhost")
+
+	// Create the certificate
+	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, priv.Public(), priv)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to create certificate: %v", err)
+	}
+
+	// Write cert.pem
+	certOut, err := os.Create(certPath)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to open cert.pem for writing: %v", err)
+	}
+	if err := pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes}); err != nil {
+		return "", "", fmt.Errorf("failed to write data to cert.pem: %v", err)
+	}
+	if err := certOut.Close(); err != nil {
+		return "", "", fmt.Errorf("error closing cert.pem: %v", err)
+	}
+
+	// Write key.pem
+	keyOut, err := os.OpenFile(keyPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to open key.pem for writing: %v", err)
+	}
+	privBytes, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return "", "", fmt.Errorf("unable to marshal private key: %v", err)
+	}
+	if err := pem.Encode(keyOut, &pem.Block{Type: "PRIVATE KEY", Bytes: privBytes}); err != nil {
+		return "", "", fmt.Errorf("failed to write data to key.pem: %v", err)
+	}
+	if err := keyOut.Close(); err != nil {
+		return "", "", fmt.Errorf("error closing key.pem: %v", err)
+	}
+
+	log.Printf("[HTTPS] Certificate generated at %s", certPath)
+	return certPath, keyPath, nil
+}
 
 // preloadUserMemory reads the user's memory file and returns its content for injection.
 // This ensures the LLM has access to stored user preferences even without tool calls.

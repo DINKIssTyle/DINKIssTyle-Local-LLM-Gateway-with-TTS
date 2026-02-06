@@ -639,14 +639,20 @@ func (a *App) StartServer(port string) error {
 		Handler: loggingMux,
 	}
 
+	// Cert paths
+	certFile, keyFile, err := ensureSelfSignedCert(GetAppDataDir())
+	if err != nil {
+		return fmt.Errorf("failed to ensure self-signed cert: %v", err)
+	}
+
 	go func() {
-		if err := a.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := a.server.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
 			fmt.Printf("Server error: %v\n", err)
 		}
 	}()
 
 	a.isRunning = true
-	fmt.Printf("Server started on http://localhost:%s\n", port)
+	fmt.Printf("Server started on https://localhost:%s\n", port)
 	a.saveConfig()
 	UpdateTrayServerState()
 	return nil
