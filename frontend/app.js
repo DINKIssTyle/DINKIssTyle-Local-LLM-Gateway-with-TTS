@@ -1612,6 +1612,55 @@ async function processStream(response, elementId) {
                             progressEl.textContent = `⏳ Processing Prompt: ${progress}%`;
                         }
                     }
+                    // Handle Model Loading Progress (LM Studio Mode)
+                    else if (json.type === 'model_load.start') {
+                        console.log('[Model Load] Start:', json.model_instance_id);
+                        const loadId = `model-load-${elementId}`;
+                        let loadEl = document.getElementById(loadId);
+                        let msgBubble = document.getElementById(elementId);
+
+                        if (msgBubble && !loadEl) {
+                            loadEl = document.createElement('div');
+                            loadEl.id = loadId;
+                            loadEl.className = 'model-load-status';
+                            loadEl.innerHTML = `
+                                <div style="font-size: 0.8em; color: #888; margin-bottom: 8px;">
+                                    <span>📦 Loading Model...</span>
+                                    <div style="background: var(--border-color); border-radius: 4px; height: 6px; margin-top: 4px; overflow: hidden;">
+                                        <div class="model-load-bar" style="background: var(--accent-color); height: 100%; width: 0%; transition: width 0.2s;"></div>
+                                    </div>
+                                    <span class="model-load-percent" style="font-size: 0.9em;">0%</span>
+                                </div>`;
+                            const bubbleContent = msgBubble.querySelector('.message-bubble');
+                            if (bubbleContent) {
+                                bubbleContent.prepend(loadEl);
+                            }
+                        }
+                    }
+                    else if (json.type === 'model_load.progress') {
+                        const loadId = `model-load-${elementId}`;
+                        const loadEl = document.getElementById(loadId);
+                        if (loadEl) {
+                            const percent = (json.progress * 100).toFixed(1);
+                            const bar = loadEl.querySelector('.model-load-bar');
+                            const percentText = loadEl.querySelector('.model-load-percent');
+                            if (bar) bar.style.width = `${percent}%`;
+                            if (percentText) percentText.textContent = `${percent}%`;
+                        }
+                    }
+                    else if (json.type === 'model_load.end') {
+                        console.log('[Model Load] End:', json.model_instance_id, 'Time:', json.load_time_seconds);
+                        const loadId = `model-load-${elementId}`;
+                        const loadEl = document.getElementById(loadId);
+                        if (loadEl) {
+                            // Show completion briefly then remove
+                            const bar = loadEl.querySelector('.model-load-bar');
+                            const percentText = loadEl.querySelector('.model-load-percent');
+                            if (bar) bar.style.width = '100%';
+                            if (percentText) percentText.textContent = `✓ Loaded (${json.load_time_seconds?.toFixed(1) || '?'}s)`;
+                            setTimeout(() => loadEl.remove(), 1500);
+                        }
+                    }
 
                     // If we have content, remove the progress indicator
                     if (contentToAdd) {
