@@ -2081,6 +2081,12 @@ function updateMessageContent(id, text) {
 
     mdBody.innerHTML = marked.parse(text);
 
+    // Make all links open in new window/tab
+    mdBody.querySelectorAll('a').forEach((link) => {
+        link.setAttribute('target', '_blank');
+        link.setAttribute('rel', 'noopener noreferrer');
+    });
+
     // Re-highlight code blocks
     mdBody.querySelectorAll('pre code').forEach((block) => {
         highlight.highlightElement(block);
@@ -2088,6 +2094,7 @@ function updateMessageContent(id, text) {
 
     scrollToBottom();
 }
+
 
 function scrollToBottom() {
     chatMessages.scrollTop = chatMessages.scrollHeight;
