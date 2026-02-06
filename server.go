@@ -809,6 +809,10 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		return
 	}
 
+	// Text-based tool call detection state
+	var accumulatedContent strings.Builder
+	toolCallPattern := regexp.MustCompile(`\{"name"\s*:\s*"([^"]+)"\s*,\s*"arguments"\s*:\s*(\{[^}]+\})\}`)
+
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -823,10 +827,78 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			// Specifically targeting: <|channel|>, <|message|>, <|start|>, <|end|>, <|thought|>, etc.
 			re := regexp.MustCompile(`(?i)<\|(?:channel|message|start|end|thought|analysis|final|start_header_id|end_header_id|assistant|user|system)[^>]*\|?>`)
 			line = re.ReplaceAllString(line, "")
+
+			// Try to extract content from SSE data for tool call detection
+			dataContent := strings.TrimPrefix(line, "data: ")
+			if dataContent != "" && dataContent != "[DONE]" {
+				var sseData map[string]interface{}
+				if json.Unmarshal([]byte(dataContent), &sseData) == nil {
+					// Extract content from choices[0].delta.content or choices[0].message.content
+					if choices, ok := sseData["choices"].([]interface{}); ok && len(choices) > 0 {
+						if choice, ok := choices[0].(map[string]interface{}); ok {
+							if delta, ok := choice["delta"].(map[string]interface{}); ok {
+								if content, ok := delta["content"].(string); ok {
+									accumulatedContent.WriteString(content)
+								}
+							}
+							if msg, ok := choice["message"].(map[string]interface{}); ok {
+								if content, ok := msg["content"].(string); ok {
+									accumulatedContent.WriteString(content)
+								}
+							}
+						}
+					}
+					// Also check for output array format (LM Studio stateful)
+					if outputs, ok := sseData["output"].([]interface{}); ok {
+						for _, output := range outputs {
+							if outMap, ok := output.(map[string]interface{}); ok {
+								if outType, ok := outMap["type"].(string); ok && outType == "message" {
+									if content, ok := outMap["content"].(string); ok {
+										accumulatedContent.WriteString(content)
+									}
+								}
+							}
+						}
+					}
+				}
+			}
 		}
 
 		fmt.Fprintf(w, "%s\n\n", line)
 		flusher.Flush()
+
+		// Check for text-based tool call pattern in accumulated content
+		accumulated := accumulatedContent.String()
+		if matches := toolCallPattern.FindStringSubmatch(accumulated); len(matches) == 3 {
+			toolName := matches[1]
+			toolArgs := matches[2]
+			log.Printf("[handleChat] Detected text-based tool call: %s with args: %s", toolName, toolArgs)
+
+			// Execute tool
+			result, err := mcp.ExecuteToolByName(toolName, []byte(toolArgs), userID, enableMemory)
+			if err != nil {
+				log.Printf("[handleChat] Text-based tool call error: %v", err)
+				result = fmt.Sprintf("Error executing tool: %v", err)
+			}
+
+			// Send tool result as SSE event
+			toolResultEvent := map[string]interface{}{
+				"type": "tool_call.result",
+				"tool": toolName,
+				"result": map[string]interface{}{
+					"content": []map[string]interface{}{
+						{"type": "text", "text": result},
+					},
+				},
+			}
+			resultBytes, _ := json.Marshal(toolResultEvent)
+			fmt.Fprintf(w, "data: %s\n\n", string(resultBytes))
+			flusher.Flush()
+			log.Printf("[handleChat] Sent text-based tool result for: %s", toolName)
+
+			// Clear accumulated content after processing to avoid duplicate triggers
+			accumulatedContent.Reset()
+		}
 	}
 
 	if err := scanner.Err(); err != nil {

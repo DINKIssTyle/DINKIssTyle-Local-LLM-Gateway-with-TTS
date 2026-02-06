@@ -10,6 +10,7 @@
   --input-bg: #161b22;
   --text-color: #c9d1d9;
   --accent-color: #238636;
+  --accent-color-rgb: 35, 134, 54;
   /* GitHub Green-ish */
   --accent-hover: #2ea043;
   --border-color: #30363d;
@@ -1004,4 +1005,29 @@ a:visited {
 a:hover {
   text-decoration: underline;
   color: #79c0ff;
+}
+
+/* Status Indicators */
+.reasoning-status {
+  animation: fadeIn 0.3s ease;
+}
+
+.spinner-small {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(var(--accent-color-rgb), 0.3);
+  border-top-color: var(--accent-color);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Progress Status Enhancement */
+.progress-status {
+  display: inline-block;
 }

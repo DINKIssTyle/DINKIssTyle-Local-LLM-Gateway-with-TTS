@@ -384,7 +384,78 @@ func HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
+// ExecuteToolByName executes a tool by name with given arguments JSON.
+// This is used for text-based tool call parsing (when model outputs tool call as plain text).
+// Returns the result text and an error if any.
+func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, enableMemory bool) (string, error) {
+	log.Printf("[MCP] ExecuteToolByName: %s (User: %s, Memory: %v)", toolName, userID, enableMemory)
+
+	switch toolName {
+	case "search_web":
+		var args struct {
+			Query string `json:"query"`
+		}
+		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
+			return "", fmt.Errorf("invalid arguments for search_web: %v", err)
+		}
+		return SearchWeb(args.Query)
+
+	case "read_web_page":
+		var args struct {
+			URL string `json:"url"`
+		}
+		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
+			return "", fmt.Errorf("invalid arguments for read_web_page: %v", err)
+		}
+		return ReadPage(args.URL)
+
+	case "personal_memory":
+		if !enableMemory {
+			return "", fmt.Errorf("memory feature is disabled by user settings")
+		}
+		var args struct {
+			Action  string `json:"action"`
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
+			return "", fmt.Errorf("invalid arguments for personal_memory: %v", err)
+		}
+		filePath, err := GetUserMemoryPath(userID)
+		if err != nil {
+			return "", fmt.Errorf("error resolving memory path: %v", err)
+		}
+		return ManageMemory(filePath, args.Action, args.Content)
+
+	case "get_current_time":
+		return GetCurrentTime()
+
+	case "read_user_document":
+		if !enableMemory {
+			return "", fmt.Errorf("memory feature is disabled by user settings")
+		}
+		var args struct {
+			Filename string `json:"filename"`
+		}
+		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
+			return "", fmt.Errorf("invalid arguments for read_user_document: %v", err)
+		}
+		if args.Filename == "" {
+			args.Filename = "index.md"
+		}
+		if args.Filename == "index.md" {
+			if err := GenerateIndexMD(userID); err != nil {
+				log.Printf("[MCP] Failed to regenerate index.md: %v", err)
+			}
+		}
+		return ReadUserDocument(userID, args.Filename)
+
+	default:
+		return "", fmt.Errorf("tool not found: %s", toolName)
+	}
+}
+
 // Helper to handle tool calls
+
 func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, enableMemory bool) {
 	var params struct {
 		Name      string          `json:"name"`

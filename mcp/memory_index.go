@@ -250,15 +250,15 @@ func RebuildAndSaveIndex(userID string) (*MemoryIndex, error) {
 		log.Printf("[Memory] Failed to save index: %v", err)
 	}
 
-	// Update index.md (human readable / MCP guide)
-	if err := GenerateIndexMD(userID); err != nil {
-		log.Printf("[Memory] Failed to generate index.md: %v", err)
-	}
-
 	// Update cache
 	indexCacheMu.Lock()
 	indexCache[indexPath] = index
 	indexCacheMu.Unlock()
+
+	// Update index.md (human readable / MCP guide)
+	if err := GenerateIndexMD(userID); err != nil {
+		log.Printf("[Memory] Failed to generate index.md: %v", err)
+	}
 
 	return index, nil
 }
@@ -351,7 +351,19 @@ func GetIndexSummaryForPrompt(userID string) string {
 
 	// Build compact representation
 	var lines []string
+
+	// Explicitly state names to prevent confusion between ID and Display Name
+	lines = append(lines, fmt.Sprintf("- ACCOUNT_ID: %s", userID))
+	if name, ok := index.Facts["name"]; ok {
+		lines = append(lines, fmt.Sprintf("- USER_NAME: %s", name))
+	} else if name, ok := index.Facts["이름"]; ok {
+		lines = append(lines, fmt.Sprintf("- USER_NAME: %s", name))
+	}
+
 	for k, v := range index.Facts {
+		if k == "name" || k == "이름" {
+			continue // Already added above
+		}
 		lines = append(lines, fmt.Sprintf("- %s: %s", k, v))
 	}
 

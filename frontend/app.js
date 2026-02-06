@@ -1224,9 +1224,11 @@ function clearChat() {
         stopGeneration();
     }
 
+    lastResponseId = null; // Clear session ID for Stateful Chat
     messages = [];
     chatMessages.innerHTML = '';
 }
+
 
 /* Chat Logic */
 
@@ -1414,7 +1416,16 @@ async function streamResponse(payload, elementId) {
                 throw new Error(errorDetails);
             }
 
+            if (errorBody.includes("Could not find stored response for previous_response_id")) {
+                console.warn("[Stateful] previous_response_id became invalid. Resetting and retrying without it...");
+                lastResponseId = null;
+                // Re-attempt without current lastResponseId
+                delete payload.previous_response_id;
+                return await streamResponse(payload, elementId);
+            }
+
             errorDetails += ` - ${errorBody}`;
+
         }
         throw new Error(errorDetails);
     }
@@ -1427,8 +1438,14 @@ async function processStream(response, elementId) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    let fullText = '';
-    let speechBuffer = ''; // Dedicated buffer for speech content (no HTML/Tools)
+    let fullText = '';           // Content to display (no reasoning)
+    let reasoningBuffer = '';     // Separate buffer for reasoning content (for history only)
+    let speechBuffer = '';        // Dedicated buffer for speech content (no HTML/Tools)
+    let currentlyReasoning = false; // State track for reasoning blocks
+    let reasoningSource = null;    // 'sse' or 'field' to prevent duplication
+
+
+
 
     // Initialize streaming TTS if enabled
     const useStreamingTTS = config.enableTTS && config.autoTTS;
@@ -1480,34 +1497,90 @@ async function processStream(response, elementId) {
                     if (json.choices && json.choices.length > 0) {
                         const delta = json.choices[0].delta || {};
                         const message = json.choices[0].message || {}; // Non-streaming fallback
+
+                        // Support for OpenAI-style reasoning_content - store in reasoningBuffer, not contentToAdd
+                        if (delta.reasoning_content) {
+                            if (!currentlyReasoning) {
+                                reasoningBuffer += '<think>';
+                                currentlyReasoning = true;
+                                reasoningSource = 'field';
+                                showReasoningStatus(elementId, '...'); // Start status
+                            }
+                            // Prioritize SSE if both present (LM Studio)
+                            if (reasoningSource !== 'sse') {
+                                reasoningBuffer += delta.reasoning_content;
+                                showReasoningStatus(elementId, delta.reasoning_content); // Update status
+                            }
+                        }
+
                         const part = delta.content || message.content || '';
-                        contentToAdd = part;
-                        speechToAdd = part;
+
+                        // Auto-close reasoning block if we transition to normal content
+                        if (part && currentlyReasoning && !delta.reasoning_content) {
+                            // If we see actual content and we were in reasoning, close the block
+                            reasoningBuffer += '</think>\n';
+                            currentlyReasoning = false;
+                            reasoningSource = null;
+                            showReasoningStatus(elementId, null, true); // Remove status
+                        }
+
+                        if (!currentlyReasoning) {
+                            contentToAdd += part;
+                            speechToAdd += part;
+                        }
+
                     }
+
+
                     // Handle Stateful Chat JSON format (output array mechanism - legacy/alternative?)
                     else if (json.output && Array.isArray(json.output)) {
                         for (const item of json.output) {
-                            if (item.content) {
+                            // Skip reasoning type items - they should not be displayed in bubble
+                            if (item.type === 'reasoning') continue;
+
+                            if (item.content && item.type === 'message') {
                                 contentToAdd += item.content;
-                                speechToAdd += item.content;
+                                if (!currentlyReasoning) {
+                                    speechToAdd += item.content;
+                                }
                             }
                         }
                     }
+
                     // Handle LM Studio Stateful Chat Streaming Format (based on logs)
                     else if (json.type === 'message.delta' && json.content) {
                         contentToAdd = json.content;
-                        speechToAdd = json.content;
+                        if (!currentlyReasoning) {
+                            speechToAdd = json.content;
+                        }
                     }
-                    // Handle Reasoning (Thinking) - Display only, NO SPEECH
+
+                    // Handle Reasoning (Thinking) - Status indicator only, NO display in bubble
                     else if (json.type === 'reasoning.start') {
-                        contentToAdd = '<think>';
+                        if (!currentlyReasoning) {
+                            reasoningBuffer += '<think>';
+                            currentlyReasoning = true;
+                        }
+                        reasoningSource = 'sse';
+                        showReasoningStatus(elementId, '...'); // Start status
                     }
                     else if (json.type === 'reasoning.delta' && json.content) {
-                        contentToAdd = json.content;
+                        // Add to reasoning buffer, NOT to contentToAdd/fullText
+                        reasoningBuffer += json.content;
+                        currentlyReasoning = true;
+                        reasoningSource = 'sse';
+                        showReasoningStatus(elementId, json.content); // Update with latest chunk
                     }
                     else if (json.type === 'reasoning.end') {
-                        contentToAdd = '</think>\n';
+                        reasoningBuffer += '</think>\n';
+                        currentlyReasoning = false;
+                        reasoningSource = null;
+                        showReasoningStatus(elementId, null, true); // Remove status
                     }
+
+
+
+
                     // Handle MCP Tool Calls - Display only, NO SPEECH
                     else if (json.type === 'tool_call.start') {
                         const toolName = json.tool || 'Running...';
@@ -1668,28 +1741,76 @@ async function processStream(response, elementId) {
                         fullText += contentToAdd;
                         let displayText = fullText;
 
-                        // UI Display Logic (Depends on config.hideThink)
-                        if (config.hideThink) {
-                            // Remove complete <think>...</think> blocks
-                            displayText = fullText.replace(/<think>[\s\S]*?<\/think>/g, '');
-                            // Handle case where </think> exists without opening tag (remove everything before it)
-                            if (displayText.includes('</think>')) {
-                                displayText = displayText.split('</think>').pop().trim();
-                            }
-                            // Handle incomplete <think> tag (still being streamed)
-                            if (displayText.includes('<think>')) {
-                                displayText = displayText.split('<think>')[0];
+                        // LM Studio Reasoning Status Detection (Text-based fallback for tags)
+                        // Only run if not already handled by SSE/reasoning_content events
+                        if (config.llmMode === 'lm-studio' && !currentlyReasoning && !config.hideThink) {
+                            const hasAnalysis = displayText.includes('<|channel|>analysis');
+
+                            const hasFinal = displayText.includes('<|channel|>final');
+                            const hasThink = displayText.includes('<think>');
+                            const hasThinkEnd = displayText.includes('</think>');
+
+                            if ((hasAnalysis && !hasFinal) || (hasThink && !hasThinkEnd)) {
+                                // Extract the "new" content part for status update
+                                // This is tricky during streaming, but we can show the last part of fullText
+                                let statusText = "Thinking...";
+                                if (hasAnalysis) {
+                                    const parts = fullText.split('<|channel|>analysis');
+                                    statusText = parts[parts.length - 1].split('<|channel|>')[0].trim();
+                                } else if (hasThink) {
+                                    const parts = fullText.split('<think>');
+                                    statusText = parts[parts.length - 1].split('</think>')[0].trim();
+                                }
+
+                                // Limit status text length for display
+                                if (statusText.length > 150) statusText = "..." + statusText.slice(-147);
+                                showReasoningStatus(elementId, statusText, false);
+                            } else if (hasFinal || hasThinkEnd) {
+                                showReasoningStatus(elementId, null, true);
                             }
                         }
+
+                        // UI Display Logic - ALWAYS hide <think> content from bubble
+                        // (Status indicator shows thinking progress instead)
+                        // 1. Remove complete <think>...</think> blocks
+                        displayText = displayText.replace(/<think>[\s\S]*?<\/think>/g, '');
+                        // 2. Remove complete <|channel|>analysis...<|channel|> blocks
+                        displayText = displayText.replace(/<\|channel\|>analysis[\s\S]*?(?=<\|channel\|>final|$)/g, '');
+                        // 3. Remove standalone tags
+                        displayText = displayText.replace(/<\|channel\|>(analysis|final|message)/g, '');
+                        displayText = displayText.replace(/<\|end\|>/g, '');
+
+                        // Handle case where </think> exists without opening tag (remove everything before it)
+                        if (displayText.includes('</think>')) {
+                            displayText = displayText.split('</think>').pop().trim();
+                        }
+                        // Handle incomplete <think> tag (still being streamed)
+                        if (displayText.includes('<think>')) {
+                            displayText = displayText.split('<think>')[0];
+                        }
+
                         updateMessageContent(elementId, displayText);
                     }
 
                     // Separate TTS Logic using speechBuffer
                     if (useStreamingTTS && speechToAdd) {
-                        speechBuffer += speechToAdd;
-                        // We can skip heavy regex cleaning for tools since they aren't in speechBuffer!
-                        feedStreamingTTS(speechBuffer);
+                        // Ultimate safety: Ensure no <think> or channel tags ever reach TTS
+                        let cleanedSpeech = speechToAdd;
+                        if (cleanedSpeech.includes('<think>') || cleanedSpeech.includes('<|channel|>')) {
+                            cleanedSpeech = cleanedSpeech.replace(/<think>[\s\S]*?<\/think>/g, '');
+                            cleanedSpeech = cleanedSpeech.replace(/<\|channel\|>analysis[\s\S]*?(?=<\|channel\|>final|$)/g, '');
+                            cleanedSpeech = cleanedSpeech.replace(/<\|channel\|>(analysis|final|message)/g, '');
+                            cleanedSpeech = cleanedSpeech.replace(/<\|end\|>/g, '');
+                            // Remove standalone partial tags
+                            cleanedSpeech = cleanedSpeech.replace(/<think>/g, '').replace(/<\/think>/g, '');
+                        }
+
+                        if (cleanedSpeech) {
+                            speechBuffer += cleanedSpeech;
+                            feedStreamingTTS(speechBuffer);
+                        }
                     }
+
                 } catch (e) {
                     console.error('JSON Parse Error', e);
                 }
@@ -1704,9 +1825,12 @@ async function processStream(response, elementId) {
         }
     } finally {
         // Finalize (Save to history even if aborted)
-        if (fullText) {
-            messages.push({ role: 'assistant', content: fullText });
+        // Combine reasoning and content for history (reasoning first, then response)
+        const historyContent = reasoningBuffer + fullText;
+        if (historyContent) {
+            messages.push({ role: 'assistant', content: historyContent });
         }
+
 
         // Finalize streaming TTS (commit any remaining text)
         if (useStreamingTTS) {
@@ -1886,6 +2010,53 @@ function stopAllAudio() {
     }
     currentAudioBtn = null;
 }
+
+// Show/Hide Reasoning Status Helper with Streaming Support
+function showReasoningStatus(elementId, text, isFinal = false) {
+    const statusId = `reasoning-${elementId}`;
+    let statusEl = document.getElementById(statusId);
+    const msgBubble = document.getElementById(elementId);
+
+    if (!msgBubble || config.hideThink) return;
+
+    const bubbleContent = msgBubble.querySelector('.message-bubble');
+    if (!bubbleContent) return;
+
+    if (isFinal) {
+        if (statusEl) statusEl.remove();
+        return;
+    }
+
+    if (!statusEl) {
+        statusEl = document.createElement('div');
+        statusEl.id = statusId;
+        statusEl.className = 'reasoning-status';
+        statusEl.style.fontSize = '0.8em';
+        statusEl.style.color = '#888';
+        statusEl.style.marginTop = '4px';
+        statusEl.style.overflow = 'hidden';
+        statusEl.style.whiteSpace = 'nowrap';
+        statusEl.style.textOverflow = 'ellipsis';
+        bubbleContent.append(statusEl);
+    }
+
+    // Fixed-length style matching "⏳ Processing Prompt: XX.XX%"
+    // Truncate to ~25 chars to keep display stable
+    const MAX_DISPLAY_LENGTH = 50;
+    const prefix = '💭 Thinking: ';
+
+    if (text) {
+        // Get last part of accumulated reasoning (most recent)
+        const cleanText = text.replace(/[\r\n]+/g, ' ').trim();
+        const truncated = cleanText.length > MAX_DISPLAY_LENGTH
+            ? cleanText.slice(0, MAX_DISPLAY_LENGTH) + '...'
+            : cleanText;
+        statusEl.textContent = prefix + truncated;
+    } else {
+        statusEl.textContent = prefix + '...';
+    }
+}
+
 
 function updateMessageContent(id, text) {
     const el = document.getElementById(id);
