@@ -1029,21 +1029,37 @@ function saveConfig(closeModal = true) {
     }
 
     // Also try fetch for web mode or as backup
+    // Build config payload - only include api_token if it was explicitly changed by user
+    const configPayload = {
+        api_endpoint: config.apiEndpoint,
+        llm_mode: config.llmMode,
+        enable_tts: config.enableTTS,
+        enable_mcp: config.enableMCP,
+        enable_memory: config.enableMemory,
+        tts_threads: config.ttsThreads
+    };
+
+    // Only include api_token if element exists and has a valid non-masked value
+    const apiTokenElForPost = document.getElementById('cfg-api-token');
+    if (apiTokenElForPost) {
+        const tokenVal = apiTokenElForPost.value.trim();
+        if (tokenVal && !tokenVal.startsWith('***') && !tokenVal.includes('...')) {
+            configPayload.api_token = tokenVal;
+        } else if (tokenVal === '') {
+            // Explicitly clearing token
+            configPayload.api_token = '';
+        }
+        // If masked (***...), don't include api_token at all - preserve server value
+    }
+
     fetch('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            api_endpoint: config.apiEndpoint,
-            api_token: config.apiToken,
-            llm_mode: config.llmMode,
-            enable_tts: config.enableTTS,
-            enable_mcp: config.enableMCP,
-            enable_memory: config.enableMemory,
-            tts_threads: config.ttsThreads
-        })
+        body: JSON.stringify(configPayload)
     }).then(r => {
         if (!r.ok) console.warn('Failed to sync settings');
     }).catch(e => console.warn('Sync error:', e));
+
 
     // Update header model name
     const headerModelName = document.getElementById('header-model-name');
