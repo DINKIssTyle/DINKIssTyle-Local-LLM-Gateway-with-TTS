@@ -91,21 +91,21 @@ func GetToolList() []Tool {
 		},
 		{
 			Name:        "personal_memory",
-			Description: "Manage the user's long-term personal memory (v13). Use 'read' for full view (BEST for start of conversation), 'search' for keyword lookup, 'append' for logs. IMPORTANT: Use 'upsert' (syntax: 'Key: Value') to store facts. NEVER overwrites existing data.",
+			Description: "Manage the user's long-term personal memory (v14 - Enhanced). Actions: 'remember' to save facts (server auto-extracts key), 'forget' to remove (log preserved), 'query' for fast lookup, 'read' for full index. Data is protected with Append-Only logging.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"action": map[string]interface{}{
 						"type":        "string",
-						"description": "The action to perform: 'read', 'search', 'append', 'replace', or 'upsert'.",
-						"enum":        []string{"read", "search", "append", "replace", "upsert"},
+						"description": "Action: 'remember' (save fact, auto-key), 'forget' (remove from index), 'query' (fast lookup), 'read' (full memory).",
+						"enum":        []string{"remember", "forget", "query", "read", "search"},
 					},
 					"content": map[string]interface{}{
 						"type":        "string",
-						"description": "Content/query. Required for all actions except 'read'.",
+						"description": "For 'remember': the fact to save (e.g., 'My name is DINKI' or 'Name: DINKI'). For 'forget'/'query': the key to lookup.",
 					},
 				},
-				"required": []string{"action"}, // Only action is strictly required by schema
+				"required": []string{"action"},
 			},
 		},
 		{

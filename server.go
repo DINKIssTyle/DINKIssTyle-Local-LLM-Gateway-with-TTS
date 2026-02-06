@@ -38,12 +38,21 @@ var (
 
 // preloadUserMemory reads the user's memory file and returns its content for injection.
 // This ensures the LLM has access to stored user preferences even without tool calls.
+// Now uses the index for efficiency instead of raw log.
 // Returns empty string if memory is disabled, file doesn't exist, or is empty.
 func preloadUserMemory(userID string, enableMemory bool) string {
 	if !enableMemory {
 		return ""
 	}
 
+	// Try index-based summary first (efficient)
+	summary := mcp.GetIndexSummaryForPrompt(userID)
+	if summary != "" {
+		log.Printf("[preloadUserMemory] Loaded index summary for user %s (%d chars)", userID, len(summary))
+		return summary
+	}
+
+	// Fallback: read raw file and try to build index
 	filePath, err := mcp.GetUserMemoryPath(userID)
 	if err != nil {
 		log.Printf("[preloadUserMemory] Failed to get path for user %s: %v", userID, err)
@@ -64,13 +73,20 @@ func preloadUserMemory(userID string, enableMemory bool) string {
 		return ""
 	}
 
+	// Build index from raw file for future use
+	go func() {
+		if _, err := mcp.RebuildAndSaveIndex(userID); err != nil {
+			log.Printf("[preloadUserMemory] Background index build failed: %v", err)
+		}
+	}()
+
 	// Truncate if too large to avoid context overflow (max ~4000 chars)
 	maxLen := 4000
 	if len(content) > maxLen {
 		content = content[:maxLen] + "\n... (memory truncated)"
 	}
 
-	log.Printf("[preloadUserMemory] Loaded %d bytes of memory for user %s", len(content), userID)
+	log.Printf("[preloadUserMemory] Loaded %d bytes of raw memory for user %s", len(content), userID)
 	return content
 }
 
