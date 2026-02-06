@@ -10,8 +10,6 @@ MS-DOS, MS Dos
 DOS, Dos
 GUI, G U I
 CLI, C L I
-HTTP, H T T P
-HTTPS, H T T P S
 API, 에이피아이
 URL, 유알엘
 JSON, 제이 에스 오 엔

@@ -811,7 +811,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 	// Text-based tool call detection state
 	var accumulatedContent strings.Builder
-	toolCallPattern := regexp.MustCompile(`\{"name"\s*:\s*"([^"]+)"\s*,\s*"arguments"\s*:\s*(\{[^}]+\})\}`)
+	// Regex to find JSON objects containing "name" field (potential tool calls)
+	toolCallJSONPattern := regexp.MustCompile(`\{"name"\s*:\s*"[^"]+"[^}]*\}`)
 
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
@@ -869,35 +870,57 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 		// Check for text-based tool call pattern in accumulated content
 		accumulated := accumulatedContent.String()
-		if matches := toolCallPattern.FindStringSubmatch(accumulated); len(matches) == 3 {
-			toolName := matches[1]
-			toolArgs := matches[2]
-			log.Printf("[handleChat] Detected text-based tool call: %s with args: %s", toolName, toolArgs)
+		if jsonMatch := toolCallJSONPattern.FindString(accumulated); jsonMatch != "" {
+			// Try to parse the JSON flexibly
+			var toolCallData map[string]interface{}
+			if err := json.Unmarshal([]byte(jsonMatch), &toolCallData); err == nil {
+				if toolName, ok := toolCallData["name"].(string); ok && toolName != "" {
+					log.Printf("[handleChat] Detected text-based tool call: %s", toolName)
 
-			// Execute tool
-			result, err := mcp.ExecuteToolByName(toolName, []byte(toolArgs), userID, enableMemory)
-			if err != nil {
-				log.Printf("[handleChat] Text-based tool call error: %v", err)
-				result = fmt.Sprintf("Error executing tool: %v", err)
+					// Extract arguments - check for "arguments" field first, otherwise use remaining fields
+					var argsJSON []byte
+					if args, ok := toolCallData["arguments"]; ok {
+						argsJSON, _ = json.Marshal(args)
+					} else {
+						// No "arguments" field - treat all other fields (except "name") as arguments
+						// This handles format like {"name": "search_web", "query": "..."}
+						argsMap := make(map[string]interface{})
+						for k, v := range toolCallData {
+							if k != "name" {
+								argsMap[k] = v
+							}
+						}
+						argsJSON, _ = json.Marshal(argsMap)
+					}
+
+					log.Printf("[handleChat] Tool args (normalized): %s", string(argsJSON))
+
+					// Execute tool
+					result, err := mcp.ExecuteToolByName(toolName, argsJSON, userID, enableMemory)
+					if err != nil {
+						log.Printf("[handleChat] Text-based tool call error: %v", err)
+						result = fmt.Sprintf("Error executing tool: %v", err)
+					}
+
+					// Send tool result as SSE event
+					toolResultEvent := map[string]interface{}{
+						"type": "tool_call.result",
+						"tool": toolName,
+						"result": map[string]interface{}{
+							"content": []map[string]interface{}{
+								{"type": "text", "text": result},
+							},
+						},
+					}
+					resultBytes, _ := json.Marshal(toolResultEvent)
+					fmt.Fprintf(w, "data: %s\n\n", string(resultBytes))
+					flusher.Flush()
+					log.Printf("[handleChat] Sent text-based tool result for: %s", toolName)
+
+					// Clear accumulated content after processing to avoid duplicate triggers
+					accumulatedContent.Reset()
+				}
 			}
-
-			// Send tool result as SSE event
-			toolResultEvent := map[string]interface{}{
-				"type": "tool_call.result",
-				"tool": toolName,
-				"result": map[string]interface{}{
-					"content": []map[string]interface{}{
-						{"type": "text", "text": result},
-					},
-				},
-			}
-			resultBytes, _ := json.Marshal(toolResultEvent)
-			fmt.Fprintf(w, "data: %s\n\n", string(resultBytes))
-			flusher.Flush()
-			log.Printf("[handleChat] Sent text-based tool result for: %s", toolName)
-
-			// Clear accumulated content after processing to avoid duplicate triggers
-			accumulatedContent.Reset()
 		}
 	}
 

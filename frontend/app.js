@@ -1780,6 +1780,13 @@ async function processStream(response, elementId) {
                         displayText = displayText.replace(/<\|channel\|>(analysis|final|message)/g, '');
                         displayText = displayText.replace(/<\|end\|>/g, '');
 
+                        // 4. Remove text-based tool call JSON patterns (for models without native function calling)
+                        // Pattern 1: {"name": "tool_name", "arguments": {...}}
+                        // Pattern 2: {"name": "tool_name", "query": "..."}  (alternative format)
+                        displayText = displayText.replace(/\{"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*\{[^}]*\}\}/g, '');
+                        displayText = displayText.replace(/\{"name"\s*:\s*"[^"]+"[^}]*\}/g, '');
+
+
                         // Handle case where </think> exists without opening tag (remove everything before it)
                         if (displayText.includes('</think>')) {
                             displayText = displayText.split('</think>').pop().trim();
@@ -1790,6 +1797,7 @@ async function processStream(response, elementId) {
                         }
 
                         updateMessageContent(elementId, displayText);
+
                     }
 
                     // Separate TTS Logic using speechBuffer
