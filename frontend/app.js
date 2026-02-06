@@ -1421,6 +1421,8 @@ function stopGeneration() {
         abortController.abort();
         abortController = null;
     }
+    // Stop any currently playing audio/TTS
+    stopAllAudio();
 }
 
 function updateSendButtonState() {
