@@ -43,6 +43,7 @@ const translations = {
         'modal.settings.title': '설정',
         // Sections
         'section.llm': 'LLM 설정',
+        'section.voiceInput': '음성 입력',
         'section.tts': 'TTS 엔진',
         // Server
         'server.stopped': '서버: 중지됨',
@@ -138,6 +139,7 @@ const translations = {
         'modal.settings.title': 'Settings',
         // Sections
         'section.llm': 'LLM Settings',
+        'section.voiceInput': 'Voice Input',
         'section.tts': 'TTS Engine',
         // Server
         'server.stopped': 'Server: Stopped',
@@ -790,7 +792,10 @@ function updateSettingsVisibility() {
     if (historyContainer) historyContainer.style.display = showHistory ? 'block' : 'none';
     if (disableStatefulContainer) disableStatefulContainer.style.display = showDisableStateful ? 'block' : 'none';
     if (mcpContainer) mcpContainer.style.display = showMCP ? 'block' : 'none';
-    if (memContainer) memContainer.style.display = showMCP ? 'block' : 'none'; // Memory also follows MCP visibility (LM Studio mode)
+
+    // Memory setting is visible only when MCP is both supported (LM Studio mode) and enabled
+    const mcpEnabled = document.getElementById('cfg-enable-mcp').checked;
+    if (memContainer) memContainer.style.display = (showMCP && mcpEnabled) ? 'block' : 'none';
 }
 
 function setupSettingsListeners() {
@@ -2888,7 +2893,12 @@ function toggleSTT() {
         return;
     }
 
-    // 2. STT Logic
+    // 2. If TTS is currently playing, stop it (interruption support)
+    if (isPlayingQueue) {
+        stopAllAudio();
+    }
+
+    // 3. STT Logic
     if (isSTTActive) {
         stopSTT();
     } else {

@@ -90,7 +90,8 @@
                     </div>
 
                     <div class="setting-item" id="container-enable-mcp">
-                        <div class="setting-toggle" onclick="toggleSwitch('cfg-enable-mcp')">
+                        <div class="setting-toggle"
+                            onclick="toggleSwitch('cfg-enable-mcp'); updateSettingsVisibility()">
                             <span data-i18n="setting.enableMCP.label">Enable MCP Features</span>
                             <input type="checkbox" id="cfg-enable-mcp">
                         </div>
@@ -112,16 +113,6 @@
                                 data-i18n="setting.memory.warning">
                                 Warning: Personal data is stored unencrypted on local disk.
                             </p>
-                            <div style="display: flex; gap: 8px; margin-top: 8px;">
-                                <button class="btn btn-secondary btn-sm" id="btn-open-memory" style="flex: 1;">
-                                    <span class="material-icons-round" style="font-size: 16px;">folder_open</span>
-                                    <span data-i18n="setting.memory.open">Open File</span>
-                                </button>
-                                <button class="btn btn-secondary btn-sm" id="btn-reset-memory" style="flex: 1;">
-                                    <span class="material-icons-round" style="font-size: 16px;">delete_forever</span>
-                                    <span data-i18n="setting.memory.reset">Reset Memory</span>
-                                </button>
-                            </div>
                         </div>
                     </div>
 
@@ -139,18 +130,10 @@
                         <p class="setting-desc" data-i18n="setting.hideThink.desc">LLM이 생각하는 과정을 채팅창에 보여주지 않습니다.</p>
                     </div>
 
-                    <div class="setting-item">
-                        <label data-i18n="setting.micLayout.label">Mic Layout</label>
-                        <p class="setting-desc" data-i18n="setting.micLayout.desc">화면에 거대 마이크 버튼을 배치합니다.</p>
-                        <select id="cfg-mic-layout" onchange="updateSettingsVisibility()">
-                            <option value="none">None</option>
-                            <option value="left">Left Side</option>
-                            <option value="right">Right Side</option>
-                            <option value="bottom">Bottom</option>
-                        </select>
-                    </div>
+                </div>
 
-
+                <!-- LLM Extra Settings (System Prompt, etc.) -->
+                <div class="setting-section">
                     <div class="setting-item">
                         <label data-i18n="setting.systemPrompt.label">System Prompt</label>
                         <p class="setting-desc" data-i18n="setting.systemPrompt.desc">LLM의 역할을 지정하세요. 예: "당신은 나의 영어
@@ -174,6 +157,21 @@
                         <label data-i18n="setting.maxTokens.label">Max Tokens</label>
                         <p class="setting-desc" data-i18n="setting.maxTokens.desc">(기본값: 4096) LLM이 생성할 최대 토큰 수</p>
                         <input type="number" id="cfg-max-tokens" value="2048">
+                    </div>
+                </div>
+
+                <!-- Voice Input Section -->
+                <div class="setting-section">
+                    <div class="setting-section-title" data-i18n="section.voiceInput">Voice Input</div>
+                    <div class="setting-item">
+                        <label data-i18n="setting.micLayout.label">Mic Layout</label>
+                        <p class="setting-desc" data-i18n="setting.micLayout.desc">화면에 거대 마이크 버튼을 배치합니다.</p>
+                        <select id="cfg-mic-layout" onchange="updateSettingsVisibility()">
+                            <option value="none">None</option>
+                            <option value="left">Left Side</option>
+                            <option value="right">Right Side</option>
+                            <option value="bottom">Bottom</option>
+                        </select>
                     </div>
                 </div>
 
