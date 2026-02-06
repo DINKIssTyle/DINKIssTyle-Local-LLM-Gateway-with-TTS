@@ -1196,9 +1196,11 @@ function setupEventListeners() {
     // Paste Handle
     messageInput.addEventListener('paste', (e) => {
         const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+        let hasImage = false;
         for (let index in items) {
             const item = items[index];
             if (item.kind === 'file' && item.type.startsWith('image/')) {
+                hasImage = true;
                 const blob = item.getAsFile();
                 const reader = new FileReader();
                 reader.onload = function (event) {
@@ -1208,6 +1210,10 @@ function setupEventListeners() {
                 };
                 reader.readAsDataURL(blob);
             }
+        }
+        // If an image was found, prevent default to avoid pasting source URLs or other metadata
+        if (hasImage) {
+            e.preventDefault();
         }
     });
 
@@ -1335,10 +1341,17 @@ async function sendMessage() {
 
     if (config.llmMode === 'stateful') {
         // Stateful Chat Mode
+        // LM Studio Stateful API (Experimental) uses a specific multimodal format:
+        // { type: 'text', content: '...' } and { type: 'image', data_url: '...' }
+        const inputData = currentImage ? [
+            { type: 'text', content: text },
+            { type: 'image', data_url: currentImage }
+        ] : text;
+
         payload = {
             model: config.model,
-            input: text, // Only current input
-            system_prompt: config.systemPrompt, // Explicitly pass system prompt
+            input: inputData,
+            system_prompt: config.systemPrompt,
             temperature: config.temperature,
             stream: true
         };
@@ -1346,10 +1359,6 @@ async function sendMessage() {
         if (config.disableStateful) {
             payload.store = false;
         }
-
-        // Note: LM Studio Stateful chat (v1/chat) is primarily text-based.
-        // If an image is present, it might not be processed correctly in stateful mode,
-        // but we'll send the default text we assigned above to avoid "empty string" errors.
 
         if (lastResponseId) {
             payload.previous_response_id = lastResponseId;

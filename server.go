@@ -756,70 +756,66 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		// EXTRA SAFEGUARD: Inject System Prompt instruction for cleaner Tool Calls
 		// Qwen/VL models often mess up XML tags (nested or unclosed).
 		if err := json.Unmarshal(body, &reqMap); err == nil {
+			preloadedMemory := preloadUserMemory(userID, enableMemory)
+			instrMarker := "### TOOL CALL GUIDELINES ###"
+			extraInstr := "\n\n" + instrMarker + "\n"
+			extraInstr += "1. Use a SINGLE valid <tool_call> block for tool requests.\n"
+			extraInstr += "2. DO NOT use search_web or read_web_page for person identification or image description unless explicitly asked.\n"
+			extraInstr += "3. CURRENT_TIME: " + time.Now().Format("2006-01-02 15:04:05 Monday")
+
+			if enableMemory {
+				if preloadedMemory != "" {
+					extraInstr += "\n\n=== USER'S SAVED MEMORY ===\n" + preloadedMemory + "\n=== END OF MEMORY ===\n"
+					extraInstr += "Use this memory for personalization. Update via `personal_memory`."
+				} else {
+					extraInstr += "\n- USER_MEMORY: Empty. Save new facts using `personal_memory`."
+				}
+			}
+
+			foundSystem := false
+			// Case A: Standard mode (OpenAI style)
 			if messages, ok := reqMap["messages"].([]interface{}); ok {
-				foundSystem := false
-
-				// Preload user memory for injection
-				preloadedMemory := preloadUserMemory(userID, enableMemory)
-
 				for i, msg := range messages {
 					if m, ok := msg.(map[string]interface{}); ok {
 						if role, ok := m["role"].(string); ok && role == "system" {
-							// Append instruction to existing system prompt
-							if content, ok := m["content"].(string); ok {
-								newContent := content + "\n\nIMPORTANT: When using tools, output a SINGLE valid <tool_call> block. Do NOT nest tool_call tags. Ensure strict XML syntax."
-								newContent += "\n- CURRENT_TIME: " + time.Now().Format("2006-01-02 15:04:05 Monday")
-								if enableMemory {
-									if preloadedMemory != "" {
-										// Inject actual memory content
-										newContent += "\n\n=== USER'S SAVED MEMORY (already loaded) ===\n" + preloadedMemory + "\n=== END OF SAVED MEMORY ===\n"
-										newContent += "Use this information to personalize your responses. To update memory, use `personal_memory` (action='upsert', content='Key: Value')."
-									} else {
-										// No saved memory yet
-										newContent += "\n- USER_MEMORY: Empty or not yet created. When user shares facts about themselves, use `personal_memory` (action='upsert', content='Key: Value') to save them."
-									}
-								}
-								m["content"] = newContent
+							content, _ := m["content"].(string)
+							// Prevent duplicate injection
+							if !strings.Contains(content, instrMarker) {
+								m["content"] = content + extraInstr
 								messages[i] = m
-								foundSystem = true
-								break
 							}
+							foundSystem = true
+							break
 						}
 					}
 				}
-
-				// If no system prompt found, prepend one
 				if !foundSystem {
-					instr := "You are a helpful assistant. IMPORTANT: For tools, use a SINGLE <tool_call> block. No nesting."
-					instr += "\n- CURRENT_TIME: " + time.Now().Format("2006-01-02 15:04:05 Monday")
-					if enableMemory {
-						if preloadedMemory != "" {
-							// Inject actual memory content
-							instr += "\n\n=== USER'S SAVED MEMORY (already loaded) ===\n" + preloadedMemory + "\n=== END OF SAVED MEMORY ===\n"
-							instr += "Use this information to personalize your responses. To update memory, use `personal_memory` (action='upsert', content='Key: Value')."
-						} else {
-							// No saved memory yet
-							instr += "\n- USER_MEMORY: Empty or not yet created. When user shares facts about themselves, use `personal_memory` (action='upsert', content='Key: Value') to save them."
-						}
-					}
 					newMsg := map[string]interface{}{
 						"role":    "system",
-						"content": instr,
+						"content": "You are a helpful assistant." + extraInstr,
 					}
-					messages = append([]interface{}{newMsg}, messages...)
+					reqMap["messages"] = append([]interface{}{newMsg}, messages...)
 					foundSystem = true
 				}
+			}
 
-				if foundSystem {
-					reqMap["messages"] = messages
-					if newBody, err := json.Marshal(reqMap); err == nil {
-						body = newBody
-						if preloadedMemory != "" {
-							log.Println("[handleChat] Injected preloaded memory into System Prompt")
-						} else {
-							log.Println("[handleChat] Injected Tool Safety Instruction (no memory to preload)")
-						}
-					}
+			// Case B: Stateful mode (LM Studio style)
+			// LM Studio might append system_prompt every turn if we keep sending it.
+			if sp, ok := reqMap["system_prompt"].(string); ok {
+				// Prevent duplicate injection
+				if !strings.Contains(sp, instrMarker) {
+					// Check if this turn has previous state.
+					// If it does, we might want to ONLY send the extra instructions if something changed,
+					// but for now, we'll just ensure we don't duplicate the marker.
+					reqMap["system_prompt"] = sp + extraInstr
+				}
+				foundSystem = true
+			}
+
+			if foundSystem {
+				if newBody, err := json.Marshal(reqMap); err == nil {
+					body = newBody
+					log.Println("[handleChat] Injected or deduplicated System Prompt instructions")
 				}
 			}
 		}

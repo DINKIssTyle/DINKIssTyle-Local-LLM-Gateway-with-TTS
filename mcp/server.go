@@ -80,7 +80,7 @@ func GetToolList() []Tool {
 		},
 		{
 			Name:        "read_web_page",
-			Description: "Read the text content of a specific URL. Use this to read articles or documentation.",
+			Description: "Read the text content of a specific URL. Use this ONLY when the user provides a URL or explicitly asks to read a specific page. DO NOT use this for describing images or identifying people in photos unless specifically requested.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
