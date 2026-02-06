@@ -1193,6 +1193,24 @@ function setupEventListeners() {
 
     messageInput.addEventListener('input', autoResizeInput);
 
+    // Paste Handle
+    messageInput.addEventListener('paste', (e) => {
+        const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+        for (let index in items) {
+            const item = items[index];
+            if (item.kind === 'file' && item.type.startsWith('image/')) {
+                const blob = item.getAsFile();
+                const reader = new FileReader();
+                reader.onload = function (event) {
+                    pendingImage = event.target.result; // Base64 string
+                    imagePreviewVal.src = pendingImage;
+                    previewContainer.style.display = 'block';
+                };
+                reader.readAsDataURL(blob);
+            }
+        }
+    });
+
     // TTS Settings listeners
     document.getElementById('cfg-tts-speed').addEventListener('input', (e) => {
         document.getElementById('speed-val').textContent = e.target.value;
@@ -1263,9 +1281,16 @@ async function sendMessage() {
     // Unlock audio context on user interaction
     unlockAudioContext();
 
-    const text = messageInput.value.trim();
-    if (!text && !pendingImage) return;
+    let text = messageInput.value.trim();
+    const currentImage = pendingImage; // Capture early
+
+    if (!text && !currentImage) return;
     if (isGenerating) return;
+
+    // Default text for vision if empty
+    if (!text && currentImage) {
+        text = (config.language === 'ko') ? '이미지를 설명해주세요.' : 'Please describe this image.';
+    }
 
     // Stop and clear any existing audio/TTS
     stopAllAudio();
@@ -1274,7 +1299,7 @@ async function sendMessage() {
     const userMsg = {
         role: 'user',
         content: text,
-        image: pendingImage
+        image: currentImage
     };
 
     appendMessage(userMsg);
@@ -1321,17 +1346,10 @@ async function sendMessage() {
         if (config.disableStateful) {
             payload.store = false;
         }
-        // Add image if present
-        if (pendingImage) {
-            // LM Studio Stateful chat might support array input for images? 
-            // The docs example is just 'input': "string". 
-            // If vision is needed, we might need a complex input object or standard stateless for vision.
-            // For now, assume simple text input for stateful.
-            // If user attached image, we might force stateless or warn?
-            // Let's attach it as text for now to avoid breaking.
-            // Actually, Stateful Chat docs don't explicitly show vision examples.
-            // We'll stick to text input. If vision is critical, we might need Standard mode.
-        }
+
+        // Note: LM Studio Stateful chat (v1/chat) is primarily text-based.
+        // If an image is present, it might not be processed correctly in stateful mode,
+        // but we'll send the default text we assigned above to avoid "empty string" errors.
 
         if (lastResponseId) {
             payload.previous_response_id = lastResponseId;
