@@ -19,55 +19,61 @@ fi
 # --- 1. Install System Dependencies ---
 echo "Checking system dependencies..."
 
-if command -v apt-get &> /dev/null; then
-    echo "Detected Debian/Ubuntu system."
-    $SUDO apt-get update
-    $SUDO apt-get install -y build-essential libgtk-3-dev pkg-config
-    
-    # Try installing WebKit2GTK 4.0, fallback to 4.1
-    if ! $SUDO apt-get install -y libwebkit2gtk-4.0-dev; then
-        echo "WebKit2GTK 4.0 not found, trying 4.1..."
-        $SUDO apt-get install -y libwebkit2gtk-4.1-dev
-    fi
+DEPENDENCIES_MET=true
+if ! pkg-config --exists gtk+-3.0; then DEPENDENCIES_MET=false; fi
+if ! pkg-config --exists webkit2gtk-4.0 && ! pkg-config --exists webkit2gtk-4.1; then DEPENDENCIES_MET=false; fi
 
-    if ! command -v go &> /dev/null; then
-        echo "Installing Go..."
-        $SUDO apt-get install -y golang-go
-    fi
-
-elif command -v dnf &> /dev/null; then
-    echo "Detected Fedora/RHEL system."
-    $SUDO dnf groupinstall -y "Development Tools"
-    $SUDO dnf install -y gtk3-devel pkgconf-pkg-config
-    
-    if ! $SUDO dnf install -y webkit2gtk3-devel; then
-         $SUDO dnf install -y webkit2gtk4.1-devel
-    fi
-
-    if ! command -v go &> /dev/null; then
-        echo "Installing Go..."
-        $SUDO dnf install -y golang
-    fi
-
-elif command -v pacman &> /dev/null; then
-    echo "Detected Arch Linux system."
-    $SUDO pacman -Sy --noconfirm base-devel gtk3 webkit2gtk go
-
-elif command -v apk &> /dev/null; then
-    echo "Detected Alpine Linux system."
-    $SUDO apk update
-    $SUDO apk add build-base gtk+3.0-dev webkit2gtk-dev go pkgconf
+if [ "$DEPENDENCIES_MET" = "true" ]; then
+    echo "Common dependencies (GTK3, WebKit2GTK) already met. Skipping installation."
 else
-    echo "Warning: Unsupported package manager. Make sure you have GTK3, WebKit2GTK, and Go installed manually."
+    echo "Missing dependencies. Attempting installation..."
+    if command -v apt-get &> /dev/null; then
+        echo "Detected Debian/Ubuntu system."
+        $SUDO apt-get update
+        $SUDO apt-get install -y build-essential libgtk-3-dev pkg-config
+        
+        # Try installing WebKit2GTK 4.0, fallback to 4.1
+        if ! $SUDO apt-get install -y libwebkit2gtk-4.0-dev; then
+            echo "WebKit2GTK 4.0 not found, trying 4.1..."
+            $SUDO apt-get install -y libwebkit2gtk-4.1-dev
+        fi
+
+    elif command -v dnf &> /dev/null; then
+        echo "Detected Fedora/RHEL system."
+        $SUDO dnf groupinstall -y "Development Tools"
+        $SUDO dnf install -y gtk3-devel pkgconf-pkg-config
+        
+        if ! $SUDO dnf install -y webkit2gtk3-devel; then
+             $SUDO dnf install -y webkit2gtk4.1-devel
+        fi
+
+    elif command -v pacman &> /dev/null; then
+        echo "Detected Arch Linux system."
+        $SUDO pacman -Sy --noconfirm base-devel gtk3 webkit2gtk
+
+    elif command -v apk &> /dev/null; then
+        echo "Detected Alpine Linux system."
+        $SUDO apk update
+        $SUDO apk add build-base gtk+3.0-dev webkit2gtk-dev pkgconf
+    else
+        echo "Warning: Unsupported package manager. Make sure you have GTK3, WebKit2GTK, and Go installed manually."
+    fi
 fi
 
-# --- 2. Check Go Installation ---
+# --- 2. Setup Environment ---
+# Ensure /usr/local/go/bin is in PATH for this script session
+export PATH=/usr/local/go/bin:$PATH
+
+# --- 3. Check Go Installation ---
 if ! command -v go &> /dev/null; then
     echo "Error: Go is not installed or not in PATH. Please install Go (https://go.dev/dl/)."
     exit 1
 fi
 
-# --- 3. Check/Install Wails ---
+GO_VERSION=$(go version | awk '{print $3}')
+echo "Using Go: $GO_VERSION"
+
+# --- 4. Check/Install Wails ---
 echo "Checking Wails..."
 WAILS_CMD="wails"
 if ! command -v wails &> /dev/null; then
@@ -86,9 +92,11 @@ if ! command -v wails &> /dev/null; then
         fi
         echo "Wails installed successfully."
     fi
-    # Add GOBIN to PATH for this session
-    export PATH=$PATH:$GOBIN
 fi
+
+# Ensure GOBIN is in PATH
+GOBIN=$(go env GOPATH)/bin
+export PATH=$PATH:$GOBIN
 
 # --- 4. Verify WebKit Version for Build Tags ---
 BUILD_TAGS=""
