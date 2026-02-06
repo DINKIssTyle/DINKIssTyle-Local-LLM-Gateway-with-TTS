@@ -91,14 +91,14 @@ func GetToolList() []Tool {
 		},
 		{
 			Name:        "personal_memory",
-			Description: "Manage the user's long-term personal memory (v12). Use 'read' for full view (BEST for start of conversation), 'search' for keyword lookup, 'append' for logs. IMPORTANT: Use 'upsert' (syntax: 'Key: Value') to store facts.",
+			Description: "Manage the user's long-term personal memory (v13). Use 'read' for full view (BEST for start of conversation), 'search' for keyword lookup, 'append' for logs. IMPORTANT: Use 'upsert' (syntax: 'Key: Value') to store facts. NEVER overwrites existing data.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"action": map[string]interface{}{
 						"type":        "string",
-						"description": "The action to perform: 'read', 'search', 'append', 'rewrite', 'replace', or 'upsert'.",
-						"enum":        []string{"read", "search", "append", "rewrite", "replace", "upsert"},
+						"description": "The action to perform: 'read', 'search', 'append', 'replace', or 'upsert'.",
+						"enum":        []string{"read", "search", "append", "replace", "upsert"},
 					},
 					"content": map[string]interface{}{
 						"type":        "string",

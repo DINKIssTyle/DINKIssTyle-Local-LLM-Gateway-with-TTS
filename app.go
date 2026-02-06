@@ -436,6 +436,13 @@ func (a *App) SetLLMEndpoint(url string) {
 	a.saveConfig()
 }
 
+// GetLLMApiToken returns the LLM API Token (for UI display)
+func (a *App) GetLLMApiToken() string {
+	a.serverMux.Lock()
+	defer a.serverMux.Unlock()
+	return a.llmApiToken
+}
+
 // SetLLMApiToken sets the LLM API Token
 func (a *App) SetLLMApiToken(token string) {
 	a.serverMux.Lock()

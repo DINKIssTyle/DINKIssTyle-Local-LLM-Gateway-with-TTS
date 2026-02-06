@@ -181,15 +181,8 @@ func ManageMemory(filePath string, action string, content string) (string, error
 		return "Memory updated successfully.", nil
 
 	case "rewrite":
-		// Safeguard: Never rewrite with empty content via tool calls
-		if strings.TrimSpace(content) == "" {
-			return "", fmt.Errorf("content cannot be empty for rewrite. If you want to clear memory, use a specific phrase or handle carefully.")
-		}
-		// Overwrite the file completely
-		if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
-			return "", fmt.Errorf("failed to rewrite memory: %v", err)
-		}
-		return "Memory rewritten successfully.", nil
+		// DEPRECATED: Action has been removed to prevent accidental data loss.
+		return "", fmt.Errorf("'rewrite' action is disabled. Use 'upsert' for updates or 'append' for new entries")
 
 	case "search":
 		if strings.TrimSpace(content) == "" {

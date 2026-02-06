@@ -350,6 +350,12 @@
                         <input type="text" id="llm-endpoint" value="http://127.0.0.1:1234"
                             placeholder="http://127.0.0.1:1234" onchange="saveLLMEndpoint()">
                     </div>
+                    <div class="form-group">
+                        <label>API Key <span style="color: var(--text-secondary); font-weight: normal;">(Require Auth
+                                활성화 시 필수)</span></label>
+                        <input type="password" id="llm-api-key" placeholder="lm-studio or custom key"
+                            onchange="saveLLMApiKey()">
+                    </div>
                 </div>
 
                 <!-- Startup Settings -->
@@ -551,6 +557,11 @@
                     updateUI(status.running, status.port);
                     document.getElementById('port-input').value = status.port; // Set loaded port
                     document.getElementById('llm-endpoint').value = status.llmEndpoint || 'http://127.0.0.1:1234';
+
+                    // Load API Key
+                    const apiKey = await window.go.main.App.GetLLMApiToken();
+                    document.getElementById('llm-api-key').value = apiKey || '';
+
                     loadUsers();
                     loadTTSConfig();
                     loadStartupSettings();
@@ -708,6 +719,17 @@
                 console.error('Failed to save LLM Endpoint:', e);
             }
         }
+
+        async function saveLLMApiKey() {
+            const apiKey = document.getElementById('llm-api-key').value;
+            try {
+                await window.go.main.App.SetLLMApiToken(apiKey);
+                console.log('API Key saved (length:', apiKey.length, ')');
+            } catch (e) {
+                console.error('Failed to save API Key:', e);
+            }
+        }
+
 
 
 
