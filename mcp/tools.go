@@ -17,6 +17,13 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
+// GetCurrentTime returns the current local time in a readable format.
+func GetCurrentTime() (string, error) {
+	now := time.Now()
+	// Format: 2026-02-06 09:02:06 Friday (KST/Local)
+	return fmt.Sprintf("Current Local Time: %s", now.Format("2006-01-02 15:04:05 Monday")), nil
+}
+
 // SearchWeb performs a search using DuckDuckGo Lite and returns a summary.
 func SearchWeb(query string) (string, error) {
 	log.Printf("[MCP] Searching Web for: %s", query)

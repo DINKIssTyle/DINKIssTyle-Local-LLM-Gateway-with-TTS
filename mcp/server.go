@@ -108,6 +108,14 @@ func GetToolList() []Tool {
 				"required": []string{"action"}, // Only action is strictly required by schema
 			},
 		},
+		{
+			Name:        "get_current_time",
+			Description: "Get the current local date and time. Use this when you need to know the current date, time, or day of the week for scheduling or age calculations.",
+			InputSchema: map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
 	}
 }
 
@@ -454,6 +462,13 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 			}
 		}
 
+	} else if params.Name == "get_current_time" {
+		content, _ := GetCurrentTime()
+		res.Result = map[string]interface{}{
+			"content": []map[string]interface{}{
+				{"type": "text", "text": content},
+			},
+		}
 	} else {
 		res.Error = &JSONRPCError{Code: -32601, Message: "Tool not found"}
 	}

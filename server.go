@@ -617,6 +617,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 							// Append instruction to existing system prompt
 							if content, ok := m["content"].(string); ok {
 								newContent := content + "\n\nIMPORTANT: When using tools, output a SINGLE valid <tool_call> block. Do NOT nest tool_call tags. Ensure strict XML syntax."
+								newContent += "\n- CURRENT_TIME: " + time.Now().Format("2006-01-02 15:04:05 Monday")
 								if enableMemory {
 									newContent += "\n- PROACTIVE: At the START of a conversation, you MUST use `personal_memory` (action='read') to load context. For later specific lookups, use `personal_memory` (action='search').\n- FACTS: Use `personal_memory` (action='upsert', content='Key: Value') for user details."
 								}
@@ -632,6 +633,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				// If no system prompt found, prepend one
 				if !foundSystem {
 					instr := "You are a helpful assistant. IMPORTANT: For tools, use a SINGLE <tool_call> block. No nesting."
+					instr += "\n- CURRENT_TIME: " + time.Now().Format("2006-01-02 15:04:05 Monday")
 					if enableMemory {
 						instr += "\n- PROACTIVE: At the START of a conversation, you MUST use `personal_memory` (action='read') to load context. For later specific lookups, use `personal_memory` (action='search').\n- FACTS: Use `personal_memory` (action='upsert', content='Key: Value') for user details."
 					}
