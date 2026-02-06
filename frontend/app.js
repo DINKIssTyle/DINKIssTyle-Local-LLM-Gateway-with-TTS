@@ -112,7 +112,7 @@ const translations = {
         'setting.format.desc': 'MP3는 WAV를 변환하여 재생합니다.',
         // Chat
         'chat.welcome': '안녕하세요! 채팅할 준비가 되었습니다. 우측 상단 기어 아이콘에서 설정하세요.',
-        'chat.instruction': '우측 상단 설정(⚙️)에서 연결 모드 및 API Token을 확인해주세요.',
+        'chat.instruction': '우측 상단 설정(⚙️)에서 설정을 변경하실 수 있습니다.',
         'input.placeholder': '메시지를 입력하세요...',
         // Health Check
         'health.systemReady': '시스템 준비 완료',

@@ -137,6 +137,7 @@ func AddClient(ch chan string) {
 	clientsMu.Lock()
 	defer clientsMu.Unlock()
 	clients[ch] = true
+	log.Printf("[MCP-DEBUG] Total Clients: %d", len(clients))
 }
 
 func RemoveClient(ch chan string) {
@@ -146,241 +147,184 @@ func RemoveClient(ch chan string) {
 	close(ch)
 }
 
-// Broadcast sends a message to all connected SSE clients
-func Broadcast(msg string) {
+// Broadcast sends a message to all connected SSE clients and returns count sent
+func Broadcast(msg string) int {
 	clientsMu.Lock()
 	defer clientsMu.Unlock()
+	count := 0
 	for ch := range clients {
 		select {
 		case ch <- msg:
+			count++
 		default:
-			// Non-blocking send
+			log.Printf("[MCP-DEBUG] Broadcast SKIPPED for a client (channel full)")
 		}
 	}
+	return count
 }
 
-// HandleSSE handles the connection for MCP (Server-Sent Events)
+// buildResponse constructs a JSON-RPC response for a given request
+func buildResponse(req *JSONRPCRequest, userID string, enableMemory bool) *JSONRPCResponse {
+	res := &JSONRPCResponse{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+	}
+
+	switch req.Method {
+	case "initialize":
+		res.Result = map[string]interface{}{
+			"protocolVersion": "2024-11-05",
+			"capabilities": map[string]interface{}{
+				"tools": map[string]interface{}{"listChanged": false},
+			},
+			"serverInfo": map[string]string{
+				"name":    "DKST Local Gateway",
+				"version": "1.0.0",
+			},
+		}
+
+	case "tools/list":
+		res.Result = map[string]interface{}{
+			"tools": GetToolList(),
+		}
+
+	case "tools/call":
+		handleToolCall(req, res, userID, enableMemory)
+
+	case "notifications/initialized":
+		log.Println("[MCP] Client Initialized")
+		return nil
+
+	default:
+		if req.Method == "ping" {
+			res.Result = map[string]string{}
+		} else {
+			res.Error = &JSONRPCError{Code: -32601, Message: fmt.Sprintf("Method not found: %s", req.Method)}
+		}
+	}
+	return res
+}
+
 func HandleSSE(w http.ResponseWriter, r *http.Request) {
-	log.Printf("[MCP-DEBUG] HandleSSE called from %s Method=%s", r.RemoteAddr, r.Method)
-	for k, v := range r.Header {
-		log.Printf("[MCP-DEBUG] Header %s: %v", k, v)
-	}
-
-	// Read and log body (LM Studio sends initialize here)
-	bodyBytes, err := io.ReadAll(r.Body)
-	if err != nil {
-		log.Printf("[MCP-DEBUG] Failed to read body: %v", err)
-	}
-	r.Body.Close()
-
-	if len(bodyBytes) > 0 {
-		log.Printf("[MCP-DEBUG] Initial Request Body: %s", string(bodyBytes))
-	}
-
-	// Process initial request if exists
-	if len(bodyBytes) > 0 {
-		var req JSONRPCRequest
-		if err := json.Unmarshal(bodyBytes, &req); err == nil {
-			if req.Method == "initialize" {
-				// Handle initialize via SSE (Keep existing flow)
-				log.Println("[MCP-DEBUG] Handling initial initialize request")
-
-				w.Header().Set("Content-Type", "text/event-stream")
-				w.Header().Set("Cache-Control", "no-cache")
-				w.Header().Set("Connection", "keep-alive")
-				w.Header().Set("Access-Control-Allow-Origin", "*")
-
-				log.Println("[MCP] New SSE Client Connected")
-
-				messageChan := make(chan string, 50) // Increased buffer
-				AddClient(messageChan)
-				defer func() {
-					log.Println("[MCP-DEBUG] Removing Client and Closing Connection")
-					RemoveClient(messageChan)
-				}()
-
-				// Send endpoint event
-				scheme := "http"
-				if r.TLS != nil {
-					scheme = "https"
-				}
-				host := strings.Replace(r.Host, "localhost", "127.0.0.1", 1)
-				endpointURL := fmt.Sprintf("%s://%s/mcp/messages", scheme, host)
-				log.Printf("[MCP-DEBUG] Advertised Endpoint: %s", endpointURL)
-
-				_, err = fmt.Fprintf(w, "event: endpoint\ndata: %s\n\n", endpointURL)
-				if err != nil {
-					log.Printf("[MCP-DEBUG] Failed to write endpoint event: %v", err)
-					return
-				}
-				if f, ok := w.(http.Flusher); ok {
-					f.Flush()
-					log.Println("[MCP-DEBUG] Flushed endpoint event")
-				}
-
-				// Send initialize response via SSE
-				res := JSONRPCResponse{
-					JSONRPC: "2.0",
-					ID:      req.ID,
-					Result: map[string]interface{}{
-						"protocolVersion": "2024-11-05",
-						"capabilities": map[string]interface{}{
-							"tools": map[string]interface{}{},
-						},
-						"serverInfo": map[string]string{
-							"name":    "DKST Local Gateway",
-							"version": "1.0.0",
-						},
-					},
-				}
-				respBytes, _ := json.Marshal(res)
-				messageChan <- string(respBytes)
-
-				// Start keepalive ticker
-				ticker := time.NewTicker(5 * time.Second)
-				defer ticker.Stop()
-
-				// SSE Loop
-				for {
-					select {
-					case msg := <-messageChan:
-						log.Printf("[MCP-DEBUG] Sending SSE Message: %s", msg)
-						fmt.Fprintf(w, "event: message\ndata: %s\n\n", msg)
-						if f, ok := w.(http.Flusher); ok {
-							f.Flush()
-						}
-					case <-ticker.C:
-						fmt.Fprintf(w, ": keepalive\n\n")
-						if f, ok := w.(http.Flusher); ok {
-							f.Flush()
-						}
-					case <-r.Context().Done():
-						log.Println("[MCP] Client Disconnected (Context Done)")
-						return
-					}
-				}
-			} else {
-				// Handle other messages as standard POST RPC (HandleMessages logic)
-				log.Printf("[MCP-DEBUG] Handling direct RPC on SSE endpoint: %s", req.Method)
-				// Reconstruct request for helper or just handle inline
-				// Handling inline for simplicity and access to 'req'
-				w.Header().Set("Content-Type", "application/json")
-				w.Header().Set("Access-Control-Allow-Origin", "*")
-
-				// Capture User ID and Memory Setting from Global Context
-				userID, enableMemory := GetContext()
-
-				var res JSONRPCResponse
-				res.JSONRPC = "2.0"
-				res.ID = req.ID
-
-				switch req.Method {
-				case "tools/list":
-					res.Result = map[string]interface{}{
-						"tools": GetToolList(),
-					}
-				case "notifications/initialized":
-					// Just ack
-					return
-				case "notifications/cancelled":
-					return
-				case "ping":
-					res.Result = map[string]string{}
-				default:
-					// For tools/call, we need the RawMessage.
-					// Since we parsed into 'req', we have req.Params
-					if req.Method == "tools/call" {
-						handleToolCall(&req, &res, userID, enableMemory)
-					} else {
-						res.Error = &JSONRPCError{Code: -32601, Message: "Method not found"}
-					}
-				}
-				json.NewEncoder(w).Encode(res)
-				return
-			}
-		}
-	}
-}
-
-// HandleMessages processes incoming JSON-RPC messages from the client
-func HandleMessages(w http.ResponseWriter, r *http.Request) {
-	log.Printf("[MCP-DEBUG] HandleMessages called from %s Method=%s", r.RemoteAddr, r.Method)
+	log.Printf("[MCP-DEBUG] HandleSSE (SSE Open) from %s Method=%s", r.RemoteAddr, r.Method)
 
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
 	if r.Method == "OPTIONS" {
-		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	var initialReq *JSONRPCRequest
+	if r.Method == http.MethodPost {
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err == nil && len(bodyBytes) > 0 {
+			var req JSONRPCRequest
+			if err := json.Unmarshal(bodyBytes, &req); err == nil {
+				initialReq = &req
+				log.Printf("[MCP-DEBUG] Initial POST Captured: %s (ID: %v)", initialReq.Method, initialReq.ID)
+			}
+		}
+		r.Body.Close()
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		return
+	}
+
+	messageChan := make(chan string, 200)
+	AddClient(messageChan)
+	defer func() {
+		log.Printf("[MCP-DEBUG] SSE CLOSED for %s", r.RemoteAddr)
+		RemoveClient(messageChan)
+	}()
+
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	endpointURL := fmt.Sprintf("%s://%s/mcp/messages", scheme, r.Host)
+	fmt.Fprintf(w, "event: endpoint\ndata: %s\n\n", endpointURL)
+	flusher.Flush()
+	log.Printf("[MCP-DEBUG] Advertised Endpoint: %s", endpointURL)
+
+	// If we captured an initial request, process it immediately in the stream
+	if initialReq != nil {
+		userID, enableMemory := GetContext()
+		res := buildResponse(initialReq, userID, enableMemory)
+		if res != nil {
+			respBytes, _ := json.Marshal(res)
+			fmt.Fprintf(w, "event: message\ndata: %s\n\n", string(respBytes))
+			flusher.Flush()
+			log.Printf("[MCP-DEBUG] Inline Response sent for %s", initialReq.Method)
+		}
+	}
+
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case msg := <-messageChan:
+			log.Printf("[MCP-DEBUG] SSE PUSH -> %s", r.RemoteAddr)
+			fmt.Fprintf(w, "event: message\ndata: %s\n\n", msg)
+			flusher.Flush()
+		case <-ticker.C:
+			fmt.Fprintf(w, ": keepalive\n\n")
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+func HandleMessages(w http.ResponseWriter, r *http.Request) {
+	log.Printf("[MCP-DEBUG] HandleMessages (POST) from %s", r.RemoteAddr)
+
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method == "OPTIONS" {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
 	if r.Method != http.MethodPost {
-		log.Printf("[MCP-DEBUG] Method Not Allowed: %s", r.Method)
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
+	bodyBytes, _ := io.ReadAll(r.Body)
+	r.Body.Close()
+
 	var req JSONRPCRequest
-	// Capture body for debugging if decode fails
-	// But decoding directly is efficient. Let's decode and log error.
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Printf("[MCP-DEBUG] Invalid JSON: %v", err)
+	if err := json.Unmarshal(bodyBytes, &req); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
 
-	// Capture User ID and Memory Setting from Global Context
-	userID, enableMemory := GetContext()
+	log.Printf("[MCP-DEBUG] Request Method: %s (ID: %v)", req.Method, req.ID)
 
-	log.Printf("[MCP] Received Method: %s (ID: %v) User: %s Memory: %v", req.Method, req.ID, userID, enableMemory)
-
-	// Acknowledge receipt immediately (MCP Spec)
 	w.WriteHeader(http.StatusAccepted)
-	w.Write([]byte("Accepted"))
 
-	// Process asynchronously and send response via SSE
 	go func() {
-		var res JSONRPCResponse
-		res.JSONRPC = "2.0"
-		res.ID = req.ID
-
-		switch req.Method {
-		case "initialize":
-			res.Result = map[string]interface{}{
-				"protocolVersion": "2024-11-05",
-				"capabilities": map[string]interface{}{
-					"tools": map[string]interface{}{},
-				},
-				"serverInfo": map[string]string{
-					"name":    "DKST Local Gateway",
-					"version": "1.0.0",
-				},
-			}
-
-		case "tools/list":
-			res.Result = map[string]interface{}{
-				"tools": GetToolList(),
-			}
-
-		case "tools/call":
-			// Pass context manually since we are in a goroutine
-			handleToolCall(&req, &res, userID, enableMemory)
-
-		case "notifications/initialized":
-			log.Println("[MCP] Client Initialized")
-			return
-
-		default:
-			if req.Method == "ping" {
-				res.Result = map[string]string{}
-			} else {
-				res.Error = &JSONRPCError{Code: -32601, Message: "Method not found"}
-			}
+		time.Sleep(50 * time.Millisecond)
+		userID, enableMemory := GetContext()
+		res := buildResponse(&req, userID, enableMemory)
+		if res != nil {
+			respBytes, _ := json.Marshal(res)
+			count := Broadcast(string(respBytes))
+			log.Printf("[MCP-DEBUG] Broadcasted %s (to %d clients)", req.Method, count)
 		}
-
-		// Send Response via SSE
-		respBytes, _ := json.Marshal(res)
-		Broadcast(string(respBytes))
 	}()
 }
 

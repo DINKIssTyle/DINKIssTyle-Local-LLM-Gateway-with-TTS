@@ -332,8 +332,14 @@
                     </div>
                     <div class="form-row">
                         <div class="form-group">
-                            <label>Port</label>
-                            <input type="text" id="port-input" value="8080" placeholder="8080" onchange="savePort()">
+                            <label>Web Port (HTTPS)</label>
+                            <input type="text" id="port-input" value="7860" placeholder="7860" onkeyup="updateMcpPort()"
+                                onchange="savePort()">
+                        </div>
+                        <div class="form-group">
+                            <label>MCP Port (HTTP)</label>
+                            <input type="text" id="mcp-port-input" value="7861" readonly
+                                style="background: rgba(255,255,255,0.05); color: var(--text-secondary); cursor: not-allowed;">
                         </div>
                     </div>
                     <button class="btn btn-primary btn-block" id="toggle-btn" onclick="toggleServer()">
@@ -616,6 +622,7 @@
                     const status = await window.go.main.App.GetServerStatus();
                     updateUI(status.running, status.port);
                     document.getElementById('port-input').value = status.port; // Set loaded port
+                    updateMcpPort();
                     document.getElementById('llm-endpoint').value = status.llmEndpoint || 'http://127.0.0.1:1234';
 
                     // Load API Key
@@ -761,10 +768,20 @@
             }
         }
 
+        function updateMcpPort() {
+            const port = parseInt(document.getElementById('port-input').value);
+            if (!isNaN(port)) {
+                document.getElementById('mcp-port-input').value = port + 1;
+            } else {
+                document.getElementById('mcp-port-input').value = '-';
+            }
+        }
+
         async function savePort() {
             const port = document.getElementById('port-input').value;
             try {
                 await window.go.main.App.SetPort(port);
+                updateMcpPort();
             } catch (e) {
                 console.error('Failed to save port:', e);
             }
@@ -804,9 +821,17 @@
                 dot.classList.add('running');
                 text.textContent = 'Running';
 
-                // Update to clickable link
-                const url = `http://localhost:${port}`;
-                portDisplay.innerHTML = `<a href="#" onclick="window.runtime.BrowserOpenURL('${url}'); return false;" style="color: var(--accent-color); text-decoration: none;">${url}</a>`;
+                const mcpPort = parseInt(port) + 1;
+                const webUrl = `https://localhost:${port}`;
+                const mcpUrl = `http://localhost:${mcpPort}/mcp/sse`;
+
+                portDisplay.innerHTML = `
+                    <div style="text-align: right; display: flex; flex-direction: column; gap: 2px;">
+                        <a href="#" onclick="window.runtime.BrowserOpenURL('${webUrl}'); return false;" style="color: var(--accent-color); text-decoration: none; font-size: 13px;">Web: ${webUrl}</a>
+                        <span style="color: var(--text-secondary); font-size: 11px; cursor: pointer; border-bottom: 1px dotted var(--text-secondary);" 
+                              onclick="window.runtime.ClipboardSetText('${mcpUrl}'); alert('MCP URL copied to clipboard');">MCP: ${mcpUrl}</span>
+                    </div>
+                `;
 
                 btn.className = 'btn btn-danger btn-block';
                 btn.innerHTML = '<span class="material-icons-round">stop</span> Stop Server';

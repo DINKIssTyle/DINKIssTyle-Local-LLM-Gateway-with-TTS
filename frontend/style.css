@@ -104,6 +104,8 @@ body {
   flex-direction: column;
   background-color: var(--chat-bg);
   position: relative;
+  min-height: 0;
+  /* Important for flex-column scroll */
 }
 
 #chat-header {
@@ -1061,16 +1063,6 @@ a:hover {
   display: flex;
 }
 
-#mic-layout-container.mic-layout-bottom {
-  width: 100vw;
-  height: 25vh;
-  min-height: 150px;
-  display: flex;
-  order: 2;
-  border-top: 1px solid var(--border-color);
-}
-
-
 #mic-layout-container.mic-layout-left {
   order: -1;
   border-right: 1px solid var(--border-color);
@@ -1081,10 +1073,45 @@ a:hover {
   border-left: 1px solid var(--border-color);
 }
 
-/* Modifying body to support row/column based on mic layout */
 body.layout-mic-bottom {
   flex-direction: column;
 }
+
+
+#mic-layout-container.mic-layout-bottom {
+  width: 100vw;
+  height: 20vh;
+  min-height: 120px;
+  display: flex;
+  order: 2;
+  border-top: 1px solid var(--border-color);
+}
+
+/* Landscape mode optimizations for mobile */
+@media screen and (max-height: 500px) and (orientation: landscape) {
+  #mic-layout-container.mic-layout-bottom {
+    height: 80px;
+    min-height: 80px;
+  }
+
+  #giant-mic-btn {
+    width: 60px;
+    height: 60px;
+  }
+
+  #giant-mic-btn .material-icons-round {
+    font-size: 30px;
+  }
+
+  #chat-header {
+    height: 40px;
+  }
+
+  #input-area {
+    padding: 10px;
+  }
+}
+
 
 #giant-mic-btn {
   width: 120px;

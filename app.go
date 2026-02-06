@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,7 +29,8 @@ import (
 // App struct for Wails binding
 type App struct {
 	ctx          context.Context
-	server       *http.Server
+	server       *http.Server // HTTPS Server
+	httpServer   *http.Server // HTTP Compatibility Server
 	serverMux    sync.Mutex
 	isRunning    bool
 	port         string
@@ -639,20 +641,39 @@ func (a *App) StartServer(port string) error {
 		Handler: loggingMux,
 	}
 
+	// Calculate secondary port for HTTP compatibility
+	portInt, _ := strconv.Atoi(port)
+	httpPort := strconv.Itoa(portInt + 1)
+	a.httpServer = &http.Server{
+		Addr:    ":" + httpPort,
+		Handler: loggingMux,
+	}
+
 	// Cert paths
 	certFile, keyFile, err := ensureSelfSignedCert(GetAppDataDir())
 	if err != nil {
 		return fmt.Errorf("failed to ensure self-signed cert: %v", err)
 	}
 
+	// Start HTTPS Server
 	go func() {
+		log.Printf("[SERVER] Starting HTTPS Server on :%s", port)
 		if err := a.server.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
-			fmt.Printf("Server error: %v\n", err)
+			log.Printf("[SERVER] HTTPS Server error on :%s: %v", port, err)
+		}
+	}()
+
+	// Start HTTP Compatibility Server
+	go func() {
+		log.Printf("[SERVER] Starting HTTP Compatibility Server on :%s", httpPort)
+		if err := a.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("[SERVER] HTTP Server error on :%s: %v", httpPort, err)
 		}
 	}()
 
 	a.isRunning = true
-	fmt.Printf("Server started on https://localhost:%s\n", port)
+	fmt.Printf("HTTPS Server: https://localhost:%s\n", port)
+	fmt.Printf("HTTP Compatibility Server: http://localhost:%s\n", httpPort)
 	a.saveConfig()
 	UpdateTrayServerState()
 	return nil
@@ -681,20 +702,30 @@ func (a *App) StopServer() error {
 	defer a.serverMux.Unlock()
 
 	if !a.isRunning {
-		return fmt.Errorf("server is not running")
+		return nil
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Shutdown HTTPS server
 	if a.server != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
 		if err := a.server.Shutdown(ctx); err != nil {
-			a.server.Close() // Force close
-			return fmt.Errorf("failed to stop server gracefully: %v", err)
+			log.Printf("[SERVER] HTTPS Shutdown error: %v", err)
+			a.server.Close()
+		}
+	}
+
+	// Shutdown HTTP server
+	if a.httpServer != nil {
+		if err := a.httpServer.Shutdown(ctx); err != nil {
+			log.Printf("[SERVER] HTTP Shutdown error: %v", err)
+			a.httpServer.Close()
 		}
 	}
 
 	a.isRunning = false
-	fmt.Println("Server stopped")
+	fmt.Println("[SERVER] All servers stopped")
 	UpdateTrayServerState()
 	return nil
 }
