@@ -5,12 +5,17 @@
   "llmMode": "standard",
   "enableTTS": true,
   "tts": {
-    "voiceStyle": "M1.json",
+    "voiceStyle": "F1.json",
     "speed": 1.0,
     "threads": 4
   },
   "startOnBoot": false,
   "minimizeToTray": false,
   "autoStartServer": true,
-  "enableMCP": false
+  "toolPatterns": {
+    "openai/gpt-oss-20b": {
+      "regex": "(?i)<\\|channel\\|>commentary to=(\\w+).*?<\\|message\\|>(\\{.*?\\})",
+      "format": "channel_tag"
+    }
+  }
 }

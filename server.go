@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -897,18 +898,143 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		return
 	}
 
+	// Determine Model ID for Tool Pattern Lookup
+	var modelID string
+	if llmMode == "stateful" { // Stateful mode usually implies config.json's "model" or defaults
+		var tmp struct {
+			Model string `json:"model"`
+		}
+		json.Unmarshal(body, &tmp)
+		modelID = tmp.Model
+	} else {
+		// Standard mode
+		var tmp struct {
+			Model string `json:"model"`
+		}
+		json.Unmarshal(body, &tmp)
+		modelID = tmp.Model
+	}
+
+	// Tool Pattern Logic
+	toolPattern := app.GetToolPattern(modelID)
+	var toolRegex *regexp.Regexp
+	var buffer string
+	var isBuffering bool
+	var bufferingThreshold = 1000 // Buffer size
+
+	if toolPattern != nil {
+		if regexStr, ok := toolPattern["regex"]; ok {
+			var err error
+			toolRegex, err = regexp.Compile(regexStr)
+			if err != nil {
+				log.Printf("[handleChat] Invalid regex for model %s: %v", modelID, err)
+				toolPattern = nil // Disable if invalid
+			} else {
+				isBuffering = true
+				log.Printf("[handleChat] Enabled Custom Tool Parsing for model: %s", modelID)
+			}
+		}
+	}
+
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if strings.TrimSpace(line) == "" {
-			continue
+
+		// CUSTOM PARSING LOGIC
+		if toolPattern != nil && isBuffering {
+			trimmedLine := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmedLine, "data: ") {
+				dataStr := strings.TrimPrefix(trimmedLine, "data: ")
+				if dataStr == "[DONE]" {
+					// End of stream, flush buffer if exists
+					if len(buffer) > 0 {
+						payload := map[string]interface{}{
+							"choices": []interface{}{
+								map[string]interface{}{
+									"delta": map[string]string{
+										"content": buffer,
+									},
+								},
+							},
+						}
+						jsonBytes, _ := json.Marshal(payload)
+						fmt.Fprintf(w, "data: %s\n\n", string(jsonBytes))
+					}
+					fmt.Fprintf(w, "%s\n\n", line)
+					flusher.Flush()
+					continue
+				}
+
+				var chunk map[string]interface{}
+				if err := json.Unmarshal([]byte(dataStr), &chunk); err == nil {
+					// Extract content
+					var content string
+					if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
+						if choice, ok := choices[0].(map[string]interface{}); ok {
+							if delta, ok := choice["delta"].(map[string]interface{}); ok {
+								if c, ok := delta["content"].(string); ok {
+									content = c
+								}
+							} else if message, ok := choice["message"].(map[string]interface{}); ok {
+								if c, ok := message["content"].(string); ok {
+									content = c
+								}
+							}
+						}
+					}
+
+					buffer += content
+
+					// Check Regex
+					matches := toolRegex.FindStringSubmatch(buffer)
+					if len(matches) > 2 {
+						// Match Found! (Group 1: Tool Name, Group 2: Args)
+						toolName := matches[1]
+						toolArgs := matches[2]
+						log.Printf("[handleChat] Custom Tool Pattern Matched! Tool: %s", toolName)
+
+						// 1. Emit start event
+						startEvt := map[string]string{
+							"type": "tool_call.start",
+							"tool": toolName,
+						}
+						startBytes, _ := json.Marshal(startEvt)
+						fmt.Fprintf(w, "data: %s\n\n", string(startBytes))
+
+						// 2. Emit arguments event
+						fmt.Fprintf(w, "data: {\"type\": \"tool_call.arguments\", \"tool\": \"%s\", \"arguments\": %s}\n\n", toolName, toolArgs)
+
+						// 3. Clear Buffer & Stop Buffering
+						buffer = ""
+						isBuffering = false
+						continue
+					}
+
+					// If buffer too long, assume no match and flush
+					if len(buffer) > bufferingThreshold {
+						// Flush buffer as regular content
+						payload := map[string]interface{}{
+							"choices": []interface{}{
+								map[string]interface{}{
+									"delta": map[string]string{
+										"content": buffer,
+									},
+								},
+							},
+						}
+						jsonBytes, _ := json.Marshal(payload)
+						fmt.Fprintf(w, "data: %s\n\n", string(jsonBytes))
+						buffer = ""
+					}
+					// Continue to next chunk (don't write original line)
+					continue
+				}
+			}
 		}
 
-		// Write line to client
-
+		// Standard Proxy
 		fmt.Fprintf(w, "%s\n\n", line)
 		flusher.Flush()
-
 	}
 
 	if err := scanner.Err(); err != nil {
