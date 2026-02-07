@@ -1796,6 +1796,24 @@ async function processStream(response, elementId) {
                             setTimeout(() => loadEl.remove(), 1500);
                         }
                     }
+                    // Handle Generative Errors (Tool Parsing, etc.)
+                    else if (json.type === 'error') {
+                        console.error('[SSE Error]', json.error);
+                        let errMsg = "Unknown Error";
+                        if (json.error && json.error.message) {
+                            errMsg = json.error.message;
+                        } else if (typeof json.error === 'string') {
+                            errMsg = json.error;
+                        }
+
+                        // If we are waiting for a tool call (lastToolCallHtml exists), update it
+                        if (lastToolCallHtml) {
+                            contentToAdd = `<span class="tool-status" style="font-size: small; color: #ff6b6b; display: block; margin: 4px 0;">❌ Error: ${errMsg}</span>\n`;
+                        } else {
+                            // Otherwise just append as text with error styling
+                            contentToAdd = `\n\n**Error:** ${errMsg}\n`;
+                        }
+                    }
 
                     // If we have content, remove the progress indicator
                     if (contentToAdd) {
