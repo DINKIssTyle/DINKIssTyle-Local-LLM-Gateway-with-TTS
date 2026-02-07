@@ -24,7 +24,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -898,11 +897,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		return
 	}
 
-	// Text-based tool call detection state
-	var accumulatedContent strings.Builder
-	// Regex to find JSON objects containing "name" field (potential tool calls)
-	toolCallJSONPattern := regexp.MustCompile(`\{"name"\s*:\s*"[^"]+"[^}]*\}`)
-
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -910,107 +904,11 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			continue
 		}
 
-		// Filter out model-specific reasoning tags if it's a data line
-		if strings.HasPrefix(line, "data: ") && line != "data: [DONE]" {
-			// Strip common internal reasoning/channel/special tags observed in models (DeepSeek, Qwen, etc.)
-			// We use a regex that handles both <|token|> and <|channel|>style<|message|> patterns.
-			// Specifically targeting: <|channel|>, <|message|>, <|start|>, <|end|>, <|thought|>, etc.
-			re := regexp.MustCompile(`(?i)<\|(?:channel|message|start|end|thought|analysis|final|start_header_id|end_header_id|assistant|user|system)[^>]*\|?>`)
-			line = re.ReplaceAllString(line, "")
-
-			// Try to extract content from SSE data for tool call detection
-			dataContent := strings.TrimPrefix(line, "data: ")
-			if dataContent != "" && dataContent != "[DONE]" {
-				var sseData map[string]interface{}
-				if json.Unmarshal([]byte(dataContent), &sseData) == nil {
-					// Extract content from choices[0].delta.content or choices[0].message.content
-					if choices, ok := sseData["choices"].([]interface{}); ok && len(choices) > 0 {
-						if choice, ok := choices[0].(map[string]interface{}); ok {
-							if delta, ok := choice["delta"].(map[string]interface{}); ok {
-								if content, ok := delta["content"].(string); ok {
-									accumulatedContent.WriteString(content)
-								}
-							}
-							if msg, ok := choice["message"].(map[string]interface{}); ok {
-								if content, ok := msg["content"].(string); ok {
-									accumulatedContent.WriteString(content)
-								}
-							}
-						}
-					}
-					// Also check for output array format (LM Studio stateful)
-					if outputs, ok := sseData["output"].([]interface{}); ok {
-						for _, output := range outputs {
-							if outMap, ok := output.(map[string]interface{}); ok {
-								if outType, ok := outMap["type"].(string); ok && outType == "message" {
-									if content, ok := outMap["content"].(string); ok {
-										accumulatedContent.WriteString(content)
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
+		// Write line to client
 
 		fmt.Fprintf(w, "%s\n\n", line)
 		flusher.Flush()
 
-		// Check for text-based tool call pattern in accumulated content
-		accumulated := accumulatedContent.String()
-		if jsonMatch := toolCallJSONPattern.FindString(accumulated); jsonMatch != "" {
-			// Try to parse the JSON flexibly
-			var toolCallData map[string]interface{}
-			if err := json.Unmarshal([]byte(jsonMatch), &toolCallData); err == nil {
-				if toolName, ok := toolCallData["name"].(string); ok && toolName != "" {
-					log.Printf("[handleChat] Detected text-based tool call: %s", toolName)
-
-					// Extract arguments - check for "arguments" field first, otherwise use remaining fields
-					var argsJSON []byte
-					if args, ok := toolCallData["arguments"]; ok {
-						argsJSON, _ = json.Marshal(args)
-					} else {
-						// No "arguments" field - treat all other fields (except "name") as arguments
-						// This handles format like {"name": "search_web", "query": "..."}
-						argsMap := make(map[string]interface{})
-						for k, v := range toolCallData {
-							if k != "name" {
-								argsMap[k] = v
-							}
-						}
-						argsJSON, _ = json.Marshal(argsMap)
-					}
-
-					log.Printf("[handleChat] Tool args (normalized): %s", string(argsJSON))
-
-					// Execute tool
-					result, err := mcp.ExecuteToolByName(toolName, argsJSON, userID, enableMemory)
-					if err != nil {
-						log.Printf("[handleChat] Text-based tool call error: %v", err)
-						result = fmt.Sprintf("Error executing tool: %v", err)
-					}
-
-					// Send tool result as SSE event
-					toolResultEvent := map[string]interface{}{
-						"type": "tool_call.result",
-						"tool": toolName,
-						"result": map[string]interface{}{
-							"content": []map[string]interface{}{
-								{"type": "text", "text": result},
-							},
-						},
-					}
-					resultBytes, _ := json.Marshal(toolResultEvent)
-					fmt.Fprintf(w, "data: %s\n\n", string(resultBytes))
-					flusher.Flush()
-					log.Printf("[handleChat] Sent text-based tool result for: %s", toolName)
-
-					// Clear accumulated content after processing to avoid duplicate triggers
-					accumulatedContent.Reset()
-				}
-			}
-		}
 	}
 
 	if err := scanner.Err(); err != nil {

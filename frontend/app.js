@@ -132,7 +132,8 @@ const translations = {
         'health.checkServer': ' -> **LM Studio 서버**가 실행 중인지 확인해주세요.',
         // Errors
         'error.authFailed': 'LM Studio 인증 실패.\n\n해결 방법:\n1. LM Studio -> Developer(사이드바) -> Server Settings\n2. \'Require Authentication\' 끄기\n3. 또는 \'Manage Tokens\'에서 \'Create new token\' API Key를 생성해서 우측 상단 설정(⚙️)에 입력하세요.\n\n원본 오류: ',
-        'error.mcpFailed': 'LM Studio MCP 연결 실패.\n\n해결 방법:\n1. LM Studio -> Developer(사이드바) -> Server Settings\n2. \'Allow calling servers from mcp.json\' 옵션 켜기\n3. 또는 우측 상단 설정(⚙️)에서 \'MCP 기능 활성화\' 옵션을 꺼주세요.\n\n원본 오류: '
+        'error.mcpFailed': 'LM Studio MCP 연결 실패.\n\n해결 방법:\n1. LM Studio -> Developer(사이드바) -> Server Settings\n2. \'Allow calling servers from mcp.json\' 옵션 켜기\n3. 또는 우측 상단 설정(⚙️)에서 \'MCP 기능 활성화\' 옵션을 꺼주세요.\n\n원본 오류: ',
+        'warning.loopDetected': '[⚠️ 반복 응답 감지로 인해 응답 처리를 중단했습니다.]'
     },
     en: {
         // Modal
@@ -228,7 +229,8 @@ const translations = {
         'health.checkServer': ' -> Check if **LM Studio Server** is running.',
         // Errors
         'error.authFailed': 'LM Studio Authentication Failed.\n\nSolution:\n1. Open LM Studio -> Developer (sidebar) -> Server Settings\n2. Turn OFF \'Require Authentication\'\n3. Or go to \'Manage Tokens\' -> \'Create new token\' and enter it in Settings.\n\nOriginal Error: ',
-        'error.mcpFailed': 'LM Studio MCP Connection Failed.\n\nSolution:\n1. Open LM Studio -> Developer (sidebar) -> Server Settings\n2. Turn ON \'Allow calling servers from mcp.json\'\n3. Or turn OFF \'Enable MCP Features\' in the top right settings (⚙️).\n\nOriginal Error: '
+        'error.mcpFailed': 'LM Studio MCP Connection Failed.\n\nSolution:\n1. Open LM Studio -> Developer (sidebar) -> Server Settings\n2. Turn ON \'Allow calling servers from mcp.json\'\n3. Or turn OFF \'Enable MCP Features\' in the top right settings (⚙️).\n\nOriginal Error: ',
+        'warning.loopDetected': '[⚠️ Repeated responses were detected, and the response was stopped.]'
     }
 };
 
@@ -1504,6 +1506,7 @@ async function processStream(response, elementId) {
     const decoder = new TextDecoder();
     let buffer = '';
     let fullText = '';           // Content to display (no reasoning)
+    let loopDetected = false;    // Loop detection state
     let reasoningBuffer = '';     // Separate buffer for reasoning content (for history only)
     let speechBuffer = '';        // Dedicated buffer for speech content (no HTML/Tools)
     let currentlyReasoning = false; // State track for reasoning blocks
@@ -1804,6 +1807,24 @@ async function processStream(response, elementId) {
                         }
 
                         fullText += contentToAdd;
+
+                        // --- LOOP DETECTION (Regex-based) ---
+                        // Restore loop detection logic as requested
+                        if (!loopDetected && fullText.length >= 50) {
+                            const shortLoopMatch = fullText.match(/([\s\S]{5,}?)\1{4,}/);
+                            const longLoopMatch = fullText.match(/([\s\S]{50,}?)\1{2,}/);
+                            const loopMatch = shortLoopMatch || longLoopMatch;
+
+                            if (loopMatch && loopMatch[1].length >= 4) {
+                                console.warn(`[Loop Detection] Pattern detected: "${loopMatch[1].substring(0, 30)}..." repeated ${Math.floor(loopMatch[0].length / loopMatch[1].length)}+ times`);
+                                loopDetected = true;
+                                stopGeneration();
+
+                                fullText += "\n\n" + (typeof t === 'function' ? t('warning.loopDetected') : "⚠️ Loop detected. Generation stopped.");
+                            }
+                        }
+                        // --- END LOOP DETECTION ---
+
                         let displayText = fullText;
 
                         // LM Studio Reasoning Status Detection (Text-based fallback for tags)
