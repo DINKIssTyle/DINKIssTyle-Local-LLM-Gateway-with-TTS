@@ -12,7 +12,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"math"
 	"math/rand"
@@ -916,12 +915,12 @@ func intArrayToTensor(array [][]int64, shape []int64) *ort.Tensor[int64] {
 // InitializeONNXRuntime initializes ONNX Runtime environment
 // InitializeONNXRuntime initializes ONNX Runtime environment
 func InitializeONNXRuntime() error {
-	// Debug logging
-	logFile, _ := os.OpenFile(GetResourcePath("debug.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if logFile != nil {
-		defer logFile.Close()
-		log.SetOutput(io.MultiWriter(os.Stdout, logFile))
-	}
+	// Debug logging - Disabled per user request
+	// logFile, _ := os.OpenFile(GetResourcePath("debug.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	// if logFile != nil {
+	// 	defer logFile.Close()
+	// 	log.SetOutput(io.MultiWriter(os.Stdout, logFile))
+	// }
 
 	libName := "onnxruntime.dll"
 	if runtime.GOOS == "darwin" {
@@ -958,4 +957,3 @@ func InitializeONNXRuntime() error {
 	log.Println("ONNX Runtime initialized successfully")
 	return nil
 }
-
