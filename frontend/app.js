@@ -1577,7 +1577,7 @@ async function processStream(response, elementId) {
                             // Prioritize SSE if both present (LM Studio)
                             if (reasoningSource !== 'sse') {
                                 reasoningBuffer += delta.reasoning_content;
-                                showReasoningStatus(elementId, delta.reasoning_content); // Update status
+                                showReasoningStatus(elementId, reasoningBuffer); // Update status with full buffer
                             }
                         }
 
@@ -1637,7 +1637,7 @@ async function processStream(response, elementId) {
                         reasoningBuffer += json.content;
                         currentlyReasoning = true;
                         reasoningSource = 'sse';
-                        showReasoningStatus(elementId, json.content); // Update with latest chunk
+                        showReasoningStatus(elementId, reasoningBuffer); // Update with full buffer
                     }
                     else if (json.type === 'reasoning.end') {
                         reasoningBuffer += '</think>\n';
@@ -2147,21 +2147,27 @@ function showReasoningStatus(elementId, text, isFinal = false) {
         statusEl.style.color = '#888';
         statusEl.style.marginTop = '4px';
         statusEl.style.overflow = 'hidden';
-        statusEl.style.whiteSpace = 'nowrap';
-        statusEl.style.textOverflow = 'ellipsis';
+        statusEl.style.whiteSpace = 'pre-wrap';      // Allow wrapping
+        statusEl.style.wordBreak = 'break-word';     // Break long words
+        statusEl.style.maxWidth = '100%';            // Force width constraint
+        statusEl.style.display = 'block';
+        // statusEl.style.textOverflow = 'ellipsis'; // Not needed with wrapping
         bubbleContent.append(statusEl);
     }
 
     // Fixed-length style matching "⏳ Processing Prompt: XX.XX%"
-    // Truncate to ~25 chars to keep display stable
-    const MAX_DISPLAY_LENGTH = 50;
+    // Increased length to show more context as requested
+    const MAX_DISPLAY_LENGTH = 300;
     const prefix = '💭 Thinking: ';
 
     if (text) {
         // Get last part of accumulated reasoning (most recent)
-        const cleanText = text.replace(/[\r\n]+/g, ' ').trim();
+        // cleanText might contain <think> tags, remove them for cleaner display
+        let cleanText = text.replace(/<think>/g, '').replace(/[\r\n]+/g, ' ').trim();
+
+        // Use tail truncation (show the end) instead of head truncation
         const truncated = cleanText.length > MAX_DISPLAY_LENGTH
-            ? cleanText.slice(0, MAX_DISPLAY_LENGTH) + '...'
+            ? '...' + cleanText.slice(-MAX_DISPLAY_LENGTH)
             : cleanText;
         statusEl.textContent = prefix + truncated;
     } else {
@@ -2183,7 +2189,17 @@ function updateMessageContent(id, text) {
         bubble.prepend(mdBody);
     }
 
-    mdBody.innerHTML = marked.parse(text);
+    // Filter out common special tokens that might leak during streaming
+    let cleanText = text;
+    // Remove <|...|> style tokens if they appear at the start or end of lines, or standalone
+    // This covers <|channel|>, <|message|>, <|end_of_turn|>, etc.
+    cleanText = cleanText.replace(/<\|.*?\|>/g, '');
+
+    // Remove specific function calling artifacts if they leak
+    cleanText = cleanText.replace(/commentary to=functions code/g, '');
+
+
+    mdBody.innerHTML = marked.parse(cleanText);
 
     // Make all links open in new window/tab
     mdBody.querySelectorAll('a').forEach((link) => {
