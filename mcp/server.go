@@ -91,18 +91,18 @@ func GetToolList() []Tool {
 		},
 		{
 			Name:        "personal_memory",
-			Description: "Manage the user's long-term personal memory. Actions: 'remember' to save facts (server auto-extracts key), 'forget' to remove (log preserved), 'query' for fast lookup, 'read' for full index. Data is protected with Append-Only logging.",
+			Description: "Manage the user's long-term memory. Actions: 'remember' to save facts (auto-categorized to personal/work), 'forget' to remove, 'query' for fast search, 'read' for recent highlights. For deep dives into specific topics, prefer 'read_user_document'.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"action": map[string]interface{}{
 						"type":        "string",
-						"description": "Action: 'remember' (save fact, auto-key), 'forget' (remove from index), 'query' (fast lookup), 'read' (full memory).",
+						"description": "Action: 'remember' (save), 'forget' (remove), 'query' (search), 'read' (high-level summary).",
 						"enum":        []string{"remember", "forget", "query", "read", "search"},
 					},
 					"content": map[string]interface{}{
 						"type":        "string",
-						"description": "For 'remember': the fact to save. For 'forget'/'query': the key to lookup.",
+						"description": "The fact to save or the keyword/key to search/forget.",
 					},
 				},
 				"required": []string{"action"},
@@ -118,13 +118,13 @@ func GetToolList() []Tool {
 		},
 		{
 			Name:        "read_user_document",
-			Description: "Read a specific document from the user's memory folder. Available files: personal.md, work.md, index.md, log.md. Use index.md first to understand available information.",
+			Description: "Read a specific memory category file for full details. Available: 'personal.md' (hobbies, family, tastes), 'work.md' (projects, coding, business), 'index.md' (all files summary). Use this when highlights in prompt are insufficient.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"filename": map[string]interface{}{
 						"type":        "string",
-						"description": "The filename to read (e.g., 'personal.md', 'work.md', 'index.md')",
+						"description": "The filename to read (personal.md, work.md, index.md).",
 					},
 				},
 				"required": []string{"filename"},
