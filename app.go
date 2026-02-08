@@ -48,21 +48,24 @@ type App struct {
 	modelCache     []byte
 	modelCacheMux  sync.RWMutex
 	modelCacheTime time.Time
+
+	toolPatterns map[string]map[string]string // Custom tool parsing patterns
 }
 
 // AppConfig holds the persistent application configuration
 type AppConfig struct {
-	Port            string          `json:"port"`
-	LLMEndpoint     string          `json:"llmEndpoint"`
-	LLMApiToken     string          `json:"llmApiToken"`
-	LLMMode         string          `json:"llmMode"`
-	EnableTTS       bool            `json:"enableTTS"`
-	EnableMCP       bool            `json:"enableMCP"`
-	EnableMemory    bool            `json:"enableMemory"`
-	TTS             ServerTTSConfig `json:"tts"`
-	StartOnBoot     bool            `json:"startOnBoot"`
-	MinimizeToTray  bool            `json:"minimizeToTray"`
-	AutoStartServer bool            `json:"autoStartServer"`
+	Port            string                       `json:"port"`
+	LLMEndpoint     string                       `json:"llmEndpoint"`
+	LLMApiToken     string                       `json:"llmApiToken"`
+	LLMMode         string                       `json:"llmMode"`
+	EnableTTS       bool                         `json:"enableTTS"`
+	EnableMCP       bool                         `json:"enableMCP"`
+	EnableMemory    bool                         `json:"enableMemory"`
+	TTS             ServerTTSConfig              `json:"tts"`
+	StartOnBoot     bool                         `json:"startOnBoot"`
+	MinimizeToTray  bool                         `json:"minimizeToTray"`
+	AutoStartServer bool                         `json:"autoStartServer"`
+	ToolPatterns    map[string]map[string]string `json:"toolPatterns"`
 }
 
 // HealthCheckResult holds the result of system health checks
@@ -272,6 +275,7 @@ func (a *App) loadConfig() {
 	a.enableTTS = cfg.EnableTTS
 	a.enableMCP = cfg.EnableMCP
 	a.enableMemory = cfg.EnableMemory
+	a.toolPatterns = cfg.ToolPatterns
 
 	fmt.Printf("[loadConfig] Loaded Config from %s\n", cfgPath)
 	fmt.Printf("   -> Port: %s, Endpoint: %s, Mode: %s, MCP: %v, Memory: %v\n", a.port, a.llmEndpoint, a.llmMode, a.enableMCP, a.enableMemory)
@@ -311,6 +315,7 @@ func (a *App) saveConfig() {
 	cfg.EnableMCP = a.enableMCP
 	cfg.EnableMemory = a.enableMemory
 	cfg.TTS = ttsConfig
+	cfg.ToolPatterns = a.toolPatterns
 
 	data, err = json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -1250,4 +1255,17 @@ func (a *App) ResetMemory(userID string) string {
 	}
 
 	return "Memory reset successfully."
+}
+
+// GetToolPattern returns the custom tool parsing pattern for a specific model ID
+// Returns nil if no pattern is defined
+func (a *App) GetToolPattern(modelID string) map[string]string {
+	if a.toolPatterns == nil {
+		return nil
+	}
+	// Direct match
+	if pattern, ok := a.toolPatterns[modelID]; ok {
+		return pattern
+	}
+	return nil
 }
