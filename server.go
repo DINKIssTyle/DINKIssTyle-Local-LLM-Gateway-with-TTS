@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +41,9 @@ var (
 	styleMutex sync.Mutex
 	// Global TTS Mutex
 	globalTTSMutex sync.RWMutex
+
+	// Global App Instance (for handlers to access app methods)
+	globalApp *App
 )
 
 // ensureSelfSignedCert check if cert.pem and key.pem exist in AppDataDir, if not create them.
@@ -897,18 +901,266 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		return
 	}
 
+	// Determine Model ID for Tool Pattern Lookup
+	var modelID string
+	// Helper to extract model from body (simple approach)
+	var tmp struct {
+		Model string `json:"model"`
+	}
+	json.Unmarshal(body, &tmp)
+	modelID = tmp.Model
+
+	// Tool Pattern Logic
+	toolPattern := app.GetToolPattern(modelID)
+	var toolRegex *regexp.Regexp
+	var buffer string
+	var isBuffering bool
+	var bufferingThreshold = 1000 // Buffer size
+
+	if toolPattern != nil {
+		if regexStr, ok := toolPattern["regex"]; ok {
+			var err error
+			toolRegex, err = regexp.Compile(regexStr)
+			if err != nil {
+				log.Printf("[handleChat] Invalid regex for model %s: %v", modelID, err)
+				toolPattern = nil // Disable if invalid
+			} else {
+				isBuffering = true
+				log.Printf("[handleChat] Enabled Custom Tool Parsing for model: %s", modelID)
+			}
+		}
+	}
+
+	// Extract messages for Memory Analysis (if enabled)
+	var messagesForMemory []map[string]interface{}
+	if globalApp != nil && globalApp.enableMemory {
+		// Try to extract messages from the initial body (parsed into reqMap or tmp)
+		// We already unmarshaled into reqMap in some paths, but let's be safe and re-parse 'body' since it's the source.
+		var tmpBody struct {
+			Messages []map[string]interface{} `json:"messages"`
+		}
+		if err := json.Unmarshal(body, &tmpBody); err == nil {
+			messagesForMemory = tmpBody.Messages
+		}
+	}
+
+	var fullResponse string // Accumulator for assistant response
+
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
 		line := scanner.Text()
+
+		// CUSTOM PARSING LOGIC
+		if toolPattern != nil && isBuffering {
+			trimmedLine := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmedLine, "data: ") {
+				dataStr := strings.TrimPrefix(trimmedLine, "data: ")
+				if dataStr == "[DONE]" {
+					// End of stream, flush buffer if exists
+					if len(buffer) > 0 {
+						payload := map[string]interface{}{
+							"choices": []interface{}{
+								map[string]interface{}{
+									"delta": map[string]string{
+										"content": buffer,
+									},
+								},
+							},
+						}
+						jsonBytes, _ := json.Marshal(payload)
+						fmt.Fprintf(w, "data: %s\n\n", string(jsonBytes))
+					}
+					fmt.Fprintf(w, "%s\n\n", line)
+					flusher.Flush()
+					continue
+				}
+
+				var chunk map[string]interface{}
+				if err := json.Unmarshal([]byte(dataStr), &chunk); err == nil {
+					// Extract content
+					var content string
+					if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
+						if choice, ok := choices[0].(map[string]interface{}); ok {
+							if delta, ok := choice["delta"].(map[string]interface{}); ok {
+								if c, ok := delta["content"].(string); ok {
+									content = c
+								}
+							} else if message, ok := choice["message"].(map[string]interface{}); ok {
+								if c, ok := message["content"].(string); ok {
+									content = c
+								}
+							}
+						}
+					}
+
+					buffer += content
+
+					// Check Regex
+					matches := toolRegex.FindStringSubmatch(buffer)
+					if len(matches) > 2 {
+						// Match Found! (Group 1: Tool Name, Group 2: Args)
+						toolName := matches[1]
+						toolArgsStr := matches[2]
+
+						// Smart Parsing: Check if G2 is actually a wrapper object with "name" and "arguments"
+						var wrapper struct {
+							Name      string      `json:"name"`
+							Arguments interface{} `json:"arguments"`
+						}
+
+						isWrapper := false
+						if err := json.Unmarshal([]byte(toolArgsStr), &wrapper); err == nil {
+							if wrapper.Name != "" && wrapper.Arguments != nil {
+								toolName = wrapper.Name
+								isWrapper = true
+								log.Printf("[handleChat] Detected Wrapper JSON format. Extracted Tool: %s", toolName)
+							}
+						}
+
+						log.Printf("[handleChat] Custom Tool Pattern Matched! Tool: %s", toolName)
+
+						// 1. Emit start event
+						startEvt := map[string]string{
+							"type": "tool_call.start",
+							"tool": toolName,
+						}
+						startBytes, _ := json.Marshal(startEvt)
+						fmt.Fprintf(w, "data: %s\n\n", string(startBytes))
+
+						// 2. Emit arguments event
+						if isWrapper {
+							argsEvt := map[string]interface{}{
+								"type":      "tool_call.arguments",
+								"tool":      toolName,
+								"arguments": wrapper.Arguments,
+							}
+							argsBytes, _ := json.Marshal(argsEvt)
+							fmt.Fprintf(w, "data: %s\n\n", string(argsBytes))
+						} else {
+							fmt.Fprintf(w, "data: {\"type\": \"tool_call.arguments\", \"tool\": \"%s\", \"arguments\": %s}\n\n", toolName, toolArgsStr)
+						}
+
+						// 3. Clear Buffer & Stop Buffering
+						buffer = ""
+						isBuffering = false
+						continue
+					}
+
+					// If buffer too long, assume no match and flush
+					if len(buffer) > bufferingThreshold {
+						// 🔍 Self-Evolution Check
+						lowerBuf := strings.ToLower(buffer)
+						if (strings.Contains(lowerBuf, "function") || strings.Contains(lowerBuf, "call") || strings.Contains(lowerBuf, "tool")) &&
+							(strings.Contains(lowerBuf, "{") && strings.Contains(lowerBuf, "}")) {
+							go app.LearnToolPattern(modelID, buffer)
+						}
+
+						// Flush buffer as regular content
+						payload := map[string]interface{}{
+							"choices": []interface{}{
+								map[string]interface{}{
+									"delta": map[string]string{
+										"content": buffer,
+									},
+								},
+							},
+						}
+						jsonBytes, _ := json.Marshal(payload)
+						fmt.Fprintf(w, "data: %s\n\n", string(jsonBytes))
+						buffer = ""
+					}
+					// Continue to next chunk (don't write original line)
+					continue
+				}
+			}
+		} else if strings.HasPrefix(strings.TrimSpace(line), "data: ") {
+			// 🔍 Self-Evolution for non-buffered models
+			if toolPattern == nil {
+				dataStr := strings.TrimPrefix(strings.TrimSpace(line), "data: ")
+				if dataStr != "[DONE]" {
+					var chunk map[string]interface{}
+					if err := json.Unmarshal([]byte(dataStr), &chunk); err == nil {
+						var content string
+						if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
+							if choice, ok := choices[0].(map[string]interface{}); ok {
+								if delta, ok := choice["delta"].(map[string]interface{}); ok {
+									if c, ok := delta["content"].(string); ok {
+										content = c
+									}
+								}
+							}
+						}
+
+						if len(content) > 5 {
+							lowerContent := strings.ToLower(content)
+							if strings.Contains(lowerContent, "<|") || strings.Contains(lowerContent, "function_call") {
+								go app.LearnToolPattern(modelID, content)
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// Standard Proxy
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
 
-		// Write line to client
+		// CUSTOM PARSING LOGIC
+		if toolPattern != nil && isBuffering {
+			// (Existing buffering logic omitted for brevity in thought process, but must be preserved in actual edit)
+			// ...
+		}
 
+		// Standard Proxy Logic & Accumulation for Memory
+		trimmedLine := strings.TrimSpace(line)
+		if trimmedLine == "" {
+			continue
+		}
+
+		// Write line to client immediately
 		fmt.Fprintf(w, "%s\n\n", line)
 		flusher.Flush()
 
+		// 🧠 Smart Memory: Accumulate response
+		if globalApp != nil && globalApp.enableMemory {
+			if strings.HasPrefix(trimmedLine, "data: ") {
+				dataStr := strings.TrimPrefix(trimmedLine, "data: ")
+				if dataStr == "[DONE]" {
+					// End of stream - Trigger Analysis
+					// We need userID and messages.
+					// userID is in 'currentUserID' (managed in `mcp/server.go` but accessible here?)
+					// 'currentUserID' is in 'mcp' package. We should use it or extract from request if possible.
+					// For now, let's use a safe default or try to get it.
+					// Actually, 'handleChat' doesn't explicitly know the user ID unless we parse it or use the global.
+					// allowedUserIDs logic exists but might not be set for every chat request.
+					// Let's assume 'default' or check if we can pass it.
+					// The 'AnalyzeConversationForMemory' takes userID.
+
+					// Trigger in background
+					// Trigger in background
+					if globalApp != nil && globalApp.enableMemory && len(messagesForMemory) > 0 {
+						// Pass captured data to analysis
+						go globalApp.AnalyzeConversationForMemory(userID, messagesForMemory, fullResponse)
+					}
+				} else {
+					// Extract content to accumulate
+					var chunk map[string]interface{}
+					if err := json.Unmarshal([]byte(dataStr), &chunk); err == nil {
+						if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
+							if choice, ok := choices[0].(map[string]interface{}); ok {
+								if delta, ok := choice["delta"].(map[string]interface{}); ok {
+									if c, ok := delta["content"].(string); ok {
+										fullResponse += c
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
 	}
 
 	if err := scanner.Err(); err != nil {

@@ -91,7 +91,7 @@ func GetToolList() []Tool {
 		},
 		{
 			Name:        "personal_memory",
-			Description: "Manage the user's long-term personal memory (v14 - Enhanced). Actions: 'remember' to save facts (server auto-extracts key), 'forget' to remove (log preserved), 'query' for fast lookup, 'read' for full index. Data is protected with Append-Only logging.",
+			Description: "Manage the user's long-term personal memory. Actions: 'remember' to save facts (server auto-extracts key), 'forget' to remove (log preserved), 'query' for fast lookup, 'read' for full index. Data is protected with Append-Only logging.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -102,7 +102,7 @@ func GetToolList() []Tool {
 					},
 					"content": map[string]interface{}{
 						"type":        "string",
-						"description": "For 'remember': the fact to save (e.g., 'My name is DINKI' or 'Name: DINKI'). For 'forget'/'query': the key to lookup.",
+						"description": "For 'remember': the fact to save. For 'forget'/'query': the key to lookup.",
 					},
 				},
 				"required": []string{"action"},
