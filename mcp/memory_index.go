@@ -333,7 +333,8 @@ func min(a, b int) int {
 	return b
 }
 
-// GetIndexSummaryForPrompt returns a compact string for injection into system prompt
+// GetIndexSummaryForPrompt returns a tiered summary of memory for injection into system prompt.
+// This is more efficient than sending all facts every single time.
 func GetIndexSummaryForPrompt(userID string) string {
 	indexPath, err := GetMemoryIndexPath(userID)
 	if err != nil {
@@ -349,29 +350,51 @@ func GetIndexSummaryForPrompt(userID string) string {
 		}
 	}
 
-	// Build compact representation
-	var lines []string
+	var sb strings.Builder
 
-	// Explicitly state names to prevent confusion between ID and Display Name
-	lines = append(lines, fmt.Sprintf("- ACCOUNT_ID: %s", userID))
+	// 1. Critical Identity (Always Inject)
+	sb.WriteString(fmt.Sprintf("- ACCOUNT_ID: %s\n", userID))
 	if name, ok := index.Facts["name"]; ok {
-		lines = append(lines, fmt.Sprintf("- USER_NAME: %s", name))
+		sb.WriteString(fmt.Sprintf("- USER_NAME: %s\n", name))
 	} else if name, ok := index.Facts["이름"]; ok {
-		lines = append(lines, fmt.Sprintf("- USER_NAME: %s", name))
+		sb.WriteString(fmt.Sprintf("- USER_NAME: %s\n", name))
 	}
 
+	// 2. Memory Category Summary
+	personalCount := 0
+	workCount := 0
 	for k, v := range index.Facts {
-		if k == "name" || k == "이름" {
-			continue // Already added above
+		category := DetermineCategory(k + " " + v)
+		if category == "work" {
+			workCount++
+		} else {
+			personalCount++
 		}
-		lines = append(lines, fmt.Sprintf("- %s: %s", k, v))
 	}
 
-	if len(lines) == 0 {
-		return ""
+	sb.WriteString("\n## MEMORY DIRECTORY\n")
+	sb.WriteString(fmt.Sprintf("- [Personal Memory]: %d facts cached in 'personal.md'\n", personalCount))
+	sb.WriteString(fmt.Sprintf("- [Work Memory]: %d facts cached in 'work.md'\n", workCount))
+	sb.WriteString("- [System Index]: Full listing in 'index.md'\n")
+
+	// 3. Highlight/Recent Facts (Max 10)
+	// For now, just grab the first few. Ideally we'd use 'updated_at' if we had it per-fact.
+	sb.WriteString("\n## HIGHLIGHTS\n")
+	count := 0
+	for k, v := range index.Facts {
+		if count >= 8 {
+			break
+		}
+		if k == "name" || k == "이름" {
+			continue
+		}
+		sb.WriteString(fmt.Sprintf("- %s: %s\n", k, v))
+		count++
 	}
 
-	return strings.Join(lines, "\n")
+	sb.WriteString("\n*Note: Use 'read_user_document' with 'personal.md' or 'work.md' for more details.*")
+
+	return sb.String()
 }
 
 // GenerateIndexMD creates or updates the index.md file that summarizes all user memory

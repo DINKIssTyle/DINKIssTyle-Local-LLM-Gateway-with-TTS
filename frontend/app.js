@@ -1827,20 +1827,36 @@ async function processStream(response, elementId) {
                         fullText += contentToAdd;
 
                         // --- LOOP DETECTION (Regex-based) ---
-                        // Restore loop detection logic as requested
-                        if (!loopDetected && fullText.length >= 50) {
-                            const shortLoopMatch = fullText.match(/([\s\S]{5,}?)\1{4,}/);
-                            const longLoopMatch = fullText.match(/([\s\S]{50,}?)\1{2,}/);
+                        // --- LOOP DETECTION (Regex-based) ---
+                        // Relaxed logic per user request (Step Id: 4593)
+                        // 1. Increased thresholds (Short: 5->10, Long: 3->6)
+                        // 2. Explicitly ignore Tool Call patterns (Agents loops are handled by backend)
+                        if (!loopDetected && fullText.length >= 100) {
+                            // Pattern: 5+ chars repeated 10+ times consecutively (was 5)
+                            const shortLoopMatch = fullText.match(/([\s\S]{5,}?)\1{9,}/);
+                            // Pattern: 50+ chars repeated 6+ times consecutively (was 3)
+                            const longLoopMatch = fullText.match(/([\s\S]{50,}?)\1{5,}/);
                             const loopMatch = shortLoopMatch || longLoopMatch;
 
                             if (loopMatch && loopMatch[1].length >= 4) {
-                                console.warn(`[Loop Detection] Pattern detected: "${loopMatch[1].substring(0, 30)}..." repeated ${Math.floor(loopMatch[0].length / loopMatch[1].length)}+ times`);
-                                loopDetected = true;
-                                stopGeneration();
+                                // Exclude Tool Call logs from loop detection (False positives common in agents)
+                                const isToolLog = loopMatch[1].includes("Tool Call") ||
+                                    loopMatch[1].includes("Tool Finished") ||
+                                    loopMatch[1].includes("🛠️") ||
+                                    loopMatch[1].includes("✅");
 
-                                fullText += "\n\n" + (typeof t === 'function' ? t('warning.loopDetected') : "⚠️ Loop detected. Generation stopped.");
+                                if (!isToolLog) {
+                                    console.warn(`[Loop Detection] Pattern detected: "${loopMatch[1].substring(0, 30)}..." repeated ${Math.floor(loopMatch[0].length / loopMatch[1].length)}+ times`);
+                                    loopDetected = true;
+                                    stopGeneration();
+
+                                    fullText += "\n\n" + (typeof t === 'function' ? t('warning.loopDetected') : "⚠️ Loop detected. Generation stopped.");
+                                } else {
+                                    console.log(`[Loop Detection] Ignored tool pattern: "${loopMatch[1].substring(0, 20)}..."`);
+                                }
                             }
                         }
+                        // --- END LOOP DETECTION ---
                         // --- END LOOP DETECTION ---
 
                         let displayText = fullText;
@@ -2191,12 +2207,24 @@ function updateMessageContent(id, text) {
 
     // Filter out common special tokens that might leak during streaming
     let cleanText = text;
-    // Remove <|...|> style tokens if they appear at the start or end of lines, or standalone
-    // This covers <|channel|>, <|message|>, <|end_of_turn|>, etc.
-    cleanText = cleanText.replace(/<\|.*?\|>/g, '');
+    // Aggressive cleaning for Command-R / GPT-OSS leakage (Step Id: 4815)
+    // 1. Remove all special tokens like <|...|> (multi-line)
+    cleanText = cleanText.replace(/<\|[\s\S]*?\|>/g, '');
 
-    // Remove specific function calling artifacts if they leak
-    cleanText = cleanText.replace(/commentary to=functions code/g, '');
+    // 2. Remove <commentary ...> style pseudo-tags
+    cleanText = cleanText.replace(/<commentary[\s\S]*?>/gi, '');
+
+    // 3. Remove "commentary to=..." text artifacts
+    cleanText = cleanText.replace(/commentary to=[a-z_]+(\s+(json|code|text))?/gi, '');
+
+    // 4. Remove standalone leakage of tool call JSON objects
+    cleanText = cleanText.replace(/\{"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*([\s\S]*?)\}/g, '');
+
+    // 5. Clean up remaining standalone markers and trim
+    cleanText = cleanText.trim().replace(/^(json|code|text)\s*/gi, '');
+
+    // Final pass for any partial tag leftovers or repeated markers
+    cleanText = cleanText.replace(/<\|.*?\|>/g, '');
 
 
     mdBody.innerHTML = marked.parse(cleanText);

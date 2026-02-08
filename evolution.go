@@ -10,7 +10,14 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
+)
+
+var (
+	learningMux      sync.Mutex
+	learningPending  = make(map[string]bool)
+	learningCooldown = make(map[string]time.Time)
 )
 
 // Message struct for LLM communication
@@ -28,31 +35,40 @@ type EvolutionRequest struct {
 
 // LearnToolPattern attempts to generate a regex for an unrecognized tool call format
 func (a *App) LearnToolPattern(modelID string, sampleLine string) {
-	// Prevent infinite loops or spamming: Check if we already have a pattern or recently tried
-	if a.GetToolPattern(modelID) != nil {
-		return // Already has a pattern, maybe it's just a bad generation?
+	learningMux.Lock()
+	if learningPending[modelID] {
+		learningMux.Unlock()
+		return
 	}
+	if lastTry, ok := learningCooldown[modelID]; ok && time.Since(lastTry) < 1*time.Minute {
+		learningMux.Unlock()
+		return
+	}
+	learningPending[modelID] = true
+	learningCooldown[modelID] = time.Now()
+	learningMux.Unlock()
+
+	defer func() {
+		learningMux.Lock()
+		learningPending[modelID] = false
+		learningMux.Unlock()
+	}()
 
 	log.Printf("[Self-Evolution] 🧬 Analyzing potential missed tool call for model %s: %s", modelID, sampleLine)
 
 	// Construct the prompt
 	prompt := fmt.Sprintf(`You are an expert at Go Regular Expressions and LLM Tool Calling patterns.
-I have a log line from an LLM that appears to be a tool call, but my current parser missed it.
-The line is:
-%s
+I have a log from an LLM that appears to be a tool call, but my current parser missed it.
+The sample content is: "%s"
 
 Please generate a single Go-compatible Regular Expression (regexp) to capture:
-- Group 1: The Tool Name
-- Group 2: The JSON Arguments (or the content containing the arguments)
-
-Examples of what I want to capture:
-Line: "Function call: search_web({query:'test'})" -> Regex: "Function call: (\w+)\((.*)\)"
+- Group 1: The Tool Name (e.g., search_web, personal_memory)
+- Group 2: The JSON Arguments or parameters block.
 
 REQUIREMENTS:
 1. Return ONLY the regex string. Do not wrap in markdown or code blocks.
-2. The regex must be robust enough to handle slight variations.
-3. Use (?i) for case insensitivity if appropriate.
-4. Do not explain your reasoning. Just the regex.`, sampleLine)
+2. The regex must be robust (use (?s) if it spans multiple lines).
+3. If no tool call found, return "NONE".`, sampleLine)
 
 	// Send request to the configured LLM endpoint
 	// We use the SAME endpoint the user is using, assuming it can handle concurrent requests or queue them.
@@ -68,7 +84,13 @@ REQUIREMENTS:
 	}
 
 	jsonPayload, _ := json.Marshal(payload)
-	req, err := http.NewRequest("POST", a.llmEndpoint+"/v1/chat/completions", bytes.NewBuffer(jsonPayload))
+	url := a.llmEndpoint
+	if !strings.HasSuffix(url, "/v1/chat/completions") {
+		url = strings.TrimSuffix(url, "/") + "/v1/chat/completions"
+	}
+
+	log.Printf("[Self-Evolution] Sending evolution request to: %s", url)
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonPayload))
 	if err != nil {
 		log.Printf("[Self-Evolution] Failed to create request: %v", err)
 		return
@@ -88,6 +110,11 @@ REQUIREMENTS:
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[Self-Evolution] LLM returned error %d: %s", resp.StatusCode, string(body))
+		return
+	}
+
 	var result struct {
 		Choices []struct {
 			Message struct {
@@ -106,11 +133,21 @@ REQUIREMENTS:
 	}
 
 	generatedRegex := strings.TrimSpace(result.Choices[0].Message.Content)
-	// Clean up markdown if present
-	generatedRegex = strings.TrimPrefix(generatedRegex, "```regex")
-	generatedRegex = strings.TrimPrefix(generatedRegex, "```go")
-	generatedRegex = strings.TrimPrefix(generatedRegex, "```")
-	generatedRegex = strings.TrimSuffix(generatedRegex, "```")
+	if generatedRegex == "NONE" || len(generatedRegex) < 5 {
+		log.Printf("[Self-Evolution] LLM returned NONE or too short regex: %s", generatedRegex)
+		return
+	}
+
+	// Clean up markdown and extra text
+	// Remove backticks
+	generatedRegex = strings.ReplaceAll(generatedRegex, "`", "")
+	// If it contains "Regex:" prefix, remove it
+	if idx := strings.Index(generatedRegex, "Regex:"); idx != -1 {
+		generatedRegex = generatedRegex[idx+6:]
+	}
+	// Remove common prefixes
+	generatedRegex = strings.TrimPrefix(generatedRegex, "regex")
+	generatedRegex = strings.TrimPrefix(generatedRegex, "go")
 	generatedRegex = strings.TrimSpace(generatedRegex)
 
 	log.Printf("[Self-Evolution] 🧬 Proposed Regex: %s", generatedRegex)

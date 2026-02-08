@@ -915,7 +915,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	var toolRegex *regexp.Regexp
 	var buffer string
 	var isBuffering bool
-	var bufferingThreshold = 1000 // Buffer size
+	// var isBuffering bool -- REMOVED DUPLICATE
+	var bufferingThreshold = 8000 // Buffer size (increased for large JSON args)
 
 	if toolPattern != nil {
 		if regexStr, ok := toolPattern["regex"]; ok {
@@ -984,6 +985,10 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 							if delta, ok := choice["delta"].(map[string]interface{}); ok {
 								if c, ok := delta["content"].(string); ok {
 									content = c
+								} else if rc, ok := delta["reasoning_content"].(string); ok {
+									content = rc
+								} else if r, ok := delta["reasoning"].(string); ok {
+									content = r
 								}
 							} else if message, ok := choice["message"].(map[string]interface{}); ok {
 								if c, ok := message["content"].(string); ok {
@@ -1001,6 +1006,17 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 						// Match Found! (Group 1: Tool Name, Group 2: Args)
 						toolName := matches[1]
 						toolArgsStr := matches[2]
+
+						// 🛠️ Command-R / GPT-OSS Name Extraction
+						// If the tool name (Group 1) looks like a Command-R prefix, try to extract real name from "to=..."
+						if strings.Contains(toolName, "<|channel|>") {
+							reName := regexp.MustCompile(`to=([a-zA-Z0-9_]+)`)
+							nameMatch := reName.FindStringSubmatch(toolName)
+							if len(nameMatch) > 1 {
+								toolName = nameMatch[1]
+								// If generic "functions", we expect the JSON to have the real name (handled by Smart Parsing below)
+							}
+						}
 
 						// Smart Parsing: Check if G2 is actually a wrapper object with "name" and "arguments"
 						var wrapper struct {
@@ -1086,14 +1102,44 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 								if delta, ok := choice["delta"].(map[string]interface{}); ok {
 									if c, ok := delta["content"].(string); ok {
 										content = c
+									} else if rc, ok := delta["reasoning_content"].(string); ok {
+										content = rc
+									} else if r, ok := delta["reasoning"].(string); ok {
+										content = r
 									}
 								}
 							}
 						}
 
+						// 🧪 Special Handling for Command-R / GPT-OSS Format (<|channel|>)
+						if !isBuffering && (strings.Contains(content, "<|channel|>") || strings.Contains(content, "<|tool_code|>")) {
+							log.Printf("[handleChat] Detected Command-R/GPT-OSS Tool Call Pattern. Switching to buffering mode.")
+							isBuffering = true
+							buffer = content
+
+							// Define a regex that captures the prefix as Group 1 (ignored) and the JSON as Group 2
+							// Pattern: <|channel|>...<|message|> { JSON }
+							toolPattern = map[string]string{"format": "command-r"}
+							toolRegex = regexp.MustCompile(`(?s)(<\|channel\|>.*?<\|message\|>)\s*(\{[\s\S]*\})`)
+							continue
+						}
+
+						// 🔍 Self-Evolution for non-buffered models (Logic reached only if not Command-R)
 						if len(content) > 5 {
-							lowerContent := strings.ToLower(content)
-							if strings.Contains(lowerContent, "<|") || strings.Contains(lowerContent, "function_call") {
+							lc := strings.ToLower(content)
+							// Broaden trigger keywords: <|, function, tool, execute, {"name":, and tool names
+							hasToolName := strings.Contains(lc, "search_web") ||
+								strings.Contains(lc, "personal_memory") ||
+								strings.Contains(lc, "read_user_document") ||
+								strings.Contains(lc, "read_web_page")
+
+							if strings.Contains(lc, "<|") ||
+								strings.Contains(lc, "function") ||
+								strings.Contains(lc, "tool") ||
+								strings.Contains(lc, "execute") ||
+								hasToolName ||
+								(strings.Contains(lc, "{\"") && strings.Contains(lc, "args")) {
+								log.Printf("[handleChat] Potential tool pattern detected in content: %s", content)
 								go app.LearnToolPattern(modelID, content)
 							}
 						}
