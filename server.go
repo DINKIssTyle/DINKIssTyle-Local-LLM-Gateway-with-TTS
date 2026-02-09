@@ -132,37 +132,49 @@ func ensureSelfSignedCert(appDataDir string) (string, string, error) {
 	return certPath, keyPath, nil
 }
 
-// preloadUserMemory reads the user's personal memory file (personal.md) into a string
-// Returns empty string if file doesn't exist or error occurs.
+// preloadUserMemory reads the user's memory files (static.md and personal.md) into a string
+// Returns formatted string or empty if no files exist.
 func preloadUserMemory(userID string) string {
-	// Fallback: read raw file
-	filePath, err := mcp.GetUserMemoryFilePath(userID, "personal.md")
-	if err != nil {
-		log.Printf("[preloadUserMemory] Failed to get path for user %s: %v", userID, err)
-		return ""
-	}
+	var sb strings.Builder
 
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			log.Printf("[preloadUserMemory] Failed to read memory for user %s: %v", userID, err)
+	// 1. Load Static Memory (Read-Only)
+	staticPath, err := mcp.GetUserMemoryFilePath(userID, "static.md")
+	if err == nil {
+		if data, err := os.ReadFile(staticPath); err == nil && len(data) > 0 {
+			content := strings.TrimSpace(string(data))
+			if content != "" {
+				sb.WriteString("[Static Memory (Read-Only)]\n")
+				sb.WriteString(content)
+				sb.WriteString("\n\n")
+			}
 		}
-		return "" // No memory yet
 	}
 
-	content := strings.TrimSpace(string(data))
-	if content == "" {
+	// 2. Load Personal Memory (Writable)
+	personalPath, err := mcp.GetUserMemoryFilePath(userID, "personal.md")
+	if err == nil {
+		if data, err := os.ReadFile(personalPath); err == nil && len(data) > 0 {
+			content := strings.TrimSpace(string(data))
+			if content != "" {
+				sb.WriteString("[Personal Memory]\n")
+				sb.WriteString(content)
+			}
+		}
+	}
+
+	finalContent := strings.TrimSpace(sb.String())
+	if finalContent == "" {
 		return ""
 	}
 
-	// Truncate if too large to avoid context overflow (max ~4000 chars)
-	maxLen := 4000
-	if len(content) > maxLen {
-		content = content[:maxLen] + "\n... (memory truncated)"
+	// Truncate if too large to avoid context overflow (max ~10000 chars)
+	maxLen := 10000
+	if len(finalContent) > maxLen {
+		finalContent = finalContent[:maxLen] + "\n... (memory truncated)"
 	}
 
-	log.Printf("[preloadUserMemory] Loaded %d bytes of raw memory for user %s", len(content), userID)
-	return content
+	log.Printf("[preloadUserMemory] Loaded %d bytes of combined memory for user %s", len(finalContent), userID)
+	return finalContent
 }
 
 type ServerTTSConfig struct {
@@ -754,6 +766,41 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			foundSystem := false
 			// Case A: Standard mode (OpenAI style)
 			if messages, ok := reqMap["messages"].([]interface{}); ok {
+				// 🚀 SLIDING WINDOW: Limit to last 15 messages to prevent context overflow
+				maxMessages := 15
+				if len(messages) > maxMessages {
+					log.Printf("[handleChat] Truncating chat history: %d -> %d messages", len(messages), maxMessages)
+
+					// Preserve system message if it exists at the beginning
+					var systemMsg interface{}
+					if len(messages) > 0 {
+						if m, ok := messages[0].(map[string]interface{}); ok {
+							if role, ok := m["role"].(string); ok && role == "system" {
+								systemMsg = messages[0]
+							}
+						}
+					}
+
+					// Take the last maxMessages
+					truncated := messages[len(messages)-maxMessages:]
+
+					// If we had a system message at the start and it's not in the truncated set now, re-add it
+					systemInTruncated := false
+					if systemMsg != nil {
+						for _, msg := range truncated {
+							if msg == systemMsg {
+								systemInTruncated = true
+								break
+							}
+						}
+						if !systemInTruncated {
+							truncated = append([]interface{}{systemMsg}, truncated...)
+						}
+					}
+					messages = truncated
+					reqMap["messages"] = messages
+				}
+
 				for i, msg := range messages {
 					if m, ok := msg.(map[string]interface{}); ok {
 						if role, ok := m["role"].(string); ok && role == "system" {

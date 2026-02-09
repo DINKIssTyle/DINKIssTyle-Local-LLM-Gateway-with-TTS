@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -628,9 +629,29 @@ func (a *App) StartServer(port string) error {
 	// Calculate secondary port for HTTP compatibility
 	portInt, _ := strconv.Atoi(port)
 	httpPort := strconv.Itoa(portInt + 1)
+	// Redirect Handler for HTTP server (redirects to HTTPS port)
+	// Redirect Handler for HTTP server (redirects to HTTPS port, but allows MCP/API)
+	redirectHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Allow MCP and API endpoints to work on HTTP (port 8081) to avoid breaking local clients
+		if strings.HasPrefix(r.URL.Path, "/mcp/") || strings.HasPrefix(r.URL.Path, "/api/") {
+			loggingMux.ServeHTTP(w, r)
+			return
+		}
+
+		host := r.Host
+		if h, _, err := net.SplitHostPort(r.Host); err == nil {
+			host = h
+		}
+		target := fmt.Sprintf("https://%s:%s%s", host, port, r.URL.Path)
+		if len(r.URL.RawQuery) > 0 {
+			target += "?" + r.URL.RawQuery
+		}
+		http.Redirect(w, r, target, http.StatusMovedPermanently)
+	})
+
 	a.httpServer = &http.Server{
 		Addr:    ":" + httpPort,
-		Handler: loggingMux,
+		Handler: redirectHandler,
 	}
 
 	// Cert paths
