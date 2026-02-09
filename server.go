@@ -132,24 +132,11 @@ func ensureSelfSignedCert(appDataDir string) (string, string, error) {
 	return certPath, keyPath, nil
 }
 
-// preloadUserMemory reads the user's memory file and returns its content for injection.
-// This ensures the LLM has access to stored user preferences even without tool calls.
-// Now uses the index for efficiency instead of raw log.
-// Returns empty string if memory is disabled, file doesn't exist, or is empty.
-func preloadUserMemory(userID string, enableMemory bool) string {
-	if !enableMemory {
-		return ""
-	}
-
-	// Try index-based summary first (efficient)
-	summary := mcp.GetIndexSummaryForPrompt(userID)
-	if summary != "" {
-		log.Printf("[preloadUserMemory] Loaded index summary for user %s (%d chars)", userID, len(summary))
-		return summary
-	}
-
-	// Fallback: read raw file and try to build index
-	filePath, err := mcp.GetUserMemoryPath(userID)
+// preloadUserMemory reads the user's personal memory file (personal.md) into a string
+// Returns empty string if file doesn't exist or error occurs.
+func preloadUserMemory(userID string) string {
+	// Fallback: read raw file
+	filePath, err := mcp.GetUserMemoryFilePath(userID, "personal.md")
 	if err != nil {
 		log.Printf("[preloadUserMemory] Failed to get path for user %s: %v", userID, err)
 		return ""
@@ -157,24 +144,16 @@ func preloadUserMemory(userID string, enableMemory bool) string {
 
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return "" // No memory yet
+		if !os.IsNotExist(err) {
+			log.Printf("[preloadUserMemory] Failed to read memory for user %s: %v", userID, err)
 		}
-		log.Printf("[preloadUserMemory] Failed to read memory for user %s: %v", userID, err)
-		return ""
+		return "" // No memory yet
 	}
 
 	content := strings.TrimSpace(string(data))
 	if content == "" {
 		return ""
 	}
-
-	// Build index from raw file for future use
-	go func() {
-		if _, err := mcp.RebuildAndSaveIndex(userID); err != nil {
-			log.Printf("[preloadUserMemory] Background index build failed: %v", err)
-		}
-	}()
 
 	// Truncate if too large to avoid context overflow (max ~4000 chars)
 	maxLen := 4000
@@ -194,6 +173,7 @@ type ServerTTSConfig struct {
 
 // createServerMux creates the HTTP handler mux for the server
 func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
+	globalApp = app // Initialize the global instance for all handlers
 	mux := http.NewServeMux()
 
 	// Public endpoints (no auth required)
@@ -320,7 +300,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 							app.SetEnableMCP(*newCfg.EnableMCP)
 						}
 						if newCfg.EnableMemory != nil {
-							app.SetEnableMemory(*newCfg.EnableMemory)
+							// Global memory toggle is removed, handled per-user
 						}
 					}
 				}
@@ -336,7 +316,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 			"llm_mode":      app.llmMode,
 			"enable_tts":    app.enableTTS,
 			"enable_mcp":    app.enableMCP,
-			"enable_memory": app.enableMemory,
+			"enable_memory": false, // Global default is false, overridden by user settings below
 			"tts_config":    ttsConfig,
 			"has_token":     app.llmApiToken != "",
 		}
@@ -677,7 +657,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	tokenRaw := app.llmApiToken
 	llmMode := app.llmMode
 	enableMCP := app.enableMCP
-	enableMemory := app.enableMemory // Default global setting
+	enableMemory := true // Default to true (memory is a per-user opt-out feature)
 
 	// Override with User Settings
 	userID := r.Header.Get("X-User-ID")
@@ -707,6 +687,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	// Set MCP Context for this user interaction
 	// This ensures that when LM Studio calls back to MCP, it has the correct context
 	mcp.SetContext(userID, enableMemory)
+	log.Printf("[handleChat-DEBUG] userID=%s, enableMemory=%v", userID, enableMemory)
 
 	// Sanitize endpoint: Remove trailing slash and optional /v1 suffix if user included it
 	endpoint := strings.TrimRight(endpointRaw, "/")
@@ -758,21 +739,16 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 		// EXTRA SAFEGUARD: Inject System Prompt instruction for cleaner Tool Calls
 		// Qwen/VL models often mess up XML tags (nested or unclosed).
+		// Qwen/VL models often mess up XML tags (nested or unclosed).
 		if err := json.Unmarshal(body, &reqMap); err == nil {
-			preloadedMemory := preloadUserMemory(userID, enableMemory)
+
+			// We use a marker to detect if we already injected instructions
 			instrMarker := "### TOOL CALL GUIDELINES ###"
-			extraInstr := "\n\n" + instrMarker + "\n"
-			extraInstr += "1. Use a SINGLE valid <tool_call> block for tool requests.\n"
-			extraInstr += "2. DO NOT use search_web or read_web_page for person identification or image description unless explicitly asked.\n"
-			extraInstr += "3. CURRENT_TIME: " + time.Now().Format("2006-01-02 15:04:05 Monday")
+			extraInstr := mcp.SystemPromptToolUsage()
 
 			if enableMemory {
-				if preloadedMemory != "" {
-					extraInstr += "\n\n=== USER'S SAVED MEMORY ===\n" + preloadedMemory + "\n=== END OF MEMORY ===\n"
-					extraInstr += "Use this memory for personalization. Update via `personal_memory`."
-				} else {
-					extraInstr += "\n- USER_MEMORY: Empty. Save new facts using `personal_memory`."
-				}
+				preloadedMemory := preloadUserMemory(userID)
+				extraInstr += mcp.SystemPromptMemoryTemplate(preloadedMemory)
 			}
 
 			foundSystem := false
@@ -901,9 +877,13 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		return
 	}
 
+	// Capture full response for memory
+	fullResponse := ""
+	memoryLogged := false
+	var messagesForMemory []map[string]interface{}
+
 	// Determine Model ID for Tool Pattern Lookup
 	var modelID string
-	// Helper to extract model from body (simple approach)
 	var tmp struct {
 		Model string `json:"model"`
 	}
@@ -915,7 +895,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	var toolRegex *regexp.Regexp
 	var buffer string
 	var isBuffering bool
-	// var isBuffering bool -- REMOVED DUPLICATE
 	var bufferingThreshold = 8000 // Buffer size (increased for large JSON args)
 
 	if toolPattern != nil {
@@ -933,52 +912,132 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	}
 
 	// Extract messages for Memory Analysis (if enabled)
-	var messagesForMemory []map[string]interface{}
-	if globalApp != nil && globalApp.enableMemory {
-		// Try to extract messages from the initial body (parsed into reqMap or tmp)
-		// We already unmarshaled into reqMap in some paths, but let's be safe and re-parse 'body' since it's the source.
+	if enableMemory {
+		log.Printf("[handleChat-DEBUG] Request Body Snippet: %s", string(body)[:min(len(body), 500)])
+
 		var tmpBody struct {
 			Messages []map[string]interface{} `json:"messages"`
+			Input    string                   `json:"input"` // Support single input field
 		}
 		if err := json.Unmarshal(body, &tmpBody); err == nil {
-			messagesForMemory = tmpBody.Messages
+			if len(tmpBody.Messages) > 0 {
+				messagesForMemory = tmpBody.Messages
+				log.Printf("[handleChat-DEBUG] Extracted %d messages for memory", len(messagesForMemory))
+			} else if tmpBody.Input != "" {
+				// Construct a single user message from Input
+				messagesForMemory = []map[string]interface{}{
+					{"role": "user", "content": tmpBody.Input},
+				}
+				log.Printf("[handleChat-DEBUG] Extracted 'input' as user message for memory")
+			} else {
+				log.Printf("[handleChat-DEBUG] No 'messages' or 'input' found in body")
+			}
+		} else {
+			log.Printf("[handleChat-DEBUG] Failed to extract messages for memory: %v", err)
 		}
 	}
 
-	var fullResponse string // Accumulator for assistant response
-
 	scanner := bufio.NewScanner(resp.Body)
+	log.Println("[handleChat-DEBUG] Starting response scanner loop")
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// CUSTOM PARSING LOGIC
-		if toolPattern != nil && isBuffering {
-			trimmedLine := strings.TrimSpace(line)
-			if strings.HasPrefix(trimmedLine, "data: ") {
-				dataStr := strings.TrimPrefix(trimmedLine, "data: ")
-				if dataStr == "[DONE]" {
-					// End of stream, flush buffer if exists
-					if len(buffer) > 0 {
-						payload := map[string]interface{}{
-							"choices": []interface{}{
-								map[string]interface{}{
-									"delta": map[string]string{
-										"content": buffer,
-									},
+		// Log first few lines to debug stream format
+		if len(fullResponse) < 100 && len(fullResponse) > 0 {
+			// Don't log every line forever, just start
+		}
+
+		// CUSTOM PARSING LOGIC & SSE Handling
+		// We process every line to handle both standard OpenAI and the custom format seen in logs
+		trimmedLine := strings.TrimSpace(line)
+
+		// Skip empty lines or comment lines (unless we need event types, which we might for the custom format)
+		if trimmedLine == "" {
+			continue
+		}
+
+		// Check for data: prefix
+		if strings.HasPrefix(trimmedLine, "data: ") {
+			dataStr := strings.TrimPrefix(trimmedLine, "data: ")
+
+			// 1. Check for Standard OpenAI [DONE]
+			if dataStr == "[DONE]" {
+				log.Println("[handleChat-DEBUG] [DONE] signal received (Standard)")
+				// If buffering for tools, flush any remaining buffer as content before sending DONE
+				if toolPattern != nil && isBuffering && len(buffer) > 0 {
+					payload := map[string]interface{}{
+						"choices": []interface{}{
+							map[string]interface{}{
+								"delta": map[string]string{
+									"content": buffer,
 								},
 							},
-						}
-						jsonBytes, _ := json.Marshal(payload)
-						fmt.Fprintf(w, "data: %s\n\n", string(jsonBytes))
+						},
 					}
-					fmt.Fprintf(w, "%s\n\n", line)
-					flusher.Flush()
-					continue
+					jsonBytes, _ := json.Marshal(payload)
+					fmt.Fprintf(w, "data: %s\n\n", string(jsonBytes))
+					fullResponse += buffer
+					buffer = ""
 				}
 
-				var chunk map[string]interface{}
-				if err := json.Unmarshal([]byte(dataStr), &chunk); err == nil {
-					// Extract content
+				// Just forward the DONE
+				fmt.Fprintf(w, "%s\n\n", line)
+				flusher.Flush()
+
+				if enableMemory {
+					checkAndLogMemoryWith(userID, messagesForMemory, fullResponse, &memoryLogged)
+				}
+				continue
+			}
+
+			// 2. Parse JSON
+			var chunk map[string]interface{}
+			if err := json.Unmarshal([]byte(dataStr), &chunk); err == nil {
+
+				// --- A. Handle Custom Format (type: "message.delta", etc) ---
+				if msgType, ok := chunk["type"].(string); ok {
+					if msgType == "message.delta" {
+						if content, ok := chunk["content"].(string); ok {
+							fullResponse += content
+
+							// 🔍 Self-Evolution for Custom Format
+							if toolPattern == nil && len(content) > 5 {
+								lc := strings.ToLower(content)
+								if strings.Contains(lc, "<|") ||
+									strings.Contains(lc, "function") ||
+									strings.Contains(lc, "tool") ||
+									strings.Contains(lc, "execute") ||
+									(strings.Contains(lc, "{\"") && strings.Contains(lc, "args")) {
+									log.Printf("[handleChat] Potential tool pattern detected in content (Custom Format): %s", content)
+									go app.LearnToolPattern(modelID, content)
+								}
+							}
+
+							// Forward to client identical to source
+							fmt.Fprintf(w, "%s\n\n", line)
+							flusher.Flush()
+							continue
+						}
+					} else if msgType == "chat.end" || msgType == "message.end" {
+						log.Printf("[handleChat-DEBUG] Custom End Signal Received: %s", msgType)
+						// Forward
+						fmt.Fprintf(w, "%s\n\n", line)
+						flusher.Flush()
+						if enableMemory {
+							checkAndLogMemoryWith(userID, messagesForMemory, fullResponse, &memoryLogged)
+						}
+						continue
+					} else {
+						// Forward other events (start, progress, etc)
+						fmt.Fprintf(w, "%s\n\n", line)
+						flusher.Flush()
+						continue
+					}
+				}
+
+				// --- B. Handle Tool Pattern Logic (if enabled and buffering) ---
+				if toolPattern != nil && isBuffering {
+					// Extract content for buffering
 					var content string
 					if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
 						if choice, ok := choices[0].(map[string]interface{}); ok {
@@ -997,7 +1056,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 							}
 						}
 					}
-
 					buffer += content
 
 					// Check Regex
@@ -1059,7 +1117,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 						// 3. Clear Buffer & Stop Buffering
 						buffer = ""
 						isBuffering = false
-						continue
+						flusher.Flush()
+						continue // Tool call handled, move to next line
 					}
 
 					// If buffer too long, assume no match and flush
@@ -1083,134 +1142,112 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 						}
 						jsonBytes, _ := json.Marshal(payload)
 						fmt.Fprintf(w, "data: %s\n\n", string(jsonBytes))
+						fullResponse += buffer // Add to full response
 						buffer = ""
+						flusher.Flush()
 					}
-					// Continue to next chunk (don't write original line)
-					continue
+					continue // Buffering logic handled, move to next line
 				}
-			}
-		} else if strings.HasPrefix(strings.TrimSpace(line), "data: ") {
-			// 🔍 Self-Evolution for non-buffered models
-			if toolPattern == nil {
-				dataStr := strings.TrimPrefix(strings.TrimSpace(line), "data: ")
-				if dataStr != "[DONE]" {
-					var chunk map[string]interface{}
-					if err := json.Unmarshal([]byte(dataStr), &chunk); err == nil {
-						var content string
-						if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
-							if choice, ok := choices[0].(map[string]interface{}); ok {
-								if delta, ok := choice["delta"].(map[string]interface{}); ok {
-									if c, ok := delta["content"].(string); ok {
-										content = c
-									} else if rc, ok := delta["reasoning_content"].(string); ok {
-										content = rc
-									} else if r, ok := delta["reasoning"].(string); ok {
-										content = r
-									}
-								}
-							}
-						}
 
-						// 🧪 Special Handling for Command-R / GPT-OSS Format (<|channel|>)
-						if !isBuffering && (strings.Contains(content, "<|channel|>") || strings.Contains(content, "<|tool_code|>")) {
-							log.Printf("[handleChat] Detected Command-R/GPT-OSS Tool Call Pattern. Switching to buffering mode.")
-							isBuffering = true
-							buffer = content
-
-							// Define a regex that captures the prefix as Group 1 (ignored) and the JSON as Group 2
-							// Pattern: <|channel|>...<|message|> { JSON }
-							toolPattern = map[string]string{"format": "command-r"}
-							toolRegex = regexp.MustCompile(`(?s)(<\|channel\|>.*?<\|message\|>)\s*(\{[\s\S]*\})`)
-							continue
-						}
-
-						// 🔍 Self-Evolution for non-buffered models (Logic reached only if not Command-R)
-						if len(content) > 5 {
-							lc := strings.ToLower(content)
-							// Broaden trigger keywords: <|, function, tool, execute, {"name":, and tool names
-							hasToolName := strings.Contains(lc, "search_web") ||
-								strings.Contains(lc, "personal_memory") ||
-								strings.Contains(lc, "read_user_document") ||
-								strings.Contains(lc, "read_web_page")
-
-							if strings.Contains(lc, "<|") ||
-								strings.Contains(lc, "function") ||
-								strings.Contains(lc, "tool") ||
-								strings.Contains(lc, "execute") ||
-								hasToolName ||
-								(strings.Contains(lc, "{\"") && strings.Contains(lc, "args")) {
-								log.Printf("[handleChat] Potential tool pattern detected in content: %s", content)
-								go app.LearnToolPattern(modelID, content)
+				// --- C. Handle Standard OpenAI Format (if not custom and not tool-buffered) ---
+				if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
+					if choice, ok := choices[0].(map[string]interface{}); ok {
+						if delta, ok := choice["delta"].(map[string]interface{}); ok {
+							if c, ok := delta["content"].(string); ok {
+								fullResponse += c
 							}
 						}
 					}
 				}
-			}
-		}
 
-		// Standard Proxy
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-
-		// CUSTOM PARSING LOGIC
-		if toolPattern != nil && isBuffering {
-			// (Existing buffering logic omitted for brevity in thought process, but must be preserved in actual edit)
-			// ...
-		}
-
-		// Standard Proxy Logic & Accumulation for Memory
-		trimmedLine := strings.TrimSpace(line)
-		if trimmedLine == "" {
-			continue
-		}
-
-		// Write line to client immediately
-		fmt.Fprintf(w, "%s\n\n", line)
-		flusher.Flush()
-
-		// 🧠 Smart Memory: Accumulate response
-		if globalApp != nil && globalApp.enableMemory {
-			if strings.HasPrefix(trimmedLine, "data: ") {
-				dataStr := strings.TrimPrefix(trimmedLine, "data: ")
-				if dataStr == "[DONE]" {
-					// End of stream - Trigger Analysis
-					// We need userID and messages.
-					// userID is in 'currentUserID' (managed in `mcp/server.go` but accessible here?)
-					// 'currentUserID' is in 'mcp' package. We should use it or extract from request if possible.
-					// For now, let's use a safe default or try to get it.
-					// Actually, 'handleChat' doesn't explicitly know the user ID unless we parse it or use the global.
-					// allowedUserIDs logic exists but might not be set for every chat request.
-					// Let's assume 'default' or check if we can pass it.
-					// The 'AnalyzeConversationForMemory' takes userID.
-
-					// Trigger in background
-					// Trigger in background
-					if globalApp != nil && globalApp.enableMemory && len(messagesForMemory) > 0 {
-						// Pass captured data to analysis
-						go globalApp.AnalyzeConversationForMemory(userID, messagesForMemory, fullResponse)
-					}
-				} else {
-					// Extract content to accumulate
-					var chunk map[string]interface{}
-					if err := json.Unmarshal([]byte(dataStr), &chunk); err == nil {
-						if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
-							if choice, ok := choices[0].(map[string]interface{}); ok {
-								if delta, ok := choice["delta"].(map[string]interface{}); ok {
-									if c, ok := delta["content"].(string); ok {
-										fullResponse += c
-									}
+				// --- D. Self-Evolution for non-buffered models ---
+				// This block was previously in an `else if strings.HasPrefix(strings.TrimSpace(line), "data: ")`
+				// It should now be integrated here, after content extraction but before forwarding.
+				if toolPattern == nil { // Only if no tool pattern is active
+					var content string
+					if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
+						if choice, ok := choices[0].(map[string]interface{}); ok {
+							if delta, ok := choice["delta"].(map[string]interface{}); ok {
+								if c, ok := delta["content"].(string); ok {
+									content = c
+								} else if rc, ok := delta["reasoning_content"].(string); ok {
+									content = rc
+								} else if r, ok := delta["reasoning"].(string); ok {
+									content = r
 								}
 							}
 						}
 					}
+
+					// 🧪 Special Handling for Command-R / GPT-OSS Format (<|channel|>)
+					if !isBuffering && (strings.Contains(content, "<|channel|>") || strings.Contains(content, "<|tool_code|>")) {
+						log.Printf("[handleChat] Detected Command-R/GPT-OSS Tool Call Pattern. Switching to buffering mode.")
+						isBuffering = true
+						buffer = content
+
+						// Define a regex that captures the prefix as Group 1 (ignored) and the JSON as Group 2
+						// Pattern: <|channel|>...<|message|> { JSON }
+						toolPattern = map[string]string{"format": "command-r"}
+						toolRegex = regexp.MustCompile(`(?s)(<\|channel\|>.*?<\|message\|>)\s*(\{[\s\S]*\})`)
+						flusher.Flush()
+						continue
+					}
+
+					// 🔍 Self-Evolution for non-buffered models
+					if len(content) > 5 {
+						lc := strings.ToLower(content)
+						// Broaden trigger keywords: <|, function, tool, execute, {"name":, and tool names
+						hasToolName := strings.Contains(lc, "search_web") ||
+							strings.Contains(lc, "personal_memory") ||
+							strings.Contains(lc, "read_user_document") ||
+							strings.Contains(lc, "read_web_page")
+
+						if strings.Contains(lc, "<|") ||
+							strings.Contains(lc, "function") ||
+							strings.Contains(lc, "tool") ||
+							strings.Contains(lc, "execute") ||
+							hasToolName ||
+							(strings.Contains(lc, "{\"") && strings.Contains(lc, "args")) {
+							log.Printf("[handleChat] Potential tool pattern detected in content: %s", content)
+							go app.LearnToolPattern(modelID, content)
+						}
+					}
 				}
 			}
+
+			// Forward the line (if not already continued by custom format or tool logic)
+			fmt.Fprintf(w, "%s\n\n", line)
+			flusher.Flush()
+
+		} else {
+			// Forward non-data lines (e.g. event: ...)
+			fmt.Fprintf(w, "%s\n\n", line)
+			flusher.Flush()
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		log.Printf("Stream error: %v", err)
+		log.Printf("[handleChat] Stream scanner error: %v", err)
+	}
+
+	log.Printf("[handleChat-DEBUG] processing complete. Total response len: %d", len(fullResponse))
+
+	// 🔍 FALLBACK logging
+	if enableMemory && len(messagesForMemory) > 0 && fullResponse != "" && !memoryLogged {
+		log.Printf("[handleChat] Fallback Memory Logging Triggered")
+		go logChatToHistory(userID, messagesForMemory, fullResponse)
+	}
+}
+
+// Helper to dedup memory check code
+func checkAndLogMemoryWith(userID string, messages []map[string]interface{}, response string, msgLogged *bool) {
+	if *msgLogged {
+		return
+	}
+	if len(messages) > 0 && response != "" {
+		log.Printf("[handleChat] Stream End Trigger. Logging to memory...")
+		go logChatToHistory(userID, messages, response)
+		*msgLogged = true
 	}
 }
 
@@ -1412,4 +1449,67 @@ func InitTTS(assetsDir string, threads int) error {
 	globalTTS = tts
 	log.Printf("TTS initialized successfully (Threads: %d)", threads)
 	return nil
+}
+
+// logChatToHistory appends the latest chat turn to a log file for async processing.
+func logChatToHistory(userID string, messages []map[string]interface{}, assistantResponse string) {
+	log.Printf("[AsyncMemory] logChatToHistory called for user: %s, msgs: %d, responseLen: %d", userID, len(messages), len(assistantResponse))
+
+	// 1. Find the last user message
+	var lastUserMsg string
+	// Iterate backwards to find the most recent user message
+	for i := len(messages) - 1; i >= 0; i-- {
+		if role, ok := messages[i]["role"].(string); ok && role == "user" {
+			if content, ok := messages[i]["content"].(string); ok {
+				lastUserMsg = content
+				break
+			}
+		}
+	}
+
+	if lastUserMsg == "" {
+		log.Printf("[AsyncMemory] No user message found in history. Skipping.")
+		return // No user message to log?
+	}
+
+	// 2. Create Log Entry
+	entry := map[string]interface{}{
+		"timestamp": time.Now().Format(time.RFC3339),
+		"user":      lastUserMsg,
+		"assistant": assistantResponse,
+	}
+
+	data, err := json.Marshal(entry)
+	if err != nil {
+		log.Printf("[AsyncMemory] Failed to marshal log entry: %v", err)
+		return
+	}
+
+	// 3. Append to File
+	logPath, err := mcp.GetUserMemoryFilePath(userID, "chat_history.log")
+	if err != nil {
+		log.Printf("[AsyncMemory] Failed to get log path: %v", err)
+		return
+	}
+
+	log.Printf("[AsyncMemory] Writing to: %s", logPath)
+
+	// Ensure directory exists (GetUserMemoryFilePath calls GetUserMemoryDir which creates the dir)
+	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
+		log.Printf("[AsyncMemory] Failed to create log directory: %v", err)
+		return
+	}
+
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("[AsyncMemory] Failed to open log file: %v", err)
+		return
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString(string(data) + "\n"); err != nil {
+		log.Printf("[AsyncMemory] Failed to write to log file: %v", err)
+	} else {
+		log.Printf("[AsyncMemory] Successfully wrote log entry.")
+	}
 }

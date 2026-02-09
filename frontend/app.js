@@ -1038,7 +1038,6 @@ function saveConfig(closeModal = true) {
         window.go.main.App.SetLLMMode(config.llmMode).catch(console.error);
         window.go.main.App.SetEnableTTS(config.enableTTS);
         window.go.main.App.SetEnableMCP(config.enableMCP);
-        window.go.main.App.SetEnableMemory(config.enableMemory);
 
         // This is separate from saveConfig in app.go, but SetTTSThreads triggers reload
         if (config.ttsThreads) {

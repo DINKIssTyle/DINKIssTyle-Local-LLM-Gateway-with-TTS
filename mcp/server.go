@@ -91,18 +91,18 @@ func GetToolList() []Tool {
 		},
 		{
 			Name:        "personal_memory",
-			Description: "Manage the user's long-term memory. Actions: 'remember' to save facts (auto-categorized to personal/work), 'forget' to remove, 'query' for fast search, 'read' for recent highlights. For deep dives into specific topics, prefer 'read_user_document'.",
+			Description: "Interface to long-term memory. Actions: 'forget' (remove a specific fact), 'query' (search), 'read' (status). IMPORTANT: Use ONLY when requested. Memory is SAVED AUTOMATICALLY after each chat; DO NOT call to 'save' facts. When using 'forget', specify the exact phrase to remove. Avoid calling multiple times in a row.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"action": map[string]interface{}{
 						"type":        "string",
-						"description": "Action: 'remember' (save), 'forget' (remove), 'query' (search), 'read' (high-level summary).",
-						"enum":        []string{"remember", "forget", "query", "read", "search"},
+						"description": "Action: 'forget', 'query', 'read'.",
+						"enum":        []string{"forget", "query", "read"},
 					},
 					"content": map[string]interface{}{
 						"type":        "string",
-						"description": "The fact to save or the keyword/key to search/forget.",
+						"description": "The fact to forget or the query to search.",
 					},
 				},
 				"required": []string{"action"},
@@ -264,6 +264,14 @@ func HandleSSE(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "event: message\ndata: %s\n\n", string(respBytes))
 			flusher.Flush()
 			log.Printf("[MCP-DEBUG] Inline Response sent for %s", initialReq.Method)
+
+			// 🚀 CRITICAL FIX: If this was a POST request and we processed it inline,
+			// don't enter the infinite SSE loop. Most one-off clients (like LM Studio tools)
+			// use POST and expect a response, not a 10-minute stream.
+			if initialReq.Method != "initialize" {
+				log.Printf("[MCP-DEBUG] Short-circuiting POST request for %s", initialReq.Method)
+				return
+			}
 		}
 	}
 
@@ -364,7 +372,8 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
 			return "", fmt.Errorf("invalid arguments for personal_memory: %v", err)
 		}
-		filePath, err := GetUserMemoryPath(userID)
+		// Default to personal.md for memory operations
+		filePath, err := GetUserMemoryFilePath(userID, "personal.md")
 		if err != nil {
 			return "", fmt.Errorf("error resolving memory path: %v", err)
 		}
@@ -384,14 +393,15 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 			return "", fmt.Errorf("invalid arguments for read_user_document: %v", err)
 		}
 		if args.Filename == "" {
-			args.Filename = "index.md"
+			args.Filename = "personal.md"
 		}
-		if args.Filename == "index.md" {
-			if err := GenerateIndexMD(userID); err != nil {
-				log.Printf("[MCP] Failed to regenerate index.md: %v", err)
-			}
+
+		// Direct read using simplified logic
+		filePath, err := GetUserMemoryFilePath(userID, args.Filename)
+		if err != nil {
+			return "", fmt.Errorf("invalid filename: %v", err)
 		}
-		return ReadUserDocument(userID, args.Filename)
+		return ManageMemory(filePath, "read", "")
 
 	default:
 		return "", fmt.Errorf("tool not found: %s", toolName)
@@ -425,12 +435,14 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 				},
 				"isError": true,
 			}
+			Broadcast(fmt.Sprintf(`{"type": "tool_call.failure", "tool": "search_web", "reason": "%v"}`, err))
 		} else {
 			res.Result = map[string]interface{}{
 				"content": []map[string]interface{}{
 					{"type": "text", "text": content},
 				},
 			}
+			Broadcast(`{"type": "tool_call.success", "tool": "search_web"}`)
 		}
 	} else if params.Name == "read_web_page" {
 		var args struct {
@@ -445,16 +457,19 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 				},
 				"isError": true,
 			}
+			Broadcast(fmt.Sprintf(`{"type": "tool_call.failure", "tool": "read_web_page", "reason": "%v"}`, err))
 		} else {
 			res.Result = map[string]interface{}{
 				"content": []map[string]interface{}{
 					{"type": "text", "text": content},
 				},
 			}
+			Broadcast(`{"type": "tool_call.success", "tool": "read_web_page"}`)
 		}
 	} else if params.Name == "personal_memory" {
 		if !enableMemory {
 			res.Error = &JSONRPCError{Code: -32601, Message: "Memory feature is disabled by user settings."}
+			Broadcast(`{"type": "tool_call.failure", "tool": "personal_memory", "reason": "Memory disabled"}`)
 			return
 		}
 
@@ -464,7 +479,7 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 		}
 		json.Unmarshal(params.Arguments, &args)
 
-		filePath, err := GetUserMemoryPath(userID)
+		filePath, err := GetUserMemoryFilePath(userID, "personal.md")
 		if err != nil {
 			res.Result = map[string]interface{}{
 				"content": []map[string]interface{}{
@@ -472,6 +487,7 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 				},
 				"isError": true,
 			}
+			Broadcast(fmt.Sprintf(`{"type": "tool_call.failure", "tool": "personal_memory", "reason": "%v"}`, err))
 			return
 		}
 
@@ -483,12 +499,14 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 				},
 				"isError": true,
 			}
+			Broadcast(fmt.Sprintf(`{"type": "tool_call.failure", "tool": "personal_memory", "reason": "%v"}`, err))
 		} else {
 			res.Result = map[string]interface{}{
 				"content": []map[string]interface{}{
 					{"type": "text", "text": content},
 				},
 			}
+			Broadcast(`{"type": "tool_call.success", "tool": "personal_memory"}`)
 		}
 
 	} else if params.Name == "get_current_time" {
@@ -498,6 +516,7 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 				{"type": "text", "text": content},
 			},
 		}
+		Broadcast(`{"type": "tool_call.success", "tool": "get_current_time"}`)
 	} else if params.Name == "read_user_document" {
 		if !enableMemory {
 			res.Error = &JSONRPCError{Code: -32601, Message: "Memory feature is disabled by user settings."}
@@ -510,18 +529,21 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 		json.Unmarshal(params.Arguments, &args)
 
 		if args.Filename == "" {
-			// Default to index.md
-			args.Filename = "index.md"
+			args.Filename = "personal.md"
 		}
 
-		// Regenerate index.md if requested
-		if args.Filename == "index.md" {
-			if err := GenerateIndexMD(userID); err != nil {
-				log.Printf("[MCP] Failed to regenerate index.md: %v", err)
+		filePath, err := GetUserMemoryFilePath(userID, args.Filename)
+		if err != nil {
+			res.Result = map[string]interface{}{
+				"content": []map[string]interface{}{
+					{"type": "text", "text": fmt.Sprintf("Error: %v", err)},
+				},
+				"isError": true,
 			}
+			return
 		}
 
-		content, err := ReadUserDocument(userID, args.Filename)
+		content, err := ManageMemory(filePath, "read", "")
 		if err != nil {
 			// If document not found, list available files
 			files, _ := ListUserMemoryFiles(userID)
@@ -532,12 +554,14 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 				},
 				"isError": true,
 			}
+			Broadcast(fmt.Sprintf(`{"type": "tool_call.failure", "tool": "read_user_document", "reason": "%v"}`, err))
 		} else {
 			res.Result = map[string]interface{}{
 				"content": []map[string]interface{}{
 					{"type": "text", "text": content},
 				},
 			}
+			Broadcast(`{"type": "tool_call.success", "tool": "read_user_document"}`)
 		}
 	} else {
 		res.Error = &JSONRPCError{Code: -32601, Message: "Tool not found"}

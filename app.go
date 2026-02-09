@@ -28,21 +28,20 @@ import (
 
 // App struct for Wails binding
 type App struct {
-	ctx          context.Context
-	server       *http.Server // HTTPS Server
-	httpServer   *http.Server // HTTP Compatibility Server
-	serverMux    sync.Mutex
-	isRunning    bool
-	port         string
-	llmEndpoint  string
-	llmApiToken  string
-	llmMode      string // "standard" or "stateful"
-	enableTTS    bool
-	enableMCP    bool
-	enableMemory bool
-	authMgr      *AuthManager
-	assets       embed.FS
-	isQuitting   bool
+	ctx         context.Context
+	server      *http.Server // HTTPS Server
+	httpServer  *http.Server // HTTP Compatibility Server
+	serverMux   sync.Mutex
+	isRunning   bool
+	port        string
+	llmEndpoint string
+	llmApiToken string
+	llmMode     string // "standard" or "stateful"
+	enableTTS   bool
+	enableMCP   bool
+	authMgr     *AuthManager
+	assets      embed.FS
+	isQuitting  bool
 
 	// Server-side Model Cache
 	modelCache     []byte
@@ -59,8 +58,6 @@ type AppConfig struct {
 	LLMApiToken     string                       `json:"llmApiToken"`
 	LLMMode         string                       `json:"llmMode"`
 	EnableTTS       bool                         `json:"enableTTS"`
-	EnableMCP       bool                         `json:"enableMCP"`
-	EnableMemory    bool                         `json:"enableMemory"`
 	TTS             ServerTTSConfig              `json:"tts"`
 	StartOnBoot     bool                         `json:"startOnBoot"`
 	MinimizeToTray  bool                         `json:"minimizeToTray"`
@@ -225,9 +222,6 @@ func copyRecursive(src, dst string) error {
 	return nil
 }
 
-// Helper to avoid import mess in this tool call, I'll add the function fully in next steps or assuming imports.
-// To do this cleanly, I'll read app.go imports first.
-
 // NewApp creates a new App instance
 func NewApp(assets embed.FS) *App {
 	a := &App{
@@ -242,7 +236,6 @@ func (a *App) loadConfig() {
 	// Set defaults
 	a.port = "8080"
 	a.llmEndpoint = "http://127.0.0.1:1234"
-	a.enableTTS = false
 	a.enableTTS = false
 	ttsConfig = ServerTTSConfig{VoiceStyle: "M1.json", Speed: 1.0, Threads: 4}
 
@@ -273,12 +266,10 @@ func (a *App) loadConfig() {
 	}
 	a.llmApiToken = cfg.LLMApiToken
 	a.enableTTS = cfg.EnableTTS
-	a.enableMCP = cfg.EnableMCP
-	a.enableMemory = cfg.EnableMemory
 	a.toolPatterns = cfg.ToolPatterns
 
 	fmt.Printf("[loadConfig] Loaded Config from %s\n", cfgPath)
-	fmt.Printf("   -> Port: %s, Endpoint: %s, Mode: %s, MCP: %v, Memory: %v\n", a.port, a.llmEndpoint, a.llmMode, a.enableMCP, a.enableMemory)
+	fmt.Printf("   -> Port: %s, Endpoint: %s, Mode: %s\n", a.port, a.llmEndpoint, a.llmMode)
 
 	// Update global TTS config if loaded values are valid
 	if cfg.TTS.VoiceStyle != "" {
@@ -290,9 +281,6 @@ func (a *App) loadConfig() {
 	if cfg.TTS.Threads > 0 {
 		ttsConfig.Threads = cfg.TTS.Threads
 	}
-
-	// Proactively sync to MCP context
-	mcp.SetContext("default", a.enableMemory)
 }
 
 func (a *App) saveConfig() {
@@ -312,8 +300,6 @@ func (a *App) saveConfig() {
 	cfg.LLMMode = a.llmMode
 	cfg.LLMApiToken = a.llmApiToken
 	cfg.EnableTTS = a.enableTTS
-	cfg.EnableMCP = a.enableMCP
-	cfg.EnableMemory = a.enableMemory
 	cfg.TTS = ttsConfig
 	cfg.ToolPatterns = a.toolPatterns
 
@@ -337,6 +323,9 @@ func (a *App) startup(ctx context.Context) {
 
 	// Reload config now that paths are set up and files potentially copied
 	a.loadConfig()
+
+	// Start Async Memory Worker
+	a.StartMemoryWorker()
 
 	// Check for Auto Start Server
 	if a.GetAutoStartServer() {
@@ -423,14 +412,13 @@ func (a *App) GetServerStatus() map[string]interface{} {
 	a.serverMux.Lock()
 	defer a.serverMux.Unlock()
 	return map[string]interface{}{
-		"running":      a.isRunning,
-		"port":         a.port,
-		"llmEndpoint":  a.llmEndpoint,
-		"llmMode":      a.llmMode,
-		"hasApiToken":  a.llmApiToken != "",
-		"enableTTS":    a.enableTTS,
-		"enableMCP":    a.enableMCP,
-		"enableMemory": a.enableMemory,
+		"running":     a.isRunning,
+		"port":        a.port,
+		"llmEndpoint": a.llmEndpoint,
+		"llmMode":     a.llmMode,
+		"hasApiToken": a.llmApiToken != "",
+		"enableTTS":   a.enableTTS,
+		"enableMCP":   a.enableMCP,
 	}
 }
 
@@ -498,16 +486,7 @@ func (a *App) SetEnableMCP(enabled bool) {
 	a.saveConfig()
 }
 
-// SetEnableMemory sets the Personal Memory enabled state
-func (a *App) SetEnableMemory(enabled bool) {
-	a.serverMux.Lock()
-	defer a.serverMux.Unlock()
-	a.enableMemory = enabled
-	a.saveConfig()
-
-	// Proactively sync to MCP context
-	mcp.SetContext("default", enabled)
-}
+// SetEnableMemory is removed; use per-user settings via /api/config
 
 // Startup Settings - exposed to Wails frontend
 
