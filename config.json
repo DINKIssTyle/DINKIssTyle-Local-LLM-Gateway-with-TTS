@@ -11,6 +11,5 @@
   },
   "startOnBoot": false,
   "minimizeToTray": false,
-  "autoStartServer": true,
-  "enableMCP": false
+  "autoStartServer": true
 }

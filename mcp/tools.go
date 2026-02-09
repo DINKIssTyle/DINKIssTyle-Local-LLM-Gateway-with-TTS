@@ -12,9 +12,14 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chromedp/chromedp"
+)
+
+var (
+	memoryMu sync.Mutex
 )
 
 // GetCurrentTime returns the current local time in a readable format.
@@ -138,11 +143,14 @@ func ReadPage(pageURL string) (string, error) {
 	return res, nil
 }
 
-// ManageMemory handles reading and writing to the user's memory file.
-// Enhanced with server-side processing to protect data.
-// Supported actions: read, remember, forget, query, search (legacy), append (legacy), upsert (legacy)
+// ManageMemory handles reading and writing to the user's memory file (personal.md).
+// Simplified to use direct markdown file manipulation.
+// Supported actions: read, remember, forget, query
 func ManageMemory(filePath string, action string, content string) (string, error) {
 	log.Printf("[MCP] ManageMemory Action: %s, Path: %s", action, filePath)
+
+	memoryMu.Lock()
+	defer memoryMu.Unlock()
 
 	// Ensure directory exists
 	dir := filepath.Dir(filePath)
@@ -150,204 +158,116 @@ func ManageMemory(filePath string, action string, content string) (string, error
 		return "", fmt.Errorf("failed to create directory: %v", err)
 	}
 
-	// Extract userID from filePath for index operations
-	// New structure: /path/to/memory/{userID}/log.md -> extract {userID} from parent dir
-	userID := filepath.Base(filepath.Dir(filePath))
+	// We primarily operate on 'personal.md' in the same directory as filePath (which might be passed as anything)
+	// But let's assume filePath IS the target file (usually personal.md for 'remember').
+	// If action is 'read', we might want to read a specific file or the default 'personal.md'.
+	// To be safe and consistent with new architecture:
+	// If filePath ends in .md, use it. If not, default to personal.md?
+	// The agent usually passes the full path to personal.md.
 
 	switch action {
 	case "read":
-		// Read index summary instead of raw file for efficiency
-		summary := GetIndexSummaryForPrompt(userID)
-		if summary == "" {
-			// Fallback to raw file for backwards compatibility
-			data, err := os.ReadFile(filePath)
-			if err != nil {
-				if os.IsNotExist(err) {
-					return "Memory is empty.", nil
-				}
-				return "", fmt.Errorf("failed to read memory: %v", err)
-			}
-			if len(data) == 0 {
-				return "Memory is empty.", nil
-			}
-			return string(data), nil
-		}
-		return fmt.Sprintf("=== User Memory Index ===\n%s", summary), nil
-
-	case "remember":
-		// Server extracts key automatically (Append-Only, safe)
-		if strings.TrimSpace(content) == "" {
-			return "", fmt.Errorf("content cannot be empty for remember")
-		}
-
-		key, value := ExtractKeyFromContent(content)
-		log.Printf("[MCP] Remember: Extracted key='%s' from content", key)
-
-		// Append to log (never overwrites)
-		if err := AppendToLog(filePath, "SET", key, value); err != nil {
-			return "", fmt.Errorf("failed to save memory: %v", err)
-		}
-
-		// Rebuild index
-		if _, err := RebuildAndSaveIndex(userID); err != nil {
-			log.Printf("[MCP] Warning: Failed to rebuild index: %v", err)
-		}
-
-		return fmt.Sprintf("Remembered: %s = %s", key, value), nil
-
-	case "forget":
-		// Mark as deleted in log (data preserved in log history)
-		if strings.TrimSpace(content) == "" {
-			return "", fmt.Errorf("key to forget cannot be empty")
-		}
-
-		key := strings.ToLower(strings.TrimSpace(content))
-
-		// Check if key exists in index
-		indexPath, _ := GetMemoryIndexPath(userID)
-		index, _ := LoadIndex(indexPath)
-		if _, exists := index.Facts[key]; !exists {
-			return fmt.Sprintf("Key '%s' not found in memory.", key), nil
-		}
-
-		// Append DELETE entry
-		if err := AppendToLog(filePath, "DELETE", key, ""); err != nil {
-			return "", fmt.Errorf("failed to update memory: %v", err)
-		}
-
-		// Rebuild index
-		if _, err := RebuildAndSaveIndex(userID); err != nil {
-			log.Printf("[MCP] Warning: Failed to rebuild index: %v", err)
-		}
-
-		return fmt.Sprintf("Forgot: %s (log preserved)", key), nil
-
-	case "query":
-		// Fast lookup from index
-		if strings.TrimSpace(content) == "" {
-			return "", fmt.Errorf("query key cannot be empty")
-		}
-
-		key := strings.ToLower(strings.TrimSpace(content))
-		indexPath, _ := GetMemoryIndexPath(userID)
-		index, err := LoadIndex(indexPath)
-		if err != nil {
-			return "", fmt.Errorf("failed to load index: %v", err)
-		}
-
-		if val, ok := index.Facts[key]; ok {
-			return fmt.Sprintf("%s: %s", key, val), nil
-		}
-
-		// Fuzzy search in keys
-		var matches []string
-		for k, v := range index.Facts {
-			if strings.Contains(k, key) || strings.Contains(strings.ToLower(v), key) {
-				matches = append(matches, fmt.Sprintf("%s: %s", k, v))
-			}
-		}
-
-		if len(matches) > 0 {
-			return fmt.Sprintf("Partial matches:\n%s", strings.Join(matches, "\n")), nil
-		}
-
-		return fmt.Sprintf("No memory found for '%s'.", key), nil
-
-	case "append":
-		// Legacy: Redirect to remember for safety
-		return ManageMemory(filePath, "remember", content)
-
-	case "rewrite":
-		// DEPRECATED: Blocked for safety
-		return "", fmt.Errorf("'rewrite' action is disabled for data protection. Use 'remember' to add new facts or 'forget' to remove")
-
-	case "search":
-		if strings.TrimSpace(content) == "" {
-			return "", fmt.Errorf("search query (content) cannot be empty")
-		}
-
-		// Try index first
-		indexPath, _ := GetMemoryIndexPath(userID)
-		index, _ := LoadIndex(indexPath)
-		if len(index.Facts) > 0 {
-			query := strings.ToLower(content)
-			var matches []string
-			for k, v := range index.Facts {
-				if strings.Contains(k, query) || strings.Contains(strings.ToLower(v), query) {
-					matches = append(matches, fmt.Sprintf("%s: %s", k, v))
-				}
-			}
-			if len(matches) > 0 {
-				return strings.Join(matches, "\n"), nil
-			}
-		}
-
-		// Fallback to raw log search
 		data, err := os.ReadFile(filePath)
 		if err != nil {
 			if os.IsNotExist(err) {
 				return "Memory is empty.", nil
 			}
-			return "", fmt.Errorf("failed to read memory for search: %v", err)
+			return "", fmt.Errorf("failed to read memory: %v", err)
+		}
+		if len(data) == 0 {
+			return "Memory is empty.", nil
+		}
+		return string(data), nil
+
+	case "remember":
+		if strings.TrimSpace(content) == "" {
+			return "", fmt.Errorf("content cannot be empty for remember")
 		}
 
-		fileContent := string(data)
-		fileSize := len(fileContent)
-		lines := strings.Split(fileContent, "\n")
-		var results []string
+		// Append to file
+		f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			return "", fmt.Errorf("failed to open memory file: %v", err)
+		}
+		defer f.Close()
 
-		// 1. Precise check: Substring match
-		query := strings.ToLower(content)
+		// Simple format: - content
+		entry := fmt.Sprintf("- %s\n", strings.TrimSpace(content))
+		if _, err := f.WriteString(entry); err != nil {
+			return "", fmt.Errorf("failed to write to memory: %v", err)
+		}
+
+		return fmt.Sprintf("Remembered: %s", content), nil
+
+	case "forget":
+		// For 'forget', we need to read the file, remove the line, and rewrite.
+		// This is a bit expensive but fine for text files.
+		if strings.TrimSpace(content) == "" {
+			return "", fmt.Errorf("content to forget cannot be empty")
+		}
+
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return "", fmt.Errorf("failed to read memory for forget: %v", err)
+		}
+
+		lines := strings.Split(string(data), "\n")
+		var newLines []string
+		deleted := false
+		target := strings.ToLower(strings.TrimSpace(content))
+
+		for _, line := range lines {
+			// fuzzy match or exact match? Let's do contains for now to be easier.
+			// But 'content' usually comes from the LLM wishing to delete a specific fact.
+			if strings.Contains(strings.ToLower(line), target) {
+				deleted = true
+				continue // Skip this line
+			}
+			newLines = append(newLines, line)
+		}
+
+		if !deleted {
+			return "Fact not found in memory.", nil
+		}
+
+		output := strings.Join(newLines, "\n")
+		if err := os.WriteFile(filePath, []byte(output), 0644); err != nil {
+			return "", fmt.Errorf("failed to update memory file: %v", err)
+		}
+
+		return fmt.Sprintf("Forgot facts containing: %s", content), nil
+
+	case "query":
+		// Simple grep
+		if strings.TrimSpace(content) == "" {
+			return "", fmt.Errorf("query cannot be empty")
+		}
+
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return "Memory is empty.", nil
+			}
+			return "", fmt.Errorf("failed to read memory: %v", err)
+		}
+
+		lines := strings.Split(string(data), "\n")
+		var matches []string
+		query := strings.ToLower(strings.TrimSpace(content))
+
 		for _, line := range lines {
 			if strings.Contains(strings.ToLower(line), query) {
-				results = append(results, line)
+				matches = append(matches, line)
 			}
 		}
 
-		// 2. Keyword check: If no precise match, split query into words
-		if len(results) == 0 {
-			keywords := strings.Fields(query)
-			if len(keywords) > 1 {
-				for _, line := range lines {
-					lineLower := strings.ToLower(line)
-					matchCount := 0
-					for _, k := range keywords {
-						if len(k) < 2 {
-							continue
-						} // Skip very short keywords
-						if strings.Contains(lineLower, k) {
-							matchCount++
-						}
-					}
-					// If at least 50% of keywords match, include the line
-					if matchCount > 0 && float64(matchCount)/float64(len(keywords)) >= 0.5 {
-						results = append(results, line)
-					}
-				}
-			}
+		if len(matches) == 0 {
+			return fmt.Sprintf("No memory found for '%s'.", content), nil
 		}
-
-		// 3. Fallback: If still no results and file is small (< 5KB), return everything
-		if len(results) == 0 && fileSize < 5120 {
-			return fmt.Sprintf("[AUTOMATIC READ FALLBACK - No direct matches for '%s']\n%s", content, fileContent), nil
-		}
-
-		if len(results) == 0 {
-			return fmt.Sprintf("No matches found for '%s' in a large memory file. Try different keywords.", content), nil
-		}
-		return strings.Join(results, "\n"), nil
-
-	case "replace":
-		// DEPRECATED: Too dangerous, redirect to remember
-		return "", fmt.Errorf("'replace' action is disabled for data protection. Use 'remember' to add new facts")
-
-	case "upsert":
-		// Legacy: Redirect to remember for Append-Only safety
-		// Extract key:value format and pass to remember
-		return ManageMemory(filePath, "remember", content)
+		return strings.Join(matches, "\n"), nil
 
 	default:
-		return "", fmt.Errorf("unknown action: %s. Supported: read, remember, forget, query, search", action)
+		return "", fmt.Errorf("unknown action: %s. Supported: read, remember, forget, query", action)
 	}
 }
 
@@ -379,18 +299,12 @@ func GetUserMemoryDir(userID string) (string, error) {
 }
 
 // GetUserMemoryFilePath returns the path to a specific memory file for a user.
-// filename can be: "personal.md", "work.md", "index.md", "log.md"
 func GetUserMemoryFilePath(userID, filename string) (string, error) {
 	dir, err := GetUserMemoryDir(userID)
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(dir, filename), nil
-}
-
-// GetUserMemoryPath is kept for backward compatibility - returns log.md path
-func GetUserMemoryPath(userID string) (string, error) {
-	return GetUserMemoryFilePath(userID, "log.md")
 }
 
 // ListUserMemoryFiles returns all .md files in the user's memory directory

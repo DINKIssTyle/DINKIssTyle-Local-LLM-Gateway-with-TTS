@@ -2,8 +2,8 @@ package main
 
 import (
 	"bytes"
+	"dinkisstyle-chat/mcp"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -57,18 +57,7 @@ func (a *App) LearnToolPattern(modelID string, sampleLine string) {
 	log.Printf("[Self-Evolution] 🧬 Analyzing potential missed tool call for model %s: %s", modelID, sampleLine)
 
 	// Construct the prompt
-	prompt := fmt.Sprintf(`You are an expert at Go Regular Expressions and LLM Tool Calling patterns.
-I have a log from an LLM that appears to be a tool call, but my current parser missed it.
-The sample content is: "%s"
-
-Please generate a single Go-compatible Regular Expression (regexp) to capture:
-- Group 1: The Tool Name (e.g., search_web, personal_memory)
-- Group 2: The JSON Arguments or parameters block.
-
-REQUIREMENTS:
-1. Return ONLY the regex string. Do not wrap in markdown or code blocks.
-2. The regex must be robust (use (?s) if it spans multiple lines).
-3. If no tool call found, return "NONE".`, sampleLine)
+	prompt := mcp.EvolutionPromptTemplate(sampleLine)
 
 	// Send request to the configured LLM endpoint
 	// We use the SAME endpoint the user is using, assuming it can handle concurrent requests or queue them.
