@@ -21,13 +21,14 @@ import (
 
 // UserSettings holds user-specific overrides
 type UserSettings struct {
-	ApiEndpoint  *string          `json:"api_endpoint,omitempty"`
-	ApiToken     *string          `json:"api_token,omitempty"`
-	LLMMode      *string          `json:"llm_mode,omitempty"`
-	EnableTTS    *bool            `json:"enable_tts,omitempty"`
-	EnableMCP    *bool            `json:"enable_mcp,omitempty"`
-	EnableMemory *bool            `json:"enable_memory,omitempty"`
-	TTSConfig    *ServerTTSConfig `json:"tts_config,omitempty"`
+	ApiEndpoint   *string          `json:"api_endpoint,omitempty"`
+	ApiToken      *string          `json:"api_token,omitempty"`
+	LLMMode       *string          `json:"llm_mode,omitempty"`
+	EnableTTS     *bool            `json:"enable_tts,omitempty"`
+	EnableMCP     *bool            `json:"enable_mcp,omitempty"`
+	EnableMemory  *bool            `json:"enable_memory,omitempty"`
+	TTSConfig     *ServerTTSConfig `json:"tts_config,omitempty"`
+	DisabledTools []string         `json:"disabled_tools,omitempty"`
 }
 
 // User represents a user account
@@ -288,6 +289,7 @@ func (am *AuthManager) GetUserDetail(id string) (map[string]interface{}, error) 
 		"created_at":     user.CreatedAt,
 		"has_api_key":    user.Settings.ApiToken != nil && *user.Settings.ApiToken != "",
 		"api_key_masked": apiToken,
+		"disabled_tools": user.Settings.DisabledTools,
 	}, nil
 }
 
@@ -362,6 +364,36 @@ func (am *AuthManager) GetUserApiToken(id string) (string, error) {
 	}
 
 	return *user.Settings.ApiToken, nil
+}
+
+// SetUserDisabledTools sets the list of disabled tools for a specific user
+func (am *AuthManager) SetUserDisabledTools(id string, tools []string) error {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+
+	user, exists := am.users[id]
+	if !exists {
+		return fmt.Errorf("user not found")
+	}
+
+	user.Settings.DisabledTools = tools
+	return am.saveUsersLocked()
+}
+
+// GetUserDisabledTools returns the list of disabled tools for a specific user
+func (am *AuthManager) GetUserDisabledTools(id string) ([]string, error) {
+	am.mu.RLock()
+	defer am.mu.RUnlock()
+
+	user, exists := am.users[id]
+	if !exists {
+		return nil, fmt.Errorf("user not found")
+	}
+
+	if user.Settings.DisabledTools == nil {
+		return []string{}, nil
+	}
+	return user.Settings.DisabledTools, nil
 }
 
 // generateToken creates a random session token

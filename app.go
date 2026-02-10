@@ -775,6 +775,16 @@ func (a *App) GetUserApiToken(id string) (string, error) {
 	return a.authMgr.GetUserApiToken(id)
 }
 
+// SetUserDisabledTools sets the list of disabled tools for a specific user (exposed to Wails)
+func (a *App) SetUserDisabledTools(id string, tools []string) error {
+	return a.authMgr.SetUserDisabledTools(id, tools)
+}
+
+// GetUserDisabledTools returns the list of disabled tools for a specific user (exposed to Wails)
+func (a *App) GetUserDisabledTools(id string) ([]string, error) {
+	return a.authMgr.GetUserDisabledTools(id)
+}
+
 // GetVoiceStyles returns a list of available voice style files (JSON)
 func (a *App) GetVoiceStyles() []string {
 	var styles []string

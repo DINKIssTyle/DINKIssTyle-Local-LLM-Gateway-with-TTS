@@ -263,7 +263,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 						user.Settings.EnableMemory = newCfg.EnableMemory
 						updated = true
 						// Sync to MCP context
-						mcp.SetContext(user.ID, *newCfg.EnableMemory)
+						mcp.SetContext(user.ID, *newCfg.EnableMemory, user.Settings.DisabledTools)
 					}
 					// Handle TTS Config partial updates if needed, for now simplistic
 					if newCfg.TTSThreads > 0 {
@@ -671,6 +671,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	enableMCP := app.enableMCP
 	enableMemory := false // Default to false (Secure by default for unauthenticated)
 
+	var disabledTools []string
+
 	// Override with User Settings
 	userID := r.Header.Get("X-User-ID")
 	if userID != "" {
@@ -695,13 +697,16 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			} else {
 				enableMemory = true // Default to true for authenticated users
 			}
+			if user.Settings.DisabledTools != nil {
+				disabledTools = user.Settings.DisabledTools
+			}
 		}
 	}
 
 	// Set MCP Context for this user interaction
 	// This ensures that when LM Studio calls back to MCP, it has the correct context
-	mcp.SetContext(userID, enableMemory)
-	log.Printf("[handleChat-DEBUG] userID=%s, enableMemory=%v", userID, enableMemory)
+	mcp.SetContext(userID, enableMemory, disabledTools)
+	log.Printf("[handleChat-DEBUG] userID=%s, enableMemory=%v, disabledTools=%v", userID, enableMemory, disabledTools)
 
 	// Sanitize endpoint: Remove trailing slash and optional /v1 suffix if user included it
 	endpoint := strings.TrimRight(endpointRaw, "/")

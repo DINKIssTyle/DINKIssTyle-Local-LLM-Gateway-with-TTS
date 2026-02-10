@@ -579,7 +579,7 @@
                 </div>
 
                 <!-- API Key Section -->
-                <div>
+                <div style="margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border-color);">
                     <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);">API Key</div>
                     <div class="form-group">
                         <label>LLM API Key</label>
@@ -587,6 +587,18 @@
                     </div>
                     <div style="font-size: 11px; color: var(--text-secondary); margin-top: -8px;">
                         This API key will be used when this user makes LLM requests.
+                    </div>
+                </div>
+
+                <!-- MCP Tool Permissions Section -->
+                <div>
+                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);">MCP Tool Permissions
+                    </div>
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 12px;">
+                        Uncheck to disable specific tools for this user.
+                    </div>
+                    <div id="edit-user-tools-list" style="display: flex; flex-direction: column; gap: 8px;">
+                        <!-- Tool checkboxes will be injected here -->
                     </div>
                 </div>
             </div>
@@ -1009,6 +1021,39 @@
                 const apiKey = await window.go.main.App.GetUserApiToken(userId);
                 document.getElementById('edit-user-api-key').value = apiKey || '';
 
+                // Load Disabled Tools
+                let disabledTools = [];
+                try {
+                    disabledTools = await window.go.main.App.GetUserDisabledTools(userId) || [];
+                } catch (e) {
+                    console.warn('Failed to load disabled tools:', e);
+                }
+
+                // Populate Tool List
+                const allTools = [
+                    { id: 'search_web', name: 'Web Search', desc: 'Search DuckDuckGo' },
+                    { id: 'read_web_page', name: 'Read Web Page', desc: 'Read URL content' },
+                    { id: 'personal_memory', name: 'Personal Memory', desc: 'Access long-term memory' },
+                    { id: 'get_current_time', name: 'Current Time', desc: 'Get date/time' },
+                    { id: 'read_user_document', name: 'Read Documents', desc: 'Read static/work memory files' }
+                ];
+
+                const toolsContainer = document.getElementById('edit-user-tools-list');
+                toolsContainer.innerHTML = allTools.map(tool => {
+                    const isDisabled = disabledTools.includes(tool.id);
+                    const isChecked = !isDisabled; // Checked means ENABLED
+                    return `
+                        <label style="display: flex; align-items: start; gap: 10px; cursor: pointer; padding: 4px 0;">
+                            <input type="checkbox" class="tool-toggle" data-tool-id="${tool.id}" 
+                                   style="width: 16px; height: 16px; margin-top: 2px;" ${isChecked ? 'checked' : ''}>
+                            <div>
+                                <div style="color: var(--text-color); font-size: 13px; font-weight: 500;">${tool.name}</div>
+                                <div style="color: var(--text-secondary); font-size: 11px;">${tool.desc}</div>
+                            </div>
+                        </label>
+                    `;
+                }).join('');
+
                 document.getElementById('edit-user-modal').style.display = 'flex';
             } catch (e) {
                 console.error('Failed to load user details:', e);
@@ -1059,6 +1104,16 @@
 
                 // Update API key
                 await window.go.main.App.SetUserApiToken(userId, apiKey);
+
+                // Update Disabled Tools
+                const toolCheckboxes = document.querySelectorAll('.tool-toggle');
+                const disabledTools = [];
+                toolCheckboxes.forEach(cb => {
+                    if (!cb.checked) {
+                        disabledTools.push(cb.getAttribute('data-tool-id'));
+                    }
+                });
+                await window.go.main.App.SetUserDisabledTools(userId, disabledTools);
 
                 closeEditUserModal();
                 loadUsers();
