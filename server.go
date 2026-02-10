@@ -738,140 +738,150 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		var reqMap map[string]interface{}
 
 		if err := json.Unmarshal(body, &reqMap); err == nil {
-			var integrations []interface{}
-			if existing, ok := reqMap["integrations"].([]interface{}); ok {
-				integrations = existing
-			}
-
-			// Add our MCP server if not present
-			targetMCP := "mcp/dinkisstyle-gateway"
-			hasMCP := false
-			for _, v := range integrations {
-				if str, ok := v.(string); ok && str == targetMCP {
-					hasMCP = true
-					break
+			// Optimization for LM Studio Stateful mode:
+			// If we are in stateful mode and have a previous_response_id, we can skip redundant injections
+			// because LM Studio remembers the context (system_prompt, integrations, etc.) in the chat thread.
+			isStatefulTurn := false
+			if llmMode == "stateful" {
+				if pid, ok := reqMap["previous_response_id"].(string); ok && pid != "" {
+					isStatefulTurn = true
+					log.Println("[handleChat] Detected follow-up stateful turn, skipping redundant injections")
 				}
 			}
 
-			if !hasMCP {
-				integrations = append(integrations, targetMCP)
-				reqMap["integrations"] = integrations
-				// Important: Must update body for the request
-				if newBody, err := json.Marshal(reqMap); err == nil {
-					body = newBody
-					log.Println("[handleChat] Injected MCP integration into request")
-				} else {
-					log.Printf("[handleChat] Failed to marshal new body with MCP: %v", err)
-				}
-			} else {
-				log.Println("[handleChat] MCP integration already present")
-			}
-		} else {
-			log.Printf("[handleChat] Failed to unmarshal body for MCP injection: %v", err)
-		}
-
-		// EXTRA SAFEGUARD: Inject System Prompt instruction for cleaner Tool Calls
-		// Qwen/VL models often mess up XML tags (nested or unclosed).
-		if err := json.Unmarshal(body, &reqMap); err == nil {
-			var envInfo string
-			if cwd, err := os.Getwd(); err == nil {
-				envInfo += fmt.Sprintf("- Current Working Directory: %s\n", cwd)
-			}
-			if home, err := os.UserHomeDir(); err == nil {
-				desktop := filepath.Join(home, "Desktop")
-				envInfo += fmt.Sprintf("- Desktop Path: %s\n", desktop)
-			}
-
-			// We use a marker to detect if we already injected instructions
-			instrMarker := "### TOOL CALL GUIDELINES ###"
-			extraInstr := mcp.SystemPromptToolUsage(envInfo)
-
-			if enableMemory {
-				preloadedMemory := preloadUserMemory(userID)
-				extraInstr += mcp.SystemPromptMemoryTemplate(preloadedMemory)
-			}
-
-			foundSystem := false
-			// Case A: Standard mode (OpenAI style)
-			if messages, ok := reqMap["messages"].([]interface{}); ok {
-				// 🚀 SLIDING WINDOW: Limit to last 15 messages to prevent context overflow
-				maxMessages := 15
-				if len(messages) > maxMessages {
-					log.Printf("[handleChat] Truncating chat history: %d -> %d messages", len(messages), maxMessages)
-
-					// Preserve system message if it exists at the beginning
-					var systemMsg interface{}
-					if len(messages) > 0 {
-						if m, ok := messages[0].(map[string]interface{}); ok {
-							if role, ok := m["role"].(string); ok && role == "system" {
-								systemMsg = messages[0]
-							}
+			if enableMCP && !isStatefulTurn {
+				targetMCP := "mcp/dinkisstyle-gateway"
+				var integrations []string
+				if existing, ok := reqMap["integrations"].([]interface{}); ok {
+					for _, v := range existing {
+						if str, ok := v.(string); ok {
+							integrations = append(integrations, str)
 						}
 					}
+				}
 
-					// Take the last maxMessages
-					truncated := messages[len(messages)-maxMessages:]
+				hasMCP := false
+				for _, v := range integrations {
+					if v == targetMCP {
+						hasMCP = true
+						break
+					}
+				}
 
-					// If we had a system message at the start and it's not in the truncated set now, re-add it
-					systemInTruncated := false
-					if systemMsg != nil {
-						for _, msg := range truncated {
-							if msg == systemMsg {
-								systemInTruncated = true
+				if !hasMCP {
+					integrations = append(integrations, targetMCP)
+					reqMap["integrations"] = integrations
+					// Important: internal body update will happen after system prompt injection
+				}
+			}
+
+			// EXTRA SAFEGUARD: Inject System Prompt instruction for cleaner Tool Calls
+			// Qwen/VL models often mess up XML tags (nested or unclosed).
+			if !isStatefulTurn {
+				var envInfo string
+				if cwd, err := os.Getwd(); err == nil {
+					envInfo += fmt.Sprintf("- Current Working Directory: %s\n", cwd)
+				}
+				if home, err := os.UserHomeDir(); err == nil {
+					desktop := filepath.Join(home, "Desktop")
+					envInfo += fmt.Sprintf("- Desktop Path: %s\n", desktop)
+				}
+
+				// We use a marker to detect if we already injected instructions
+				instrMarker := "### TOOL CALL GUIDELINES ###"
+				extraInstr := mcp.SystemPromptToolUsage(envInfo)
+
+				if enableMemory {
+					preloadedMemory := preloadUserMemory(userID)
+					extraInstr += mcp.SystemPromptMemoryTemplate(preloadedMemory)
+				}
+
+				foundSystem := false
+				// Case A: Standard mode (OpenAI style)
+				if messages, ok := reqMap["messages"].([]interface{}); ok {
+					// 🚀 SLIDING WINDOW: Limit to last 15 messages to prevent context overflow
+					maxMessages := 15
+					if len(messages) > maxMessages {
+						log.Printf("[handleChat] Truncating chat history: %d -> %d messages", len(messages), maxMessages)
+
+						// Preserve system message if it exists at the beginning
+						var systemMsg interface{}
+						if len(messages) > 0 {
+							if m, ok := messages[0].(map[string]interface{}); ok {
+								if role, ok := m["role"].(string); ok && role == "system" {
+									systemMsg = messages[0]
+								}
+							}
+						}
+
+						// Take the last maxMessages
+						truncated := messages[len(messages)-maxMessages:]
+
+						// If we had a system message at the start and it's not in the truncated set now, re-add it
+						systemInTruncated := false
+						if systemMsg != nil {
+							for _, msg := range truncated {
+								if msg == systemMsg {
+									systemInTruncated = true
+									break
+								}
+							}
+							if !systemInTruncated {
+								truncated = append([]interface{}{systemMsg}, truncated...)
+							}
+						}
+						messages = truncated
+						reqMap["messages"] = messages
+					}
+
+					for i, msg := range messages {
+						if m, ok := msg.(map[string]interface{}); ok {
+							if role, ok := m["role"].(string); ok && role == "system" {
+								content, _ := m["content"].(string)
+								// Prevent duplicate injection
+								if !strings.Contains(content, instrMarker) {
+									m["content"] = content + extraInstr
+									messages[i] = m
+								}
+								foundSystem = true
 								break
 							}
 						}
-						if !systemInTruncated {
-							truncated = append([]interface{}{systemMsg}, truncated...)
-						}
 					}
-					messages = truncated
-					reqMap["messages"] = messages
+					if !foundSystem {
+						newMsg := map[string]interface{}{
+							"role":    "system",
+							"content": "You are a helpful assistant." + extraInstr,
+						}
+						reqMap["messages"] = append([]interface{}{newMsg}, messages...)
+						foundSystem = true
+					}
 				}
 
-				for i, msg := range messages {
-					if m, ok := msg.(map[string]interface{}); ok {
-						if role, ok := m["role"].(string); ok && role == "system" {
-							content, _ := m["content"].(string)
-							// Prevent duplicate injection
-							if !strings.Contains(content, instrMarker) {
-								m["content"] = content + extraInstr
-								messages[i] = m
-							}
-							foundSystem = true
-							break
-						}
+				// Case B: Stateful mode (LM Studio style)
+				// LM Studio might append system_prompt every turn if we keep sending it.
+				if sp, ok := reqMap["system_prompt"].(string); ok {
+					// Prevent duplicate injection
+					if !strings.Contains(sp, instrMarker) {
+						// Check if this turn has previous state.
+						// If it does, we might want to ONLY send the extra instructions if something changed,
+						// but for now, we'll just ensure we don't duplicate the marker.
+						reqMap["system_prompt"] = sp + extraInstr
 					}
-				}
-				if !foundSystem {
-					newMsg := map[string]interface{}{
-						"role":    "system",
-						"content": "You are a helpful assistant." + extraInstr,
-					}
-					reqMap["messages"] = append([]interface{}{newMsg}, messages...)
 					foundSystem = true
 				}
-			}
 
-			// Case B: Stateful mode (LM Studio style)
-			// LM Studio might append system_prompt every turn if we keep sending it.
-			if sp, ok := reqMap["system_prompt"].(string); ok {
-				// Prevent duplicate injection
-				if !strings.Contains(sp, instrMarker) {
-					// Check if this turn has previous state.
-					// If it does, we might want to ONLY send the extra instructions if something changed,
-					// but for now, we'll just ensure we don't duplicate the marker.
-					reqMap["system_prompt"] = sp + extraInstr
-				}
-				foundSystem = true
-			}
-
-			if foundSystem {
-				if newBody, err := json.Marshal(reqMap); err == nil {
-					body = newBody
+				if foundSystem {
 					log.Println("[handleChat] Injected or deduplicated System Prompt instructions")
 				}
 			}
+
+			// Final Body update if we changed anything
+			if newBody, err := json.Marshal(reqMap); err == nil {
+				body = newBody
+			}
+		} else {
+			log.Printf("[handleChat] Failed to unmarshal body for MCP injection: %v", err)
 		}
 	} else {
 		log.Printf("[handleChat] MCP injection skipped (EnableMCP=%v, Mode=%s)", enableMCP, llmMode)
