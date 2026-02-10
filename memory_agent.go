@@ -22,6 +22,7 @@ type MemoryAnalysisRequest struct {
 	Model       string    `json:"model"`
 	Messages    []Message `json:"messages"`
 	Temperature float64   `json:"temperature"`
+	Store       bool      `json:"store"`
 }
 
 // Checkpoint stores the last processed offset of the chat log
