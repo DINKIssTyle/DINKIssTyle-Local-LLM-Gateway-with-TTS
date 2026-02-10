@@ -46,23 +46,25 @@ var (
 	// Current Context (Hacky solution for local single-user gateway)
 	// Since LM Studio doesn't pass user context back to MCP, we rely on the
 	// most recent chat request setting these values.
-	currentUserID       = "default"
-	currentEnableMemory = false
-	contextMu           sync.RWMutex
+	currentUserID        = "default"
+	currentEnableMemory  = false
+	currentDisabledTools []string
+	contextMu            sync.RWMutex
 )
 
-func SetContext(userID string, enableMemory bool) {
+func SetContext(userID string, enableMemory bool, disabledTools []string) {
 	contextMu.Lock()
 	defer contextMu.Unlock()
 	currentUserID = userID
 	currentEnableMemory = enableMemory
-	log.Printf("[MCP] Set Context -> User: %s, Memory: %v", userID, enableMemory)
+	currentDisabledTools = disabledTools
+	log.Printf("[MCP] Set Context -> User: %s, Memory: %v, DisabledTools: %v", userID, enableMemory, disabledTools)
 }
 
-func GetContext() (string, bool) {
+func GetContext() (string, bool, []string) {
 	contextMu.RLock()
 	defer contextMu.RUnlock()
-	return currentUserID, currentEnableMemory
+	return currentUserID, currentEnableMemory, currentDisabledTools
 }
 
 func GetToolList() []Tool {
@@ -164,7 +166,7 @@ func Broadcast(msg string) int {
 }
 
 // buildResponse constructs a JSON-RPC response for a given request
-func buildResponse(req *JSONRPCRequest, userID string, enableMemory bool) *JSONRPCResponse {
+func buildResponse(req *JSONRPCRequest, userID string, enableMemory bool, disabledTools []string) *JSONRPCResponse {
 	res := &JSONRPCResponse{
 		JSONRPC: "2.0",
 		ID:      req.ID,
@@ -184,12 +186,14 @@ func buildResponse(req *JSONRPCRequest, userID string, enableMemory bool) *JSONR
 		}
 
 	case "tools/list":
+		// TODO: Filter tools list based on disabledTools?
+		// For now, list all, but fail on call.
 		res.Result = map[string]interface{}{
 			"tools": GetToolList(),
 		}
 
 	case "tools/call":
-		handleToolCall(req, res, userID, enableMemory)
+		handleToolCall(req, res, userID, enableMemory, disabledTools)
 
 	case "notifications/initialized":
 		log.Println("[MCP] Client Initialized")
@@ -257,8 +261,8 @@ func HandleSSE(w http.ResponseWriter, r *http.Request) {
 
 	// If we captured an initial request, process it immediately in the stream
 	if initialReq != nil {
-		userID, enableMemory := GetContext()
-		res := buildResponse(initialReq, userID, enableMemory)
+		userID, enableMemory, disabledTools := GetContext()
+		res := buildResponse(initialReq, userID, enableMemory, disabledTools)
 		if res != nil {
 			respBytes, _ := json.Marshal(res)
 			fmt.Fprintf(w, "event: message\ndata: %s\n\n", string(respBytes))
@@ -326,8 +330,8 @@ func HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		userID, enableMemory := GetContext()
-		res := buildResponse(&req, userID, enableMemory)
+		userID, enableMemory, disabledTools := GetContext()
+		res := buildResponse(&req, userID, enableMemory, disabledTools)
 		if res != nil {
 			respBytes, _ := json.Marshal(res)
 			count := Broadcast(string(respBytes))
@@ -339,8 +343,15 @@ func HandleMessages(w http.ResponseWriter, r *http.Request) {
 // ExecuteToolByName executes a tool by name with given arguments JSON.
 // This is used for text-based tool call parsing (when model outputs tool call as plain text).
 // Returns the result text and an error if any.
-func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, enableMemory bool) (string, error) {
+func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, enableMemory bool, disabledTools []string) (string, error) {
 	log.Printf("[MCP] ExecuteToolByName: %s (User: %s, Memory: %v)", toolName, userID, enableMemory)
+
+	// Check if tool is disabled
+	for _, disabled := range disabledTools {
+		if disabled == toolName {
+			return "", fmt.Errorf("tool '%s' is disabled for this user", toolName)
+		}
+	}
 
 	switch toolName {
 	case "search_web":
@@ -410,7 +421,7 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 
 // Helper to handle tool calls
 
-func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, enableMemory bool) {
+func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, enableMemory bool, disabledTools []string) {
 	var params struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
@@ -421,6 +432,15 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 	}
 
 	log.Printf("[MCP] Tool Call: %s", params.Name)
+
+	// Check if tool is disabled
+	for _, disabled := range disabledTools {
+		if disabled == params.Name {
+			res.Error = &JSONRPCError{Code: -32601, Message: fmt.Sprintf("Tool '%s' is disabled for this user.", params.Name)}
+			Broadcast(fmt.Sprintf(`{"type": "tool_call.failure", "tool": "%s", "reason": "Disabled by admin"}`, params.Name))
+			return
+		}
+	}
 
 	if params.Name == "search_web" {
 		var args struct {
