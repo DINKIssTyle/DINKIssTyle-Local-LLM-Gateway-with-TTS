@@ -263,7 +263,9 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 						user.Settings.EnableMemory = newCfg.EnableMemory
 						updated = true
 						// Sync to MCP context
-						mcp.SetContext(user.ID, *newCfg.EnableMemory, user.Settings.DisabledTools, "")
+						// We need disallowed lists here too, but handleConfig is partial update.
+						// Let's retrieve full user settings to be safe.
+						mcp.SetContext(user.ID, *newCfg.EnableMemory, user.Settings.DisabledTools, "", user.Settings.DisallowedCommands, user.Settings.DisallowedDirectories)
 					}
 					// Handle TTS Config partial updates if needed, for now simplistic
 					if newCfg.TTSThreads > 0 {
@@ -673,6 +675,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 	var disabledTools []string
 	var locationInfo string
+	var disallowedCmds []string
+	var disallowedDirs []string
 
 	// Override with User Settings
 	userID := r.Header.Get("X-User-ID")
@@ -704,13 +708,19 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			if user.Settings.DisabledTools != nil {
 				disabledTools = user.Settings.DisabledTools
 			}
+			if user.Settings.DisallowedCommands != nil {
+				disallowedCmds = user.Settings.DisallowedCommands
+			}
+			if user.Settings.DisallowedDirectories != nil {
+				disallowedDirs = user.Settings.DisallowedDirectories
+			}
 		}
 	}
 
 	// Set MCP Context for this user interaction
 	// This ensures that when LM Studio calls back to MCP, it has the correct context
-	mcp.SetContext(userID, enableMemory, disabledTools, locationInfo)
-	log.Printf("[handleChat-DEBUG] userID=%s, enableMemory=%v, disabledTools=%v, Location=%s", userID, enableMemory, disabledTools, locationInfo)
+	mcp.SetContext(userID, enableMemory, disabledTools, locationInfo, disallowedCmds, disallowedDirs)
+	log.Printf("[handleChat-DEBUG] userID=%s, enableMemory=%v, disabledTools=%v, Location=%s, DisallowedCmds=%v, DisallowedDirs=%v", userID, enableMemory, disabledTools, locationInfo, disallowedCmds, disallowedDirs)
 
 	// Sanitize endpoint: Remove trailing slash and optional /v1 suffix if user included it
 	endpoint := strings.TrimRight(endpointRaw, "/")
@@ -762,12 +772,19 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 		// EXTRA SAFEGUARD: Inject System Prompt instruction for cleaner Tool Calls
 		// Qwen/VL models often mess up XML tags (nested or unclosed).
-		// Qwen/VL models often mess up XML tags (nested or unclosed).
 		if err := json.Unmarshal(body, &reqMap); err == nil {
+			var envInfo string
+			if cwd, err := os.Getwd(); err == nil {
+				envInfo += fmt.Sprintf("- Current Working Directory: %s\n", cwd)
+			}
+			if home, err := os.UserHomeDir(); err == nil {
+				desktop := filepath.Join(home, "Desktop")
+				envInfo += fmt.Sprintf("- Desktop Path: %s\n", desktop)
+			}
 
 			// We use a marker to detect if we already injected instructions
 			instrMarker := "### TOOL CALL GUIDELINES ###"
-			extraInstr := mcp.SystemPromptToolUsage()
+			extraInstr := mcp.SystemPromptToolUsage(envInfo)
 
 			if enableMemory {
 				preloadedMemory := preloadUserMemory(userID)

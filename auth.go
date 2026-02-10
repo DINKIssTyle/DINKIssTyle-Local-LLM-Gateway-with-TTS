@@ -21,14 +21,16 @@ import (
 
 // UserSettings holds user-specific overrides
 type UserSettings struct {
-	ApiEndpoint   *string          `json:"api_endpoint,omitempty"`
-	ApiToken      *string          `json:"api_token,omitempty"`
-	LLMMode       *string          `json:"llm_mode,omitempty"`
-	EnableTTS     *bool            `json:"enable_tts,omitempty"`
-	EnableMCP     *bool            `json:"enable_mcp,omitempty"`
-	EnableMemory  *bool            `json:"enable_memory,omitempty"`
-	TTSConfig     *ServerTTSConfig `json:"tts_config,omitempty"`
-	DisabledTools []string         `json:"disabled_tools,omitempty"`
+	ApiEndpoint           *string          `json:"api_endpoint,omitempty"`
+	ApiToken              *string          `json:"api_token,omitempty"`
+	LLMMode               *string          `json:"llm_mode,omitempty"`
+	EnableTTS             *bool            `json:"enable_tts,omitempty"`
+	EnableMCP             *bool            `json:"enable_mcp,omitempty"`
+	EnableMemory          *bool            `json:"enable_memory,omitempty"`
+	TTSConfig             *ServerTTSConfig `json:"tts_config,omitempty"`
+	DisabledTools         []string         `json:"disabled_tools,omitempty"`
+	DisallowedCommands    []string         `json:"disallowed_commands,omitempty"`
+	DisallowedDirectories []string         `json:"disallowed_directories,omitempty"`
 }
 
 // User represents a user account
@@ -434,4 +436,64 @@ func AdminMiddleware(am *AuthManager, next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	})
+}
+
+// SetUserDisallowedCommands sets the list of disallowed commands for a specific user
+func (am *AuthManager) SetUserDisallowedCommands(id string, cmds []string) error {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+
+	user, exists := am.users[id]
+	if !exists {
+		return fmt.Errorf("user not found")
+	}
+
+	user.Settings.DisallowedCommands = cmds
+	return am.saveUsersLocked()
+}
+
+// GetUserDisallowedCommands returns the list of disallowed commands for a specific user
+func (am *AuthManager) GetUserDisallowedCommands(id string) ([]string, error) {
+	am.mu.RLock()
+	defer am.mu.RUnlock()
+
+	user, exists := am.users[id]
+	if !exists {
+		return nil, fmt.Errorf("user not found")
+	}
+
+	if user.Settings.DisallowedCommands == nil {
+		return []string{}, nil
+	}
+	return user.Settings.DisallowedCommands, nil
+}
+
+// SetUserDisallowedDirectories sets the list of disallowed directories for a specific user
+func (am *AuthManager) SetUserDisallowedDirectories(id string, dirs []string) error {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+
+	user, exists := am.users[id]
+	if !exists {
+		return fmt.Errorf("user not found")
+	}
+
+	user.Settings.DisallowedDirectories = dirs
+	return am.saveUsersLocked()
+}
+
+// GetUserDisallowedDirectories returns the list of disallowed directories for a specific user
+func (am *AuthManager) GetUserDisallowedDirectories(id string) ([]string, error) {
+	am.mu.RLock()
+	defer am.mu.RUnlock()
+
+	user, exists := am.users[id]
+	if !exists {
+		return nil, fmt.Errorf("user not found")
+	}
+
+	if user.Settings.DisallowedDirectories == nil {
+		return []string{}, nil
+	}
+	return user.Settings.DisallowedDirectories, nil
 }

@@ -46,27 +46,31 @@ var (
 	// Current Context (Hacky solution for local single-user gateway)
 	// Since LM Studio doesn't pass user context back to MCP, we rely on the
 	// most recent chat request setting these values.
-	currentUserID        = "default"
-	currentEnableMemory  = false
-	currentDisabledTools []string
-	currentLocationInfo  string
-	contextMu            sync.RWMutex
+	currentUserID         = "default"
+	currentEnableMemory   = false
+	currentDisabledTools  []string
+	currentLocationInfo   string
+	currentDisallowedCmds []string
+	currentDisallowedDirs []string
+	contextMu             sync.RWMutex
 )
 
-func SetContext(userID string, enableMemory bool, disabledTools []string, locationInfo string) {
+func SetContext(userID string, enableMemory bool, disabledTools []string, locationInfo string, disallowedCmds []string, disallowedDirs []string) {
 	contextMu.Lock()
 	defer contextMu.Unlock()
 	currentUserID = userID
 	currentEnableMemory = enableMemory
 	currentDisabledTools = disabledTools
 	currentLocationInfo = locationInfo
-	log.Printf("[MCP] Set Context -> User: %s, Memory: %v, DisabledTools: %v, Location: %s", userID, enableMemory, disabledTools, locationInfo)
+	currentDisallowedCmds = disallowedCmds
+	currentDisallowedDirs = disallowedDirs
+	log.Printf("[MCP] Set Context -> User: %s, Memory: %v, DisabledTools: %v, Location: %s, DisallowedCmds: %v, DisallowedDirs: %v", userID, enableMemory, disabledTools, locationInfo, disallowedCmds, disallowedDirs)
 }
 
-func GetContext() (string, bool, []string, string) {
+func GetContext() (string, bool, []string, string, []string, []string) {
 	contextMu.RLock()
 	defer contextMu.RUnlock()
-	return currentUserID, currentEnableMemory, currentDisabledTools, currentLocationInfo
+	return currentUserID, currentEnableMemory, currentDisabledTools, currentLocationInfo, currentDisallowedCmds, currentDisallowedDirs
 }
 
 func GetToolList() []Tool {
@@ -153,6 +157,20 @@ func GetToolList() []Tool {
 				"properties": map[string]interface{}{},
 			},
 		},
+		{
+			Name:        "execute_command",
+			Description: "Execute a shell command on the host (with restrictions). Use this to run system commands.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"command": map[string]interface{}{
+						"type":        "string",
+						"description": "The shell command to execute.",
+					},
+				},
+				"required": []string{"command"},
+			},
+		},
 	}
 }
 
@@ -187,7 +205,7 @@ func Broadcast(msg string) int {
 }
 
 // buildResponse constructs a JSON-RPC response for a given request
-func buildResponse(req *JSONRPCRequest, userID string, enableMemory bool, disabledTools []string) *JSONRPCResponse {
+func buildResponse(req *JSONRPCRequest, userID string, enableMemory bool, disabledTools []string, disallowedCmds []string, disallowedDirs []string) *JSONRPCResponse {
 	res := &JSONRPCResponse{
 		JSONRPC: "2.0",
 		ID:      req.ID,
@@ -214,7 +232,7 @@ func buildResponse(req *JSONRPCRequest, userID string, enableMemory bool, disabl
 		}
 
 	case "tools/call":
-		handleToolCall(req, res, userID, enableMemory, disabledTools)
+		handleToolCall(req, res, userID, enableMemory, disabledTools, disallowedCmds, disallowedDirs)
 
 	case "notifications/initialized":
 		log.Println("[MCP] Client Initialized")
@@ -282,9 +300,9 @@ func HandleSSE(w http.ResponseWriter, r *http.Request) {
 
 	// If we captured an initial request, process it immediately in the stream
 	if initialReq != nil {
-		userID, enableMemory, disabledTools, locationInfo := GetContext()
+		userID, enableMemory, disabledTools, locationInfo, disallowedCmds, disallowedDirs := GetContext()
 		_ = locationInfo // Handle unused for now if not needed in buildResponse directly
-		res := buildResponse(initialReq, userID, enableMemory, disabledTools)
+		res := buildResponse(initialReq, userID, enableMemory, disabledTools, disallowedCmds, disallowedDirs)
 		if res != nil {
 			respBytes, _ := json.Marshal(res)
 			fmt.Fprintf(w, "event: message\ndata: %s\n\n", string(respBytes))
@@ -352,9 +370,9 @@ func HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		userID, enableMemory, disabledTools, locationInfo := GetContext()
+		userID, enableMemory, disabledTools, locationInfo, disallowedCmds, disallowedDirs := GetContext()
 		_ = locationInfo // Unused here
-		res := buildResponse(&req, userID, enableMemory, disabledTools)
+		res := buildResponse(&req, userID, enableMemory, disabledTools, disallowedCmds, disallowedDirs)
 		if res != nil {
 			respBytes, _ := json.Marshal(res)
 			count := Broadcast(string(respBytes))
@@ -369,7 +387,7 @@ func HandleMessages(w http.ResponseWriter, r *http.Request) {
 func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, enableMemory bool, disabledTools []string) (string, error) {
 	// Re-fetch context to get location since signature change is hard across all callsites (or we can just use global if thread-safe enough for this hack)
 	// Better: Use the global GetContext to retrieve the location for this execution
-	_, _, _, locationInfo := GetContext()
+	_, _, _, locationInfo, disallowedCmds, disallowedDirs := GetContext()
 
 	log.Printf("[MCP] ExecuteToolByName: %s (User: %s, Memory: %v, Loc: %s)", toolName, userID, enableMemory, locationInfo)
 
@@ -456,6 +474,17 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 		}
 		return locationInfo, nil
 
+	case "execute_command":
+		var args map[string]string
+		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
+			return "", fmt.Errorf("invalid arguments: %v", err)
+		}
+		command, ok := args["command"]
+		if !ok {
+			return "", fmt.Errorf("argument 'command' is required")
+		}
+		return ExecuteCommand(command, disallowedCmds, disallowedDirs)
+
 	default:
 		return "", fmt.Errorf("tool not found: %s", toolName)
 	}
@@ -463,7 +492,7 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 
 // Helper to handle tool calls
 
-func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, enableMemory bool, disabledTools []string) {
+func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, enableMemory bool, disabledTools []string, disallowedCmds []string, disallowedDirs []string) {
 	var params struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
@@ -648,7 +677,7 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 			Broadcast(`{"type": "tool_call.success", "tool": "namu_wiki"}`)
 		}
 	} else if params.Name == "get_current_location" {
-		_, _, _, locationInfo := GetContext()
+		_, _, _, locationInfo, _, _ := GetContext()
 		if locationInfo == "" {
 			res.Result = map[string]interface{}{
 				"content": []map[string]interface{}{
@@ -664,6 +693,35 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 			}
 			Broadcast(`{"type": "tool_call.success", "tool": "get_current_location"}`)
 		}
+
+	} else if params.Name == "execute_command" {
+		var args struct {
+			Command string `json:"command"`
+		}
+		if err := json.Unmarshal(params.Arguments, &args); err != nil {
+			res.Error = &JSONRPCError{Code: -32602, Message: "Invalid arguments"}
+		} else if args.Command == "" {
+			res.Error = &JSONRPCError{Code: -32602, Message: "Missing 'command' argument"}
+		} else {
+			output, err := ExecuteCommand(args.Command, disallowedCmds, disallowedDirs)
+			if err != nil {
+				res.Result = map[string]interface{}{
+					"content": []map[string]interface{}{
+						{"type": "text", "text": fmt.Sprintf("Error: %v", err)},
+					},
+					"isError": true,
+				}
+				Broadcast(fmt.Sprintf(`{"type": "tool_call.failure", "tool": "execute_command", "reason": "%v"}`, err))
+			} else {
+				res.Result = map[string]interface{}{
+					"content": []map[string]interface{}{
+						{"type": "text", "text": output},
+					},
+				}
+				Broadcast(`{"type": "tool_call.success", "tool": "execute_command"}`)
+			}
+		}
+
 	} else {
 		res.Error = &JSONRPCError{Code: -32601, Message: "Tool not found"}
 	}
