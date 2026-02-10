@@ -1524,6 +1524,14 @@ async function streamResponse(payload, elementId) {
                 throw new Error(errorDetails);
             }
 
+            // Check for Context Overflow error (from non-200 check)
+            if (errorBody.startsWith("LM_STUDIO_CONTEXT_ERROR: ")) {
+                const originalMsg = errorBody.replace("LM_STUDIO_CONTEXT_ERROR: ", "");
+                // localized msg can be added later, for now show original
+                errorDetails = originalMsg;
+                throw new Error(errorDetails);
+            }
+
             if (errorBody.includes("Could not find stored response for previous_response_id")) {
                 console.warn("[Stateful] previous_response_id became invalid. Resetting and retrying without it...");
                 lastResponseId = null;
@@ -1597,6 +1605,16 @@ async function processStream(response, elementId) {
                     if (json.response_id) {
                         lastResponseId = json.response_id;
                         console.log(`[Stateful] Captured response_id: ${lastResponseId}`);
+                    }
+
+                    // Check for explicit error in stream (Context Overflow etc)
+                    if (json.error) {
+                        let errorMsg = json.error;
+                        if (errorMsg.startsWith("LM_STUDIO_CONTEXT_ERROR: ")) {
+                            errorMsg = errorMsg.replace("LM_STUDIO_CONTEXT_ERROR: ", "");
+                        }
+                        // Throw to stop generation and show error in bubble
+                        throw new Error(errorMsg);
                     }
 
                     let contentToAdd = '';
