@@ -669,7 +669,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	tokenRaw := app.llmApiToken
 	llmMode := app.llmMode
 	enableMCP := app.enableMCP
-	enableMemory := true // Default to true (memory is a per-user opt-out feature)
+	enableMemory := false // Default to false (Secure by default for unauthenticated)
 
 	// Override with User Settings
 	userID := r.Header.Get("X-User-ID")
@@ -692,6 +692,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			}
 			if user.Settings.EnableMemory != nil {
 				enableMemory = *user.Settings.EnableMemory
+			} else {
+				enableMemory = true // Default to true for authenticated users
 			}
 		}
 	}
