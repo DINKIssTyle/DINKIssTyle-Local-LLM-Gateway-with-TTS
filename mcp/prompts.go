@@ -6,11 +6,17 @@ import (
 )
 
 // SystemPromptToolUsage returns the guidelines for tool usage to be injected into the system prompt.
-func SystemPromptToolUsage() string {
-	return fmt.Sprintf("\n\n### TOOL CALL GUIDELINES ###\n"+
+func SystemPromptToolUsage(envInfo string) string {
+	prompt := fmt.Sprintf("\n\n### TOOL CALL GUIDELINES ###\n"+
 		"1. Use a SINGLE valid <tool_call> block for tool requests.\n"+
 		"2. DO NOT use search_web or read_web_page for person identification or image description unless explicitly asked.\n"+
 		"3. CURRENT_TIME: %s", time.Now().Format("2006-01-02 15:04:05 Monday"))
+
+	if envInfo != "" {
+		prompt += fmt.Sprintf("\n4. ENVIRONMENT INFO:\n%s", envInfo)
+	}
+
+	return prompt
 }
 
 // SystemPromptMemoryTemplate returns the template for injecting user memory.

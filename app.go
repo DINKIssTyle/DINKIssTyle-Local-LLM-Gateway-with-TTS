@@ -785,6 +785,26 @@ func (a *App) GetUserDisabledTools(id string) ([]string, error) {
 	return a.authMgr.GetUserDisabledTools(id)
 }
 
+// SetUserDisallowedCommands sets the list of disallowed commands for a specific user (exposed to Wails)
+func (a *App) SetUserDisallowedCommands(id string, cmds []string) error {
+	return a.authMgr.SetUserDisallowedCommands(id, cmds)
+}
+
+// GetUserDisallowedCommands returns the list of disallowed commands for a specific user (exposed to Wails)
+func (a *App) GetUserDisallowedCommands(id string) ([]string, error) {
+	return a.authMgr.GetUserDisallowedCommands(id)
+}
+
+// SetUserDisallowedDirectories sets the list of disallowed directories for a specific user (exposed to Wails)
+func (a *App) SetUserDisallowedDirectories(id string, dirs []string) error {
+	return a.authMgr.SetUserDisallowedDirectories(id, dirs)
+}
+
+// GetUserDisallowedDirectories returns the list of disallowed directories for a specific user (exposed to Wails)
+func (a *App) GetUserDisallowedDirectories(id string) ([]string, error) {
+	return a.authMgr.GetUserDisallowedDirectories(id)
+}
+
 // GetVoiceStyles returns a list of available voice style files (JSON)
 func (a *App) GetVoiceStyles() []string {
 	var styles []string

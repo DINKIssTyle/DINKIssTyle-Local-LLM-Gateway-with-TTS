@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -412,4 +413,57 @@ func DetermineCategory(content string) string {
 	}
 
 	return "personal"
+}
+
+// ExecuteCommand runs a shell command with restrictions
+func ExecuteCommand(command string, disallowedCmds []string, disallowedDirs []string) (string, error) {
+	log.Printf("[MCP] ExecuteCommand: %s", command)
+
+	// 1. Basic Security Checks
+	if strings.TrimSpace(command) == "" {
+		return "", fmt.Errorf("command is empty")
+	}
+
+	parts := strings.Fields(command)
+	if len(parts) == 0 {
+		return "", fmt.Errorf("command is empty")
+	}
+	baseCmd := parts[0]
+
+	// 2. Check Disallowed Commands
+	for _, disallowed := range disallowedCmds {
+		if strings.EqualFold(baseCmd, disallowed) {
+			return "", fmt.Errorf("permission denied: command '%s' is not allowed", baseCmd)
+		}
+	}
+
+	// 3. Check Disallowed Directories (Command Arguments)
+	// Iterate through arguments to see if they reference disallowed paths
+	for _, arg := range parts[1:] {
+		// Clean the path
+		argClean := filepath.Clean(arg)
+		for _, dir := range disallowedDirs {
+			// Check if arg starts with disallowed dir (simple check)
+			// TODO: Enhance with better path resolution
+			if strings.HasPrefix(argClean, filepath.Clean(dir)) {
+				return "", fmt.Errorf("permission denied: directory '%s' is restricted", dir)
+			}
+		}
+	}
+
+	// 4. Execution
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("cmd", "/C", command)
+	} else {
+		cmd = exec.Command("sh", "-c", command)
+	}
+
+	// Capture Output
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Sprintf("Error: %v\nOutput: %s", err, string(output)), nil
+	}
+
+	return string(output), nil
 }
