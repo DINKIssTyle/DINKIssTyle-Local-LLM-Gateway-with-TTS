@@ -1410,6 +1410,19 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				flusher.Flush()
 
 			} else {
+				// Check for raw error JSON (not prefixed with data:)
+				// e.g. {"error":{"message":"Context size has been exceeded.",...}}
+				if strings.HasPrefix(line, "{") && strings.Contains(line, "\"error\"") {
+					log.Printf("[handleChat] Detected Raw JSON Error in stream: %s", line)
+					if strings.Contains(line, "Context size has been exceeded") || strings.Contains(line, "context_length_exceeded") {
+						// Send explicit known error event
+						// We use a custom event type or just an error field that app.js will pick up
+						fmt.Fprintf(w, "data: {\"error\": \"LM_STUDIO_CONTEXT_ERROR: Context size exceeded.\"}\n\n")
+						flusher.Flush()
+						return // Stop processing
+					}
+				}
+
 				// Forward non-data lines (e.g. event: ...)
 				fmt.Fprintf(w, "%s\n\n", line)
 				flusher.Flush()
