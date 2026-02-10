@@ -132,6 +132,17 @@ func GetToolList() []Tool {
 				"required": []string{"filename"},
 			},
 		},
+		{
+			Name:        "namu_wiki",
+			Description: "Search and read definitions from Namuwiki (Korean Wiki). Use this for Korean pop culture, history, or slang definitions. Input must be the exact keyword/title.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"keyword": map[string]interface{}{"type": "string", "description": "The exact keyword to search on Namuwiki"},
+				},
+				"required": []string{"keyword"},
+			},
+		},
 	}
 }
 
@@ -414,6 +425,15 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 		}
 		return ManageMemory(filePath, "read", "")
 
+	case "namu_wiki":
+		var args struct {
+			Keyword string `json:"keyword"`
+		}
+		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
+			return "", fmt.Errorf("invalid arguments for namu_wiki: %v", err)
+		}
+		return SearchNamuwiki(args.Keyword)
+
 	default:
 		return "", fmt.Errorf("tool not found: %s", toolName)
 	}
@@ -582,6 +602,28 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 				},
 			}
 			Broadcast(`{"type": "tool_call.success", "tool": "read_user_document"}`)
+		}
+	} else if params.Name == "namu_wiki" {
+		var args struct {
+			Keyword string `json:"keyword"`
+		}
+		json.Unmarshal(params.Arguments, &args)
+		content, err := SearchNamuwiki(args.Keyword)
+		if err != nil {
+			res.Result = map[string]interface{}{
+				"content": []map[string]interface{}{
+					{"type": "text", "text": fmt.Sprintf("Error: %v", err)},
+				},
+				"isError": true,
+			}
+			Broadcast(fmt.Sprintf(`{"type": "tool_call.failure", "tool": "namu_wiki", "reason": "%v"}`, err))
+		} else {
+			res.Result = map[string]interface{}{
+				"content": []map[string]interface{}{
+					{"type": "text", "text": content},
+				},
+			}
+			Broadcast(`{"type": "tool_call.success", "tool": "namu_wiki"}`)
 		}
 	} else {
 		res.Error = &JSONRPCError{Code: -32601, Message: "Tool not found"}

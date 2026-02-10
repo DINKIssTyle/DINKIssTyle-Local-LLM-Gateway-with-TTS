@@ -112,6 +112,25 @@ func SearchWeb(query string) (string, error) {
 	return strings.Join(results, "\n---\n"), nil
 }
 
+// SearchNamuwiki searches Namuwiki by constructing a direct URL and reading the page.
+func SearchNamuwiki(keyword string) (string, error) {
+	log.Printf("[MCP] Searching Namuwiki for: %s", keyword)
+
+	// Construct Namuwiki URL: https://namu.wiki/w/Keyword
+	// Namuwiki uses direct path for terms
+	encodedKeyword := url.PathEscape(keyword)
+	targetURL := fmt.Sprintf("https://namu.wiki/w/%s", encodedKeyword)
+
+	// Reuse ReadPage to fetch content
+	// Namuwiki relies heavily on JS, so ReadPage (chromedp) is perfect.
+	content, err := ReadPage(targetURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to read Namuwiki page: %v", err)
+	}
+
+	return content, nil
+}
+
 // ReadPage fetches the text content of a URL using a headless browser.
 func ReadPage(pageURL string) (string, error) {
 	log.Printf("[MCP] Reading Page: %s", pageURL)
