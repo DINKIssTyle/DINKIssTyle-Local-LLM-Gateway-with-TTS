@@ -1317,6 +1317,12 @@ function clearChat() {
     chatMessages.innerHTML = '';
 }
 
+function clearContext() {
+    lastResponseId = null;
+    showAlert(t('setting.memory.reset.success') + ' (Context/Session ID Cleared)');
+    console.log('[Context] Manual context reset trigger.');
+}
+
 
 /* Chat Logic */
 
