@@ -178,6 +178,15 @@ func (am *AuthManager) AddUser(id, password, role string) error {
 				Speed:      speed,
 				Threads:    threads,
 			},
+                        DisallowedCommands: []string{
+                                "rm", "rmdir", "unlink", "dd", "mkfs", "mkfs.ext4", "mkfs.xfs", "mkfs.apfs",
+                                "fsck", "fsck.ext4", "fsck.xfs", "fsck_apfs", "mount", "umount", "chmod", "chown", "chgrp",
+                                "kill", "killall", "pkill", "shutdown", "reboot", "poweroff", "init", "telinit",
+                                "systemctl", "service", "crontab", "at", "curl", "wget", "scp", "rsync",
+                                "nc", "ncat", "ssh", "sudo", "su", "visudo", "useradd", "userdel", "usermod",
+                                "groupadd", "groupdel", "passwd", "export", "env", "set", "unset", "source",
+                                "exec", "nohup", "screen", "tmux", "history", "alias", "unalias",
+                        },
 		},
 	}
 
