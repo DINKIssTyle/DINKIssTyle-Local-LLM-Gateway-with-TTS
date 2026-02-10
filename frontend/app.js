@@ -487,6 +487,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Initial System Check
     setTimeout(checkSystemHealth, 500);
 
+    // Start Location Tracking
+    updateUserLocation();
+    setInterval(updateUserLocation, 300000); // Update every 5 mins
+
 
     // Setup Markdown
     marked.setOptions({
@@ -500,6 +504,33 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 // Current user state
 let currentUser = null;
+let currentUserLocation = null; // Store location: {lat, lon, accuracy}
+
+// Location Tracking
+function updateUserLocation() {
+    if (!navigator.geolocation) {
+        console.warn("[Location] Geolocation not supported");
+        return;
+    }
+    navigator.geolocation.getCurrentPosition(
+        (position) => {
+            const { latitude, longitude, accuracy } = position.coords;
+            // Format loosely: "Lat: 37.5, Lon: 127.0 (Acc: 10m)"
+            // Or JSON:
+            currentUserLocation = JSON.stringify({
+                lat: latitude,
+                lon: longitude,
+                acc: accuracy
+            });
+            console.log("[Location] Updated:", currentUserLocation);
+        },
+        (err) => {
+            console.warn("[Location] Error:", err.message);
+            currentUserLocation = null;
+        },
+        { enableHighAccuracy: false, timeout: 10000, maximumAge: 600000 } // 10 min cache
+    );
+}
 
 // Check authentication status
 async function checkAuth() {
@@ -1450,10 +1481,15 @@ function updateSendButtonState() {
 
 
 async function streamResponse(payload, elementId) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (currentUserLocation) {
+        headers['X-User-Location'] = currentUserLocation;
+    }
+
     // Use the Go server's API endpoint
     const response = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: headers,
         body: JSON.stringify(payload),
         signal: abortController.signal
     });

@@ -49,22 +49,24 @@ var (
 	currentUserID        = "default"
 	currentEnableMemory  = false
 	currentDisabledTools []string
+	currentLocationInfo  string
 	contextMu            sync.RWMutex
 )
 
-func SetContext(userID string, enableMemory bool, disabledTools []string) {
+func SetContext(userID string, enableMemory bool, disabledTools []string, locationInfo string) {
 	contextMu.Lock()
 	defer contextMu.Unlock()
 	currentUserID = userID
 	currentEnableMemory = enableMemory
 	currentDisabledTools = disabledTools
-	log.Printf("[MCP] Set Context -> User: %s, Memory: %v, DisabledTools: %v", userID, enableMemory, disabledTools)
+	currentLocationInfo = locationInfo
+	log.Printf("[MCP] Set Context -> User: %s, Memory: %v, DisabledTools: %v, Location: %s", userID, enableMemory, disabledTools, locationInfo)
 }
 
-func GetContext() (string, bool, []string) {
+func GetContext() (string, bool, []string, string) {
 	contextMu.RLock()
 	defer contextMu.RUnlock()
-	return currentUserID, currentEnableMemory, currentDisabledTools
+	return currentUserID, currentEnableMemory, currentDisabledTools, currentLocationInfo
 }
 
 func GetToolList() []Tool {
@@ -141,6 +143,14 @@ func GetToolList() []Tool {
 					"keyword": map[string]interface{}{"type": "string", "description": "The exact keyword to search on Namuwiki"},
 				},
 				"required": []string{"keyword"},
+			},
+		},
+		{
+			Name:        "get_current_location",
+			Description: "Get the user's current location (City, Region, Country) provided by their device. Use this for location-specific queries like weather or local news.",
+			InputSchema: map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
 			},
 		},
 	}
@@ -272,7 +282,8 @@ func HandleSSE(w http.ResponseWriter, r *http.Request) {
 
 	// If we captured an initial request, process it immediately in the stream
 	if initialReq != nil {
-		userID, enableMemory, disabledTools := GetContext()
+		userID, enableMemory, disabledTools, locationInfo := GetContext()
+		_ = locationInfo // Handle unused for now if not needed in buildResponse directly
 		res := buildResponse(initialReq, userID, enableMemory, disabledTools)
 		if res != nil {
 			respBytes, _ := json.Marshal(res)
@@ -341,7 +352,8 @@ func HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		userID, enableMemory, disabledTools := GetContext()
+		userID, enableMemory, disabledTools, locationInfo := GetContext()
+		_ = locationInfo // Unused here
 		res := buildResponse(&req, userID, enableMemory, disabledTools)
 		if res != nil {
 			respBytes, _ := json.Marshal(res)
@@ -355,7 +367,11 @@ func HandleMessages(w http.ResponseWriter, r *http.Request) {
 // This is used for text-based tool call parsing (when model outputs tool call as plain text).
 // Returns the result text and an error if any.
 func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, enableMemory bool, disabledTools []string) (string, error) {
-	log.Printf("[MCP] ExecuteToolByName: %s (User: %s, Memory: %v)", toolName, userID, enableMemory)
+	// Re-fetch context to get location since signature change is hard across all callsites (or we can just use global if thread-safe enough for this hack)
+	// Better: Use the global GetContext to retrieve the location for this execution
+	_, _, _, locationInfo := GetContext()
+
+	log.Printf("[MCP] ExecuteToolByName: %s (User: %s, Memory: %v, Loc: %s)", toolName, userID, enableMemory, locationInfo)
 
 	// Check if tool is disabled
 	for _, disabled := range disabledTools {
@@ -433,6 +449,12 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 			return "", fmt.Errorf("invalid arguments for namu_wiki: %v", err)
 		}
 		return SearchNamuwiki(args.Keyword)
+
+	case "get_current_location":
+		if locationInfo == "" {
+			return "Location information not provided by client.", nil
+		}
+		return locationInfo, nil
 
 	default:
 		return "", fmt.Errorf("tool not found: %s", toolName)
@@ -624,6 +646,23 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 				},
 			}
 			Broadcast(`{"type": "tool_call.success", "tool": "namu_wiki"}`)
+		}
+	} else if params.Name == "get_current_location" {
+		_, _, _, locationInfo := GetContext()
+		if locationInfo == "" {
+			res.Result = map[string]interface{}{
+				"content": []map[string]interface{}{
+					{"type": "text", "text": "Location information not provided by client."},
+				},
+			}
+			Broadcast(`{"type": "tool_call.failure", "tool": "get_current_location", "reason": "No location info"}`)
+		} else {
+			res.Result = map[string]interface{}{
+				"content": []map[string]interface{}{
+					{"type": "text", "text": locationInfo},
+				},
+			}
+			Broadcast(`{"type": "tool_call.success", "tool": "get_current_location"}`)
 		}
 	} else {
 		res.Error = &JSONRPCError{Code: -32601, Message: "Tool not found"}
