@@ -46,6 +46,13 @@ var (
 	globalApp *App
 )
 
+// Structured Tool Call Support
+type StructuredToolCall struct {
+	Thought       string      `json:"thought"`
+	ToolName      string      `json:"tool_name"`
+	ToolArguments interface{} `json:"tool_arguments"`
+}
+
 // ensureSelfSignedCert check if cert.pem and key.pem exist in AppDataDir, if not create them.
 func ensureSelfSignedCert(appDataDir string) (string, string, error) {
 	certPath := filepath.Join(appDataDir, "cert.pem")
@@ -732,12 +739,14 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		token = strings.TrimSpace(token[7:])
 	}
 
+	var reqMap map[string]interface{}
+	// Always unmarshal body into reqMap to prevent nil panics later in the turn loop
+	json.Unmarshal(body, &reqMap)
+
 	// Inject MCP integration if enabled AND NOT IN STANDARD MODE
 	// Standard Mode (OpenAI compliant) with 'integrations' field might trigger strict auth in LM Studio.
 	if enableMCP && llmMode != "standard" {
-		var reqMap map[string]interface{}
-
-		if err := json.Unmarshal(body, &reqMap); err == nil {
+		if reqMap != nil {
 			// Optimization for LM Studio Stateful mode:
 			// If we are in stateful mode and have a previous_response_id, we can skip redundant injections
 			// because LM Studio remembers the context (system_prompt, integrations, etc.) in the chat thread.
@@ -745,11 +754,11 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			if llmMode == "stateful" {
 				if pid, ok := reqMap["previous_response_id"].(string); ok && pid != "" {
 					isStatefulTurn = true
-					log.Println("[handleChat] Detected follow-up stateful turn, skipping redundant injections")
+					log.Println("[handleChat] Detected follow-up stateful turn, skipping redundant system prompt (maintaining tools)")
 				}
 			}
 
-			if enableMCP && !isStatefulTurn {
+			if enableMCP {
 				targetMCP := "mcp/dinkisstyle-gateway"
 				var integrations []string
 				if existing, ok := reqMap["integrations"].([]interface{}); ok {
@@ -799,8 +808,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				foundSystem := false
 				// Case A: Standard mode (OpenAI style)
 				if messages, ok := reqMap["messages"].([]interface{}); ok {
-					// 🚀 SLIDING WINDOW: Limit to last 15 messages to prevent context overflow
-					maxMessages := 15
+					// 🚀 SLIDING WINDOW: Limit to last 10 messages to prevent context overflow
+					maxMessages := 10
 					if len(messages) > maxMessages {
 						log.Printf("[handleChat] Truncating chat history: %d -> %d messages", len(messages), maxMessages)
 
@@ -880,77 +889,28 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			if newBody, err := json.Marshal(reqMap); err == nil {
 				body = newBody
 			}
-		} else {
-			log.Printf("[handleChat] Failed to unmarshal body for MCP injection: %v", err)
 		}
 	} else {
 		log.Printf("[handleChat] MCP injection skipped (EnableMCP=%v, Mode=%s)", enableMCP, llmMode)
 	}
 
-	// DEBUG LOG
-	log.Printf("[handleChat] User: %s, Mode: %s, Endpoint: %s, HasToken: %v", userID, llmMode, endpoint, token != "")
-
+	// Set the LLM URL based on mode
 	if llmMode == "stateful" {
 		llmURL = endpoint + "/api/v1/chat"
 	} else {
 		llmURL = endpoint + "/v1/chat/completions"
 	}
-	log.Printf("[handleChat] Proxying to LLM URL: %s", llmURL)
+	log.Printf("[handleChat] User: %s, Mode: %s, Endpoint: %s, URL: %s", userID, llmMode, endpoint, llmURL)
 
-	// Use r.Context() to propagate cancellation from frontend
-	req, err := http.NewRequestWithContext(r.Context(), "POST", llmURL, bytes.NewReader(body))
-	if err != nil {
-		http.Error(w, "Failed to create request", http.StatusInternalServerError)
-		return
+	// Determine Model ID for Tool Pattern Lookup
+	var modelID string
+	var tmpModel struct {
+		Model string `json:"model"`
 	}
+	json.Unmarshal(body, &tmpModel)
+	modelID = tmpModel.Model
 
-	req.Header.Set("Content-Type", "application/json")
-
-	// Check if token is effectively empty or just "bearer", OR IS A MASKED VALUE
-	token = strings.TrimSpace(token)
-	isMasked := strings.HasPrefix(token, "***") || strings.HasSuffix(token, "...")
-	if token != "" && !isMasked {
-		req.Header.Set("Authorization", "Bearer "+token)
-	} else {
-		// Default to lm-studio (standard, no hacks).
-		// If this fails with 401, we will handle the error response to guide the user.
-		log.Printf("[handleChat] Empty/Invalid/Masked Token detected ('%s'), using Default: lm-studio", token)
-		req.Header.Set("Authorization", "Bearer lm-studio")
-	}
-
-	client := &http.Client{Timeout: 5 * time.Minute}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("LLM request failed: %v", err)
-		http.Error(w, fmt.Sprintf("LLM connection failed: %v", err), http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		errorMsg := string(bodyBytes)
-		log.Printf("LLM error response: %s", errorMsg)
-
-		// Check for specific LM Studio auth error
-		// We return a text starting with "LM_STUDIO_AUTH_ERROR:" so frontend can localize it.
-		if resp.StatusCode == http.StatusUnauthorized || strings.Contains(errorMsg, "invalid_api_key") || strings.Contains(errorMsg, "Malformed LM Studio API token") {
-			// Frontend will detect this prefix and show translated message
-			http.Error(w, "LM_STUDIO_AUTH_ERROR: "+errorMsg, resp.StatusCode)
-			return
-		}
-
-		// Check for MCP Permission Error (403)
-		if resp.StatusCode == http.StatusForbidden && strings.Contains(errorMsg, "Permission denied to use plugin") {
-			http.Error(w, "LM_STUDIO_MCP_ERROR: "+errorMsg, resp.StatusCode)
-			return
-		}
-
-		http.Error(w, fmt.Sprintf("LLM error: %s", errorMsg), resp.StatusCode)
-		return
-	}
-
-	// Set SSE headers
+	// Set SSE headers ONCE before turn loop
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -962,260 +922,171 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		return
 	}
 
-	// Capture full response for memory
+	// Shared turn-state variables
 	fullResponse := ""
 	memoryLogged := false
 	var messagesForMemory []map[string]interface{}
+	needsCorrection := false
+	var badContentCapture string
+	var lastResponseID string // Captured from chat.end for stateful chaining
 
-	// Determine Model ID for Tool Pattern Lookup
-	var modelID string
-	var tmp struct {
-		Model string `json:"model"`
-	}
-	json.Unmarshal(body, &tmp)
-	modelID = tmp.Model
+	// --- TURN LOOP START ---
+	// We allow up to 10 turns (tool call cycles) per request
+	for turn := 0; turn < 10; turn++ {
+		toolExecutedThisTurn := false
+		var lastToolName string
+		var lastToolArgsStr string
+		var lastSavedBufferForTurn string
 
-	// Tool Pattern Logic
-	toolPattern := app.GetToolPattern(modelID)
-	var toolRegex *regexp.Regexp
-	var buffer string
-	var isBuffering bool
-	var bufferingThreshold = 8000 // Buffer size (increased for large JSON args)
+		// Variables for tool execution (shared between Regex and JSON modes)
+		var toolName string
+		var toolArgsStr string
 
-	if toolPattern != nil {
-		if regexStr, ok := toolPattern["regex"]; ok {
-			var err error
-			toolRegex, err = regexp.Compile(regexStr)
-			if err != nil {
-				log.Printf("[handleChat] Invalid regex for model %s: %v", modelID, err)
-				toolPattern = nil // Disable if invalid
-			} else {
-				isBuffering = true
-				log.Printf("[handleChat] Enabled Custom Tool Parsing for model: %s", modelID)
-			}
+		// Use r.Context() to propagate cancellation from frontend
+		// Note: 'body' must be updated if we loop
+		req, err := http.NewRequestWithContext(r.Context(), "POST", llmURL, bytes.NewReader(body))
+		if err != nil {
+			http.Error(w, "Failed to create request", http.StatusInternalServerError)
+			return
 		}
-	}
 
-	// Extract messages for Memory Analysis (if enabled)
-	if enableMemory {
-		log.Printf("[handleChat-DEBUG] Request Body Snippet: %s", string(body)[:min(len(body), 500)])
+		req.Header.Set("Content-Type", "application/json")
 
-		var tmpBody struct {
-			Messages []map[string]interface{} `json:"messages"`
-			Input    string                   `json:"input"` // Support single input field
-		}
-		if err := json.Unmarshal(body, &tmpBody); err == nil {
-			if len(tmpBody.Messages) > 0 {
-				messagesForMemory = tmpBody.Messages
-				log.Printf("[handleChat-DEBUG] Extracted %d messages for memory", len(messagesForMemory))
-			} else if tmpBody.Input != "" {
-				// Construct a single user message from Input
-				messagesForMemory = []map[string]interface{}{
-					{"role": "user", "content": tmpBody.Input},
-				}
-				log.Printf("[handleChat-DEBUG] Extracted 'input' as user message for memory")
-			} else {
-				log.Printf("[handleChat-DEBUG] No 'messages' or 'input' found in body")
-			}
+		// Check if token is effectively empty or just "bearer", OR IS A MASKED VALUE
+		token = strings.TrimSpace(token)
+		isMasked := strings.HasPrefix(token, "***") || strings.HasSuffix(token, "...")
+		if token != "" && !isMasked {
+			req.Header.Set("Authorization", "Bearer "+token)
 		} else {
-			log.Printf("[handleChat-DEBUG] Failed to extract messages for memory: %v", err)
-		}
-	}
-
-	scanner := bufio.NewScanner(resp.Body)
-	log.Println("[handleChat-DEBUG] Starting response scanner loop")
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		// Log first few lines to debug stream format
-		if len(fullResponse) < 100 && len(fullResponse) > 0 {
-			// Don't log every line forever, just start
+			// Default to lm-studio (standard, no hacks).
+			// If this fails with 401, we will handle the error response to guide the user.
+			log.Printf("[handleChat] Empty/Invalid/Masked Token detected ('%s'), using Default: lm-studio", token)
+			req.Header.Set("Authorization", "Bearer lm-studio")
 		}
 
-		// CUSTOM PARSING LOGIC & SSE Handling
-		// We process every line to handle both standard OpenAI and the custom format seen in logs
-		trimmedLine := strings.TrimSpace(line)
+		client := &http.Client{Timeout: 5 * time.Minute}
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("LLM request failed: %v", err)
+			if turn == 0 {
+				http.Error(w, fmt.Sprintf("LLM connection failed: %v", err), http.StatusBadGateway)
+			}
+			return
+		}
+		// Close body at end of this turn
+		// We will close it explicitly after the scanner instead of using defer in a loop
 
-		// Skip empty lines or comment lines (unless we need event types, which we might for the custom format)
-		if trimmedLine == "" {
-			continue
+		if resp.StatusCode != http.StatusOK {
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			errorMsg := string(bodyBytes)
+			log.Printf("LLM error response: %s", errorMsg)
+
+			// Check for specific LM Studio auth error
+			// We return a text starting with "LM_STUDIO_AUTH_ERROR:" so frontend can localize it.
+			if resp.StatusCode == http.StatusUnauthorized || strings.Contains(errorMsg, "invalid_api_key") || strings.Contains(errorMsg, "Malformed LM Studio API token") {
+				// Frontend will detect this prefix and show translated message
+				http.Error(w, "LM_STUDIO_AUTH_ERROR: "+errorMsg, resp.StatusCode)
+				return
+			}
+
+			// Check for MCP Permission Error (403)
+			if resp.StatusCode == http.StatusForbidden && strings.Contains(errorMsg, "Permission denied to use plugin") {
+				http.Error(w, "LM_STUDIO_MCP_ERROR: "+errorMsg, resp.StatusCode)
+				return
+			}
+
+			// Check for Context Overflow Error
+			if strings.Contains(errorMsg, "Context size has been exceeded") || strings.Contains(errorMsg, "context_length_exceeded") {
+				log.Printf("[handleChat] LM Studio Context Limit Reached. Informing user.")
+				// Return a specialized error that the frontend can handle specifically
+				http.Error(w, "LM_STUDIO_CONTEXT_ERROR: Context limit reached. Please clear the chat and try again.", resp.StatusCode)
+				return
+			}
+
+			http.Error(w, fmt.Sprintf("LLM error: %s", errorMsg), resp.StatusCode)
+			return
 		}
 
-		// Check for data: prefix
-		if strings.HasPrefix(trimmedLine, "data: ") {
-			dataStr := strings.TrimPrefix(trimmedLine, "data: ")
+		// Tool Pattern Logic
+		toolPattern := app.GetToolPattern(modelID)
+		var toolRegex = (*regexp.Regexp)(nil)
 
-			// 1. Check for Standard OpenAI [DONE]
-			if dataStr == "[DONE]" {
-				log.Println("[handleChat-DEBUG] [DONE] signal received (Standard)")
-				// If buffering for tools, flush any remaining buffer as content before sending DONE
-				if toolPattern != nil && isBuffering && len(buffer) > 0 {
-					payload := map[string]interface{}{
-						"choices": []interface{}{
-							map[string]interface{}{
-								"delta": map[string]string{
-									"content": buffer,
-								},
-							},
-						},
+		// Buffer for handling split tags (e.g., "<", "tool", "_call>")
+		var partialTagBuffer string
+
+		// Flag if we are in "buffering mode" (waiting for complete tool call)
+		isBuffering := false
+		var buffer string             // Declare buffer here
+		var bufferingThreshold = 8000 // Buffer size (increased for large JSON args)
+
+		if toolPattern != nil {
+			if regexStr, ok := toolPattern["regex"]; ok {
+				var err error
+				toolRegex, err = regexp.Compile(regexStr)
+				if err != nil {
+					log.Printf("[handleChat] Invalid regex for model %s: %v", modelID, err)
+					toolPattern = nil // Disable if invalid
+				} else {
+					isBuffering = true
+					log.Printf("[handleChat] Enabled Custom Tool Parsing for model: %s", modelID)
+				}
+			}
+		}
+
+		// Extract messages for Memory Analysis (if enabled)
+		if enableMemory {
+			log.Printf("[handleChat-DEBUG] Request Body Snippet: %s", string(body)[:min(len(body), 500)])
+
+			var tmpBody struct {
+				Messages []map[string]interface{} `json:"messages"`
+				Input    string                   `json:"input"` // Support single input field
+			}
+			if err := json.Unmarshal(body, &tmpBody); err == nil {
+				if len(tmpBody.Messages) > 0 {
+					messagesForMemory = tmpBody.Messages
+					log.Printf("[handleChat-DEBUG] Extracted %d messages for memory", len(messagesForMemory))
+				} else if tmpBody.Input != "" {
+					// Construct a single user message from Input
+					messagesForMemory = []map[string]interface{}{
+						{"role": "user", "content": tmpBody.Input},
 					}
-					jsonBytes, _ := json.Marshal(payload)
-					fmt.Fprintf(w, "data: %s\n\n", string(jsonBytes))
-					fullResponse += buffer
-					buffer = ""
+					log.Printf("[handleChat-DEBUG] Extracted 'input' as user message for memory")
+				} else {
+					log.Printf("[handleChat-DEBUG] No 'messages' or 'input' found in body")
 				}
+			} else {
+				log.Printf("[handleChat-DEBUG] Failed to extract messages for memory: %v", err)
+			}
+		}
 
-				// Just forward the DONE
-				fmt.Fprintf(w, "%s\n\n", line)
-				flusher.Flush()
+		scanner := bufio.NewScanner(resp.Body)
+		log.Println("[handleChat-DEBUG] Starting response scanner loop")
+		for scanner.Scan() {
+			line := scanner.Text()
 
-				if enableMemory {
-					checkAndLogMemoryWith(userID, messagesForMemory, fullResponse, &memoryLogged)
-				}
+			// Log first few lines to debug stream format
+			if len(fullResponse) < 100 && len(fullResponse) > 0 {
+				// Don't log every line forever, just start
+			}
+
+			// CUSTOM PARSING LOGIC & SSE Handling
+			// We process every line to handle both standard OpenAI and the custom format seen in logs
+			trimmedLine := strings.TrimSpace(line)
+
+			// Skip empty lines or comment lines (unless we need event types, which we might for the custom format)
+			if trimmedLine == "" {
 				continue
 			}
 
-			// 2. Parse JSON
-			var chunk map[string]interface{}
-			if err := json.Unmarshal([]byte(dataStr), &chunk); err == nil {
+			// Check for data: prefix
+			if strings.HasPrefix(trimmedLine, "data: ") {
+				dataStr := strings.TrimPrefix(trimmedLine, "data: ")
 
-				// --- A. Handle Custom Format (type: "message.delta", etc) ---
-				if msgType, ok := chunk["type"].(string); ok {
-					if msgType == "message.delta" {
-						if content, ok := chunk["content"].(string); ok {
-							fullResponse += content
-
-							// 🔍 Self-Evolution for Custom Format
-							if toolPattern == nil && len(content) > 5 {
-								lc := strings.ToLower(content)
-								if strings.Contains(lc, "<|") ||
-									strings.Contains(lc, "function") ||
-									strings.Contains(lc, "tool") ||
-									strings.Contains(lc, "execute") ||
-									(strings.Contains(lc, "{\"") && strings.Contains(lc, "args")) {
-									log.Printf("[handleChat] Potential tool pattern detected in content (Custom Format): %s", content)
-									go app.LearnToolPattern(modelID, content)
-								}
-							}
-
-							// Forward to client identical to source
-							fmt.Fprintf(w, "%s\n\n", line)
-							flusher.Flush()
-							continue
-						}
-					} else if msgType == "chat.end" || msgType == "message.end" {
-						log.Printf("[handleChat-DEBUG] Custom End Signal Received: %s", msgType)
-						// Forward
-						fmt.Fprintf(w, "%s\n\n", line)
-						flusher.Flush()
-						if enableMemory {
-							checkAndLogMemoryWith(userID, messagesForMemory, fullResponse, &memoryLogged)
-						}
-						continue
-					} else {
-						// Forward other events (start, progress, etc)
-						fmt.Fprintf(w, "%s\n\n", line)
-						flusher.Flush()
-						continue
-					}
-				}
-
-				// --- B. Handle Tool Pattern Logic (if enabled and buffering) ---
-				if toolPattern != nil && isBuffering {
-					// Extract content for buffering
-					var content string
-					if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
-						if choice, ok := choices[0].(map[string]interface{}); ok {
-							if delta, ok := choice["delta"].(map[string]interface{}); ok {
-								if c, ok := delta["content"].(string); ok {
-									content = c
-								} else if rc, ok := delta["reasoning_content"].(string); ok {
-									content = rc
-								} else if r, ok := delta["reasoning"].(string); ok {
-									content = r
-								}
-							} else if message, ok := choice["message"].(map[string]interface{}); ok {
-								if c, ok := message["content"].(string); ok {
-									content = c
-								}
-							}
-						}
-					}
-					buffer += content
-
-					// Check Regex
-					matches := toolRegex.FindStringSubmatch(buffer)
-					if len(matches) > 2 {
-						// Match Found! (Group 1: Tool Name, Group 2: Args)
-						toolName := matches[1]
-						toolArgsStr := matches[2]
-
-						// 🛠️ Command-R / GPT-OSS Name Extraction
-						// If the tool name (Group 1) looks like a Command-R prefix, try to extract real name from "to=..."
-						if strings.Contains(toolName, "<|channel|>") {
-							reName := regexp.MustCompile(`to=([a-zA-Z0-9_]+)`)
-							nameMatch := reName.FindStringSubmatch(toolName)
-							if len(nameMatch) > 1 {
-								toolName = nameMatch[1]
-								// If generic "functions", we expect the JSON to have the real name (handled by Smart Parsing below)
-							}
-						}
-
-						// Smart Parsing: Check if G2 is actually a wrapper object with "name" and "arguments"
-						var wrapper struct {
-							Name      string      `json:"name"`
-							Arguments interface{} `json:"arguments"`
-						}
-
-						isWrapper := false
-						if err := json.Unmarshal([]byte(toolArgsStr), &wrapper); err == nil {
-							if wrapper.Name != "" && wrapper.Arguments != nil {
-								toolName = wrapper.Name
-								isWrapper = true
-								log.Printf("[handleChat] Detected Wrapper JSON format. Extracted Tool: %s", toolName)
-							}
-						}
-
-						log.Printf("[handleChat] Custom Tool Pattern Matched! Tool: %s", toolName)
-
-						// 1. Emit start event
-						startEvt := map[string]string{
-							"type": "tool_call.start",
-							"tool": toolName,
-						}
-						startBytes, _ := json.Marshal(startEvt)
-						fmt.Fprintf(w, "data: %s\n\n", string(startBytes))
-
-						// 2. Emit arguments event
-						if isWrapper {
-							argsEvt := map[string]interface{}{
-								"type":      "tool_call.arguments",
-								"tool":      toolName,
-								"arguments": wrapper.Arguments,
-							}
-							argsBytes, _ := json.Marshal(argsEvt)
-							fmt.Fprintf(w, "data: %s\n\n", string(argsBytes))
-						} else {
-							fmt.Fprintf(w, "data: {\"type\": \"tool_call.arguments\", \"tool\": \"%s\", \"arguments\": %s}\n\n", toolName, toolArgsStr)
-						}
-
-						// 3. Clear Buffer & Stop Buffering
-						buffer = ""
-						isBuffering = false
-						flusher.Flush()
-						continue // Tool call handled, move to next line
-					}
-
-					// If buffer too long, assume no match and flush
-					if len(buffer) > bufferingThreshold {
-						// 🔍 Self-Evolution Check
-						lowerBuf := strings.ToLower(buffer)
-						if (strings.Contains(lowerBuf, "function") || strings.Contains(lowerBuf, "call") || strings.Contains(lowerBuf, "tool")) &&
-							(strings.Contains(lowerBuf, "{") && strings.Contains(lowerBuf, "}")) {
-							go app.LearnToolPattern(modelID, buffer)
-						}
-
-						// Flush buffer as regular content
+				// 1. Check for Standard OpenAI [DONE]
+				if dataStr == "[DONE]" {
+					log.Println("[handleChat-DEBUG] [DONE] signal received (Standard)")
+					// If buffering for tools, flush any remaining buffer as content before sending DONE
+					if toolPattern != nil && isBuffering && len(buffer) > 0 {
 						payload := map[string]interface{}{
 							"choices": []interface{}{
 								map[string]interface{}{
@@ -1227,111 +1098,624 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 						}
 						jsonBytes, _ := json.Marshal(payload)
 						fmt.Fprintf(w, "data: %s\n\n", string(jsonBytes))
-						fullResponse += buffer // Add to full response
+						fullResponse += buffer
 						buffer = ""
-						flusher.Flush()
 					}
-					continue // Buffering logic handled, move to next line
+
+					// Just forward the DONE
+					fmt.Fprintf(w, "%s\n\n", line)
+					flusher.Flush()
+
+					if enableMemory {
+						checkAndLogMemoryWith(userID, messagesForMemory, fullResponse, &memoryLogged, modelID)
+					}
+					continue
 				}
 
-				// --- C. Handle Standard OpenAI Format (if not custom and not tool-buffered) ---
-				if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
-					if choice, ok := choices[0].(map[string]interface{}); ok {
-						if delta, ok := choice["delta"].(map[string]interface{}); ok {
-							if c, ok := delta["content"].(string); ok {
-								fullResponse += c
+				// 2. Parse JSON
+				var chunk map[string]interface{}
+				if err := json.Unmarshal([]byte(dataStr), &chunk); err == nil {
+
+					// --- A. Handle Custom Format (type: "message.delta", etc) ---
+					if msgType, ok := chunk["type"].(string); ok {
+						if msgType == "message.delta" {
+							if content, ok := chunk["content"].(string); ok {
+								fullResponse += content
+
+								// 🔍 Self-Evolution for Custom Format
+								if toolPattern == nil && len(content) > 5 {
+									lc := strings.ToLower(content)
+									if strings.Contains(lc, "<|") ||
+										strings.Contains(lc, "function") ||
+										strings.Contains(lc, "tool") ||
+										strings.Contains(lc, "execute") ||
+										(strings.Contains(lc, "{\"") && strings.Contains(lc, "args")) {
+										log.Printf("[handleChat] Invalid tool pattern detected in content (Custom Format): %s", content)
+										needsCorrection = true
+										badContentCapture = content // Capture the snippet for the prompt
+									}
+								}
+
+								// Forward to client identical to source
+								fmt.Fprintf(w, "%s\n\n", line)
+								flusher.Flush()
+								continue
 							}
+						} else if msgType == "chat.end" || msgType == "message.end" {
+							log.Printf("[handleChat-DEBUG] Custom End Signal Received: %s", msgType)
+
+							// Capture response_id for chaining in stateful mode
+							// Line is like: event: chat.end\ndata: {"result": {"response_id": "..."}}
+							// We need to decode "data" part.
+							// The 'line' variable here is the raw SSE line, e.g. "data: {...}"
+							if strings.HasPrefix(line, "data: ") {
+								jsonPart := strings.TrimPrefix(line, "data: ")
+								var endPayload map[string]interface{}
+								if err := json.Unmarshal([]byte(jsonPart), &endPayload); err == nil {
+									if res, ok := endPayload["result"].(map[string]interface{}); ok {
+										if rid, ok := res["response_id"].(string); ok {
+											lastResponseID = rid
+											log.Printf("[handleChat] Captured response_id for chaining: %s", lastResponseID)
+										}
+									}
+								}
+							}
+
+							// Forward
+							fmt.Fprintf(w, "%s\n\n", line)
+							flusher.Flush()
+							if enableMemory {
+								checkAndLogMemoryWith(userID, messagesForMemory, fullResponse, &memoryLogged, modelID)
+							}
+							continue
+						} else {
+							// Forward other events (start, progress, etc)
+							fmt.Fprintf(w, "%s\n\n", line)
+							flusher.Flush()
+							continue
 						}
 					}
-				}
 
-				// --- D. Self-Evolution for non-buffered models ---
-				// This block was previously in an `else if strings.HasPrefix(strings.TrimSpace(line), "data: ")`
-				// It should now be integrated here, after content extraction but before forwarding.
-				if toolPattern == nil { // Only if no tool pattern is active
-					var content string
+					// --- B. Handle Tool Pattern Logic (if enabled and buffering) ---
+					if toolPattern != nil && isBuffering {
+						// Extract content for buffering
+						var content string
+						if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
+							if choice, ok := choices[0].(map[string]interface{}); ok {
+								if delta, ok := choice["delta"].(map[string]interface{}); ok {
+									if c, ok := delta["content"].(string); ok {
+										content = c
+									} else if rc, ok := delta["reasoning_content"].(string); ok {
+										content = rc
+									} else if r, ok := delta["reasoning"].(string); ok {
+										content = r
+									}
+								} else if message, ok := choice["message"].(map[string]interface{}); ok {
+									if c, ok := message["content"].(string); ok {
+										content = c
+									}
+								}
+							}
+						}
+						buffer += content
+
+						// Check Regex
+						matches := toolRegex.FindStringSubmatch(buffer)
+						if len(matches) > 2 {
+							// Match Found! (Group 1: Tool Name, Group 2: Args)
+							toolName = matches[1]
+							toolArgsStr = matches[2]
+
+							// 🛠️ Command-R / GPT-OSS Name Extraction
+							// If the tool name (Group 1) looks like a Command-R prefix, try to extract real name from "to=..."
+							if strings.Contains(toolName, "<|channel|>") {
+								reName := regexp.MustCompile(`to=([a-zA-Z0-9_]+)`)
+								nameMatch := reName.FindStringSubmatch(toolName)
+								if len(nameMatch) > 1 {
+									toolName = nameMatch[1]
+									// If generic "functions", we expect the JSON to have the real name (handled by Smart Parsing below)
+								}
+							}
+
+							// Smart Parsing: Check if G2 is actually a wrapper object with "name" and "arguments"
+							var wrapper struct {
+								Name      string      `json:"name"`
+								Arguments interface{} `json:"arguments"`
+							}
+
+							isWrapper := false
+							if err := json.Unmarshal([]byte(toolArgsStr), &wrapper); err == nil {
+								if wrapper.Name != "" && wrapper.Arguments != nil {
+									toolName = wrapper.Name
+									isWrapper = true
+									log.Printf("[handleChat] Detected Wrapper JSON format. Extracted Tool: %s", toolName)
+								}
+							}
+
+							log.Printf("[handleChat] Custom Tool Pattern Matched! Tool: %s", toolName)
+
+							// 🛠️ Mark for execution after stream ends
+							toolExecutedThisTurn = true
+							lastToolName = toolName
+							lastToolArgsStr = toolArgsStr
+
+							// 1. Emit start event
+							startEvt := map[string]string{
+								"type": "tool_call.start",
+								"tool": toolName,
+							}
+							startBytes, _ := json.Marshal(startEvt)
+							fmt.Fprintf(w, "data: %s\n\n", string(startBytes))
+
+							// 2. Emit arguments event
+							if isWrapper {
+								argsEvt := map[string]interface{}{
+									"type":      "tool_call.arguments",
+									"tool":      toolName,
+									"arguments": wrapper.Arguments,
+								}
+								argsBytes, _ := json.Marshal(argsEvt)
+								fmt.Fprintf(w, "data: %s\n\n", string(argsBytes))
+							} else {
+								fmt.Fprintf(w, "data: {\"type\": \"tool_call.arguments\", \"tool\": \"%s\", \"arguments\": %s}\n\n", toolName, toolArgsStr)
+							}
+
+							// 3. Clear Buffer & Stop Buffering
+							buffer = ""
+							isBuffering = false
+							flusher.Flush()
+							continue // Tool call handled, move to next line
+						}
+
+						// If buffer too long, assume no match and flush
+						if len(buffer) > bufferingThreshold {
+							// 🔍 Self-Evolution Check
+							lowerBuf := strings.ToLower(buffer)
+							if (strings.Contains(lowerBuf, "function") || strings.Contains(lowerBuf, "call") || strings.Contains(lowerBuf, "tool")) &&
+								(strings.Contains(lowerBuf, "{") && strings.Contains(lowerBuf, "}")) {
+								log.Printf("[handleChat] Invalid tool pattern detected in buffer: %s", buffer)
+								needsCorrection = true
+								badContentCapture = buffer
+							}
+
+							// Flush buffer as regular content
+							payload := map[string]interface{}{
+								"choices": []interface{}{
+									map[string]interface{}{
+										"delta": map[string]string{
+											"content": buffer,
+										},
+									},
+								},
+							}
+							jsonBytes, _ := json.Marshal(payload)
+							fmt.Fprintf(w, "data: %s\n\n", string(jsonBytes))
+							fullResponse += buffer // Add to full response
+							buffer = ""
+							flusher.Flush()
+						}
+						continue // Buffering logic handled, move to next line
+					}
+
+					// --- C. Handle Standard OpenAI Format (if not custom and not tool-buffered) ---
 					if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
 						if choice, ok := choices[0].(map[string]interface{}); ok {
 							if delta, ok := choice["delta"].(map[string]interface{}); ok {
 								if c, ok := delta["content"].(string); ok {
-									content = c
-								} else if rc, ok := delta["reasoning_content"].(string); ok {
-									content = rc
-								} else if r, ok := delta["reasoning"].(string); ok {
-									content = r
+									fullResponse += c
 								}
 							}
 						}
 					}
 
-					// 🧪 Special Handling for Command-R / GPT-OSS Format (<|channel|>)
-					if !isBuffering && (strings.Contains(content, "<|channel|>") || strings.Contains(content, "<|tool_code|>")) {
-						log.Printf("[handleChat] Detected Command-R/GPT-OSS Tool Call Pattern. Switching to buffering mode.")
-						isBuffering = true
-						buffer = content
+					// --- D. Self-Evolution for non-buffered models ---
+					// This block was previously in an `else if strings.HasPrefix(strings.TrimSpace(line), "data: ")`
+					// It should now be integrated here, after content extraction but before forwarding.
+					if toolPattern == nil { // Only if no tool pattern is active
+						var content string
+						if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
+							if choice, ok := choices[0].(map[string]interface{}); ok {
+								if delta, ok := choice["delta"].(map[string]interface{}); ok {
+									if c, ok := delta["content"].(string); ok {
+										content = c
+									} else if rc, ok := delta["reasoning_content"].(string); ok {
+										content = rc
+									} else if r, ok := delta["reasoning"].(string); ok {
+										content = r
+									}
+								}
+							}
+						}
 
-						// Define a regex that captures the prefix as Group 1 (ignored) and the JSON as Group 2
-						// Pattern: <|channel|>...<|message|> { JSON }
-						toolPattern = map[string]string{"format": "command-r"}
-						toolRegex = regexp.MustCompile(`(?s)(<\|channel\|>.*?<\|message\|>)\s*(\{[\s\S]*\})`)
-						flusher.Flush()
-						continue
-					}
+						// 🛠️ Structured Output Support: Force buffering if start of JSON object is detected
+						if !isBuffering && len(fullResponse) < 50 && strings.HasPrefix(strings.TrimSpace(content), "{") {
+							log.Printf("[handleChat] Detected potential JSON start. Switching to buffering mode.")
+							isBuffering = true
+							buffer = content
+							flusher.Flush()
+							continue
+						}
 
-					// 🔍 Self-Evolution for non-buffered models
-					if len(content) > 5 {
-						lc := strings.ToLower(content)
-						// Broaden trigger keywords: <|, function, tool, execute, {"name":, and tool names
-						hasToolName := strings.Contains(lc, "search_web") ||
-							strings.Contains(lc, "personal_memory") ||
-							strings.Contains(lc, "read_user_document") ||
-							strings.Contains(lc, "read_web_page")
+						// 🧪 Special Handling for Command-R / GPT-OSS Format (<|channel|>)
+						if !isBuffering && (strings.Contains(content, "<|channel|>") || strings.Contains(content, "<|tool_code|>") || strings.Contains(content, "<tool_call>")) {
+							log.Printf("[handleChat] Detected Command-R/GPT-OSS/Qwen Tool Call Pattern. Switching to buffering mode.")
+							isBuffering = true
+							buffer = content
 
-						if strings.Contains(lc, "<|") ||
-							strings.Contains(lc, "function") ||
-							strings.Contains(lc, "tool") ||
-							strings.Contains(lc, "execute") ||
-							hasToolName ||
-							(strings.Contains(lc, "{\"") && strings.Contains(lc, "args")) {
-							log.Printf("[handleChat] Potential tool pattern detected in content: %s", content)
-							go app.LearnToolPattern(modelID, content)
+							if strings.Contains(content, "<tool_call>") {
+								// Qwen Style: <tool_call>{JSON}</tool_call>
+								toolPattern = map[string]string{"format": "qwen"}
+								// Regex: Group 1 (Dummy/Name) + Group 2 (JSON)
+								toolRegex = regexp.MustCompile(`(?s)(<tool_call>)\s*(\{[\s\S]*?\})\s*</tool_call>`)
+							} else {
+								// Command-R / GPT-OSS Style
+								// Define a regex that captures the prefix as Group 1 (ignored) and the JSON as Group 2
+								// Pattern: <|channel|>...<|message|> { JSON }
+								toolPattern = map[string]string{"format": "command-r"}
+								toolRegex = regexp.MustCompile(`(?s)(<\|channel\|>.*?<\|message\|>)\s*(\{[\s\S]*\})`)
+							}
+							flusher.Flush()
+							continue
+						}
+
+						// 🔍 Self-Evolution for non-buffered models
+						if len(content) > 5 {
+							lc := strings.ToLower(content)
+							// Broaden trigger keywords: <|, function, tool, execute, {"name":, and tool names
+							hasToolName := strings.Contains(lc, "search_web") ||
+								strings.Contains(lc, "personal_memory") ||
+								strings.Contains(lc, "read_user_document") ||
+								strings.Contains(lc, "read_web_page")
+
+							if strings.Contains(lc, "<|") ||
+								strings.Contains(lc, "function") ||
+								strings.Contains(lc, "tool") ||
+								strings.Contains(lc, "execute") ||
+								hasToolName ||
+								(strings.Contains(lc, "{\"") && strings.Contains(lc, "args")) {
+
+								// 🧬 Anti-Recursion & Meta-Content Filter
+								// We want to skip learning if the content is:
+								// 1. A regex definition (has "(?s)", "regex")
+								// 2. A code block explanation of a tool call (has "tool_call[")
+								// 3. A JSON definition inside a markdown block (often starts with ```json) - though hard to detect in fragments
+								// 4. Broken/Partial JSON that is clearly just text discussion
+								if strings.Contains(lc, "(?s)") ||
+									strings.Contains(lc, "regex") ||
+									strings.Contains(lc, "tool_call[") || // Catch array/map access style which is code, not natural language
+									strings.Contains(lc, "tool_call [") ||
+									strings.Contains(lc, "```") {
+									log.Printf("[handleChat] Self-Evolution trigger skipped: detected meta-content (regex/code)")
+								} else {
+									// Double check: if it's just a tool name mention without execution context, skip
+									// Real execution usually involves JSON-like structure "{" or special tokens "<|"
+									isRealExecution := strings.Contains(lc, "<|") || (strings.Contains(lc, "{") && strings.Contains(lc, ":"))
+
+									if isRealExecution {
+										log.Printf("[handleChat] Invalid tool pattern detected in content: %s", content)
+										// 🛡️ REPLACEMENT: Instead of Self-Evolution (which loops), mark for Self-Correction
+										needsCorrection = true
+										badContentCapture = content // Capture the snippet for the prompt
+									} else {
+										// If it's just a word "tool" or "function" without structure, ignore
+									}
+								}
+							}
 						}
 					}
 				}
+
+				// Forward the line (if not already continued by custom format or tool logic)
+				fmt.Fprintf(w, "%s\n\n", line)
+				flusher.Flush()
+
+			} else {
+				// Forward non-data lines (e.g. event: ...)
+				fmt.Fprintf(w, "%s\n\n", line)
+				flusher.Flush()
 			}
+		}
 
-			// Forward the line (if not already continued by custom format or tool logic)
-			fmt.Fprintf(w, "%s\n\n", line)
+		resp.Body.Close() // Explicit close after scanner is done with this turn
+
+		if err := scanner.Err(); err != nil {
+			log.Printf("[handleChat] Stream scanner error: %v", err)
+		}
+
+		// 🛠️ Structured Output Support (JSON)
+		// Check if buffer looks like a complete JSON object from a Structured Output model
+		// Pattern: {"thought": "...", "tool_name": "...", "tool_arguments": ...}
+		if isBuffering || (strings.HasPrefix(strings.TrimSpace(buffer), "{") && strings.Contains(buffer, "\"tool_name\"")) {
+			var structTool StructuredToolCall
+			if err := json.Unmarshal([]byte(buffer), &structTool); err == nil {
+				if structTool.ToolName != "" {
+					log.Printf("[handleChat] Detected Structured JSON Tool Call: %s", structTool.ToolName)
+					toolName = structTool.ToolName
+
+					// Convert arguments back to JSON string for consistent handling
+					if argsBytes, err := json.Marshal(structTool.ToolArguments); err == nil {
+						toolArgsStr = string(argsBytes)
+					} else {
+						toolArgsStr = "{}"
+					}
+
+					toolExecutedThisTurn = true
+					lastToolName = toolName
+					lastToolArgsStr = toolArgsStr
+
+					// Emit events to frontend
+					startEvt := map[string]string{
+						"type": "tool_call.start",
+						"tool": toolName,
+					}
+					startBytes, _ := json.Marshal(startEvt)
+					fmt.Fprintf(w, "data: %s\n\n", string(startBytes))
+
+					argsEvt := map[string]interface{}{
+						"type":      "tool_call.arguments",
+						"tool":      toolName,
+						"arguments": structTool.ToolArguments,
+					}
+					argsBytes, _ := json.Marshal(argsEvt)
+					fmt.Fprintf(w, "data: %s\n\n", string(argsBytes))
+
+					// Clear buffer and stop any further buffering
+					buffer = ""
+					isBuffering = false
+					flusher.Flush()
+					continue
+				}
+			}
+		}
+
+		// 🛠️ FINAL BUFFER FLUSH: If we were buffering and the stream ended, flush what's left.
+		if isBuffering && len(buffer) > 0 {
+			log.Printf("[handleChat] Final buffer flush triggered (Stream End)")
+			payload := map[string]interface{}{
+				"choices": []interface{}{
+					map[string]interface{}{
+						"delta": map[string]string{
+							"content": buffer,
+						},
+					},
+				},
+			}
+			jsonBytes, _ := json.Marshal(payload)
+			fmt.Fprintf(w, "data: %s\n\n", string(jsonBytes))
+			fullResponse += buffer
+			lastSavedBufferForTurn = buffer // Save for history before clearing
+			buffer = ""
 			flusher.Flush()
-
-		} else {
-			// Forward non-data lines (e.g. event: ...)
-			fmt.Fprintf(w, "%s\n\n", line)
+		} else if len(partialTagBuffer) > 0 {
+			// Flush partial tag buffer if stream ends
+			payload := map[string]interface{}{
+				"choices": []interface{}{
+					map[string]interface{}{
+						"delta": map[string]string{
+							"content": partialTagBuffer,
+						},
+					},
+				},
+			}
+			jsonBytes, _ := json.Marshal(payload)
+			fmt.Fprintf(w, "data: %s\n\n", string(jsonBytes))
+			fullResponse += partialTagBuffer
+			partialTagBuffer = ""
 			flusher.Flush()
 		}
-	}
 
-	if err := scanner.Err(); err != nil {
-		log.Printf("[handleChat] Stream scanner error: %v", err)
-	}
+		log.Printf("[handleChat-DEBUG] turn %d processing complete. Total response len: %d", turn, len(fullResponse))
 
-	log.Printf("[handleChat-DEBUG] processing complete. Total response len: %d", len(fullResponse))
+		// 🛡️ TOOL EXECUTION & LOOP LOGIC
+		if toolExecutedThisTurn {
+			log.Printf("[handleChat] Turn %d detected Tool Call: %s. Executing...", turn, lastToolName)
+
+			// 1. Execute Tool
+			result, err := mcp.ExecuteToolByName(lastToolName, []byte(lastToolArgsStr), userID, enableMemory, disabledTools)
+			var toolResultEvt map[string]interface{}
+			if err != nil {
+				log.Printf("[handleChat] Tool Execution Failed: %v", err)
+				toolResultEvt = map[string]interface{}{
+					"type":   "tool_call.failure",
+					"tool":   lastToolName,
+					"reason": err.Error(),
+				}
+				result = fmt.Sprintf("Error executing tool %s: %v", lastToolName, err)
+			} else {
+				log.Printf("[handleChat] Tool Execution Success.")
+				toolResultEvt = map[string]interface{}{
+					"type": "tool_call.success",
+					"tool": lastToolName,
+				}
+			}
+
+			// Emit Result Event to Frontend
+			resBytes, _ := json.Marshal(toolResultEvt)
+			fmt.Fprintf(w, "data: %s\n\n", string(resBytes))
+			flusher.Flush()
+
+			// 2. Prepare Follow-up Request
+			// We feed the result back as a hidden user message or a tool response if the model supports it.
+			// For consistency across modes, we'll use a simulated message.
+
+			if llmMode == "stateful" {
+				// Stateful: use previous_response_id of the JUST FINISHED assistant turn
+				if lastResponseID == "" {
+					log.Printf("[handleChat] WARNING: No lastResponseID captured for turn %d. Multi-turn might break.", turn)
+				}
+				reqMap = map[string]interface{}{
+					"model":                modelID,
+					"input":                fmt.Sprintf("Tool Result (%s): %s", lastToolName, result),
+					"previous_response_id": lastResponseID,
+					"stream":               true,
+				}
+			} else {
+				// Standard: Append Assistant turn and Tool Result turn
+				msgs, _ := reqMap["messages"].([]interface{})
+				// Add what the assistant just said (the tool call) - use the saved buffer
+				msgs = append(msgs, map[string]interface{}{
+					"role":    "assistant",
+					"content": lastSavedBufferForTurn,
+				})
+				// Add the result
+				msgs = append(msgs, map[string]interface{}{
+					"role":    "user",
+					"content": fmt.Sprintf("Tool Result (%s): %s", lastToolName, result),
+				})
+				reqMap["messages"] = msgs
+			}
+
+			// Reinject integrations for the next turn
+			if enableMCP {
+				reqMap["integrations"] = []string{"mcp/dinkisstyle-gateway"}
+			}
+
+			// Update body for next turn
+			body, _ = json.Marshal(reqMap)
+			continue // Start next turn loop
+		}
+
+		// If no tool executed, we are done with all turns
+		break
+	} // --- TURN LOOP END ---
+
+	// 🛡️ SELF-CORRECTION TRIGGER (Only if we didn't loop or at the very end)
+	if needsCorrection && badContentCapture != "" {
+		log.Printf("[handleChat] Triggering Self-Correction for invalid tool format...")
+
+		// Prepare Correction Request
+		correctionPrompt := mcp.SelfCorrectionPromptTemplate(badContentCapture)
+		var correctionReq map[string]interface{}
+
+		// Determine if we are in stateful mode or standard mode
+		// We need to re-parse body or re-use reqMap if available.
+		// Since reqMap was local to an if block earlier, we might not have it here.
+		// We will reconstruct a minimal valid request based on llmMode.
+
+		if llmMode == "stateful" {
+			// Stateful: just send input and previous_response_id
+			// We need the response ID from the JUST FINISHED stream.
+			// It was in the 'chat.end' event: "response_id": "resp_..."
+			// However, capturing it from the stream is hard without parsing every chunk JSON.
+			// Fallback: Just send a new message with the SAME previous_response_id as the original request,
+			// effectively branching or continuing.
+			// But original 'reqMap' is not in scope here. We need to parse 'body' again or lift 'reqMap' scope.
+			// Since parsing is cheap, let's re-parse 'body' to get previous_id.
+			var tempMap map[string]interface{}
+			if err := json.Unmarshal(body, &tempMap); err == nil {
+				// Use the lastResponseID from the just-completed turn if available
+				// This chains the correction AFTER the bad response.
+				correctionReq = map[string]interface{}{
+					"model":       modelID,
+					"input":       correctionPrompt, // Just the prompt
+					"stream":      true,
+					"temperature": 0.1,
+				}
+
+				if enableMCP {
+					correctionReq["integrations"] = []string{"mcp/dinkisstyle-gateway"}
+				}
+
+				if lastResponseID != "" {
+					correctionReq["previous_response_id"] = lastResponseID
+				} else {
+					// Fallback: fork from original parent
+					if pid, ok := tempMap["previous_response_id"].(string); ok && pid != "" {
+						correctionReq["previous_response_id"] = pid
+					}
+				}
+			}
+		} else {
+			// Standard/Stateless: Send full messages array with correction appended
+			var tempMap map[string]interface{}
+			if err := json.Unmarshal(body, &tempMap); err == nil {
+				if msgs, ok := tempMap["messages"].([]interface{}); ok {
+					newMessages := append(msgs, map[string]interface{}{
+						"role":    "assistant",
+						"content": fullResponse,
+					})
+					newMessages = append(newMessages, map[string]interface{}{
+						"role":    "system",
+						"content": correctionPrompt,
+					})
+
+					correctionReq = map[string]interface{}{
+						"model":       modelID,
+						"messages":    newMessages,
+						"stream":      true,
+						"temperature": 0.1,
+					}
+					if enableMCP {
+						correctionReq["integrations"] = []string{"mcp/dinkisstyle-gateway"}
+					}
+				}
+			}
+		}
+
+		if correctionReq != nil {
+			jsonPayload, _ := json.Marshal(correctionReq)
+
+			// Use 'url' which is defined in handleChat scope (we need to verify this variable name)
+			// Looking at code, 'url' variable holds the endpoint.
+			// If 'url' is not available, we reconstruct it:
+			targetURL := app.llmEndpoint
+			if !strings.HasSuffix(targetURL, "/v1/chat/completions") && !strings.HasSuffix(targetURL, "/api/v1/chat") {
+				// Basic fix, though precise path depends on mode.
+				// Ideally we use a variable that holds the valid endpoint used earlier.
+				// Let's assume 'app.llmEndpoint' + appropriate suffix if needed, or better:
+				// The variable 'url' IS usually defined in handleChat. Let's check previous context.
+				// In `handleChat`:
+				// url := app.llmEndpoint
+				// So we can use 'url'.
+			}
+			// Force valid URL for safety if 'url' is not in scope of this block (it should be)
+			// Actually, to be safe against scope issues, we use 'app.llmEndpoint' and fix path.
+			reqUrl := app.llmEndpoint
+			if llmMode == "stateful" && !strings.Contains(reqUrl, "chat") {
+				reqUrl = strings.TrimSuffix(reqUrl, "/") + "/api/v1/chat"
+			} else if !strings.Contains(reqUrl, "chat") {
+				reqUrl = strings.TrimSuffix(reqUrl, "/") + "/v1/chat/completions"
+			}
+
+			req, _ := http.NewRequest("POST", reqUrl, bytes.NewBuffer(jsonPayload))
+			req.Header.Set("Content-Type", "application/json")
+			if app.llmApiToken != "" {
+				req.Header.Set("Authorization", "Bearer "+app.llmApiToken)
+			}
+
+			client := &http.Client{Timeout: 60 * time.Second}
+			resp, err := client.Do(req)
+			if err == nil {
+				defer resp.Body.Close()
+				correctionScanner := bufio.NewScanner(resp.Body)
+				for correctionScanner.Scan() {
+					line := correctionScanner.Text()
+					if strings.HasPrefix(line, "data: ") {
+						fmt.Fprintf(w, "%s\n\n", line)
+						flusher.Flush()
+					}
+				}
+			} else {
+				log.Printf("[handleChat] Self-Correction Request Failed: %v", err)
+			}
+		}
+	}
 
 	// 🔍 FALLBACK logging
 	if enableMemory && len(messagesForMemory) > 0 && fullResponse != "" && !memoryLogged {
 		log.Printf("[handleChat] Fallback Memory Logging Triggered")
-		go logChatToHistory(userID, messagesForMemory, fullResponse)
+		go logChatToHistory(userID, messagesForMemory, fullResponse, modelID)
 	}
 }
 
 // Helper to dedup memory check code
-func checkAndLogMemoryWith(userID string, messages []map[string]interface{}, response string, msgLogged *bool) {
+func checkAndLogMemoryWith(userID string, messages []map[string]interface{}, response string, msgLogged *bool, modelID string) {
 	if *msgLogged {
 		return
 	}
 	if len(messages) > 0 && response != "" {
 		log.Printf("[handleChat] Stream End Trigger. Logging to memory...")
-		go logChatToHistory(userID, messages, response)
+		go logChatToHistory(userID, messages, response, modelID)
 		*msgLogged = true
 	}
 }
@@ -1537,8 +1921,8 @@ func InitTTS(assetsDir string, threads int) error {
 }
 
 // logChatToHistory appends the latest chat turn to a log file for async processing.
-func logChatToHistory(userID string, messages []map[string]interface{}, assistantResponse string) {
-	log.Printf("[AsyncMemory] logChatToHistory called for user: %s, msgs: %d, responseLen: %d", userID, len(messages), len(assistantResponse))
+func logChatToHistory(userID string, messages []map[string]interface{}, assistantResponse string, modelID string) {
+	log.Printf("[AsyncMemory] logChatToHistory called for user: %s, model: %s, msgs: %d", userID, modelID, len(messages))
 
 	// 1. Find the last user message
 	var lastUserMsg string
@@ -1562,6 +1946,7 @@ func logChatToHistory(userID string, messages []map[string]interface{}, assistan
 		"timestamp": time.Now().Format(time.RFC3339),
 		"user":      lastUserMsg,
 		"assistant": assistantResponse,
+		"model":     modelID,
 	}
 
 	data, err := json.Marshal(entry)

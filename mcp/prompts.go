@@ -84,3 +84,36 @@ OUTPUT FORMAT:
 - Do not include headers like "Here is the summary".
 - If nothing significant happened (just greetings), output: "NO_IMPORTANT_CONTENT"`, conversationText)
 }
+
+// SelfCorrectionPromptTemplate returns the prompt to ask the model to fix its tool call format.
+func SelfCorrectionPromptTemplate(badContent string) string {
+	return fmt.Sprintf(`SYSTEM ALERT: INVALID TOOL CALL FORMAT DETECTED.
+Your previous response tried to use a tool but failed the syntax check.
+We detected: "%s..."
+
+You MUST correct this immediately.
+
+❌ WRONG FORMAT (DO NOT USE):
+<tool_call>
+name: search_web
+query: something
+</tool_call>
+(No Markdown code blocks like `+"`"+``+"`"+`json or `+"`"+``+"`"+`xml)
+
+✅ CORRECT FORMAT (XML + ONE LINER JSON):
+<tool_call>{"name": "search_web", "arguments": {"query": "weather in Seoul"}}</tool_call>
+
+INSTRUCTIONS:
+1. Output ONLY the corrected <tool_call> block.
+2. Do not apologize or explain.
+3. Ensure the JSON inside is valid and minified (no distinct newlines inside JSON if possible).
+
+REWRITE THE TOOL CALL NOW:`, badContent[:min(len(badContent), 100)])
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}

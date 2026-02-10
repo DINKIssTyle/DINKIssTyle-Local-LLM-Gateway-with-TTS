@@ -157,6 +157,7 @@ func (a *App) processChatLog(userID string) {
 
 	log.Printf("[MemoryWorker] [%s] 🔍 Scanning lines in %s...", userID, filepath.Base(processingPath))
 
+	var lastModel string
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.TrimSpace(line) == "" {
@@ -171,6 +172,9 @@ func (a *App) processChatLog(userID string) {
 				timestamp = "Unknown Time"
 			}
 			sb.WriteString(fmt.Sprintf("[%s]\nUser: %s\nAssistant: %s\n", timestamp, entry["user"], entry["assistant"]))
+			if m, ok := entry["model"]; ok && m != "" {
+				lastModel = m
+			}
 			count++
 		} else {
 			log.Printf("[MemoryWorker] [%s] ⚠️ JSON Unmarshal error on line: %v", userID, err)
@@ -184,9 +188,9 @@ func (a *App) processChatLog(userID string) {
 	file.Close() // Close before removal
 
 	if count > 0 {
-		log.Printf("[MemoryWorker] [%s] 🧠 Analyzing %d interactions...", userID, count)
+		log.Printf("[MemoryWorker] [%s] 🧠 Analyzing %d interactions (Model: %s)...", userID, count, lastModel)
 		conversationText := sb.String()
-		a.analyzeAndSaveFacts(userID, conversationText)
+		a.analyzeAndSaveFacts(userID, conversationText, lastModel)
 	} else {
 		log.Printf("[MemoryWorker] [%s] ℹ️ No valid interactions found.", userID)
 	}
@@ -201,7 +205,7 @@ func (a *App) processChatLog(userID string) {
 	// Optional: Limit recursion or periodic cleanup if needed, but this is fine.
 }
 
-func (a *App) analyzeAndSaveFacts(userID, conversationText string) {
+func (a *App) analyzeAndSaveFacts(userID, conversationText, modelID string) {
 	prompt := mcp.ChatSummaryPromptTemplate(conversationText)
 
 	// Call LLM
@@ -210,8 +214,15 @@ func (a *App) analyzeAndSaveFacts(userID, conversationText string) {
 		{Role: "user", Content: prompt},
 	}
 
+	// Use model from log, fallback to some logic if empty
+	targetModel := modelID
+	if targetModel == "" {
+		// Try to pick something sensible if the log was from an older version
+		targetModel = "qwen/qwen3-vl-30b" // Sensible fallback for now
+	}
+
 	payload := MemoryAnalysisRequest{
-		Model:       "local-model", // Use configured model if possible
+		Model:       targetModel,
 		Messages:    msgs,
 		Temperature: 0.0,
 	}
@@ -242,14 +253,14 @@ func (a *App) analyzeAndSaveFacts(userID, conversationText string) {
 	// Trigger Consolidation (if needed)
 	// We check file size. If > 100 bytes (for testing), consolidate.
 	info, err := os.Stat(memoryPath)
-	if err == nil && info.Size() > 100 {
+	if err == nil && info.Size() > 5000 { // Increased limit for sanity
 		log.Printf("[MemoryWorker] 🧹 Triggering memory consolidation for %s (Size: %d bytes)", userID, info.Size())
-		a.consolidateMemory(userID)
+		a.consolidateMemory(userID, targetModel)
 	}
 }
 
 // consolidateMemory reads the full memory file, sends it to LLM for cleanup, and overwrites it.
-func (a *App) consolidateMemory(userID string) {
+func (a *App) consolidateMemory(userID, modelID string) {
 	memoryPath, _ := mcp.GetUserMemoryFilePath(userID, "personal.md")
 
 	content, err := os.ReadFile(memoryPath)
@@ -266,7 +277,7 @@ func (a *App) consolidateMemory(userID string) {
 	}
 
 	payload := MemoryAnalysisRequest{
-		Model:       "local-model",
+		Model:       modelID,
 		Messages:    msgs,
 		Temperature: 0.1, // Low temp for deterministic cleanup
 	}
