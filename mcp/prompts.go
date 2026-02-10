@@ -17,8 +17,9 @@ func SystemPromptToolUsage() string {
 // It expects the preloaded memory string as an argument.
 func SystemPromptMemoryTemplate(preloadedMemory string) string {
 	if preloadedMemory != "" {
-		return fmt.Sprintf("\n\n=== USER'S SAVED MEMORY ===\n%s\n=== END OF MEMORY ===\n"+
-			"NOTE: Memory is saved AUTOMATICALLY after the session. Do NOT attempt to save facts manually via tools.", preloadedMemory)
+		return fmt.Sprintf("\n\n### USER'S SAVED MEMORY ###\n%s\n### END OF MEMORY ###\n"+
+			"NOTE: Memory is saved AUTOMATICALLY after the session. Do NOT attempt to save facts manually via tools.\n"+
+			"CRITICAL: [Static Memory] contains verified, immutable facts. If [Personal Memory] conflicts with [Static Memory], ALWAYS trust [Static Memory] as the absolute truth.", preloadedMemory)
 	}
 	return "\n- USER_MEMORY: Empty. Memory is saved AUTOMATICALLY after the session. Do NOT attempt to save facts manually."
 }
