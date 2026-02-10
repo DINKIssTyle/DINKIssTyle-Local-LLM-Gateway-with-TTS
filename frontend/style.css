@@ -105,7 +105,8 @@ body {
   background-color: var(--chat-bg);
   position: relative;
   min-height: 0;
-  /* Important for flex-column scroll */
+  min-width: 0;
+  /* Ensure container can shrink */
 }
 
 #chat-header {
@@ -135,8 +136,11 @@ body {
 #chat-messages {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
+  /* Force horizontal containment */
   padding: 20px;
   scroll-behavior: smooth;
+  min-width: 0;
 }
 
 .message {
@@ -160,26 +164,24 @@ body {
   display: flex;
   flex-direction: column;
   max-width: 85%;
+  min-width: 0;
+  /* Crucial for child overflow */
   gap: 4px;
-  overflow: hidden;
-  /* Added to contain children */
 }
 
 /* ... */
 
 .message-bubble {
   max-width: 100%;
-  /* controlled by inner */
   padding: 12px 16px;
   border-radius: 12px;
   line-height: 1.5;
   position: relative;
   word-break: break-word;
-  /* Force break for long words */
   overflow-wrap: break-word;
-  /* Standard property */
   white-space: pre-wrap;
-  /* Preserve whitespace but wrap */
+  min-width: 0;
+  /* Allow content to shrink and scroll */
 }
 
 .message-actions {
@@ -288,11 +290,28 @@ body {
   border-radius: 6px;
   padding: 1rem;
   overflow-x: auto;
+  max-width: 100%;
+  /* Ensure pre doesn't exceed bubble width */
+  width: 100%;
 }
 
 .markdown-body code {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   font-size: 0.9em;
+}
+
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1rem;
+  display: block;
+  overflow-x: auto;
+  /* Allow horizontal scroll for wide tables */
+}
+
+.markdown-body img {
+  max-width: 100%;
+  height: auto;
 }
 
 .markdown-body p {
