@@ -132,6 +132,22 @@ func SearchNamuwiki(keyword string) (string, error) {
 	return content, nil
 }
 
+// SearchNaver performs a search on Naver and returns the page content.
+// Specialized for dictionary, Korea-related content, weather, and news.
+func SearchNaver(query string) (string, error) {
+	log.Printf("[MCP] Searching Naver for: %s", query)
+
+	searchURL := fmt.Sprintf("https://search.naver.com/search.naver?&sm=top_hty&fbm=0&ie=utf8&query=%s", url.QueryEscape(query))
+
+	// Reuse ReadPage to fetch content
+	content, err := ReadPage(searchURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to search Naver: %v", err)
+	}
+
+	return content, nil
+}
+
 // ReadPage fetches the text content of a URL using a headless browser.
 func ReadPage(pageURL string) (string, error) {
 	log.Printf("[MCP] Reading Page: %s", pageURL)
