@@ -134,6 +134,7 @@ const translations = {
         'error.authFailed': 'LM Studio 인증 실패.\n\n해결 방법:\n1. LM Studio -> Developer(사이드바) -> Server Settings\n2. \'Require Authentication\' 끄기\n3. 또는 \'Manage Tokens\'에서 \'Create new token\' API Key를 생성해서 우측 상단 설정(⚙️)에 입력하세요.\n\n원본 오류: ',
         'error.mcpFailed': 'LM Studio MCP 연결 실패.\n\n해결 방법:\n1. LM Studio -> Developer(사이드바) -> Server Settings\n2. \'Allow calling servers from mcp.json\' 옵션 켜기\n3. 또는 우측 상단 설정(⚙️)에서 \'MCP 기능 활성화\' 옵션을 꺼주세요.\n\n원본 오류: ',
         'error.contextExceeded': '대화 문맥 길이가 초과되었습니다. 사이드바 하단의 [문맥 초기화] 버튼을 눌러주세요.',
+        'error.visionNotSupported': '선택한 모델은 이미지를 인식할 수 없습니다. 비전(Vision) 모델을 선택해주세요.',
         'warning.loopDetected': '[⚠️ 반복 응답 감지로 인해 응답 처리를 중단했습니다.]'
     },
     en: {
@@ -150,6 +151,7 @@ const translations = {
         'server.start': 'Start Server',
         'server.stop': 'Stop Server',
         'error.contextExceeded': 'Context size has been exceeded. Please click [Reset Context] in the sidebar.',
+        'error.visionNotSupported': 'The selected model does not support images. Please choose a vision-capable model.',
         // Actions
         'action.clearChat': 'Clear Chat History',
         'action.logout': 'Logout',
@@ -1531,6 +1533,13 @@ async function streamResponse(payload, elementId) {
                 // "LM_STUDIO_CONTEXT_ERROR: Context size exceeded."
                 // Use localized message
                 errorDetails = t('error.contextExceeded');
+                errorDetails = t('error.contextExceeded');
+                throw new Error(errorDetails);
+            }
+
+            // Check for Vision Support Error
+            if (errorBody.startsWith("LM_STUDIO_VISION_ERROR: ")) {
+                errorDetails = t('error.visionNotSupported');
                 throw new Error(errorDetails);
             }
 
