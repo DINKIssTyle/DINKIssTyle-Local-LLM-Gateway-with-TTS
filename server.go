@@ -1003,6 +1003,13 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				return
 			}
 
+			// Check for Non-Vision Model Error
+			if strings.Contains(errorMsg, "does not support image inputs") {
+				log.Printf("[handleChat] Non-Vision Model Error detected. Informing user.")
+				http.Error(w, "LM_STUDIO_VISION_ERROR: Model does not support images.", resp.StatusCode)
+				return
+			}
+
 			http.Error(w, fmt.Sprintf("LLM error: %s", errorMsg), resp.StatusCode)
 			return
 		}
