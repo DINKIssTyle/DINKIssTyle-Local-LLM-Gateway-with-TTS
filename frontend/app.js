@@ -133,6 +133,7 @@ const translations = {
         // Errors
         'error.authFailed': 'LM Studio 인증 실패.\n\n해결 방법:\n1. LM Studio -> Developer(사이드바) -> Server Settings\n2. \'Require Authentication\' 끄기\n3. 또는 \'Manage Tokens\'에서 \'Create new token\' API Key를 생성해서 우측 상단 설정(⚙️)에 입력하세요.\n\n원본 오류: ',
         'error.mcpFailed': 'LM Studio MCP 연결 실패.\n\n해결 방법:\n1. LM Studio -> Developer(사이드바) -> Server Settings\n2. \'Allow calling servers from mcp.json\' 옵션 켜기\n3. 또는 우측 상단 설정(⚙️)에서 \'MCP 기능 활성화\' 옵션을 꺼주세요.\n\n원본 오류: ',
+        'error.contextExceeded': '대화 문맥 길이가 초과되었습니다. 사이드바 하단의 [문맥 초기화] 버튼을 눌러주세요.',
         'warning.loopDetected': '[⚠️ 반복 응답 감지로 인해 응답 처리를 중단했습니다.]'
     },
     en: {
@@ -148,6 +149,7 @@ const translations = {
         'server.port': 'Server Port',
         'server.start': 'Start Server',
         'server.stop': 'Stop Server',
+        'error.contextExceeded': 'Context size has been exceeded. Please click [Reset Context] in the sidebar.',
         // Actions
         'action.clearChat': 'Clear Chat History',
         'action.logout': 'Logout',
@@ -1526,9 +1528,9 @@ async function streamResponse(payload, elementId) {
 
             // Check for Context Overflow error (from non-200 check)
             if (errorBody.startsWith("LM_STUDIO_CONTEXT_ERROR: ")) {
-                const originalMsg = errorBody.replace("LM_STUDIO_CONTEXT_ERROR: ", "");
-                // localized msg can be added later, for now show original
-                errorDetails = originalMsg;
+                // "LM_STUDIO_CONTEXT_ERROR: Context size exceeded."
+                // Use localized message
+                errorDetails = t('error.contextExceeded');
                 throw new Error(errorDetails);
             }
 
@@ -1611,7 +1613,7 @@ async function processStream(response, elementId) {
                     if (json.error) {
                         let errorMsg = json.error;
                         if (errorMsg.startsWith("LM_STUDIO_CONTEXT_ERROR: ")) {
-                            errorMsg = errorMsg.replace("LM_STUDIO_CONTEXT_ERROR: ", "");
+                            errorMsg = t('error.contextExceeded');
                         }
                         // Throw to stop generation and show error in bubble
                         throw new Error(errorMsg);
