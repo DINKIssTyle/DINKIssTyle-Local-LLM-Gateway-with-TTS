@@ -234,10 +234,12 @@ func (a *App) analyzeAndSaveFacts(userID, conversationText, modelID string) {
 		return
 	}
 
-	result := strings.TrimSpace(respBody)
-	if result == "NO_IMPORTANT_CONTENT" || result == "" {
+	cleanResult := strings.ToUpper(strings.Trim(respBody, " \n\r\t\"'`.[]"))
+	if cleanResult == "NO_IMPORTANT_CONTENT" || cleanResult == "NO IMPORTANT CONTENT" || cleanResult == "" {
 		return
 	}
+
+	result := strings.TrimSpace(respBody)
 
 	// Format summary with timestamp
 	currentTime := time.Now().Format("2006-01-02 15:04")

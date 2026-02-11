@@ -139,6 +139,17 @@ func GetToolList() []Tool {
 			},
 		},
 		{
+			Name:        "naver_search",
+			Description: "Search Naver (Korean portal). Specialized for dictionary, Korea-related content, weather, and news. Use this for specific Korean context.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"query": map[string]interface{}{"type": "string", "description": "The search query for Naver"},
+				},
+				"required": []string{"query"},
+			},
+		},
+		{
 			Name:        "namu_wiki",
 			Description: "Search and read definitions from Namuwiki (Korean Wiki). Use this for Korean pop culture, history, or slang definitions. Input must be the exact keyword/title.",
 			InputSchema: map[string]interface{}{
@@ -468,6 +479,15 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 		}
 		return SearchNamuwiki(args.Keyword)
 
+	case "naver_search":
+		var args struct {
+			Query string `json:"query"`
+		}
+		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
+			return "", fmt.Errorf("invalid arguments for naver_search: %v", err)
+		}
+		return SearchNaver(args.Query)
+
 	case "get_current_location":
 		if locationInfo == "" {
 			return "Location information not provided by client.", nil
@@ -675,6 +695,28 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 				},
 			}
 			Broadcast(`{"type": "tool_call.success", "tool": "namu_wiki"}`)
+		}
+	} else if params.Name == "naver_search" {
+		var args struct {
+			Query string `json:"query"`
+		}
+		json.Unmarshal(params.Arguments, &args)
+		content, err := SearchNaver(args.Query)
+		if err != nil {
+			res.Result = map[string]interface{}{
+				"content": []map[string]interface{}{
+					{"type": "text", "text": fmt.Sprintf("Error: %v", err)},
+				},
+				"isError": true,
+			}
+			Broadcast(fmt.Sprintf(`{"type": "tool_call.failure", "tool": "naver_search", "reason": "%v"}`, err))
+		} else {
+			res.Result = map[string]interface{}{
+				"content": []map[string]interface{}{
+					{"type": "text", "text": content},
+				},
+			}
+			Broadcast(`{"type": "tool_call.success", "tool": "naver_search"}`)
 		}
 	} else if params.Name == "get_current_location" {
 		_, _, _, locationInfo, _, _ := GetContext()
