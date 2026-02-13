@@ -54,14 +54,25 @@ type StructuredToolCall struct {
 }
 
 // ensureSelfSignedCert check if cert.pem and key.pem exist in AppDataDir, if not create them.
-func ensureSelfSignedCert(appDataDir string) (string, string, error) {
+func ensureSelfSignedCert(appDataDir string, certDomain string) (string, string, error) {
 	certPath := filepath.Join(appDataDir, "cert.pem")
 	keyPath := filepath.Join(appDataDir, "key.pem")
 
-	// If both files exist, return them
+	// If both files exist, check if the domain matches
 	if _, err := os.Stat(certPath); err == nil {
 		if _, err := os.Stat(keyPath); err == nil {
-			return certPath, keyPath, nil
+			// Validate existing certificate CN
+			certData, err := os.ReadFile(certPath)
+			if err == nil {
+				block, _ := pem.Decode(certData)
+				if block != nil && block.Type == "CERTIFICATE" {
+					cert, err := x509.ParseCertificate(block.Bytes)
+					if err == nil && cert.Subject.CommonName == certDomain {
+						return certPath, keyPath, nil
+					}
+					log.Printf("[HTTPS] Certificate domain mismatch (%s != %s). Regenerating...", cert.Subject.CommonName, certDomain)
+				}
+			}
 		}
 	}
 
@@ -87,7 +98,7 @@ func ensureSelfSignedCert(appDataDir string) (string, string, error) {
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
 			Organization: []string{"DINKI'ssTyle Local LLM Gateway"},
-			CommonName:   "localhost",
+			CommonName:   certDomain,
 		},
 		NotBefore: notBefore,
 		NotAfter:  notAfter,
@@ -100,6 +111,9 @@ func ensureSelfSignedCert(appDataDir string) (string, string, error) {
 	// Add local IP and localhost to SANs
 	template.IPAddresses = append(template.IPAddresses, net.ParseIP("127.0.0.1"), net.ParseIP("::1"))
 	template.DNSNames = append(template.DNSNames, "localhost")
+	if certDomain != "localhost" && certDomain != "127.0.0.1" {
+		template.DNSNames = append(template.DNSNames, certDomain)
+	}
 
 	// Create the certificate
 	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, priv.Public(), priv)
@@ -857,40 +871,61 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				foundSystem := false
 				// Case A: Standard mode (OpenAI style)
 				if messages, ok := reqMap["messages"].([]interface{}); ok {
-					// 🚀 SLIDING WINDOW: Limit to last 10 messages to prevent context overflow
-					maxMessages := 10
-					if len(messages) > maxMessages {
-						log.Printf("[handleChat] Truncating chat history: %d -> %d messages", len(messages), maxMessages)
+					// 🚀 AGGRESSIVE SLIDING WINDOW & TRUNCATION
+					// 1. First, truncate any individual message that is too long
+					maxIndividualLen := 10000
+					for i, msg := range messages {
+						if m, ok := msg.(map[string]interface{}); ok {
+							if content, ok := m["content"].(string); ok && len(content) > maxIndividualLen {
+								m["content"] = content[:maxIndividualLen] + "\n... (content truncated for context optimization)"
+								messages[i] = m
+							}
+						}
+					}
 
-						// Preserve system message if it exists at the beginning
-						var systemMsg interface{}
-						if len(messages) > 0 {
-							if m, ok := messages[0].(map[string]interface{}); ok {
-								if role, ok := m["role"].(string); ok && role == "system" {
-									systemMsg = messages[0]
+					// 2. Limit total character count and number of messages
+					maxTotalChars := 15000
+					maxCount := 10
+
+					currentTotal := 0
+					var truncated []interface{}
+
+					// Preserve system message if it exists at index 0
+					var systemMsg interface{}
+					if len(messages) > 0 {
+						if m, ok := messages[0].(map[string]interface{}); ok {
+							if role, ok := m["role"].(string); ok && role == "system" {
+								systemMsg = messages[0]
+								if content, ok := m["content"].(string); ok {
+									currentTotal += len(content)
 								}
 							}
 						}
+					}
 
-						// Take the last maxMessages
-						truncated := messages[len(messages)-maxMessages:]
-
-						// If we had a system message at the start and it's not in the truncated set now, re-add it
-						systemInTruncated := false
-						if systemMsg != nil {
-							for _, msg := range truncated {
-								if msg == systemMsg {
-									systemInTruncated = true
+					// Build history from most recent, preserving space for system message
+					for i := len(messages) - 1; i >= 0; i-- {
+						if messages[i] == systemMsg {
+							continue
+						}
+						msg := messages[i]
+						if m, ok := msg.(map[string]interface{}); ok {
+							if content, ok := m["content"].(string); ok {
+								if currentTotal+len(content) > maxTotalChars || len(truncated) >= maxCount {
 									break
 								}
-							}
-							if !systemInTruncated {
-								truncated = append([]interface{}{systemMsg}, truncated...)
+								currentTotal += len(content)
+								truncated = append([]interface{}{msg}, truncated...)
 							}
 						}
-						messages = truncated
-						reqMap["messages"] = messages
 					}
+
+					if systemMsg != nil {
+						truncated = append([]interface{}{systemMsg}, truncated...)
+					}
+
+					messages = truncated
+					reqMap["messages"] = messages
 
 					for i, msg := range messages {
 						if m, ok := msg.(map[string]interface{}); ok {
@@ -1045,21 +1080,23 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			}
 
 			// Check for Context Overflow Error
-			if strings.Contains(errorMsg, "Context size has been exceeded") || strings.Contains(errorMsg, "context_length_exceeded") {
+			if strings.Contains(errorMsg, "Context size has been exceeded") ||
+				strings.Contains(errorMsg, "context_length_exceeded") ||
+				strings.Contains(errorMsg, "exceeds the available context size") ||
+				strings.Contains(errorMsg, "too many tokens") {
 				log.Printf("[handleChat] LM Studio Context Limit Reached. Informing user.")
-				// Return a specialized error that the frontend can handle specifically
-				http.Error(w, "LM_STUDIO_CONTEXT_ERROR: Context limit reached. Please clear the chat and try again.", resp.StatusCode)
+				sendSSEError(w, flusher, "LM_STUDIO_CONTEXT_ERROR: Context limit reached. Please clear the chat or use a larger context model.")
 				return
 			}
 
 			// Check for Non-Vision Model Error
 			if strings.Contains(errorMsg, "does not support image inputs") {
 				log.Printf("[handleChat] Non-Vision Model Error detected. Informing user.")
-				http.Error(w, "LM_STUDIO_VISION_ERROR: Model does not support images.", resp.StatusCode)
+				sendSSEError(w, flusher, "LM_STUDIO_VISION_ERROR: Model does not support images.")
 				return
 			}
 
-			http.Error(w, fmt.Sprintf("LLM error: %s", errorMsg), resp.StatusCode)
+			sendSSEError(w, flusher, fmt.Sprintf("LLM error: %s", errorMsg))
 			return
 		}
 
@@ -1095,20 +1132,20 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 			var tmpBody struct {
 				Messages []map[string]interface{} `json:"messages"`
-				Input    string                   `json:"input"` // Support single input field
+				Input    interface{}              `json:"input"` // Flexible for any type
 			}
 			if err := json.Unmarshal(body, &tmpBody); err == nil {
 				if len(tmpBody.Messages) > 0 {
 					messagesForMemory = tmpBody.Messages
 					log.Printf("[handleChat-DEBUG] Extracted %d messages for memory", len(messagesForMemory))
-				} else if tmpBody.Input != "" {
+				} else if inputStr, ok := tmpBody.Input.(string); ok && inputStr != "" {
 					// Construct a single user message from Input
 					messagesForMemory = []map[string]interface{}{
-						{"role": "user", "content": tmpBody.Input},
+						{"role": "user", "content": inputStr},
 					}
-					log.Printf("[handleChat-DEBUG] Extracted 'input' as user message for memory")
+					log.Printf("[handleChat-DEBUG] Extracted 'input' string as user message for memory")
 				} else {
-					log.Printf("[handleChat-DEBUG] No 'messages' or 'input' found in body")
+					log.Printf("[handleChat-DEBUG] No valid 'messages' or 'input' string found in body")
 				}
 			} else {
 				log.Printf("[handleChat-DEBUG] Failed to extract messages for memory: %v", err)
@@ -2052,4 +2089,24 @@ func logChatToHistory(userID string, messages []map[string]interface{}, assistan
 		os.WriteFile(activePath, []byte(validated), 0644)
 		log.Printf("[AsyncMemory] High-fidelity active context updated for %s", userID)
 	}()
+}
+
+// sendSSEError sends a properly formatted SSE error event to the client
+func sendSSEError(w http.ResponseWriter, flusher http.Flusher, msg string) {
+	payload := map[string]interface{}{
+		"choices": []interface{}{
+			map[string]interface{}{
+				"delta": map[string]string{
+					"content": "\n\n❌ **Error:** " + msg + "\n",
+				},
+			},
+		},
+	}
+	data, _ := json.Marshal(payload)
+	fmt.Fprintf(w, "data: %s\n\n", string(data))
+	flusher.Flush()
+
+	// Also send a specialized error event if the frontend supports it
+	fmt.Fprintf(w, "event: error\ndata: %s\n\n", msg)
+	flusher.Flush()
 }

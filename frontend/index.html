@@ -329,6 +329,68 @@
             border-top: 1px solid var(--border-color);
             text-align: right;
         }
+
+        /* Restart Banner */
+        .restart-banner {
+            display: none;
+            background: rgba(234, 179, 8, 0.1);
+            border: 1px solid rgba(234, 179, 8, 0.2);
+            border-radius: 12px;
+            padding: 12px 16px;
+            margin-bottom: 20px;
+            color: #facc15;
+            font-size: 13px;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            backdrop-filter: blur(8px);
+            animation: slideDown 0.3s ease-out;
+        }
+
+        @keyframes slideDown {
+            from {
+                transform: translateY(-20px);
+                opacity: 0;
+            }
+
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        .restart-banner.active {
+            display: flex;
+        }
+
+        .restart-banner-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .btn-restart-now {
+            background: #eab308;
+            color: #000;
+            padding: 6px 14px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .btn-restart-now:hover {
+            background: #ca8a04;
+        }
+
+        .btn-save-only {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-color);
+            padding: 6px 14px;
+            font-size: 12px;
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-save-only:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
     </style>
 </head>
 
@@ -337,6 +399,18 @@
         <div class="header">
             <span class="material-icons-round">dns</span>
             <h1>DKST LLM Chat Server</h1>
+        </div>
+
+        <!-- Restart Required Banner -->
+        <div id="restart-banner" class="restart-banner">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <span class="material-icons-round" style="color: #eab308;">warning</span>
+                <span>Server configuration has changed. Restart the server to apply changes.</span>
+            </div>
+            <div class="restart-banner-actions">
+                <button class="btn btn-save-only" onclick="dismissRestartBanner()">Save Only</button>
+                <button class="btn btn-restart-now" onclick="restartServer()">Restart Now</button>
+            </div>
         </div>
 
         <div class="main-layout">
@@ -445,6 +519,17 @@
 
                     <div class="footer" style="margin-top: 12px; text-align: left; font-size: 11px;">
                         Detailed TTS settings are available in the web client.
+                    </div>
+                </div>
+
+                <!-- Advanced Settings -->
+                <div class="card">
+                    <div class="card-title">Advanced Settings</div>
+                    <div class="form-group">
+                        <label>Certificate Domain / Address</label>
+                        <input type="text" id="cert-domain" value="localhost" placeholder="localhost or domain.com"
+                            autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false"
+                            inputmode="url" oninput="saveCertDomain()" />
                     </div>
                 </div>
 
@@ -693,6 +778,7 @@
                     loadUsers();
                     loadTTSConfig();
                     loadStartupSettings();
+                    loadAdvancedConfig();
 
                     // Listen for asset events
                     window.runtime.EventsOn("assets-ready", () => {
@@ -721,6 +807,61 @@
                 checkAssetStatus();
             } catch (e) {
                 console.error('TTS Config Load Failed:', e);
+            }
+        }
+
+        async function loadAdvancedConfig() {
+            if (typeof window.go === 'undefined') return;
+            try {
+                const domain = await window.go.main.App.GetCertDomain();
+                document.getElementById('cert-domain').value = domain || 'localhost';
+            } catch (e) {
+                console.error('Advanced Config Load Failed:', e);
+            }
+        }
+
+        async function saveCertDomain() {
+            const domain = document.getElementById('cert-domain').value;
+            try {
+                await window.go.main.App.SetCertDomain(domain);
+                checkRestartRequired();
+            } catch (e) {
+                console.error('Failed to set Cert Domain:', e);
+            }
+        }
+
+        let restartRequired = false;
+        function checkRestartRequired() {
+            if (isRunning) {
+                document.getElementById('restart-banner').classList.add('active');
+                restartRequired = true;
+            }
+        }
+
+        function dismissRestartBanner() {
+            document.getElementById('restart-banner').classList.remove('active');
+            restartRequired = false;
+        }
+
+        async function restartServer() {
+            try {
+                dismissRestartBanner();
+                // Set transitional UI state
+                const toggleBtn = document.getElementById('toggle-btn');
+                toggleBtn.disabled = true;
+                toggleBtn.innerHTML = '<span class="material-icons-round">sync</span> Restarting...';
+
+                document.getElementById('status-dot').style.backgroundColor = '#eab308';
+                document.getElementById('status-text').innerText = 'Restarting...';
+
+                await window.go.main.App.RestartServer();
+
+                // Refresh status after a short delay
+                setTimeout(updateStatus, 1000);
+            } catch (e) {
+                console.error('Restart failed:', e);
+                alert('Server restart failed: ' + e);
+                updateStatus();
             }
         }
 
@@ -843,6 +984,7 @@
             try {
                 await window.go.main.App.SetPort(port);
                 updateMcpPort();
+                checkRestartRequired();
             } catch (e) {
                 console.error('Failed to save port:', e);
             }
@@ -853,6 +995,7 @@
             try {
                 await window.go.main.App.SetLLMEndpoint(endpoint);
                 console.log('LLM Endpoint saved:', endpoint);
+                checkRestartRequired();
             } catch (e) {
                 console.error('Failed to save LLM Endpoint:', e);
             }

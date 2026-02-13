@@ -40,6 +40,7 @@ type App struct {
 	llmMode     string // "standard" or "stateful"
 	enableTTS   bool
 	enableMCP   bool
+	certDomain  string
 	authMgr     *AuthManager
 	assets      embed.FS
 	isQuitting  bool
@@ -63,6 +64,7 @@ type AppConfig struct {
 	StartOnBoot     bool                         `json:"startOnBoot"`
 	MinimizeToTray  bool                         `json:"minimizeToTray"`
 	AutoStartServer bool                         `json:"autoStartServer"`
+	CertDomain      string                       `json:"certDomain"`
 	ToolPatterns    map[string]map[string]string `json:"toolPatterns"`
 }
 
@@ -238,6 +240,7 @@ func (a *App) loadConfig() {
 	a.port = "8080"
 	a.llmEndpoint = "http://127.0.0.1:1234"
 	a.enableTTS = false
+	a.certDomain = "localhost"
 	ttsConfig = ServerTTSConfig{VoiceStyle: "M1.json", Speed: 1.0, Threads: 4}
 
 	cfgPath := GetResourcePath(configFile)
@@ -267,6 +270,9 @@ func (a *App) loadConfig() {
 	}
 	a.llmApiToken = cfg.LLMApiToken
 	a.enableTTS = cfg.EnableTTS
+	if cfg.CertDomain != "" {
+		a.certDomain = cfg.CertDomain
+	}
 	a.toolPatterns = cfg.ToolPatterns
 
 	fmt.Printf("[loadConfig] Loaded Config from %s\n", cfgPath)
@@ -301,6 +307,7 @@ func (a *App) saveConfig() {
 	cfg.LLMMode = a.llmMode
 	cfg.LLMApiToken = a.llmApiToken
 	cfg.EnableTTS = a.enableTTS
+	cfg.CertDomain = a.certDomain
 	cfg.TTS = ttsConfig
 	cfg.ToolPatterns = a.toolPatterns
 
@@ -487,6 +494,21 @@ func (a *App) SetEnableMCP(enabled bool) {
 	a.saveConfig()
 }
 
+// GetCertDomain returns the certificate domain
+func (a *App) GetCertDomain() string {
+	a.serverMux.Lock()
+	defer a.serverMux.Unlock()
+	return a.certDomain
+}
+
+// SetCertDomain sets the certificate domain
+func (a *App) SetCertDomain(domain string) {
+	a.serverMux.Lock()
+	defer a.serverMux.Unlock()
+	a.certDomain = domain
+	a.saveConfig()
+}
+
 // SetEnableMemory is removed; use per-user settings via /api/config
 
 // Startup Settings - exposed to Wails frontend
@@ -603,6 +625,77 @@ func (a *App) loadStartupSetting(key string) bool {
 	return false
 }
 
+// ---------------------------------------------------------------------------
+// Hybrid HTTP/HTTPS Listener logic (Same port protocol detection)
+// ---------------------------------------------------------------------------
+
+func (a *App) sniffProtocol(conn net.Conn, tlsChan, httpChan chan net.Conn) {
+	// Read the first byte to detect TLS vs HTTP
+	// TLS handshake starts with 0x16 (record type: handshake)
+	peek := make([]byte, 1)
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	n, err := conn.Read(peek)
+
+	// Create a new connection that "peeks" the first byte
+	pConn := &peekingConn{
+		Conn:     conn,
+		peeked:   peek,
+		peekLen:  n,
+		peekRead: false,
+	}
+
+	// Reset deadline for the actual server processing
+	conn.SetReadDeadline(time.Time{})
+
+	if err == nil && n > 0 && peek[0] == 0x16 {
+		// It's TLS
+		tlsChan <- pConn
+	} else {
+		// It's likely HTTP (or error/timeout)
+		httpChan <- pConn
+	}
+}
+
+// peekingConn is a net.Conn that allows re-reading the first peeked byte
+type peekingConn struct {
+	net.Conn
+	peeked   []byte
+	peekLen  int
+	peekRead bool
+}
+
+func (c *peekingConn) Read(b []byte) (int, error) {
+	if !c.peekRead && c.peekLen > 0 {
+		c.peekRead = true
+		n := copy(b, c.peeked[:c.peekLen])
+		return n, nil
+	}
+	return c.Conn.Read(b)
+}
+
+// chanListener is a net.Listener that gets connections from a channel
+type chanListener struct {
+	addr  net.Addr
+	conns chan net.Conn
+}
+
+func (l *chanListener) Accept() (net.Conn, error) {
+	conn, ok := <-l.conns
+	if !ok {
+		return nil, fmt.Errorf("listener closed")
+	}
+	return conn, nil
+}
+
+func (l *chanListener) Close() error {
+	// We don't close the chan here to avoid panic on other streamers
+	return nil
+}
+
+func (l *chanListener) Addr() net.Addr {
+	return l.addr
+}
+
 // StartServer starts the HTTP server on the specified port
 func (a *App) StartServer(port string) error {
 	a.serverMux.Lock()
@@ -626,13 +719,13 @@ func (a *App) StartServer(port string) error {
 		Handler: loggingMux,
 	}
 
-	// Calculate secondary port for HTTP compatibility
+	// Calculate secondary port for HTTP compatibility (legacy, but we keep it for backward compatibility if needed)
 	portInt, _ := strconv.Atoi(port)
 	httpPort := strconv.Itoa(portInt + 1)
-	// Redirect Handler for HTTP server (redirects to HTTPS port)
-	// Redirect Handler for HTTP server (redirects to HTTPS port, but allows MCP/API)
+
+	// Redirect Handler: Redirects HTTP to HTTPS on the SAME port
 	redirectHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Allow MCP and API endpoints to work on HTTP (port 8081) to avoid breaking local clients
+		// Allow MCP and API endpoints to work on HTTP to avoid breaking local clients
 		if strings.HasPrefix(r.URL.Path, "/mcp/") || strings.HasPrefix(r.URL.Path, "/api/") {
 			loggingMux.ServeHTTP(w, r)
 			return
@@ -642,46 +735,106 @@ func (a *App) StartServer(port string) error {
 		if h, _, err := net.SplitHostPort(r.Host); err == nil {
 			host = h
 		}
+		// We redirect to the SAME port but with https://
 		target := fmt.Sprintf("https://%s:%s%s", host, port, r.URL.Path)
 		if len(r.URL.RawQuery) > 0 {
 			target += "?" + r.URL.RawQuery
 		}
+		log.Printf("[REDIRECT] HTTP -> HTTPS redirect for %s", r.URL.Path)
 		http.Redirect(w, r, target, http.StatusMovedPermanently)
 	})
 
 	a.httpServer = &http.Server{
-		Addr:    ":" + httpPort,
+		Addr:    ":" + port, // Same port as HTTPS
 		Handler: redirectHandler,
 	}
 
 	// Cert paths
-	certFile, keyFile, err := ensureSelfSignedCert(GetAppDataDir())
+	certFile, keyFile, err := ensureSelfSignedCert(GetAppDataDir(), a.certDomain)
 	if err != nil {
 		return fmt.Errorf("failed to ensure self-signed cert: %v", err)
 	}
 
-	// Start HTTPS Server
+	// Hybrid Protocol Detection Listener
+	baseListener, err := net.Listen("tcp", ":"+port)
+	if err != nil {
+		return fmt.Errorf("failed to start listener on port %s: %v", port, err)
+	}
+
+	tlsChan := make(chan net.Conn)
+	httpChan := make(chan net.Conn)
+
+	// Accept loop with protocol sniffing
 	go func() {
-		log.Printf("[SERVER] Starting HTTPS Server on :%s", port)
-		if err := a.server.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
-			log.Printf("[SERVER] HTTPS Server error on :%s: %v", port, err)
+		for {
+			conn, err := baseListener.Accept()
+			if err != nil {
+				if a.isRunning {
+					log.Printf("[HYBRID] Accept error: %v", err)
+				}
+				return
+			}
+			go a.sniffProtocol(conn, tlsChan, httpChan)
 		}
 	}()
 
-	// Start HTTP Compatibility Server
+	// Start HTTPS Server with TLS Listener
 	go func() {
-		log.Printf("[SERVER] Starting HTTP Compatibility Server on :%s", httpPort)
-		if err := a.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("[SERVER] HTTP Server error on :%s: %v", httpPort, err)
+		log.Printf("[SERVER] Starting HTTPS Server on :%s (Hybrid)", port)
+		tlsListener := &chanListener{
+			addr:  baseListener.Addr(),
+			conns: tlsChan,
+		}
+		if err := a.server.ServeTLS(tlsListener, certFile, keyFile); err != nil && err != http.ErrServerClosed {
+			log.Printf("[SERVER] HTTPS Server error: %v", err)
+		}
+	}()
+
+	// Start HTTP Redirection Server with HTTP Listener
+	go func() {
+		log.Printf("[SERVER] Starting HTTP Redirector on :%s (Hybrid)", port)
+		httpListener := &chanListener{
+			addr:  baseListener.Addr(),
+			conns: httpChan,
+		}
+		if err := a.httpServer.Serve(httpListener); err != nil && err != http.ErrServerClosed {
+			log.Printf("[SERVER] HTTP Server error: %v", err)
+		}
+	}()
+
+	// Also start a secondary HTTP port for absolute compatibility if requested (legacy behavior)
+	go func() {
+		log.Printf("[SERVER] Starting Secondary HTTP Server on :%s", httpPort)
+		// We use a separate server instance for this to avoid port collisions
+		secondaryServer := &http.Server{
+			Addr:    ":" + httpPort,
+			Handler: redirectHandler,
+		}
+		if err := secondaryServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("[SERVER] Secondary HTTP error: %v", err)
 		}
 	}()
 
 	a.isRunning = true
-	fmt.Printf("HTTPS Server: https://localhost:%s\n", port)
-	fmt.Printf("HTTP Compatibility Server: http://localhost:%s\n", httpPort)
-	a.saveConfig()
 	UpdateTrayServerState()
 	return nil
+}
+
+// RestartServer stops and then starts the server with current config
+func (a *App) RestartServer() error {
+	a.serverMux.Lock()
+	port := a.port
+	a.serverMux.Unlock()
+
+	log.Println("[SERVER] Restarting server...")
+	if err := a.StopServer(); err != nil {
+		return fmt.Errorf("failed to stop server: %v", err)
+	}
+
+	// Small delay to ensure port is released
+	time.Sleep(500 * time.Millisecond)
+
+	return a.StartServer(port)
 }
 
 // StartServerWithCurrentConfig starts the server using the current port configuration
