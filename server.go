@@ -141,47 +141,94 @@ func ensureSelfSignedCert(appDataDir string) (string, string, error) {
 
 // preloadUserMemory reads the user's memory files (static.md and personal.md) into a string
 // Returns formatted string or empty if no files exist.
-func preloadUserMemory(userID string) string {
-	var sb strings.Builder
-
-	// 1. Load Static Memory (Read-Only)
-	staticPath, err := mcp.GetUserMemoryFilePath(userID, "static.md")
-	if err == nil {
-		if data, err := os.ReadFile(staticPath); err == nil && len(data) > 0 {
-			content := strings.TrimSpace(string(data))
-			if content != "" {
-				sb.WriteString("[Static Memory (Read-Only)]\n")
-				sb.WriteString(content)
-				sb.WriteString("\n\n")
-			}
-		}
+func preloadUserMemory(userID string, fileName ...string) string {
+	targetFile := "personal.md"
+	if len(fileName) > 0 && fileName[0] != "" {
+		targetFile = fileName[0]
 	}
 
-	// 2. Load Personal Memory (Writable)
-	personalPath, err := mcp.GetUserMemoryFilePath(userID, "personal.md")
-	if err == nil {
-		if data, err := os.ReadFile(personalPath); err == nil && len(data) > 0 {
-			content := strings.TrimSpace(string(data))
-			if content != "" {
-				sb.WriteString("[Personal Memory]\n")
-				sb.WriteString(content)
-			}
-		}
+	filePath, err := mcp.GetUserMemoryFilePath(userID, targetFile)
+	if err != nil {
+		return ""
 	}
-
-	finalContent := strings.TrimSpace(sb.String())
-	if finalContent == "" {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
 		return ""
 	}
 
+	content := strings.TrimSpace(string(data))
+
 	// Truncate if too large to avoid context overflow (max ~10000 chars)
 	maxLen := 10000
-	if len(finalContent) > maxLen {
-		finalContent = finalContent[:maxLen] + "\n... (memory truncated)"
+	if len(content) > maxLen {
+		content = content[:maxLen] + "\n... (memory truncated)"
 	}
 
-	log.Printf("[preloadUserMemory] Loaded %d bytes of combined memory for user %s", len(finalContent), userID)
-	return finalContent
+	return content
+}
+
+// callLLMInternal makes a background request to the LLM for summary/validation
+func callLLMInternal(prompt string, modelID string) string {
+	if globalApp == nil || globalApp.llmEndpoint == "" {
+		return ""
+	}
+
+	endpoint := strings.TrimRight(globalApp.llmEndpoint, "/")
+	endpoint = strings.TrimSuffix(endpoint, "/v1")
+	reqURL := fmt.Sprintf("%s/v1/chat/completions", endpoint)
+
+	payload := map[string]interface{}{
+		"model": modelID,
+		"messages": []map[string]interface{}{
+			{"role": "user", "content": prompt},
+		},
+		"stream": false,
+	}
+
+	jsonPayload, _ := json.Marshal(payload)
+	req, err := http.NewRequest("POST", reqURL, bytes.NewBuffer(jsonPayload))
+	if err != nil {
+		return ""
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if globalApp.llmApiToken != "" {
+		token := strings.TrimSpace(globalApp.llmApiToken)
+		if strings.HasPrefix(strings.ToLower(token), "bearer ") {
+			token = token[7:]
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+	} else {
+		req.Header.Set("Authorization", "Bearer lm-studio")
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+
+	var resMap map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&resMap); err != nil {
+		return ""
+	}
+
+	if choices, ok := resMap["choices"].([]interface{}); ok && len(choices) > 0 {
+		if choice, ok := choices[0].(map[string]interface{}); ok {
+			if msg, ok := choice["message"].(map[string]interface{}); ok {
+				if content, ok := msg["content"].(string); ok {
+					return strings.TrimSpace(content)
+				}
+			}
+		}
+	}
+
+	return ""
 }
 
 type ServerTTSConfig struct {
@@ -801,8 +848,10 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				extraInstr := mcp.SystemPromptToolUsage(envInfo)
 
 				if enableMemory {
-					preloadedMemory := preloadUserMemory(userID)
-					extraInstr += mcp.SystemPromptMemoryTemplate(preloadedMemory)
+					staticMemory := preloadUserMemory(userID, "static.md")
+					userProfile := preloadUserMemory(userID, "personal.md")
+					activeContext := preloadUserMemory(userID, "active_context.md")
+					extraInstr += mcp.SystemPromptMemoryTemplate(staticMemory, userProfile, activeContext)
 				}
 
 				foundSystem := false
@@ -1946,7 +1995,6 @@ func logChatToHistory(userID string, messages []map[string]interface{}, assistan
 
 	// 1. Find the last user message
 	var lastUserMsg string
-	// Iterate backwards to find the most recent user message
 	for i := len(messages) - 1; i >= 0; i-- {
 		if role, ok := messages[i]["role"].(string); ok && role == "user" {
 			if content, ok := messages[i]["content"].(string); ok {
@@ -1957,11 +2005,10 @@ func logChatToHistory(userID string, messages []map[string]interface{}, assistan
 	}
 
 	if lastUserMsg == "" {
-		log.Printf("[AsyncMemory] No user message found in history. Skipping.")
-		return // No user message to log?
+		return
 	}
 
-	// 2. Create Log Entry
+	// 2. Append to chat_history.log
 	entry := map[string]interface{}{
 		"timestamp": time.Now().Format(time.RFC3339),
 		"user":      lastUserMsg,
@@ -1969,37 +2016,40 @@ func logChatToHistory(userID string, messages []map[string]interface{}, assistan
 		"model":     modelID,
 	}
 
-	data, err := json.Marshal(entry)
-	if err != nil {
-		log.Printf("[AsyncMemory] Failed to marshal log entry: %v", err)
-		return
-	}
-
-	// 3. Append to File
-	logPath, err := mcp.GetUserMemoryFilePath(userID, "chat_history.log")
-	if err != nil {
-		log.Printf("[AsyncMemory] Failed to get log path: %v", err)
-		return
-	}
-
-	log.Printf("[AsyncMemory] Writing to: %s", logPath)
-
-	// Ensure directory exists (GetUserMemoryFilePath calls GetUserMemoryDir which creates the dir)
-	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
-		log.Printf("[AsyncMemory] Failed to create log directory: %v", err)
-		return
-	}
+	data, _ := json.Marshal(entry)
+	logPath, _ := mcp.GetUserMemoryFilePath(userID, "chat_history.log")
+	os.MkdirAll(filepath.Dir(logPath), 0755)
 
 	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		log.Printf("[AsyncMemory] Failed to open log file: %v", err)
-		return
+	if err == nil {
+		f.WriteString(string(data) + "\n")
+		f.Close()
 	}
-	defer f.Close()
 
-	if _, err := f.WriteString(string(data) + "\n"); err != nil {
-		log.Printf("[AsyncMemory] Failed to write to log file: %v", err)
-	} else {
-		log.Printf("[AsyncMemory] Successfully wrote log entry.")
-	}
+	// 3. High-Fidelity Extraction & Active Context Update
+	// Use LLM to extract long-term facts and validate them
+	go func() {
+		// A. Extract Candidate Memories
+		summaryPrompt := mcp.ChatSummaryPromptTemplate(fmt.Sprintf("User: %s\nAssistant: %s", lastUserMsg, assistantResponse))
+		candidates := callLLMInternal(summaryPrompt, modelID)
+
+		if candidates == "" || strings.Contains(candidates, "NO_IMPORTANT_CONTENT") {
+			log.Printf("[AsyncMemory] No important content extracted for %s", userID)
+			return
+		}
+
+		// B. Validate Candidate Memories (The Validation Gate)
+		validationPrompt := mcp.MemoryValidationPromptTemplate(candidates)
+		validated := callLLMInternal(validationPrompt, modelID)
+
+		if validated == "" || strings.Contains(validated, "NONE") {
+			log.Printf("[AsyncMemory] Memory validation gate rejected candidates for %s", userID)
+			return
+		}
+
+		// C. Update Active Context
+		activePath, _ := mcp.GetUserMemoryFilePath(userID, "active_context.md")
+		os.WriteFile(activePath, []byte(validated), 0644)
+		log.Printf("[AsyncMemory] High-fidelity active context updated for %s", userID)
+	}()
 }

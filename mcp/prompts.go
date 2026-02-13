@@ -20,16 +20,33 @@ func SystemPromptToolUsage(envInfo string) string {
 	return prompt
 }
 
-// SystemPromptMemoryTemplate returns the template for injecting user memory.
-// It expects the preloaded memory string as an argument.
-// SystemPromptMemoryTemplate: server.go에서 사용자의 기존 메모리(Personal/Static Memory)를 채팅 컨텍스트에 주입할 때 사용됩니다.
-func SystemPromptMemoryTemplate(preloadedMemory string) string {
-	if preloadedMemory != "" {
-		return fmt.Sprintf("\n\n### USER'S SAVED MEMORY ###\n%s\n### END OF MEMORY ###\n"+
-			"NOTE: Memory is saved AUTOMATICALLY after the session. Do NOT attempt to save facts manually via tools.\n"+
-			"CRITICAL: [Static Memory] contains verified, immutable facts. If [Personal Memory] conflicts with [Static Memory], ALWAYS trust [Static Memory] as the absolute truth.", preloadedMemory)
-	}
-	return "\n- USER_MEMORY: Empty. Memory is saved AUTOMATICALLY after the session. Do NOT attempt to save facts manually."
+// SystemPromptMemoryTemplate returns the template for injecting user memory using the 3-layer model.
+// SystemPromptMemoryTemplate: 채팅 컨텍스트에 3계층 메모리 구조를 주입합니다.
+func SystemPromptMemoryTemplate(staticMemory string, userProfile string, activeContext string) string {
+	return fmt.Sprintf(`
+### MEMORY CONTEXT ###
+
+#### STATIC MEMORY (Highest Authority)
+%s
+
+#### USER PROFILE (Persistent Long-Term Memory)
+%s
+
+#### ACTIVE CONTEXT (Recent, Temporary)
+%s
+
+MEMORY PRIORITY ORDER:
+1. Static Memory
+2. User Profile
+3. Current Conversation
+
+RULES:
+- Static Memory overrides everything.
+- Do NOT modify or reinterpret Static Memory.
+- Do NOT generate any tool call to save memory.
+- Memory persistence is handled outside the model.
+- Any attempt to manually save memory is considered an error.
+`, staticMemory, userProfile, activeContext)
 }
 
 // EvolutionPromptTemplate returns the prompt used for self-evolution (regex generation).
@@ -50,74 +67,132 @@ REQUIREMENTS:
 3. If no tool call found, return "NONE".`, sampleLine)
 }
 
-// MemoryConsolidationPromptTemplate creates a prompt to organize and dedup memory.
-// MemoryConsolidationPromptTemplate: memory_agent.go에서 비대해진 메모리 파일을 정리하고 중복을 제거할 때 사용됩니다.
-func MemoryConsolidationPromptTemplate(currentMemory string) string {
-	return fmt.Sprintf(`You are a Memory Optimization Agent.
-The user's long-term memory file has grown and needs consolidation.
-Your task is to:
-1. Remove duplicate facts and redundant information.
-2. Resolve conflicting information (keep the most specific or likely recent one).
-3. Group facts into logical sections (e.g., ## Personal, ## Preferences, ## Domain Knowledge).
-4. Summarize verbose descriptions into concise atomic facts.
-5. CLEANUP: Remove transient context (CWD, IPs), mundane action logs ("User asked for..."), and any entries that do not contain meaningful long-term facts about the user.
-6. REMOVE empty sections or sections with only transient/junk data.
+// MemoryValidationPromptTemplate creates a prompt to validate candidate memories.
+// MemoryValidationPromptTemplate: 추출된 메모리 후보 중 장기 보관할 가치가 있는 항목만 검증합니다.
+func MemoryValidationPromptTemplate(candidateMemory string) string {
+	return fmt.Sprintf(`
+You are a Memory Validation Agent.
 
-CURRENT MEMORY CONTENT:
+Review the following candidate memory entries:
+
 %s
 
-OUTPUT FORMAT:
-- Output valid Markdown with headers (## Section Name).
-- Use bullet points for facts.
-- Do not include any conversational filler (e.g., "Here is the consolidated memory").`, currentMemory)
+Remove anything that is:
+- Ephemeral
+- Repeated
+- Session-bound
+- Assumption-based
+- Speculative
+
+Keep ONLY:
+- Stable long-term traits
+- Verified persistent user facts
+
+If nothing remains, output:
+NONE
+
+Output bullet list only.
+`, candidateMemory)
+}
+
+// MemoryConsolidationPromptTemplate creates a prompt to organize and dedup memory.
+// MemoryConsolidationPromptTemplate: 메모리 파일을 정리하고 충돌을 해결합니다.
+func MemoryConsolidationPromptTemplate(currentMemory string) string {
+	return fmt.Sprintf(`
+You are a Memory Optimization Agent.
+
+Your task:
+
+1. Remove duplicates.
+2. If conflict:
+   - Prefer more specific fact.
+   - If timestamp exists → prefer newer.
+   - If unsure → keep both and mark conflict.
+   - NEVER invent new facts.
+3. Preserve technical specificity.
+4. Do NOT remove domain names, versions, technologies.
+5. Remove:
+   - Transient logs
+   - CWD
+   - IP
+   - Debug context
+   - Action descriptions
+6. Remove empty sections.
+
+OUTPUT:
+- Markdown
+- ## Section headers
+- Bullet points only
+- No filler text
+
+CURRENT MEMORY:
+%s
+`, currentMemory)
 }
 
 // ChatSummaryPromptTemplate returns the prompt used to summarize a conversation session.
-// ChatSummaryPromptTemplate: memory_agent.go에서 대화 세션을 요약하여 핵심 내용을 추출할 때 사용됩니다.
+// ChatSummaryPromptTemplate: 대화 세션에서 새로운 장기 기억 항목을 추출합니다.
 func ChatSummaryPromptTemplate(conversationText string) string {
-	return fmt.Sprintf(`You are a Long-term Memory Extraction Agent.
-Analyze the following conversation and extract ONLY NEW and SIGNIFICANT facts about the user for long-term storage.
+	return fmt.Sprintf(`
+You are a Long-term Memory Extraction Agent.
 
-STRICT GUIDELINES:
-1. Extract atomic facts (e.g., "User likes Python", "User lives in Seoul").
-2. DO NOT include transient session context (Current working directory, IP, process IDs).
-3. DO NOT include mundane action logs (e.g., "User asked for a profile", "Assistant provided a path").
-4. DO NOT include information that is already common knowledge (e.g., facts about public figures found in searches).
-5. If NO new personal facts, preferences, or meaningful context are found, output exactly: "NO_IMPORTANT_CONTENT"
+Extract ONLY new, stable, and long-term user facts.
 
-Conversation:
+STRICT RULES:
+
+1. Extract atomic, stable traits only.
+2. DO NOT extract temporary goals.
+3. DO NOT extract debugging issues.
+4. DO NOT extract one-time problems.
+5. DO NOT extract session-specific context.
+6. DO NOT extract information already stored.
+7. DO NOT infer or speculate.
+8. If unsure whether a fact is long-term → DO NOT include it.
+
+Only include:
+- Stable preferences
+- Ongoing projects
+- Long-term technical domains
+- Repeated behavioral patterns
+
+If nothing qualifies → output exactly:
+
+NO_IMPORTANT_CONTENT
+
+OUTPUT:
+- Bullet list only
+- No explanations
+
+CONVERSATION:
 %s
-
-OUTPUT FORMAT:
-- A simple list of bullet points for NEW facts only.
-- No headers, no intro/outro filler.`, conversationText)
+`, conversationText)
 }
 
 // SelfCorrectionPromptTemplate returns the prompt to ask the model to fix its tool call format.
-// SelfCorrectionPromptTemplate: server.go에서 모델이 잘못된 도구 호출 형식을 사용했을 때, 즉시 교정 요청을 보낼 때 사용됩니다.
+// SelfCorrectionPromptTemplate: 도구 호출 형식 오류 시 즉각 수정을 요청합니다.
 func SelfCorrectionPromptTemplate(badContent string) string {
-	return fmt.Sprintf(`SYSTEM ALERT: INVALID TOOL CALL FORMAT DETECTED.
-Your previous response tried to use a tool but failed the syntax check.
-We detected: "%s..."
+	return fmt.Sprintf(`
+SYSTEM ALERT: INVALID TOOL CALL FORMAT DETECTED.
 
 You MUST correct this immediately.
 
-❌ WRONG FORMAT (DO NOT USE):
+If you output anything other than a single <tool_call> block, the request will fail.
+
+❌ WRONG:
 <tool_call>
 name: search_web
-query: something
+query: test
 </tool_call>
-(No Markdown code blocks like `+"`"+``+"`"+`json or `+"`"+``+"`"+`xml)
 
-✅ CORRECT FORMAT (XML + ONE LINER JSON):
-<tool_call>{"name": "search_web", "arguments": {"query": "weather in Seoul"}}</tool_call>
+✅ CORRECT:
+<tool_call>{"name":"search_web","arguments":{"query":"weather in Seoul"}}</tool_call>
 
-INSTRUCTIONS:
-1. Output ONLY the corrected <tool_call> block.
-2. Do not apologize or explain.
-3. Ensure the JSON inside is valid and minified (no distinct newlines inside JSON if possible).
+Output ONLY the corrected <tool_call> block.
+Do not apologize.
 
-REWRITE THE TOOL CALL NOW:`, badContent[:min(len(badContent), 100)])
+DETECTED CONTENT:
+%s
+`, badContent[:min(len(badContent), 100)])
 }
 
 // mcp/prompts.go 내부에서 에러 메시지 길이를 제한하기 위해 사용되는 유틸리티 함수입니다.
