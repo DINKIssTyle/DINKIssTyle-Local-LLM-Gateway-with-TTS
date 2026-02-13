@@ -111,6 +111,11 @@ const translations = {
         'setting.threads.desc': '(기본값: 2) TTS 생성에 할당하는 CPU 스레드',
         'setting.format.label': '재생 형식',
         'setting.format.desc': 'MP3는 WAV를 변환하여 재생합니다.',
+        // Advanced
+        'section.advanced': '고급 설정',
+        'setting.cert.label': 'HTTPS 인증서',
+        'setting.cert.desc': '이 기기에서 서버를 신뢰하기 위해 인증서를 다운로드합니다.',
+        'action.downloadCert': '인증서(cert.pem) 다운로드',
         // Chat
         'chat.welcome': '안녕하세요! 채팅할 준비가 되었습니다. 우측 상단 기어 아이콘에서 설정하세요.',
         'chat.instruction': '우측 상단 설정(⚙️)에서 설정을 변경하실 수 있습니다.',
@@ -212,6 +217,11 @@ const translations = {
         'setting.threads.desc': '(Default: 2) CPU threads for TTS generation',
         'setting.format.label': 'Audio Format',
         'setting.format.desc': 'MP3 is converted from WAV.',
+        // Advanced
+        'section.advanced': 'Advanced Settings',
+        'setting.cert.label': 'HTTPS Certificate',
+        'setting.cert.desc': 'Download the certificate to trust this server on this device.',
+        'action.downloadCert': 'Download cert.pem',
         // Chat
         'chat.welcome': 'Hello! I am ready to chat. Configure settings using the gear icon.',
         'chat.instruction': 'You can configure settings in the top right menu.',
@@ -404,6 +414,29 @@ function openSettingsModal() {
 
 function closeSettingsModal() {
     document.getElementById('settings-modal').classList.remove('active');
+}
+
+/**
+ * Handle certificate download
+ */
+async function downloadCertificate() {
+    try {
+        const response = await fetch('/api/cert/download', { credentials: 'include' });
+        if (!response.ok) throw new Error('Failed to download certificate');
+
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'cert.pem';
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+    } catch (err) {
+        console.error('[Cert] Download failed:', err);
+        alert('인증서 다운로드 실패: ' + err.message);
+    }
 }
 
 // Chat State

@@ -51,6 +51,9 @@ type App struct {
 	modelCacheTime time.Time
 
 	toolPatterns map[string]map[string]string // Custom tool parsing patterns
+
+	baseListener    net.Listener // Primary TCP listener for hybrid HTTP/HTTPS
+	secondaryServer *http.Server // Secondary HTTP server for backward compatibility
 }
 
 // AppConfig holds the persistent application configuration
@@ -649,10 +652,18 @@ func (a *App) sniffProtocol(conn net.Conn, tlsChan, httpChan chan net.Conn) {
 
 	if err == nil && n > 0 && peek[0] == 0x16 {
 		// It's TLS
-		tlsChan <- pConn
+		select {
+		case tlsChan <- pConn:
+		case <-time.After(1 * time.Second):
+			conn.Close()
+		}
 	} else {
 		// It's likely HTTP (or error/timeout)
-		httpChan <- pConn
+		select {
+		case httpChan <- pConn:
+		case <-time.After(1 * time.Second):
+			conn.Close()
+		}
 	}
 }
 
@@ -677,18 +688,30 @@ func (c *peekingConn) Read(b []byte) (int, error) {
 type chanListener struct {
 	addr  net.Addr
 	conns chan net.Conn
+	done  chan struct{}
 }
 
 func (l *chanListener) Accept() (net.Conn, error) {
-	conn, ok := <-l.conns
-	if !ok {
-		return nil, fmt.Errorf("listener closed")
+	select {
+	case conn, ok := <-l.conns:
+		if !ok {
+			return nil, fmt.Errorf("listener closed")
+		}
+		return conn, nil
+	case <-l.done:
+		return nil, fmt.Errorf("listener shutting down")
 	}
-	return conn, nil
 }
 
 func (l *chanListener) Close() error {
-	// We don't close the chan here to avoid panic on other streamers
+	// We don't close the chan here to avoid panic on other streamers,
+	// but we signal Accept to stop.
+	select {
+	case <-l.done:
+		// already closed
+	default:
+		close(l.done)
+	}
 	return nil
 }
 
@@ -760,6 +783,7 @@ func (a *App) StartServer(port string) error {
 	if err != nil {
 		return fmt.Errorf("failed to start listener on port %s: %v", port, err)
 	}
+	a.baseListener = baseListener
 
 	tlsChan := make(chan net.Conn)
 	httpChan := make(chan net.Conn)
@@ -784,6 +808,7 @@ func (a *App) StartServer(port string) error {
 		tlsListener := &chanListener{
 			addr:  baseListener.Addr(),
 			conns: tlsChan,
+			done:  make(chan struct{}),
 		}
 		if err := a.server.ServeTLS(tlsListener, certFile, keyFile); err != nil && err != http.ErrServerClosed {
 			log.Printf("[SERVER] HTTPS Server error: %v", err)
@@ -796,6 +821,7 @@ func (a *App) StartServer(port string) error {
 		httpListener := &chanListener{
 			addr:  baseListener.Addr(),
 			conns: httpChan,
+			done:  make(chan struct{}),
 		}
 		if err := a.httpServer.Serve(httpListener); err != nil && err != http.ErrServerClosed {
 			log.Printf("[SERVER] HTTP Server error: %v", err)
@@ -806,11 +832,11 @@ func (a *App) StartServer(port string) error {
 	go func() {
 		log.Printf("[SERVER] Starting Secondary HTTP Server on :%s", httpPort)
 		// We use a separate server instance for this to avoid port collisions
-		secondaryServer := &http.Server{
+		a.secondaryServer = &http.Server{
 			Addr:    ":" + httpPort,
 			Handler: redirectHandler,
 		}
-		if err := secondaryServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := a.secondaryServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("[SERVER] Secondary HTTP error: %v", err)
 		}
 	}()
@@ -866,7 +892,12 @@ func (a *App) StopServer() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Shutdown HTTPS server
+	// 1. Close base listener first to stop new connections
+	if a.baseListener != nil {
+		a.baseListener.Close()
+	}
+
+	// 2. Shutdown servers
 	if a.server != nil {
 		if err := a.server.Shutdown(ctx); err != nil {
 			log.Printf("[SERVER] HTTPS Shutdown error: %v", err)
@@ -874,11 +905,17 @@ func (a *App) StopServer() error {
 		}
 	}
 
-	// Shutdown HTTP server
 	if a.httpServer != nil {
 		if err := a.httpServer.Shutdown(ctx); err != nil {
 			log.Printf("[SERVER] HTTP Shutdown error: %v", err)
 			a.httpServer.Close()
+		}
+	}
+
+	if a.secondaryServer != nil {
+		if err := a.secondaryServer.Shutdown(ctx); err != nil {
+			log.Printf("[SERVER] Secondary HTTP Shutdown error: %v", err)
+			a.secondaryServer.Close()
 		}
 	}
 
