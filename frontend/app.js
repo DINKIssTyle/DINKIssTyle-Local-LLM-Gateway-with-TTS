@@ -472,7 +472,6 @@ const previewContainer = document.getElementById('preview-container');
 // Audio Context for Auto-play
 let audioContextUnlocked = false;
 let audioCtx = null;
-let currentSource = null;
 
 async function unlockAudioContext() {
     if (!audioCtx) {
@@ -496,6 +495,39 @@ async function unlockAudioContext() {
         } catch (e) {
             console.error("Failed to resume AudioContext", e);
         }
+    }
+
+    // Initialize/Unlock HTML5 Audio element for iOS
+    if (!currentAudio) {
+        currentAudio = new Audio();
+        currentAudio.playsInline = true;
+        // iOS requires a play() call during user interaction to unlock background audio
+        currentAudio.src = 'data:audio/wav;base64,UklGRigAAABXQVZFRm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAA=='; // 1 sample silent wav
+        currentAudio.play().catch(() => { });
+    }
+}
+
+/**
+ * Update Media Session Metadata
+ */
+function updateMediaSessionMetadata(text) {
+    if ('mediaSession' in navigator) {
+        navigator.mediaSession.metadata = new MediaMetadata({
+            title: text || "TTS Message",
+            artist: "DKST Chat",
+            album: "Local LLM Gateway",
+            artwork: [
+                { src: 'apple-touch-icon.png', sizes: '180x180', type: 'image/png' }
+            ]
+        });
+
+        // Set action handlers
+        navigator.mediaSession.setActionHandler('pause', () => {
+            stopAllAudio();
+        });
+        navigator.mediaSession.setActionHandler('stop', () => {
+            stopAllAudio();
+        });
     }
 }
 
@@ -2216,13 +2248,14 @@ function stopAllAudio() {
     audioWarmup = null;
 
     // Stop current audio source
-    if (currentSource) {
+    if (currentAudio) {
         try {
-            currentSource.stop();
+            currentAudio.pause();
+            currentAudio.src = '';
+            currentAudio.load(); // Forces resource release
         } catch (e) {
-            // Ignore errors if already stopped
+            // Ignore
         }
-        currentSource = null;
     }
 
     // Clear audio cache to free memory
@@ -2882,21 +2915,15 @@ async function processTTSQueue(isFirstChunk = false) {
             break;
         }
 
-        // Play audio using Web Audio API
+        // Play audio using HTML5 Audio (Better for iOS Background)
         try {
-            // Unlock audio context if needed (last ditch effort)
-            await unlockAudioContext();
+            // Update Media Session
+            updateMediaSessionMetadata(text.substring(0, 100) + (text.length > 100 ? '...' : ''));
 
-            if (!audioCtx) {
-                throw new Error("AudioContext not available");
+            if (!currentAudio) {
+                currentAudio = new Audio();
+                currentAudio.playsInline = true;
             }
-
-            // Fetch blob data
-            const response = await fetch(audioUrl);
-            const arrayBuffer = await response.arrayBuffer();
-
-            // Decode audio data
-            const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
 
             // Update UI on first chunk playing
             if (!firstChunkPlayed && btn) {
@@ -2907,25 +2934,31 @@ async function processTTSQueue(isFirstChunk = false) {
                 firstChunkPlayed = true;
             }
 
-            // Create source and play
+            // Play via Audio element
             await new Promise((resolve, reject) => {
+                const onEnded = () => {
+                    currentAudio.removeEventListener('ended', onEnded);
+                    currentAudio.removeEventListener('error', onError);
+                    resolve();
+                };
+                const onError = (e) => {
+                    console.error("Audio element error:", e);
+                    currentAudio.removeEventListener('ended', onEnded);
+                    currentAudio.removeEventListener('error', onError);
+                    reject(e);
+                };
+
+                currentAudio.addEventListener('ended', onEnded);
+                currentAudio.addEventListener('error', onError);
+
                 // Check cancellation before starting
                 if (sessionId !== ttsSessionId) {
                     resolve();
                     return;
                 }
 
-                const source = audioCtx.createBufferSource();
-                source.buffer = audioBuffer;
-                source.connect(audioCtx.destination);
-                currentSource = source;
-
-                source.onended = () => {
-                    currentSource = null;
-                    resolve();
-                };
-
-                source.start(0);
+                currentAudio.src = audioUrl;
+                currentAudio.play().catch(reject);
             });
 
         } catch (e) {
