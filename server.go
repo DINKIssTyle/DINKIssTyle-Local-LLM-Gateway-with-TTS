@@ -67,10 +67,10 @@ func ensureSelfSignedCert(appDataDir string, certDomain string) (string, string,
 				block, _ := pem.Decode(certData)
 				if block != nil && block.Type == "CERTIFICATE" {
 					cert, err := x509.ParseCertificate(block.Bytes)
-					if err == nil && cert.Subject.CommonName == certDomain {
+					if err == nil && cert.Subject.CommonName == certDomain && cert.IsCA {
 						return certPath, keyPath, nil
 					}
-					log.Printf("[HTTPS] Certificate domain mismatch (%s != %s). Regenerating...", cert.Subject.CommonName, certDomain)
+					log.Printf("[HTTPS] Certificate upgrade/mismatch required (CN: %s, IsCA: %v). Regenerating...", cert.Subject.CommonName, cert.IsCA)
 				}
 			}
 		}
@@ -103,9 +103,10 @@ func ensureSelfSignedCert(appDataDir string, certDomain string) (string, string,
 		NotBefore: notBefore,
 		NotAfter:  notAfter,
 
-		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
+		IsCA:                  true,
 	}
 
 	// Add local IP and localhost to SANs
@@ -276,6 +277,18 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	log.Println("[Server] MCP Support Active")
 	mux.HandleFunc("/mcp/sse", mcp.HandleSSE)
 	mux.HandleFunc("/mcp/messages", mcp.HandleMessages)
+
+	// Certificate Download Endpoint
+	mux.HandleFunc("/api/cert/download", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
+		certPath := filepath.Join(GetAppDataDir(), "cert.pem")
+		if _, err := os.Stat(certPath); os.IsNotExist(err) {
+			http.Error(w, "Certificate not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Disposition", "attachment; filename=cert.pem")
+		w.Header().Set("Content-Type", "application/x-x509-ca-cert")
+		http.ServeFile(w, r, certPath)
+	}))
 
 	mux.HandleFunc("/api/config", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {

@@ -260,6 +260,22 @@
                         </select>
                     </div>
                 </div>
+
+                <!-- Advanced Settings Section -->
+                <div class="setting-section">
+                    <div class="setting-section-title" data-i18n="section.advanced">Advanced Settings</div>
+                    <div class="setting-item">
+                        <label data-i18n="setting.cert.label">HTTPS Certificate</label>
+                        <p class="setting-desc" data-i18n="setting.cert.desc">Download the certificate to trust this
+                            server
+                            on this device.</p>
+                        <button class="btn btn-secondary" onclick="downloadCertificate()"
+                            style="width: 100%; justify-content: center;">
+                            <span class="material-icons-round">download</span>
+                            <span data-i18n="action.downloadCert">Download cert.pem</span>
+                        </button>
+                    </div>
+                </div>
             </div>
             <div class="modal-footer">
                 <div class="modal-footer-buttons">
