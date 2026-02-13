@@ -150,21 +150,99 @@ func SearchNaver(query string) (string, error) {
 
 // ReadPage fetches the text content of a URL using a headless browser.
 func ReadPage(pageURL string) (string, error) {
-	log.Printf("[MCP] Reading Page: %s", pageURL)
+	log.Printf("[MCP] Reading Page (Advanced): %s", pageURL)
 
 	// Create context
 	ctx, cancel := chromedp.NewContext(context.Background())
 	defer cancel()
 
-	// Set timeout
-	ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+	// Set a generous timeout for complex pages
+	ctx, cancel = context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 
 	var res string
 	err := chromedp.Run(ctx,
 		chromedp.Navigate(pageURL),
-		chromedp.Sleep(2*time.Second), // Wait for dynamic content
-		chromedp.Evaluate(`document.body.innerText`, &res),
+		chromedp.Sleep(2*time.Second), // Wait for initial load
+		// 1. Auto-scroll logic to trigger lazy loading
+		chromedp.Evaluate(`
+			(async () => {
+				const distance = 400;
+				const delay = 100;
+				for (let i = 0; i < 15; i++) {
+					window.scrollBy(0, distance);
+					await new Promise(r => setTimeout(r, delay));
+					if ((window.innerHeight + window.scrollY) >= document.body.offsetHeight) break;
+				}
+				window.scrollTo(0, 0); // Scroll back to top for extraction
+			})()
+		`, nil),
+		chromedp.Sleep(1*time.Second),
+		// 2. Smart Extraction Logic
+		chromedp.Evaluate(`
+			(() => {
+				const noiseSelectors = [
+					'nav', 'footer', 'aside', 'header', 'script', 'style', 'iframe',
+					'.ads', '.menu', '.sidebar', '.nav', '.footer', '.advertisement',
+					'.social-share', '.comments-section', '.related-posts'
+				];
+				const contentSelectors = [
+					'article', 'main', '[role="main"]', '.content', '.post-content', 
+					'.article-body', '.article-content', '#content', '.entry-content'
+				];
+
+				// Try to find the main content root
+				let root = null;
+				for (const s of contentSelectors) {
+					const el = document.querySelector(s);
+					if (el && el.innerText.length > 200) { // Ensure it's substantial
+						root = el;
+						break;
+					}
+				}
+				if (!root) root = document.body;
+
+				// Clone or work on a fragment to clean up
+				const tempDiv = document.createElement('div');
+				tempDiv.innerHTML = root.innerHTML;
+
+				// Remove noise
+				noiseSelectors.forEach(s => {
+					const elements = tempDiv.querySelectorAll(s);
+					elements.forEach(el => el.remove());
+				});
+
+				// Basic HTML to Markdown converter
+				function toMarkdown(node) {
+					let text = "";
+					for (let child of node.childNodes) {
+						if (child.nodeType === 3) { // Text node
+							text += child.textContent;
+						} else if (child.nodeType === 1) { // Element node
+							const tag = child.tagName.toLowerCase();
+							const inner = toMarkdown(child);
+							switch(tag) {
+								case 'h1': text += "\n# " + inner + "\n"; break;
+								case 'h2': text += "\n## " + inner + "\n"; break;
+								case 'h3': text += "\n### " + inner + "\n"; break;
+								case 'p': text += "\n" + inner + "\n"; break;
+								case 'br': text += "\n"; break;
+								case 'b': case 'strong': text += "**" + inner + "**"; break;
+								case 'i': case 'em': text += "*" + inner + "*"; break;
+								case 'a': text += "[" + inner + "](" + child.href + ")"; break;
+								case 'li': text += "\n- " + inner; break;
+								case 'code': text += String.fromCharCode(96) + inner + String.fromCharCode(96); break;
+								case 'pre': text += "\n" + String.fromCharCode(96,96,96) + "\n" + inner + "\n" + String.fromCharCode(96,96,96) + "\n"; break;
+								default: text += inner;
+							}
+						}
+					}
+					return text;
+				}
+
+				return toMarkdown(tempDiv).replace(/\n\s*\n/g, "\n\n").trim();
+			})()
+		`, &res),
 	)
 
 	if err != nil {
@@ -172,8 +250,8 @@ func ReadPage(pageURL string) (string, error) {
 	}
 
 	// truncate if too long (simple protection)
-	if len(res) > 20000 {
-		res = res[:20000] + "... (truncated)"
+	if len(res) > 30000 {
+		res = res[:30000] + "... (truncated)"
 	}
 
 	return res, nil
