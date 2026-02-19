@@ -95,15 +95,22 @@ func main() {
 func createAppMenu(app *App) *menu.Menu {
 	men := menu.NewMenu()
 
-	// App Menu
-	appMenu := men.AddSubmenu("App")
-	appMenu.AddText("About DKST LLM Chat Server", keys.CmdOrCtrl("i"), func(_ *menu.CallbackData) {
-		app.ShowAbout()
-	})
-	appMenu.AddSeparator()
-	appMenu.AddText("Quit", keys.CmdOrCtrl("q"), func(_ *menu.CallbackData) {
-		app.Quit()
-	})
+	if runtime.GOOS == "darwin" {
+		// macOS: AppMenu handles all standard roles (About, Hide, Services, Quit)
+		men.Append(menu.AppMenu())
+
+		// Add custom items to the AppMenu if needed, but AppMenu() is the standard way
+		// Alternatively, we can build it manually but accurately:
+	} else {
+		appMenu := men.AddSubmenu("App")
+		appMenu.AddText("About DKST LLM Chat Server", keys.CmdOrCtrl("i"), func(_ *menu.CallbackData) {
+			app.ShowAbout()
+		})
+		appMenu.AddSeparator()
+		appMenu.AddText("Quit", keys.CmdOrCtrl("q"), func(_ *menu.CallbackData) {
+			app.Quit()
+		})
+	}
 
 	// Edit Menu - Use Wails built-in EditMenu for proper clipboard support
 	men.Append(menu.EditMenu())
