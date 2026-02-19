@@ -56,10 +56,13 @@ if [ $? -eq 0 ]; then
     install_name_tool -id "@rpath/libonnxruntime.dylib" "$DYLIB_PATH"
 
     # Re-sign binaries to fix "Code Signature Invalid" crash
-    echo "Re-signing binaries..."
-    codesign -f -s - "$DYLIB_PATH"
-    
+    echo "Cleaning detritus and re-signing binaries..."
     APP_BUNDLE_PATH="build/bin/DKST LLM Chat Server.app"
+    
+    # Remove hidden metadata attributes that can break code signing
+    xattr -cr "$APP_BUNDLE_PATH"
+    
+    codesign -f -s - "$DYLIB_PATH"
     codesign -f -s - --deep "$APP_BUNDLE_PATH"
 
     echo "Build success!"
