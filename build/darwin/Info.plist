@@ -59,5 +59,7 @@
           {{end}}
         </array>
         {{end}}
+        <key>NSDocumentsFolderUsageDescription</key>
+        <string>This app requires access to your Documents folder to save and load configuration, chat history, and user settings.</string>
     </dict>
 </plist>
