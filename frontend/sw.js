@@ -3,7 +3,7 @@
  * Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
  */
 
-const CACHE_NAME = 'dkst-chat-v1';
+const CACHE_NAME = 'dkst-chat-v2';
 const ASSETS = [
     '/',
     '/index.html',
@@ -45,7 +45,17 @@ self.addEventListener('fetch', event => {
 
     event.respondWith(
         fetch(event.request).catch(() => {
-            return caches.match(event.request);
+            return caches.match(event.request).then(response => {
+                if (response) {
+                    return response;
+                }
+                // Safari throws if respondWith resolves to undefined/null.
+                // Return a valid 503 response if network fails and no cache exists.
+                return new Response('Network error and asset not cached.', {
+                    status: 503,
+                    headers: new Headers({ 'Content-Type': 'text/plain' })
+                });
+            });
         })
     );
 });

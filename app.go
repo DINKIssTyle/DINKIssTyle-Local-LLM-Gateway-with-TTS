@@ -636,7 +636,7 @@ func (a *App) sniffProtocol(conn net.Conn, tlsChan, httpChan chan net.Conn) {
 	// Read the first byte to detect TLS vs HTTP
 	// TLS handshake starts with 0x16 (record type: handshake)
 	peek := make([]byte, 1)
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	n, err := conn.Read(peek)
 
 	// Create a new connection that "peeks" the first byte

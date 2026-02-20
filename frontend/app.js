@@ -573,7 +573,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Register Service Worker for PWA
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-            navigator.serviceWorker.register('/sw.js')
+            navigator.serviceWorker.register('/sw.js?v=2')
                 .then(reg => console.log('[PWA] Service Worker registered:', reg.scope))
                 .catch(err => console.warn('[PWA] Service Worker failed:', err));
         });
@@ -3011,13 +3011,23 @@ async function checkSystemHealth() {
 
     // 2. Fallback to API (Web Mode)
     if (!health) {
-        try {
-            const res = await fetch('/api/health');
-            if (res.ok) {
-                health = await res.json();
+        let retries = 3;
+        while (retries > 0 && !health) {
+            try {
+                const res = await fetch('/api/health', {
+                    headers: { 'Cache-Control': 'no-cache' }
+                });
+                if (res.ok) {
+                    health = await res.json();
+                    break;
+                }
+            } catch (e) {
+                console.error(`API health check failed (${retries} retries left):`, e);
             }
-        } catch (e) {
-            console.error("API health check failed:", e);
+            retries--;
+            if (retries > 0) {
+                await new Promise(r => setTimeout(r, 1000));
+            }
         }
     }
 
