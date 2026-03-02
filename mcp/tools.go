@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
 
@@ -148,23 +149,74 @@ func SearchNaver(query string) (string, error) {
 	return content, nil
 }
 
-// ReadPage fetches the text content of a URL using a headless browser.
+// ReadPage fetches the text content of a URL using a headless browser with anti-detection.
 func ReadPage(pageURL string) (string, error) {
-	log.Printf("[MCP] Reading Page (Advanced): %s", pageURL)
+	log.Printf("[MCP] Reading Page (Advanced + Anti-Detection): %s", pageURL)
 
-	// Create context
-	ctx, cancel := chromedp.NewContext(context.Background())
+	// 1. Anti-Detection: Configure browser with stealth flags
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("disable-features", "TranslateUI"),
+		chromedp.Flag("disable-infobars", true),
+		chromedp.Flag("disable-extensions", true),
+		chromedp.Flag("no-first-run", true),
+		chromedp.Flag("disable-default-apps", true),
+		chromedp.UserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"),
+	)
+
+	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
+	defer allocCancel()
+
+	ctx, cancel := chromedp.NewContext(allocCtx)
 	defer cancel()
 
-	// Set a generous timeout for complex pages
-	ctx, cancel = context.WithTimeout(ctx, 45*time.Second)
+	// Set a generous timeout for complex pages + Cloudflare challenge
+	ctx, cancel = context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
 	var res string
 	err := chromedp.Run(ctx,
+		// 2. Anti-Detection: Override navigator.webdriver before any page loads
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			_, err := page.AddScriptToEvaluateOnNewDocument(`
+				Object.defineProperty(navigator, 'webdriver', {get: () => false});
+				if (!window.chrome) { window.chrome = {}; }
+				if (!window.chrome.runtime) { window.chrome.runtime = {}; }
+				Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+				Object.defineProperty(navigator, 'languages', {get: () => ['ko-KR', 'ko', 'en-US', 'en']});
+			`).Do(ctx)
+			return err
+		}),
+
 		chromedp.Navigate(pageURL),
-		chromedp.Sleep(2*time.Second), // Wait for initial load
-		// 1. Auto-scroll logic to trigger lazy loading
+
+		// 3. Anti-Detection: Wait for Cloudflare challenge to resolve (dynamic, up to 15s)
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			for i := 0; i < 15; i++ {
+				var title string
+				if err := chromedp.Evaluate(`document.title`, &title).Do(ctx); err != nil {
+					return nil // Page might not be ready yet
+				}
+				titleLower := strings.ToLower(title)
+				// Cloudflare challenge pages have these titles
+				if strings.Contains(titleLower, "just a moment") ||
+					strings.Contains(titleLower, "attention required") ||
+					strings.Contains(titleLower, "checking your browser") ||
+					strings.Contains(titleLower, "please wait") {
+					log.Printf("[MCP] Cloudflare challenge detected (title: %s), waiting... (%d/15)", title, i+1)
+					time.Sleep(1 * time.Second)
+					continue
+				}
+				// Challenge passed or not a Cloudflare page
+				break
+			}
+			return nil
+		}),
+
+		// Wait for page content to settle after challenge
+		chromedp.Sleep(2*time.Second),
+
+		// 4. Auto-scroll logic to trigger lazy loading
 		chromedp.Evaluate(`
 			(async () => {
 				const distance = 400;
@@ -178,7 +230,8 @@ func ReadPage(pageURL string) (string, error) {
 			})()
 		`, nil),
 		chromedp.Sleep(1*time.Second),
-		// 2. Smart Extraction Logic
+
+		// 5. Smart Extraction Logic
 		chromedp.Evaluate(`
 			(() => {
 				const noiseSelectors = [
