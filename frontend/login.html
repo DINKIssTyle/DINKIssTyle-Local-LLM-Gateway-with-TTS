@@ -52,6 +52,47 @@
             width: 100%;
             max-width: 400px;
             box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            position: relative;
+        }
+
+        .refresh-btn {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 6px;
+            border-radius: 6px;
+        }
+
+        .refresh-btn:hover {
+            color: var(--text-color);
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .cert-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 14px;
+            margin-top: 25px;
+            padding-top: 20px;
+            border-top: 1px solid var(--border-color);
+            width: 100%;
+            transition: color 0.2s;
+        }
+
+        .cert-btn:hover {
+            color: var(--text-color);
         }
 
         .login-header {
@@ -146,6 +187,10 @@
 
 <body>
     <div class="login-container">
+        <button class="refresh-btn" onclick="window.location.reload(true)" title="새로고침(PWA, 캐시 등등)">
+            <span class="material-icons-round" style="font-size: 20px;">autorenew</span>
+        </button>
+
         <div class="login-header">
             <img src="appicon.png" alt="App Icon" style="width: 48px; height: 48px; margin-bottom: 15px;">
             <h1>DKST LLM Chat</h1>
@@ -188,6 +233,10 @@
 
             <button type="submit" class="login-btn" id="login-btn">Sign In</button>
         </form>
+
+        <a href="/api/cert/download" class="cert-btn" download>
+            <span style="font-size: 16px;">🔐</span> Download CA Certificate
+        </a>
 
         <div class="footer">
             &copy; 2026 DINKI'ssTyle

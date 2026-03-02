@@ -234,8 +234,8 @@ func (a *App) analyzeAndSaveFacts(userID, conversationText, modelID string) {
 		return
 	}
 
-	cleanResult := strings.ToUpper(strings.Trim(respBody, " \n\r\t\"'`.[]"))
-	if cleanResult == "NO_IMPORTANT_CONTENT" || cleanResult == "NO IMPORTANT CONTENT" || cleanResult == "" {
+	cleanResult := strings.ToUpper(strings.TrimSpace(respBody))
+	if cleanResult == "" || strings.Contains(cleanResult, "NO_IMPORTANT_CONTENT") || strings.Contains(cleanResult, "NO IMPORTANT CONTENT") {
 		return
 	}
 

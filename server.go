@@ -324,7 +324,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	mux.HandleFunc("/mcp/messages", mcp.HandleMessages)
 
 	// Certificate Download Endpoint
-	mux.HandleFunc("/api/cert/download", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/cert/download", func(w http.ResponseWriter, r *http.Request) {
 		certPath, _, _ := getActiveCertPaths(GetAppDataDir(), app.GetCertDomain())
 		if _, err := os.Stat(certPath); os.IsNotExist(err) {
 			http.Error(w, "Certificate not found", http.StatusNotFound)
@@ -333,7 +333,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filepath.Base(certPath)))
 		w.Header().Set("Content-Type", "application/x-x509-ca-cert")
 		http.ServeFile(w, r, certPath)
-	}))
+	})
 
 	mux.HandleFunc("/api/config", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
