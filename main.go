@@ -11,6 +11,8 @@ import (
 	"log"
 	"runtime"
 
+	"dinkisstyle-chat/mcp"
+
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/menu"
 	"github.com/wailsapp/wails/v2/pkg/menu/keys"
@@ -56,8 +58,22 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		OnStartup:         app.startup,
-		OnShutdown:        app.shutdown,
+		OnStartup: func(ctx context.Context) {
+			// Initialize SQLite DB
+			dbPath, err := mcp.GetUserMemoryFilePath("default", "memory.db")
+			if err != nil {
+				log.Printf("Failed to resolve DB path: %v", err)
+			} else {
+				if err := mcp.InitDB(dbPath); err != nil {
+					log.Printf("Failed to init SQLite: %v", err)
+				}
+			}
+			app.startup(ctx)
+		},
+		OnShutdown: func(ctx context.Context) {
+			mcp.CloseDB()
+			app.shutdown(ctx)
+		},
 		HideWindowOnClose: false, // Handled by OnBeforeClose
 		OnBeforeClose: func(ctx context.Context) (prevent bool) {
 			if app.isQuitting {

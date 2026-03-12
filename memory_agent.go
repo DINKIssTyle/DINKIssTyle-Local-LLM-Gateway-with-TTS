@@ -22,6 +22,7 @@ type MemoryAnalysisRequest struct {
 	Model       string    `json:"model"`
 	Messages    []Message `json:"messages"`
 	Temperature float64   `json:"temperature"`
+	MaxTokens   int       `json:"max_tokens,omitempty"`
 	Store       bool      `json:"store"`
 }
 
@@ -191,12 +192,16 @@ func (a *App) processChatLog(userID string) {
 	if count > 0 {
 		log.Printf("[MemoryWorker] [%s] 🧠 Analyzing %d interactions (Model: %s)...", userID, count, lastModel)
 		conversationText := sb.String()
-		a.analyzeAndSaveFacts(userID, conversationText, lastModel)
+		err := a.analyzeAndSaveFacts(userID, conversationText, lastModel)
+		if err != nil {
+			log.Printf("[MemoryWorker] [%s] ⚠️ Memory analysis failed (will retry later): %v", userID, err)
+			return // DO NOT DELETE the processing file
+		}
 	} else {
 		log.Printf("[MemoryWorker] [%s] ℹ️ No valid interactions found.", userID)
 	}
 
-	// 4. Delete the processing file
+	// 4. Delete the processing file only on success or empty
 	if err := os.Remove(processingPath); err != nil {
 		log.Printf("[MemoryWorker] [%s] ❌ Failed to delete processed log: %v", userID, err)
 	} else {
@@ -206,107 +211,143 @@ func (a *App) processChatLog(userID string) {
 	// Optional: Limit recursion or periodic cleanup if needed, but this is fine.
 }
 
-func (a *App) analyzeAndSaveFacts(userID, conversationText, modelID string) {
-	prompt := mcp.ChatSummaryPromptTemplate(conversationText)
+func (a *App) analyzeAndSaveFacts(userID, conversationText, modelID string) error {
+	// Request structured JSON format from the LLM
+	prompt := fmt.Sprintf(`Extract ALL useful information from this conversation.
+
+SAVE RULES (VERY IMPORTANT):
+- ANY personal information (names, dates, preferences, family, work, etc.) → MUST SAVE
+- ANY facts, events, opinions, or requests the user shared → MUST SAVE
+- ANY technical discussions, decisions, or problem-solving → MUST SAVE
+- If the user explicitly asks to remember/save something → ABSOLUTELY MUST SAVE
+
+SKIP RULES (use NO_IMPORTANT_CONTENT ONLY for these):
+- The conversation is LITERALLY just "hi", "hello", "bye" with zero substance
+- The assistant gave an empty or error response with no user content
+
+OUTPUT FORMAT: A single JSON object, no other text.
+{ "summary": "...", "keywords": "..." }
+
+- "summary": Concise bullet-point summary of key facts
+- "keywords": Comma-separated tags (e.g. "name, family, preference")
+- If skipping: { "summary": "NO_IMPORTANT_CONTENT", "keywords": "" }
+
+Conversation:
+%s`, conversationText)
 
 	// Call LLM
 	msgs := []Message{
-		{Role: "system", Content: "You summarize conversations for memory."},
+		{Role: "system", Content: "You are a memory extraction agent. Output ONLY a raw JSON object. Do NOT output any thinking, reasoning, or explanation. Do NOT use markdown. Just output the JSON."},
 		{Role: "user", Content: prompt},
 	}
 
-	// Use model from log, fallback to some logic if empty
 	targetModel := modelID
 	if targetModel == "" {
-		// Try to pick something sensible if the log was from an older version
-		targetModel = "qwen/qwen3-vl-30b" // Sensible fallback for now
+		targetModel = "qwen/qwen3-vl-30b"
 	}
 
 	payload := MemoryAnalysisRequest{
 		Model:       targetModel,
 		Messages:    msgs,
 		Temperature: 0.0,
+		MaxTokens:   1024, // Enough room for thinking output + actual JSON
 	}
 
+	log.Printf("[MemoryWorker] [%s] 📡 Calling LLM at %s with model %s (MaxTokens: 1024)...", userID, a.llmEndpoint, targetModel)
 	respBody, err := a.callLLM(payload)
 	if err != nil {
-		log.Printf("[MemoryWorker] LLM call failed: %v", err)
-		return
+		log.Printf("[MemoryWorker] [%s] ❌ LLM call failed: %v", userID, err)
+		return fmt.Errorf("LLM request failed: %w", err)
+	}
+	log.Printf("[MemoryWorker] [%s] ✅ LLM responded (%d bytes)", userID, len(respBody))
+
+	rawRes := strings.TrimSpace(respBody)
+
+	// Strip possible markdown block wrappers like ```json and ```
+	rawRes = strings.TrimPrefix(rawRes, "```json")
+	rawRes = strings.TrimPrefix(rawRes, "```")
+	rawRes = strings.TrimSuffix(rawRes, "```")
+	rawRes = strings.TrimSpace(rawRes)
+
+	// Strip thinking/reasoning content from models like Qwen3.5 that output
+	// chain-of-thought before the actual JSON. Use brace-counting to extract
+	// only the FIRST complete JSON object, avoiding contamination from
+	// thinking text that may also contain JSON-like examples.
+	if firstBrace := strings.Index(rawRes, "{"); firstBrace >= 0 {
+		depth := 0
+		inString := false
+		escape := false
+		endPos := -1
+		for i := firstBrace; i < len(rawRes); i++ {
+			ch := rawRes[i]
+			if escape {
+				escape = false
+				continue
+			}
+			if ch == '\\' && inString {
+				escape = true
+				continue
+			}
+			if ch == '"' {
+				inString = !inString
+				continue
+			}
+			if inString {
+				continue
+			}
+			if ch == '{' {
+				depth++
+			} else if ch == '}' {
+				depth--
+				if depth == 0 {
+					endPos = i
+					break
+				}
+			}
+		}
+		if endPos > firstBrace {
+			extracted := rawRes[firstBrace : endPos+1]
+			if firstBrace > 0 {
+				log.Printf("[MemoryWorker] [%s] ⚙️ Extracted JSON (%d bytes) from position %d", userID, len(extracted), firstBrace)
+			}
+			rawRes = extracted
+		}
 	}
 
-	cleanResult := strings.ToUpper(strings.TrimSpace(respBody))
-	if cleanResult == "" || strings.Contains(cleanResult, "NO_IMPORTANT_CONTENT") || strings.Contains(cleanResult, "NO IMPORTANT CONTENT") {
-		return
+	// Parse JSON
+	var memData struct {
+		Summary  string `json:"summary"`
+		Keywords string `json:"keywords"`
 	}
 
-	result := strings.TrimSpace(respBody)
-
-	// Format summary with timestamp
-	currentTime := time.Now().Format("2006-01-02 15:04")
-	summaryBlock := fmt.Sprintf("\n### Session [%s]\n%s", currentTime, result)
-
-	memoryPath, _ := mcp.GetUserMemoryFilePath(userID, "personal.md")
-
-	// Save Summary
-	res, err := mcp.ManageMemory(memoryPath, "remember", summaryBlock)
-	if err == nil {
-		log.Printf("[MemoryWorker] ✅ Saved summary for %s: %s", userID, res)
+	if err := json.Unmarshal([]byte(rawRes), &memData); err != nil {
+		// Fallback for messy output
+		log.Printf("[MemoryWorker] [%s] ❌ Failed to parse JSON (%v). Raw output: %s", userID, err, rawRes)
+		// We return nil so it doesn't get stuck infinitely retrying garbage output
+		return nil
 	}
 
-	// Trigger Consolidation (if needed)
-	// We check file size. If > 100 bytes (for testing), consolidate.
-	info, err := os.Stat(memoryPath)
-	if err == nil && info.Size() > 5000 { // Increased limit for sanity
-		log.Printf("[MemoryWorker] 🧹 Triggering memory consolidation for %s (Size: %d bytes)", userID, info.Size())
-		a.consolidateMemory(userID, targetModel)
+	log.Printf("[MemoryWorker] [%s] 📋 Parsed: Summary=%q, Keywords=%q", userID, memData.Summary, memData.Keywords)
+
+	if memData.Summary == "" || 
+		strings.Contains(strings.ToUpper(memData.Summary), "NO_IMPORTANT_CONTENT") {
+		log.Printf("[MemoryWorker] [%s] No important content to remember.", userID)
+		return nil
 	}
-}
 
-// consolidateMemory reads the full memory file, sends it to LLM for cleanup, and overwrites it.
-func (a *App) consolidateMemory(userID, modelID string) {
-	memoryPath, _ := mcp.GetUserMemoryFilePath(userID, "personal.md")
-
-	content, err := os.ReadFile(memoryPath)
+	// Save to SQLite
+	id, err := mcp.InsertMemory(userID, memData.Summary, memData.Keywords, conversationText)
 	if err != nil {
-		return
-	}
-
-	prompt := mcp.MemoryConsolidationPromptTemplate(string(content))
-
-	// Call LLM
-	msgs := []Message{
-		{Role: "system", Content: "You are a helpful assistant that organizes information."},
-		{Role: "user", Content: prompt},
-	}
-
-	payload := MemoryAnalysisRequest{
-		Model:       modelID,
-		Messages:    msgs,
-		Temperature: 0.1, // Low temp for deterministic cleanup
-	}
-
-	respBody, err := a.callLLM(payload)
-	if err != nil {
-		log.Printf("[MemoryWorker] Consolidation failed: %v", err)
-		return
-	}
-
-	consolidated := strings.TrimSpace(respBody)
-	if len(consolidated) < 10 {
-		log.Printf("[MemoryWorker] Consolidated output too short, aborting overwrite.")
-		return
-	}
-
-	// Overwrite file
-	// We use direct file write here because ManageMemory appends.
-	// We want to REPLACE the content.
-	err = os.WriteFile(memoryPath, []byte(consolidated), 0644)
-	if err != nil {
-		log.Printf("[MemoryWorker] Failed to write consolidated memory: %v", err)
+		log.Printf("[MemoryWorker] ❌ Failed to insert memory to DB: %v", err)
+		return err // Retry later
 	} else {
-		log.Printf("[MemoryWorker] ✨ Memory consolidated for %s. New size: %d bytes", userID, len(consolidated))
+		log.Printf("[MemoryWorker] ✅ Saved memory to DB for %s (ID: %d)", userID, id)
 	}
+
+	return nil
 }
+
+// consolidateMemory is deprecated as SQLite handles memory consolidation automatically via search.
 
 // Internal helper to call LLM (Kept from previous version)
 func (a *App) callLLM(payload interface{}) (string, error) {
@@ -319,6 +360,8 @@ func (a *App) callLLM(payload interface{}) (string, error) {
 		url = strings.TrimSuffix(url, "/") + "/v1/chat/completions"
 	}
 
+	log.Printf("[MemoryWorker-LLM] 📡 POST %s (payload: %d bytes, token: %v)", url, len(jsonPayload), a.llmApiToken != "")
+
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonPayload))
 	if err != nil {
 		return "", err
@@ -329,14 +372,17 @@ func (a *App) callLLM(payload interface{}) (string, error) {
 		req.Header.Set("Authorization", "Bearer "+a.llmApiToken)
 	}
 
-	client := &http.Client{Timeout: 60 * time.Second} // Longer timeout for batch
+	client := &http.Client{Timeout: 60 * time.Second} // Use a standard 60s timeout, MaxTokens will prevent massive generation
 	resp, err := client.Do(req)
 	if err != nil {
+		log.Printf("[MemoryWorker-LLM] ❌ HTTP request failed: %v", err)
 		return "", err
 	}
 	defer resp.Body.Close()
 
+	log.Printf("[MemoryWorker-LLM] 📥 Response status: %s", resp.Status)
 	body, _ := io.ReadAll(resp.Body)
+	log.Printf("[MemoryWorker-LLM] 📥 Response body length: %d bytes", len(body))
 
 	// Parse standard OpenAI format
 	var result struct {

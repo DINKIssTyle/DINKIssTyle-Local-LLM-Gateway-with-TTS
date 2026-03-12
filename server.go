@@ -199,33 +199,8 @@ func ensureSelfSignedCert(appDataDir string, certDomain string) (string, string,
 	return certPath, keyPath, nil
 }
 
-// preloadUserMemory reads the user's memory files (static.md and personal.md) into a string
-// Returns formatted string or empty if no files exist.
-func preloadUserMemory(userID string, fileName ...string) string {
-	targetFile := "personal.md"
-	if len(fileName) > 0 && fileName[0] != "" {
-		targetFile = fileName[0]
-	}
-
-	filePath, err := mcp.GetUserMemoryFilePath(userID, targetFile)
-	if err != nil {
-		return ""
-	}
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return ""
-	}
-
-	content := strings.TrimSpace(string(data))
-
-	// Truncate if too large to avoid context overflow (max ~10000 chars)
-	maxLen := 10000
-	if len(content) > maxLen {
-		content = content[:maxLen] + "\n... (memory truncated)"
-	}
-
-	return content
-}
+// preloadUserMemory has been removed as it was part of the legacy file-based memory system.
+// System context is now managed exclusively through the new SQLite Agentic RAG system and tools.
 
 // callLLMInternal makes a background request to the LLM for summary/validation
 func callLLMInternal(prompt string, modelID string) string {
@@ -920,10 +895,10 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				extraInstr := mcp.SystemPromptToolUsage(envInfo)
 
 				if enableMemory {
-					staticMemory := preloadUserMemory(userID, "static.md")
-					userProfile := preloadUserMemory(userID, "personal.md")
-					activeContext := preloadUserMemory(userID, "active_context.md")
-					extraInstr += mcp.SystemPromptMemoryTemplate(staticMemory, userProfile, activeContext)
+					// In the new Agentic RAG system, we no longer inject the entire memory file.
+					// We only inject the instructions on how to use the memory tools.
+					// The actual context retrieval is done by the LLM calling search_memory.
+					extraInstr += mcp.SystemPromptMemoryTemplate("", "", "")
 				}
 
 				foundSystem := false

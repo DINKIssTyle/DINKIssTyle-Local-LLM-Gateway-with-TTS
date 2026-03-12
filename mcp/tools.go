@@ -310,132 +310,59 @@ func ReadPage(pageURL string) (string, error) {
 	return res, nil
 }
 
-// ManageMemory handles reading and writing to the user's memory file (personal.md).
-// Simplified to use direct markdown file manipulation.
-// Supported actions: read, remember, forget, query
-func ManageMemory(filePath string, action string, content string) (string, error) {
-	log.Printf("[MCP] ManageMemory Action: %s, Path: %s", action, filePath)
+// ManageMemory is deprecated. All memory is handled via SQLite (SearchMemoryDB / ReadMemoryDB).
 
-	memoryMu.Lock()
-	defer memoryMu.Unlock()
-
-	// Ensure directory exists
-	dir := filepath.Dir(filePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create directory: %v", err)
+// SearchMemoryDB calls the SQLite db to search memory by keyword
+func SearchMemoryDB(userID, query string) (string, error) {
+	log.Printf("[MCP] SearchMemoryDB: User=%s, Query=%s", userID, query)
+	results, err := SearchMemories(userID, query)
+	if err != nil {
+		return "", fmt.Errorf("db search failed: %v", err)
 	}
 
-	// We primarily operate on 'personal.md' in the same directory as filePath (which might be passed as anything)
-	// But let's assume filePath IS the target file (usually personal.md for 'remember').
-	// If action is 'read', we might want to read a specific file or the default 'personal.md'.
-	// To be safe and consistent with new architecture:
-	// If filePath ends in .md, use it. If not, default to personal.md?
-	// The agent usually passes the full path to personal.md.
-
-	switch action {
-	case "read":
-		data, err := os.ReadFile(filePath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return "Memory is empty.", nil
-			}
-			return "", fmt.Errorf("failed to read memory: %v", err)
-		}
-		if len(data) == 0 {
-			return "Memory is empty.", nil
-		}
-		return string(data), nil
-
-	case "remember":
-		if strings.TrimSpace(content) == "" {
-			return "", fmt.Errorf("content cannot be empty for remember")
-		}
-
-		// Append to file
-		f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			return "", fmt.Errorf("failed to open memory file: %v", err)
-		}
-		defer f.Close()
-
-		// Simple format: - content
-		entry := fmt.Sprintf("- %s\n", strings.TrimSpace(content))
-		if _, err := f.WriteString(entry); err != nil {
-			return "", fmt.Errorf("failed to write to memory: %v", err)
-		}
-
-		return fmt.Sprintf("Remembered: %s", content), nil
-
-	case "forget":
-		// For 'forget', we need to read the file, remove the line, and rewrite.
-		// This is a bit expensive but fine for text files.
-		if strings.TrimSpace(content) == "" {
-			return "", fmt.Errorf("content to forget cannot be empty")
-		}
-
-		data, err := os.ReadFile(filePath)
-		if err != nil {
-			return "", fmt.Errorf("failed to read memory for forget: %v", err)
-		}
-
-		lines := strings.Split(string(data), "\n")
-		var newLines []string
-		deleted := false
-		target := strings.ToLower(strings.TrimSpace(content))
-
-		for _, line := range lines {
-			// fuzzy match or exact match? Let's do contains for now to be easier.
-			// But 'content' usually comes from the LLM wishing to delete a specific fact.
-			if strings.Contains(strings.ToLower(line), target) {
-				deleted = true
-				continue // Skip this line
-			}
-			newLines = append(newLines, line)
-		}
-
-		if !deleted {
-			return "Fact not found in memory.", nil
-		}
-
-		output := strings.Join(newLines, "\n")
-		if err := os.WriteFile(filePath, []byte(output), 0644); err != nil {
-			return "", fmt.Errorf("failed to update memory file: %v", err)
-		}
-
-		return fmt.Sprintf("Forgot facts containing: %s", content), nil
-
-	case "query":
-		// Simple grep
-		if strings.TrimSpace(content) == "" {
-			return "", fmt.Errorf("query cannot be empty")
-		}
-
-		data, err := os.ReadFile(filePath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return "Memory is empty.", nil
-			}
-			return "", fmt.Errorf("failed to read memory: %v", err)
-		}
-
-		lines := strings.Split(string(data), "\n")
-		var matches []string
-		query := strings.ToLower(strings.TrimSpace(content))
-
-		for _, line := range lines {
-			if strings.Contains(strings.ToLower(line), query) {
-				matches = append(matches, line)
-			}
-		}
-
-		if len(matches) == 0 {
-			return fmt.Sprintf("No memory found for '%s'.", content), nil
-		}
-		return strings.Join(matches, "\n"), nil
-
-	default:
-		return "", fmt.Errorf("unknown action: %s. Supported: read, remember, forget, query", action)
+	if len(results) == 0 {
+		return "No relevant memories found.", nil
 	}
+
+	var sb strings.Builder
+	sb.WriteString("Found records (ID / Summary / Keywords):\n")
+	for _, r := range results {
+		sb.WriteString(fmt.Sprintf("- ID: %d | [%s] %s | KWs: %s\n", r.ID, r.CreatedAt.Format("2006-01-02"), r.Summary, r.Keywords))
+	}
+	sb.WriteString("\nTo read the full conversation of a memory, use read_memory with the ID.")
+	return sb.String(), nil
+}
+
+// ReadMemoryDB calls the SQLite db to read full text of a specific memory ID
+func ReadMemoryDB(userID string, memoryID int64) (string, error) {
+	log.Printf("[MCP] ReadMemoryDB: User=%s, ID=%d", userID, memoryID)
+	mem, err := ReadMemory(userID, memoryID)
+	if err != nil {
+		return "", fmt.Errorf("db read failed: %v", err)
+	}
+
+	return fmt.Sprintf("Memory ID: %d\nDate: %s\nSummary: %s\nKeywords: %s\n\n--- Full Context ---\n%s", 
+		mem.ID, mem.CreatedAt.Format("2006-01-02 15:04"), mem.Summary, mem.Keywords, mem.FullText), nil
+}
+
+// UpdateMemoryDB modifications a specific memory entry.
+func UpdateMemoryDB(userID string, memoryID int64, summary string, keywords string) (string, error) {
+	log.Printf("[MCP] UpdateMemoryDB: User=%s, ID=%d", userID, memoryID)
+	err := UpdateMemory(userID, memoryID, summary, keywords)
+	if err != nil {
+		return "", fmt.Errorf("db update failed: %v", err)
+	}
+	return fmt.Sprintf("Successfully updated Memory ID: %d", memoryID), nil
+}
+
+// DeleteMemoryDB removes a specific memory entry.
+func DeleteMemoryDB(userID string, memoryID int64) (string, error) {
+	log.Printf("[MCP] DeleteMemoryDB: User=%s, ID=%d", userID, memoryID)
+	err := DeleteMemory(userID, memoryID)
+	if err != nil {
+		return "", fmt.Errorf("db delete failed: %v", err)
+	}
+	return fmt.Sprintf("Successfully deleted Memory ID: %d", memoryID), nil
 }
 
 // GetUserMemoryDir returns the memory directory path for a user based on OS.

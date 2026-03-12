@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 )
@@ -98,25 +97,6 @@ func GetToolList() []Tool {
 			},
 		},
 		{
-			Name:        "personal_memory",
-			Description: "Interface to long-term memory. Actions: 'forget' (remove a specific fact), 'query' (search), 'read' (status). IMPORTANT: Use ONLY when requested. Memory is SAVED AUTOMATICALLY after each chat; DO NOT call to 'save' facts. When using 'forget', specify the exact phrase to remove. Avoid calling multiple times in a row.",
-			InputSchema: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"action": map[string]interface{}{
-						"type":        "string",
-						"description": "Action: 'forget', 'query', 'read'.",
-						"enum":        []string{"forget", "query", "read"},
-					},
-					"content": map[string]interface{}{
-						"type":        "string",
-						"description": "The fact to forget or the query to search.",
-					},
-				},
-				"required": []string{"action"},
-			},
-		},
-		{
 			Name:        "get_current_time",
 			Description: "Get the current local date and time. Use this when you need to know the current date, time, or day of the week for scheduling or age calculations.",
 			InputSchema: map[string]interface{}{
@@ -125,17 +105,67 @@ func GetToolList() []Tool {
 			},
 		},
 		{
-			Name:        "read_user_document",
-			Description: "Read a specific memory category file for full details. Available: 'personal.md' (hobbies, family, tastes), 'work.md' (projects, coding, business), 'index.md' (all files summary). Use this when highlights in prompt are insufficient.",
+			Name:        "search_memory",
+			Description: "Search the user's long-term SQLite memory using keywords. Returns a list of memory IDs, summaries, and exact matched keywords. Use this FIRST to find relevant past conversations.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
-					"filename": map[string]interface{}{
+					"query": map[string]interface{}{
 						"type":        "string",
-						"description": "The filename to read (personal.md, work.md, index.md).",
+						"description": "The keyword or short phrase to search in past memories.",
 					},
 				},
-				"required": []string{"filename"},
+				"required": []string{"query"},
+			},
+		},
+		{
+			Name:        "read_memory",
+			Description: "Read the full transcription/context of a specific memory by its ID. Use this AFTER search_memory if the summary isn't enough to answer the user's question.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"memory_id": map[string]interface{}{
+						"type":        "integer",
+						"description": "The numeric ID of the memory to read.",
+					},
+				},
+				"required": []string{"memory_id"},
+			},
+		},
+		{
+			Name:        "update_memory",
+			Description: "Update an existing memory entry if facts have changed or need correction. You MUST use search_memory first to find the correct memory_id.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"memory_id": map[string]interface{}{
+						"type":        "integer",
+						"description": "The ID of the memory to update.",
+					},
+					"summary": map[string]interface{}{
+						"type":        "string",
+						"description": "The new summary/fact string to replace the old one.",
+					},
+					"keywords": map[string]interface{}{
+						"type":        "string",
+						"description": "Comma-separated keywords for the updated memory.",
+					},
+				},
+				"required": []string{"memory_id", "summary", "keywords"},
+			},
+		},
+		{
+			Name:        "delete_memory",
+			Description: "Delete an existing memory entry if it is completely wrong or no longer needed. You MUST use search_memory first to find the correct memory_id.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"memory_id": map[string]interface{}{
+						"type":        "integer",
+						"description": "The ID of the memory to delete.",
+					},
+				},
+				"required": []string{"memory_id"},
 			},
 		},
 		{
@@ -428,47 +458,58 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 		}
 		return ReadPage(args.URL)
 
-	case "personal_memory":
+	case "search_memory":
 		if !enableMemory {
 			return "", fmt.Errorf("memory feature is disabled by user settings")
 		}
 		var args struct {
-			Action  string `json:"action"`
-			Content string `json:"content"`
+			Query string `json:"query"`
 		}
 		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
-			return "", fmt.Errorf("invalid arguments for personal_memory: %v", err)
+			return "", fmt.Errorf("invalid arguments for search_memory: %v", err)
 		}
-		// Default to personal.md for memory operations
-		filePath, err := GetUserMemoryFilePath(userID, "personal.md")
-		if err != nil {
-			return "", fmt.Errorf("error resolving memory path: %v", err)
+		return SearchMemoryDB(userID, args.Query)
+
+	case "read_memory":
+		if !enableMemory {
+			return "", fmt.Errorf("memory feature is disabled by user settings")
 		}
-		return ManageMemory(filePath, args.Action, args.Content)
+		var args struct {
+			MemoryID int64 `json:"memory_id"`
+		}
+		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
+			return "", fmt.Errorf("invalid arguments for read_memory: %v", err)
+		}
+		return ReadMemoryDB(userID, args.MemoryID)
+
+	case "update_memory":
+		if !enableMemory {
+			return "", fmt.Errorf("memory feature is disabled by user settings")
+		}
+		var args struct {
+			MemoryID int64  `json:"memory_id"`
+			Summary  string `json:"summary"`
+			Keywords string `json:"keywords"`
+		}
+		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
+			return "", fmt.Errorf("invalid arguments for update_memory: %v", err)
+		}
+		return UpdateMemoryDB(userID, args.MemoryID, args.Summary, args.Keywords)
+
+	case "delete_memory":
+		if !enableMemory {
+			return "", fmt.Errorf("memory feature is disabled by user settings")
+		}
+		var args struct {
+			MemoryID int64 `json:"memory_id"`
+		}
+		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
+			return "", fmt.Errorf("invalid arguments for delete_memory: %v", err)
+		}
+		return DeleteMemoryDB(userID, args.MemoryID)
 
 	case "get_current_time":
 		return GetCurrentTime()
-
-	case "read_user_document":
-		if !enableMemory {
-			return "", fmt.Errorf("memory feature is disabled by user settings")
-		}
-		var args struct {
-			Filename string `json:"filename"`
-		}
-		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
-			return "", fmt.Errorf("invalid arguments for read_user_document: %v", err)
-		}
-		if args.Filename == "" {
-			args.Filename = "personal.md"
-		}
-
-		// Direct read using simplified logic
-		filePath, err := GetUserMemoryFilePath(userID, args.Filename)
-		if err != nil {
-			return "", fmt.Errorf("invalid filename: %v", err)
-		}
-		return ManageMemory(filePath, "read", "")
 
 	case "namu_wiki":
 		var args struct {
@@ -577,32 +618,18 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 			}
 			Broadcast(`{"type": "tool_call.success", "tool": "read_web_page"}`)
 		}
-	} else if params.Name == "personal_memory" {
+	} else if params.Name == "search_memory" {
 		if !enableMemory {
 			res.Error = &JSONRPCError{Code: -32601, Message: "Memory feature is disabled by user settings."}
-			Broadcast(`{"type": "tool_call.failure", "tool": "personal_memory", "reason": "Memory disabled"}`)
+			Broadcast(`{"type": "tool_call.failure", "tool": "search_memory", "reason": "Memory disabled"}`)
 			return
 		}
-
 		var args struct {
-			Action  string `json:"action"`
-			Content string `json:"content"`
+			Query string `json:"query"`
 		}
 		json.Unmarshal(params.Arguments, &args)
 
-		filePath, err := GetUserMemoryFilePath(userID, "personal.md")
-		if err != nil {
-			res.Result = map[string]interface{}{
-				"content": []map[string]interface{}{
-					{"type": "text", "text": fmt.Sprintf("Error resolving memory path: %v", err)},
-				},
-				"isError": true,
-			}
-			Broadcast(fmt.Sprintf(`{"type": "tool_call.failure", "tool": "personal_memory", "reason": "%v"}`, err))
-			return
-		}
-
-		content, err := ManageMemory(filePath, args.Action, args.Content)
+		content, err := SearchMemoryDB(userID, args.Query)
 		if err != nil {
 			res.Result = map[string]interface{}{
 				"content": []map[string]interface{}{
@@ -610,16 +637,103 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 				},
 				"isError": true,
 			}
-			Broadcast(fmt.Sprintf(`{"type": "tool_call.failure", "tool": "personal_memory", "reason": "%v"}`, err))
+			Broadcast(fmt.Sprintf(`{"type": "tool_call.failure", "tool": "search_memory", "reason": "%v"}`, err))
 		} else {
 			res.Result = map[string]interface{}{
 				"content": []map[string]interface{}{
 					{"type": "text", "text": content},
 				},
 			}
-			Broadcast(`{"type": "tool_call.success", "tool": "personal_memory"}`)
+			Broadcast(`{"type": "tool_call.success", "tool": "search_memory"}`)
+		}
+	} else if params.Name == "read_memory" {
+		if !enableMemory {
+			res.Error = &JSONRPCError{Code: -32601, Message: "Memory feature is disabled by user settings."}
+			Broadcast(`{"type": "tool_call.failure", "tool": "read_memory", "reason": "Memory disabled"}`)
+			return
+		}
+		var args struct {
+			MemoryID int64 `json:"memory_id"`
+		}
+		json.Unmarshal(params.Arguments, &args)
+
+		content, err := ReadMemoryDB(userID, args.MemoryID)
+		if err != nil {
+			res.Result = map[string]interface{}{
+				"content": []map[string]interface{}{
+					{"type": "text", "text": fmt.Sprintf("Error: %v", err)},
+				},
+				"isError": true,
+			}
+			Broadcast(fmt.Sprintf(`{"type": "tool_call.failure", "tool": "read_memory", "reason": "%v"}`, err))
+		} else {
+			res.Result = map[string]interface{}{
+				"content": []map[string]interface{}{
+					{"type": "text", "text": content},
+				},
+			}
+			Broadcast(`{"type": "tool_call.success", "tool": "read_memory"}`)
 		}
 
+	} else if params.Name == "update_memory" {
+		if !enableMemory {
+			res.Error = &JSONRPCError{Code: -32601, Message: "Memory feature is disabled by user settings."}
+			Broadcast(`{"type": "tool_call.failure", "tool": "update_memory", "reason": "Memory disabled"}`)
+			return
+		}
+		var args struct {
+			MemoryID int64  `json:"memory_id"`
+			Summary  string `json:"summary"`
+			Keywords string `json:"keywords"`
+		}
+		json.Unmarshal(params.Arguments, &args)
+
+		content, err := UpdateMemoryDB(userID, args.MemoryID, args.Summary, args.Keywords)
+		if err != nil {
+			res.Result = map[string]interface{}{
+				"content": []map[string]interface{}{
+					{"type": "text", "text": fmt.Sprintf("Error: %v", err)},
+				},
+				"isError": true,
+			}
+			Broadcast(fmt.Sprintf(`{"type": "tool_call.failure", "tool": "update_memory", "reason": "%v"}`, err))
+		} else {
+			res.Result = map[string]interface{}{
+				"content": []map[string]interface{}{
+					{"type": "text", "text": content},
+				},
+			}
+			Broadcast(`{"type": "tool_call.success", "tool": "update_memory"}`)
+		}
+
+	} else if params.Name == "delete_memory" {
+		if !enableMemory {
+			res.Error = &JSONRPCError{Code: -32601, Message: "Memory feature is disabled by user settings."}
+			Broadcast(`{"type": "tool_call.failure", "tool": "delete_memory", "reason": "Memory disabled"}`)
+			return
+		}
+		var args struct {
+			MemoryID int64 `json:"memory_id"`
+		}
+		json.Unmarshal(params.Arguments, &args)
+
+		content, err := DeleteMemoryDB(userID, args.MemoryID)
+		if err != nil {
+			res.Result = map[string]interface{}{
+				"content": []map[string]interface{}{
+					{"type": "text", "text": fmt.Sprintf("Error: %v", err)},
+				},
+				"isError": true,
+			}
+			Broadcast(fmt.Sprintf(`{"type": "tool_call.failure", "tool": "delete_memory", "reason": "%v"}`, err))
+		} else {
+			res.Result = map[string]interface{}{
+				"content": []map[string]interface{}{
+					{"type": "text", "text": content},
+				},
+			}
+			Broadcast(`{"type": "tool_call.success", "tool": "delete_memory"}`)
+		}
 	} else if params.Name == "get_current_time" {
 		content, _ := GetCurrentTime()
 		res.Result = map[string]interface{}{
@@ -628,52 +742,6 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 			},
 		}
 		Broadcast(`{"type": "tool_call.success", "tool": "get_current_time"}`)
-	} else if params.Name == "read_user_document" {
-		if !enableMemory {
-			res.Error = &JSONRPCError{Code: -32601, Message: "Memory feature is disabled by user settings."}
-			return
-		}
-
-		var args struct {
-			Filename string `json:"filename"`
-		}
-		json.Unmarshal(params.Arguments, &args)
-
-		if args.Filename == "" {
-			args.Filename = "personal.md"
-		}
-
-		filePath, err := GetUserMemoryFilePath(userID, args.Filename)
-		if err != nil {
-			res.Result = map[string]interface{}{
-				"content": []map[string]interface{}{
-					{"type": "text", "text": fmt.Sprintf("Error: %v", err)},
-				},
-				"isError": true,
-			}
-			return
-		}
-
-		content, err := ManageMemory(filePath, "read", "")
-		if err != nil {
-			// If document not found, list available files
-			files, _ := ListUserMemoryFiles(userID)
-			availableFiles := strings.Join(files, ", ")
-			res.Result = map[string]interface{}{
-				"content": []map[string]interface{}{
-					{"type": "text", "text": fmt.Sprintf("Error: %v. Available files: %s", err, availableFiles)},
-				},
-				"isError": true,
-			}
-			Broadcast(fmt.Sprintf(`{"type": "tool_call.failure", "tool": "read_user_document", "reason": "%v"}`, err))
-		} else {
-			res.Result = map[string]interface{}{
-				"content": []map[string]interface{}{
-					{"type": "text", "text": content},
-				},
-			}
-			Broadcast(`{"type": "tool_call.success", "tool": "read_user_document"}`)
-		}
 	} else if params.Name == "namu_wiki" {
 		var args struct {
 			Keyword string `json:"keyword"`
