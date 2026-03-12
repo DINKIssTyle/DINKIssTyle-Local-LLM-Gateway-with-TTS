@@ -333,6 +333,24 @@ func SearchMemoryDB(userID, query string) (string, error) {
 	return sb.String(), nil
 }
 
+// GetMemorySnapshot returns a formatted string of the most recent memories for system prompt injection.
+func GetMemorySnapshot(userID string) string {
+	results, err := SearchMemoriesByRecent(userID, 10)
+	if err != nil {
+		log.Printf("[MCP] Failed to get memory snapshot: %v", err)
+		return "No recent memories found."
+	}
+	if len(results) == 0 {
+		return "No recent memories found."
+	}
+
+	var sb strings.Builder
+	for _, r := range results {
+		sb.WriteString(fmt.Sprintf("- [%s] %s (Keywords: %s)\n", r.CreatedAt.Format("2006-01-02"), r.Summary, r.Keywords))
+	}
+	return sb.String()
+}
+
 // ReadMemoryDB calls the SQLite db to read full text of a specific memory ID
 func ReadMemoryDB(userID string, memoryID int64) (string, error) {
 	log.Printf("[MCP] ReadMemoryDB: User=%s, ID=%d", userID, memoryID)

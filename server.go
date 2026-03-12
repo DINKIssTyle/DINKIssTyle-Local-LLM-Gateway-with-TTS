@@ -896,9 +896,10 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 				if enableMemory {
 					// In the new Agentic RAG system, we no longer inject the entire memory file.
-					// We only inject the instructions on how to use the memory tools.
-					// The actual context retrieval is done by the LLM calling search_memory.
-					extraInstr += mcp.SystemPromptMemoryTemplate("", "", "")
+					// Instead, we inject a "Memory Snapshot" — the 10 most recent summaries.
+					// This informs the LLM that memories EXIST, encouraging it to use search_memory/read_memory tools.
+					snapshot := mcp.GetMemorySnapshot(userID)
+					extraInstr += mcp.SystemPromptMemoryTemplate("", snapshot, "")
 				}
 
 				foundSystem := false
