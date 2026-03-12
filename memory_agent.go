@@ -269,11 +269,23 @@ Conversation:
 	rawRes = strings.TrimSuffix(rawRes, "```")
 	rawRes = strings.TrimSpace(rawRes)
 
-	// Strip thinking/reasoning content from models like Qwen3.5 that output
-	// chain-of-thought before the actual JSON. Use brace-counting to extract
-	// only the FIRST complete JSON object, avoiding contamination from
-	// thinking text that may also contain JSON-like examples.
-	if firstBrace := strings.Index(rawRes, "{"); firstBrace >= 0 {
+	// Extract ALL JSON objects from the response using brace-counting, then pick
+	// the best candidate. This handles models like Qwen3.5 that output thinking
+	// text containing template JSON examples before the actual response JSON.
+	type jsonCandidate struct {
+		raw      string
+		startPos int
+	}
+	var candidates []jsonCandidate
+
+	searchFrom := 0
+	for searchFrom < len(rawRes) {
+		firstBrace := strings.Index(rawRes[searchFrom:], "{")
+		if firstBrace < 0 {
+			break
+		}
+		firstBrace += searchFrom // Adjust to absolute position
+
 		depth := 0
 		inString := false
 		escape := false
@@ -307,27 +319,64 @@ Conversation:
 		}
 		if endPos > firstBrace {
 			extracted := rawRes[firstBrace : endPos+1]
-			if firstBrace > 0 {
-				log.Printf("[MemoryWorker] [%s] ⚙️ Extracted JSON (%d bytes) from position %d", userID, len(extracted), firstBrace)
-			}
-			rawRes = extracted
+			candidates = append(candidates, jsonCandidate{raw: extracted, startPos: firstBrace})
+			searchFrom = endPos + 1
+		} else {
+			break
 		}
 	}
 
-	// Parse JSON
+	log.Printf("[MemoryWorker] [%s] ⚙️ Found %d JSON candidate(s) in LLM output", userID, len(candidates))
+
+	// Parse JSON - try each candidate and pick the first one with a real summary
 	var memData struct {
 		Summary  string `json:"summary"`
 		Keywords string `json:"keywords"`
 	}
 
-	if err := json.Unmarshal([]byte(rawRes), &memData); err != nil {
-		// Fallback for messy output
-		log.Printf("[MemoryWorker] [%s] ❌ Failed to parse JSON (%v). Raw output: %s", userID, err, rawRes)
-		// We return nil so it doesn't get stuck infinitely retrying garbage output
-		return nil
+	parsed := false
+	for i, c := range candidates {
+		var tmp struct {
+			Summary  string `json:"summary"`
+			Keywords string `json:"keywords"`
+		}
+		if err := json.Unmarshal([]byte(c.raw), &tmp); err != nil {
+			log.Printf("[MemoryWorker] [%s]   candidate %d (pos %d, %d bytes): parse error: %v", userID, i, c.startPos, len(c.raw), err)
+			continue
+		}
+		cleanSummary := strings.TrimSpace(strings.Trim(tmp.Summary, "."))
+		if len(cleanSummary) < 10 || strings.Contains(strings.ToUpper(tmp.Summary), "NO_IMPORTANT_CONTENT") {
+			log.Printf("[MemoryWorker] [%s]   candidate %d (pos %d): placeholder/skip (%q)", userID, i, c.startPos, tmp.Summary)
+			continue
+		}
+		// Found a good candidate
+		memData = tmp
+		parsed = true
+		log.Printf("[MemoryWorker] [%s]   ✅ Using candidate %d (pos %d, %d bytes)", userID, i, c.startPos, len(c.raw))
+		break
 	}
 
-	log.Printf("[MemoryWorker] [%s] 📋 Parsed: Summary=%q, Keywords=%q", userID, memData.Summary, memData.Keywords)
+	if !parsed {
+		if len(candidates) > 0 {
+			// All candidates were placeholders — try parsing the last (largest) one as fallback
+			last := candidates[len(candidates)-1]
+			if err := json.Unmarshal([]byte(last.raw), &memData); err != nil {
+				log.Printf("[MemoryWorker] [%s] ❌ All %d JSON candidates failed to parse. Last raw: %s", userID, len(candidates), last.raw)
+				return nil
+			}
+			// Check if this last one is also a placeholder
+			cleanSummary := strings.TrimSpace(strings.Trim(memData.Summary, "."))
+			if len(cleanSummary) < 10 {
+				log.Printf("[MemoryWorker] [%s] ⚠️ All candidates are placeholders, will retry.", userID)
+				return fmt.Errorf("all JSON candidates are placeholders")
+			}
+		} else {
+			log.Printf("[MemoryWorker] [%s] ❌ No JSON objects found in LLM output (%d bytes)", userID, len(rawRes))
+			return nil
+		}
+	}
+
+	log.Printf("[MemoryWorker] [%s] 📋 Final: Summary=%q, Keywords=%q", userID, memData.Summary, memData.Keywords)
 
 	if memData.Summary == "" || 
 		strings.Contains(strings.ToUpper(memData.Summary), "NO_IMPORTANT_CONTENT") {
