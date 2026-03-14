@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -325,11 +326,12 @@ func SearchMemoryDB(userID, query string) (string, error) {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("Found records (ID / Summary / Keywords):\n")
+	sb.WriteString("Found records:\n")
 	for _, r := range results {
-		sb.WriteString(fmt.Sprintf("- ID: %d | [%s] %s | KWs: %s\n", r.ID, r.CreatedAt.Format("2006-01-02"), r.Summary, r.Keywords))
+		sb.WriteString(fmt.Sprintf("\n--- MEMORY ID: %d | DATE: %s | KWs: %s ---\n", r.ID, r.CreatedAt.Format("2006-01-02"), r.Keywords))
+		sb.WriteString(fmt.Sprintf("SUMMARY: %s\n", r.Summary))
+		sb.WriteString(fmt.Sprintf("FULL TEXT:\n%s\n", r.FullText))
 	}
-	sb.WriteString("\nTo read the full conversation of a memory, use read_memory with the ID.")
 	return sb.String(), nil
 }
 
@@ -349,6 +351,188 @@ func GetMemorySnapshot(userID string) string {
 		sb.WriteString(fmt.Sprintf("- [%s] %s (Keywords: %s)\n", r.CreatedAt.Format("2006-01-02"), r.Summary, r.Keywords))
 	}
 	return sb.String()
+}
+
+// ExtractKeywords provides keyword extraction from user message
+// by stripping common Korean particles (조사) and stopwords.
+func ExtractKeywords(input string) []string {
+	inputLower := strings.ToLower(input)
+	
+	// Remove common punctuation
+	replacer := strings.NewReplacer(",", " ", ".", " ", "?", " ", "!", " ", "\"", " ", "'", " ", "(", " ", ")", " ", "-", " ")
+	clean := replacer.Replace(inputLower)
+	words := strings.Fields(clean)
+
+	var keywords []string
+	
+	// Words to completely ignore
+	stopwords := map[string]bool{
+		"그리고": true, "그래서": true, "하지만": true, "알려줘": true, "해줘": true, 
+		"뭐야": true, "어때": true, "어디": true, "누구": true, "어떻게": true, "왜": true,
+		"the": true, "a": true, "an": true, "and": true, "or": true, "but": true, 
+		"in": true, "on": true, "at": true, "to": true, "for": true, "of": true, 
+		"with": true, "about": true, "like": true, "this": true, "that": true,
+		"tell": true, "me": true, "what": true, "who": true, "when": true, 
+		"where": true, "why": true, "how": true,
+	}
+
+	// Suffixes (particles/조사) to strip from the end of words
+	particles := []string{
+		"이라고", "이라는", "에서는", "로부터", "까지도", "마저도", "조차도",
+		"에서", "부터", "까지", "으로", "보다", "처럼", "만큼", "마다", "이랑", "하고",
+		"은", "는", "이", "가", "을", "를", "에", "도", "로", "와", "과", "의", "만", "요", "다",
+	}
+
+	for _, w := range words {
+		if stopwords[w] {
+			continue
+		}
+
+		// Strip particles
+		cleanedWord := w
+		for _, p := range particles {
+			if strings.HasSuffix(cleanedWord, p) {
+				// Only strip if the remaining word is at least 1 Korean character (approx 3 bytes)
+				// or 2 English characters.
+				potential := strings.TrimSuffix(cleanedWord, p)
+				if len([]rune(potential)) >= 1 {
+					cleanedWord = potential
+					break // Only strip one layer of matching particle to be safe
+				}
+			}
+		}
+
+		// Only add if it's meaningful length
+		if len([]rune(cleanedWord)) >= 1 {
+			// Avoid adding single-letter English stopwords that might have bypassed earlier checks
+			if len(cleanedWord) == 1 && stopwords[cleanedWord] {
+				continue
+			}
+			keywords = append(keywords, cleanedWord)
+		}
+	}
+	
+	return keywords
+}
+
+// AutoSearchMemory searches for the most relevant memories using extracted keywords
+// and returns their full text to be injected proactively into the system prompt.
+func AutoSearchMemory(userID, input string) string {
+	keywords := ExtractKeywords(input)
+	if len(keywords) == 0 {
+		return ""
+	}
+
+	// We'll search for the first 3 strong keywords to avoid overly broad searches
+	searchWords := keywords
+	if len(searchWords) > 3 {
+		searchWords = searchWords[:3]
+	}
+
+	var allResults []MemoryEntry
+	seenIDs := make(map[int64]bool)
+
+	for _, kw := range searchWords {
+		results, err := SearchMemories(userID, kw)
+		if err == nil {
+			for _, r := range results {
+				if !seenIDs[r.ID] {
+					allResults = append(allResults, r)
+					seenIDs[r.ID] = true
+				}
+			}
+		}
+	}
+
+	if len(allResults) == 0 {
+		return ""
+	}
+
+	// Limit to top 3 to provide rich but safe context
+	limit := 3
+	if len(allResults) < limit {
+		limit = len(allResults)
+	}
+
+	var rawContextSb strings.Builder
+	for i := 0; i < limit; i++ {
+		r := allResults[i]
+		rawContextSb.WriteString(fmt.Sprintf("\n--- MEMORY ID: %d | DATE: %s ---\n", r.ID, r.CreatedAt.Format("2006-01-02")))
+		rawContextSb.WriteString(fmt.Sprintf("%s\n", r.FullText))
+	}
+	
+	rawContext := rawContextSb.String()
+
+	// Perform server-side memory synthesis
+	syn, err := SynthesizeMemoryContext(userID, input, rawContext)
+	if err != nil {
+		log.Printf("[MCP] Synthesize failed, falling back to raw context: %v", err)
+		return "\n[PROACTIVE MEMORY RETRIEVAL (Raw)]\n" + rawContext
+	}
+
+	return "\n[PROACTIVE MEMORY RETRIEVAL (Synthesized by Background Agent)]\n" + syn
+}
+
+// SynthesizeMemoryContext makes a quick LLM call to extract only the facts relevant to the query 
+// from the raw database records, filtering out noise.
+func SynthesizeMemoryContext(userID, query, rawMemories string) (string, error) {
+	prompt := fmt.Sprintf(`You are a background memory filtering agent.
+Below are raw logs of past conversations between the user and the assistant.
+The user is currently asking or saying: "%s"
+
+Your task is to extract ONLY the exact facts, quotes, or statements from the raw logs that are relevant to the user's current message.
+DO NOT answer the user's message. 
+DO NOT converse.
+DO NOT add any conversational filler.
+If nothing in the logs is relevant, output "NO_RELEVANT_INFO".
+
+Raw Logs:
+%s`, query, rawMemories)
+
+	type Message struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+
+	payload := map[string]interface{}{
+		// Using a standard identifier, the local server should route it to the active model
+		"model": "local-model",
+		"messages": []Message{
+			{Role: "system", Content: "Extract facts concisely. No chat. No markdown unless necessary."},
+			{Role: "user", Content: prompt},
+		},
+		"temperature": 0.1,
+	}
+
+	reqBody, _ := json.Marshal(payload)
+	
+	// Assuming the LM Studio / Local endpoint is running on default port 1234
+	// In a real production app, this should be pulled from configuration.
+	resp, err := http.Post("http://127.0.0.1:1234/v1/chat/completions", "application/json", strings.NewReader(string(reqBody)))
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var resData struct {
+		Choices []struct {
+			Message Message `json:"message"`
+		} `json:"choices"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&resData); err != nil {
+		return "", err
+	}
+
+	if len(resData.Choices) > 0 {
+		content := strings.TrimSpace(resData.Choices[0].Message.Content)
+		if content == "NO_RELEVANT_INFO" || content == "" {
+			return "", nil
+		}
+		return content, nil
+	}
+
+	return "", fmt.Errorf("empty response from LLM")
 }
 
 // ReadMemoryDB calls the SQLite db to read full text of a specific memory ID

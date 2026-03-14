@@ -213,31 +213,36 @@ func (a *App) processChatLog(userID string) {
 
 func (a *App) analyzeAndSaveFacts(userID, conversationText, modelID string) error {
 	// Request structured JSON format from the LLM
+	// Request structured JSON format from the LLM
 	prompt := fmt.Sprintf(`Extract ALL useful information from this conversation.
 
 SAVE RULES (VERY IMPORTANT):
 - ANY personal information (names, dates, preferences, family, work, etc.) → MUST SAVE
-- ANY facts, events, opinions, or requests the user shared → MUST SAVE
-- ANY technical discussions, decisions, or problem-solving → MUST SAVE
-- If the user explicitly asks to remember/save something → ABSOLUTELY MUST SAVE
+- ANY facts, persistent events, or long-term ongoing projects the user shared → MUST SAVE
+- If the user explicitly asks to remember/save something for the future → ABSOLUTELY MUST SAVE
 
 SKIP RULES (use NO_IMPORTANT_CONTENT ONLY for these):
-- The conversation is LITERALLY just "hi", "hello", "bye" with zero substance
-- The assistant gave an empty or error response with no user content
+- The conversation is just greetings, "hi", "bye", or empty responses.
+- The user is just sharing a URL or link to be read/summarized (e.g., "https://namu.wiki... 요약").
+- The user is making a one-time request (e.g., "translate this", "summarize", "fix this code block", tool commands).
+- Technical discussions that are solely about fixing a single transient bug.
+- Any transient, one-off, or temporary chat that has NO long-term value for understanding the user.
 
 OUTPUT FORMAT: A single JSON object, no other text.
 { "summary": "...", "keywords": "..." }
 
-- "summary": Concise bullet-point summary of key facts
-- "keywords": Comma-separated tags (e.g. "name, family, preference")
-- If skipping: { "summary": "NO_IMPORTANT_CONTENT", "keywords": "" }
+- "summary": Concise bullet-point summary of key facts.
+- "keywords": Comma-separated tags (e.g. "name, family, preference").
+- If applying ANY of the SKIP RULES, you MUST exactly output:
+{ "summary": "NO_IMPORTANT_CONTENT", "keywords": "" }
+
 
 Conversation:
 %s`, conversationText)
 
 	// Call LLM
 	msgs := []Message{
-		{Role: "system", Content: "You are a memory extraction agent. Output ONLY a raw JSON object. Do NOT output any thinking, reasoning, or explanation. Do NOT use markdown. Just output the JSON."},
+		{Role: "system", Content: "You are a memory extraction agent. Output ONLY a raw JSON object. Do NOT output any thinking, reasoning, or explanation. DO NOT use markdown. Start your response directly with '{'. Direct response only."},
 		{Role: "user", Content: prompt},
 	}
 
@@ -250,10 +255,10 @@ Conversation:
 		Model:       targetModel,
 		Messages:    msgs,
 		Temperature: 0.0,
-		MaxTokens:   1024, // Enough room for thinking output + actual JSON
+		// MaxTokens removed to allow the model to provide full output without truncation.
 	}
 
-	log.Printf("[MemoryWorker] [%s] 📡 Calling LLM at %s with model %s (MaxTokens: 1024)...", userID, a.llmEndpoint, targetModel)
+	log.Printf("[MemoryWorker] [%s] 📡 Calling LLM at %s with model %s (No Token Limit)...", userID, a.llmEndpoint, targetModel)
 	respBody, err := a.callLLM(payload)
 	if err != nil {
 		log.Printf("[MemoryWorker] [%s] ❌ LLM call failed: %v", userID, err)

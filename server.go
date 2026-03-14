@@ -895,11 +895,26 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				extraInstr := mcp.SystemPromptToolUsage(envInfo)
 
 				if enableMemory {
-					// In the new Agentic RAG system, we no longer inject the entire memory file.
-					// Instead, we inject a "Memory Snapshot" — the 10 most recent summaries.
-					// This informs the LLM that memories EXIST, encouraging it to use search_memory/read_memory tools.
+					// 1. Memory Snapshot: 10 most recent summaries
 					snapshot := mcp.GetMemorySnapshot(userID)
-					extraInstr += mcp.SystemPromptMemoryTemplate("", snapshot, "")
+					
+					// 2. Auto-RAG: Proactively search for full context based on the current user request
+					var autoContext string
+					if messages, ok := reqMap["messages"].([]interface{}); ok && len(messages) > 0 {
+						// Find the last user message
+						for i := len(messages) - 1; i >= 0; i-- {
+							if m, ok := messages[i].(map[string]interface{}); ok {
+								if role, ok := m["role"].(string); ok && role == "user" {
+									if content, ok := m["content"].(string); ok {
+										autoContext = mcp.AutoSearchMemory(userID, content)
+										break
+									}
+								}
+							}
+						}
+					}
+
+					extraInstr += mcp.SystemPromptMemoryTemplate("", snapshot, autoContext)
 				}
 
 				foundSystem := false

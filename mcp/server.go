@@ -106,7 +106,7 @@ func GetToolList() []Tool {
 		},
 		{
 			Name:        "search_memory",
-			Description: "Search the user's long-term SQLite memory using keywords. Returns a list of memory IDs, summaries, and exact matched keywords. Use this FIRST to find relevant past conversations.",
+			Description: "Search the user's long-term SQLite memory using keywords. Returns ONLY short summaries. CRITICAL: You MUST use 'read_memory' with the returned ID to read the full context before answering the user.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -120,7 +120,7 @@ func GetToolList() []Tool {
 		},
 		{
 			Name:        "read_memory",
-			Description: "Read the full transcription/context of a specific memory by its ID. Use this AFTER search_memory if the summary isn't enough to answer the user's question.",
+			Description: "Read the full transcription/context of a specific memory by its ID. You MUST call this IMMEDIATELY after 'search_memory' to understand the actual details of the memory.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{

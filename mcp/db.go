@@ -116,7 +116,7 @@ func SearchMemories(userID, queryStr string) ([]MemoryEntry, error) {
 	searchPattern := "%" + queryStr + "%"
 
 	query := `
-	SELECT id, user_id, summary, keywords, created_at
+	SELECT id, user_id, summary, keywords, full_text, created_at
 	FROM memories
 	WHERE user_id = ? AND (keywords LIKE ? OR summary LIKE ? OR full_text LIKE ?)
 	ORDER BY created_at DESC
@@ -131,10 +131,9 @@ func SearchMemories(userID, queryStr string) ([]MemoryEntry, error) {
 	var results []MemoryEntry
 	for rows.Next() {
 		var m MemoryEntry
-		if err := rows.Scan(&m.ID, &m.UserID, &m.Summary, &m.Keywords, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.UserID, &m.Summary, &m.Keywords, &m.FullText, &m.CreatedAt); err != nil {
 			return nil, err
 		}
-		// Notice we omit full_text to keep search results light
 		results = append(results, m)
 	}
 
