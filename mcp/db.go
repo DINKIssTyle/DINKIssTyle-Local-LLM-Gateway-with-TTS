@@ -63,6 +63,7 @@ func createSchema() error {
 		summary TEXT NOT NULL,
 		keywords TEXT NOT NULL,
 		full_text TEXT NOT NULL,
+		hit_count INTEGER DEFAULT 0,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 	
@@ -72,6 +73,9 @@ func createSchema() error {
 	if err != nil {
 		return fmt.Errorf("failed to create schema: %w", err)
 	}
+
+	// Migration: Add hit_count if it doesn't exist (for existing DBs)
+	_, _ = db.Exec("ALTER TABLE memories ADD COLUMN hit_count INTEGER DEFAULT 0")
 
 	log.Println("[DB] Schema initialized successfully.")
 	return nil
@@ -84,8 +88,8 @@ func InsertMemory(userID, summary, keywords, fullText string) (int64, error) {
 	}
 
 	query := `
-	INSERT INTO memories (user_id, summary, keywords, full_text)
-	VALUES (?, ?, ?, ?)`
+	INSERT INTO memories (user_id, summary, keywords, full_text, hit_count)
+	VALUES (?, ?, ?, ?, 0)`
 
 	result, err := db.Exec(query, userID, summary, keywords, fullText)
 	if err != nil {
@@ -95,6 +99,16 @@ func InsertMemory(userID, summary, keywords, fullText string) (int64, error) {
 	return result.LastInsertId()
 }
 
+// IncrementHitCount increases the hit counter for a specific memory entry.
+func IncrementHitCount(memoryID int64) error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	query := "UPDATE memories SET hit_count = hit_count + 1 WHERE id = ?"
+	_, err := db.Exec(query, memoryID)
+	return err
+}
+
 // MemoryEntry represents a single memory record.
 type MemoryEntry struct {
 	ID        int64     `json:"id"`
@@ -102,6 +116,7 @@ type MemoryEntry struct {
 	Summary   string    `json:"summary"`
 	Keywords  string    `json:"keywords"`
 	FullText  string    `json:"full_text"`
+	HitCount  int       `json:"hit_count"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -116,7 +131,7 @@ func SearchMemories(userID, queryStr string) ([]MemoryEntry, error) {
 	searchPattern := "%" + queryStr + "%"
 
 	query := `
-	SELECT id, user_id, summary, keywords, full_text, created_at
+	SELECT id, user_id, summary, keywords, full_text, hit_count, created_at
 	FROM memories
 	WHERE user_id = ? AND (keywords LIKE ? OR summary LIKE ? OR full_text LIKE ?)
 	ORDER BY created_at DESC
@@ -131,7 +146,7 @@ func SearchMemories(userID, queryStr string) ([]MemoryEntry, error) {
 	var results []MemoryEntry
 	for rows.Next() {
 		var m MemoryEntry
-		if err := rows.Scan(&m.ID, &m.UserID, &m.Summary, &m.Keywords, &m.FullText, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.UserID, &m.Summary, &m.Keywords, &m.FullText, &m.HitCount, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		results = append(results, m)
@@ -147,7 +162,7 @@ func SearchMemoriesByRecent(userID string, limit int) ([]MemoryEntry, error) {
 	}
 
 	query := `
-	SELECT id, user_id, summary, keywords, created_at
+	SELECT id, user_id, summary, keywords, hit_count, created_at
 	FROM memories
 	WHERE user_id = ?
 	ORDER BY created_at DESC
@@ -162,7 +177,7 @@ func SearchMemoriesByRecent(userID string, limit int) ([]MemoryEntry, error) {
 	var results []MemoryEntry
 	for rows.Next() {
 		var m MemoryEntry
-		if err := rows.Scan(&m.ID, &m.UserID, &m.Summary, &m.Keywords, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.UserID, &m.Summary, &m.Keywords, &m.HitCount, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		results = append(results, m)
@@ -179,11 +194,11 @@ func ReadMemory(userID string, memoryID int64) (MemoryEntry, error) {
 	}
 
 	query := `
-	SELECT id, user_id, summary, keywords, full_text, created_at
+	SELECT id, user_id, summary, keywords, full_text, hit_count, created_at
 	FROM memories
 	WHERE id = ? AND user_id = ?`
 
-	err := db.QueryRow(query, memoryID, userID).Scan(&m.ID, &m.UserID, &m.Summary, &m.Keywords, &m.FullText, &m.CreatedAt)
+	err := db.QueryRow(query, memoryID, userID).Scan(&m.ID, &m.UserID, &m.Summary, &m.Keywords, &m.FullText, &m.HitCount, &m.CreatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return m, fmt.Errorf("memory not found")

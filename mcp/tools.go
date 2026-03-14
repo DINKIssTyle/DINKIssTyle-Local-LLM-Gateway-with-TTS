@@ -419,11 +419,11 @@ func ExtractKeywords(input string) []string {
 // and returns their full text to be injected proactively into the system prompt.
 func AutoSearchMemory(userID, input string) string {
 	keywords := ExtractKeywords(input)
+	log.Printf("[MCP] AutoSearchMemory: Input=%q, Keywords=%v", input, keywords)
 	if len(keywords) == 0 {
 		return ""
 	}
 
-	// We'll search for the first 3 strong keywords to avoid overly broad searches
 	searchWords := keywords
 	if len(searchWords) > 3 {
 		searchWords = searchWords[:3]
@@ -435,12 +435,15 @@ func AutoSearchMemory(userID, input string) string {
 	for _, kw := range searchWords {
 		results, err := SearchMemories(userID, kw)
 		if err == nil {
+			log.Printf("[MCP] AutoSearchMemory: Keyword %q found %d results", kw, len(results))
 			for _, r := range results {
 				if !seenIDs[r.ID] {
 					allResults = append(allResults, r)
 					seenIDs[r.ID] = true
 				}
 			}
+		} else {
+			log.Printf("[MCP] AutoSearchMemory: Search failed for %q: %v", kw, err)
 		}
 	}
 
@@ -459,6 +462,13 @@ func AutoSearchMemory(userID, input string) string {
 		r := allResults[i]
 		rawContextSb.WriteString(fmt.Sprintf("\n--- MEMORY ID: %d | DATE: %s ---\n", r.ID, r.CreatedAt.Format("2006-01-02")))
 		rawContextSb.WriteString(fmt.Sprintf("%s\n", r.FullText))
+
+		// Increment hit count for tracking relevance
+		if err := IncrementHitCount(r.ID); err != nil {
+			log.Printf("[MCP] Failed to increment hit count for ID %d: %v", r.ID, err)
+		} else {
+			log.Printf("[MCP] IncrementHitCount success for ID %d", r.ID)
+		}
 	}
 	
 	rawContext := rawContextSb.String()
@@ -506,9 +516,17 @@ Raw Logs:
 
 	reqBody, _ := json.Marshal(payload)
 	
-	// Assuming the LM Studio / Local endpoint is running on default port 1234
-	// In a real production app, this should be pulled from configuration.
-	resp, err := http.Post("http://127.0.0.1:1234/v1/chat/completions", "application/json", strings.NewReader(string(reqBody)))
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", "http://127.0.0.1:1234/v1/chat/completions", strings.NewReader(string(reqBody)))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -523,6 +541,7 @@ Raw Logs:
 	if err := json.NewDecoder(resp.Body).Decode(&resData); err != nil {
 		return "", err
 	}
+
 
 	if len(resData.Choices) > 0 {
 		content := strings.TrimSpace(resData.Choices[0].Message.Content)
