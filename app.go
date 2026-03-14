@@ -335,8 +335,8 @@ func (a *App) startup(ctx context.Context) {
 	// Reload config now that paths are set up and files potentially copied
 	a.loadConfig()
 
-	// Start Async Memory Worker
-	a.StartMemoryWorker()
+	// Start Async Memory Worker (Disabled: Transitioned to real-time raw-to-DB model)
+	// a.StartMemoryWorker()
 
 	// Check for Auto Start Server
 	if a.GetAutoStartServer() {

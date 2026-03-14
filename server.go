@@ -1057,7 +1057,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 	// Shared turn-state variables
 	fullResponse := ""
-	memoryLogged := false
 	var messagesForMemory []map[string]interface{}
 	needsCorrection := false
 	var badContentCapture string
@@ -1227,8 +1226,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				// 1. Check for Standard OpenAI [DONE]
 				if dataStr == "[DONE]" {
 					log.Println("[handleChat-DEBUG] [DONE] signal received (Standard)")
-					// If buffering for tools, flush any remaining buffer as content before sending DONE
-					if toolPattern != nil && isBuffering && len(buffer) > 0 {
+					// If buffering, flush any remaining buffer as content before sending DONE
+					if isBuffering && len(buffer) > 0 {
 						payload := map[string]interface{}{
 							"choices": []interface{}{
 								map[string]interface{}{
@@ -1247,10 +1246,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 					// Just forward the DONE
 					fmt.Fprintf(w, "%s\n\n", line)
 					flusher.Flush()
-
-					if enableMemory {
-						checkAndLogMemoryWith(userID, messagesForMemory, fullResponse, &memoryLogged, modelID)
-					}
 					continue
 				}
 
@@ -1306,9 +1301,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 							// Forward
 							fmt.Fprintf(w, "%s\n\n", line)
 							flusher.Flush()
-							if enableMemory {
-								checkAndLogMemoryWith(userID, messagesForMemory, fullResponse, &memoryLogged, modelID)
-							}
 							continue
 						} else {
 							// Forward other events (start, progress, etc)
@@ -1846,6 +1838,21 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				for correctionScanner.Scan() {
 					line := correctionScanner.Text()
 					if strings.HasPrefix(line, "data: ") {
+						dataStr := strings.TrimPrefix(line, "data: ")
+						if dataStr != "[DONE]" {
+							var chunk map[string]interface{}
+							if err := json.Unmarshal([]byte(dataStr), &chunk); err == nil {
+								if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
+									if choice, ok := choices[0].(map[string]interface{}); ok {
+										if delta, ok := choice["delta"].(map[string]interface{}); ok {
+											if c, ok := delta["content"].(string); ok {
+												fullResponse += c
+											}
+										}
+									}
+								}
+							}
+						}
 						fmt.Fprintf(w, "%s\n\n", line)
 						flusher.Flush()
 					}
@@ -1856,22 +1863,10 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		}
 	}
 
-	// 🔍 FALLBACK logging
-	if enableMemory && len(messagesForMemory) > 0 && fullResponse != "" && !memoryLogged {
-		log.Printf("[handleChat] Fallback Memory Logging Triggered")
+	// 🔍 FINAL Memory Logging: Catch everything after all turns and corrections
+	if enableMemory && len(messagesForMemory) > 0 && fullResponse != "" {
+		log.Printf("[handleChat] Final Assistant Response Captured (Len: %d). Logging to DB...", len(fullResponse))
 		go logChatToHistory(userID, messagesForMemory, fullResponse, modelID)
-	}
-}
-
-// Helper to dedup memory check code
-func checkAndLogMemoryWith(userID string, messages []map[string]interface{}, response string, msgLogged *bool, modelID string) {
-	if *msgLogged {
-		return
-	}
-	if len(messages) > 0 && response != "" {
-		log.Printf("[handleChat] Stream End Trigger. Logging to memory...")
-		go logChatToHistory(userID, messages, response, modelID)
-		*msgLogged = true
 	}
 }
 
@@ -2094,50 +2089,16 @@ func logChatToHistory(userID string, messages []map[string]interface{}, assistan
 		return
 	}
 
-	// 2. Append to chat_history.log
-	entry := map[string]interface{}{
-		"timestamp": time.Now().Format(time.RFC3339),
-		"user":      lastUserMsg,
-		"assistant": assistantResponse,
-		"model":     modelID,
+	// 2. Real-time Raw Memory Storage: Insert directly into SQLite
+	fullContext := fmt.Sprintf("User: %s\nAssistant: %s", lastUserMsg, assistantResponse)
+	
+	// We'll leave summary/keywords empty for raw interactions to keep the DB clean as requested.
+	id, err := mcp.InsertMemory(userID, "", "", fullContext)
+	if err != nil {
+		log.Printf("[AsyncMemory] ❌ Failed to insert raw memory to DB: %v", err)
+	} else {
+		log.Printf("[AsyncMemory] ✅ Saved raw interaction to DB (ID: %d) for user %s", id, userID)
 	}
-
-	data, _ := json.Marshal(entry)
-	logPath, _ := mcp.GetUserMemoryFilePath(userID, "chat_history.log")
-	os.MkdirAll(filepath.Dir(logPath), 0755)
-
-	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err == nil {
-		f.WriteString(string(data) + "\n")
-		f.Close()
-	}
-
-	// 3. High-Fidelity Extraction & Active Context Update
-	// Use LLM to extract long-term facts and validate them
-	go func() {
-		// A. Extract Candidate Memories
-		summaryPrompt := mcp.ChatSummaryPromptTemplate(fmt.Sprintf("User: %s\nAssistant: %s", lastUserMsg, assistantResponse))
-		candidates := callLLMInternal(summaryPrompt, modelID)
-
-		if candidates == "" || strings.Contains(candidates, "NO_IMPORTANT_CONTENT") {
-			log.Printf("[AsyncMemory] No important content extracted for %s", userID)
-			return
-		}
-
-		// B. Validate Candidate Memories (The Validation Gate)
-		validationPrompt := mcp.MemoryValidationPromptTemplate(candidates)
-		validated := callLLMInternal(validationPrompt, modelID)
-
-		if validated == "" || strings.Contains(validated, "NONE") {
-			log.Printf("[AsyncMemory] Memory validation gate rejected candidates for %s", userID)
-			return
-		}
-
-		// C. Update Active Context
-		activePath, _ := mcp.GetUserMemoryFilePath(userID, "active_context.md")
-		os.WriteFile(activePath, []byte(validated), 0644)
-		log.Printf("[AsyncMemory] High-fidelity active context updated for %s", userID)
-	}()
 }
 
 // sendSSEError sends a properly formatted SSE error event to the client

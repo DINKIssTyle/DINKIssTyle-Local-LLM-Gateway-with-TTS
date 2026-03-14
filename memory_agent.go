@@ -216,25 +216,25 @@ func (a *App) analyzeAndSaveFacts(userID, conversationText, modelID string) erro
 	// Request structured JSON format from the LLM
 	prompt := fmt.Sprintf(`Extract ALL useful information from this conversation.
 
-SAVE RULES (VERY IMPORTANT):
-- ANY personal information (names, dates, preferences, family, work, etc.) → MUST SAVE
-- ANY facts, persistent events, or long-term ongoing projects the user shared → MUST SAVE
-- If the user explicitly asks to remember/save something for the future → ABSOLUTELY MUST SAVE
+- ANY facts, persistent user preferences, or long-term events shared by the user → MUST SAVE
+- Significant technical decisions or architectural patterns discussed → MUST SAVE
+- If the user explicitly says "remember this" or "save this" → ABSOLUTELY MUST SAVE
 
-SKIP RULES (use NO_IMPORTANT_CONTENT ONLY for these):
-- The conversation is just greetings, "hi", "bye", or empty responses.
-- The user is just sharing a URL or link to be read/summarized (e.g., "https://namu.wiki... 요약").
-- The user is making a one-time request (e.g., "translate this", "summarize", "fix this code block", tool commands).
-- Technical discussions that are solely about fixing a single transient bug.
-- Any transient, one-off, or temporary chat that has NO long-term value for understanding the user.
+SKIP RULES (Output { "summary": "NO_IMPORTANT_CONTENT", "keywords": "" } ONLY):
+- Greetings, small talk, or empty/trivial responses ("hi", "ok", "thanks").
+- User pastes a URL or file just to have it summarized, translated, or analyzed.
+- One-off tool commands, code snippet fixes, or transient troubleshooting.
+- Questions from the user that are clearly just seeking immediate help (e.g. "how do I run this?").
+- Any information that does NOT have long-term value for future conversations.
 
 OUTPUT FORMAT: A single JSON object, no other text.
 { "summary": "...", "keywords": "..." }
 
-- "summary": Concise bullet-point summary of key facts.
-- "keywords": Comma-separated tags (e.g. "name, family, preference").
-- If applying ANY of the SKIP RULES, you MUST exactly output:
+- "summary": Concise list of permanent facts.
+- "keywords": Comma-separated tags.
+- IF SKIP RULES APPLY, YOU MUST OUTPUT EXACTLY:
 { "summary": "NO_IMPORTANT_CONTENT", "keywords": "" }
+
 
 
 Conversation:
@@ -426,7 +426,7 @@ func (a *App) callLLM(payload interface{}) (string, error) {
 		req.Header.Set("Authorization", "Bearer "+a.llmApiToken)
 	}
 
-	client := &http.Client{Timeout: 60 * time.Second} // Use a standard 60s timeout, MaxTokens will prevent massive generation
+	client := &http.Client{Timeout: 300 * time.Second} // Increased to 300s to handle heavy models or long contexts
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[MemoryWorker-LLM] ❌ HTTP request failed: %v", err)
