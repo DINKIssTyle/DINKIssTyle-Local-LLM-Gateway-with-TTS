@@ -179,6 +179,10 @@ body {
   align-items: flex-start;
 }
 
+.message.system {
+  align-items: flex-start;
+}
+
 .message-label {
   display: inline-flex;
   align-items: center;
@@ -197,6 +201,10 @@ body {
 
 .message.user .message-label {
   color: #9bc7ff;
+}
+
+.message.system .message-label {
+  color: var(--text-subtle);
 }
 
 .message-inner {
@@ -439,9 +447,36 @@ body {
   width: 100%;
   border-collapse: collapse;
   margin-bottom: 1rem;
-  display: block;
-  overflow-x: auto;
-  /* Allow horizontal scroll for wide tables */
+  display: table;
+  table-layout: auto;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.markdown-body th,
+.markdown-body td {
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-body th:last-child,
+.markdown-body td:last-child {
+  border-right: none;
+}
+
+.markdown-body tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.markdown-body th {
+  color: #b8d8ff;
+  background: rgba(88, 166, 255, 0.08);
+  font-weight: 700;
 }
 
 .markdown-body img {
@@ -519,6 +554,15 @@ body {
 .tool-status-card {
   background: transparent;
   border: none;
+}
+
+.system-strip-card {
+  width: min(100%, 42rem);
+}
+
+.system-strip-header {
+  cursor: default;
+  background: rgba(95, 140, 255, 0.06);
 }
 
 .tool-strip-header {

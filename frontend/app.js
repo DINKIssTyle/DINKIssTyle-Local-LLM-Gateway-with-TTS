@@ -489,6 +489,7 @@ const sendBtn = document.getElementById('send-btn');
 const imagePreviewVal = document.getElementById('image-preview');
 const previewContainer = document.getElementById('preview-container');
 const chatProgressDock = document.getElementById('chat-progress-dock');
+const inputArea = document.getElementById('input-area');
 
 // Audio Context for Auto-play
 let audioContextUnlocked = false;
@@ -1562,7 +1563,10 @@ async function ensureStatefulContextBudget(nextUserText = '') {
     pendingStatefulResetReason = 'auto_summary_reset';
     statefulLastInputTokens = estimateTokensFromText(statefulSummary);
     statefulLastOutputTokens = 0;
-    showToast(`Stateful context compacted (${statefulPeakInputTokens || 0} -> ~${statefulLastInputTokens} tokens)`);
+    appendMessage({
+        role: 'system',
+        content: `Stateful context compacted ${statefulPeakInputTokens || 0} -> ~${statefulLastInputTokens}`
+    });
 }
 
 
@@ -2221,6 +2225,19 @@ function appendMessage(msg) {
                 ${msg.image ? `<img src="${msg.image}" class="message-image">` : ''}
                 <div class="message-bubble">${escapeHtml(textContent)}</div>
             </div>`;
+    } else if (msg.role === 'system') {
+        div.innerHTML = `
+            <div class="message-inner">
+                <div class="message-label">System</div>
+                <div class="assistant-sections">
+                    <section class="system-strip-card">
+                        <div class="reasoning-header system-strip-header">
+                            <span class="reasoning-chevron material-icons-round">info</span>
+                            <span class="reasoning-title">${escapeHtml(textContent)}</span>
+                        </div>
+                    </section>
+                </div>
+            </div>`;
     } else {
         div.innerHTML = `
             <div class="message-inner">
@@ -2471,6 +2488,7 @@ function showToast(message, isError = false) {
         <span class="material-icons-round" style="color: ${color}">${icon}</span>
         <span>${message}</span>
     `;
+    toast.style.bottom = `${getToastBottomOffset()}px`;
 
     // Trigger reflow
     void toast.offsetWidth;
@@ -2489,6 +2507,12 @@ function speakMessageFromBtn(btn) {
     if (bubble) {
         speakMessage(bubble.innerText, btn);
     }
+}
+
+function getToastBottomOffset() {
+    if (!inputArea) return 20;
+    const rect = inputArea.getBoundingClientRect();
+    return Math.max(20, window.innerHeight - rect.top + 16);
 }
 
 /**
