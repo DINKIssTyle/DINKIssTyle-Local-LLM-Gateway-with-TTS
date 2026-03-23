@@ -12,10 +12,13 @@ func SystemPromptToolUsage(envInfo string) string {
 		"1. For any tool use, output exactly one valid <tool_call> block.\n"+
 		"2. If no tool is needed, answer normally.\n"+
 		"3. Avoid search_web or read_web_page for person identification or image description unless explicitly asked.\n"+
-		"4. CURRENT_TIME: %s", time.Now().Format("2006-01-02 15:04:05 Monday"))
+		"4. Web-reading tools may return a buffered source handle instead of the full text to save context.\n"+
+		"5. After search_web, read_web_page, naver_search, or namu_wiki, call read_buffered_source with source_id and the user's actual question when you need detailed evidence.\n"+
+		"6. If read_buffered_source omits source_id, it will use the most recent buffered source for this user.\n"+
+		"7. CURRENT_TIME: %s", time.Now().Format("2006-01-02 15:04:05 Monday"))
 
 	if envInfo != "" {
-		prompt += fmt.Sprintf("\n5. ENVIRONMENT INFO:\n%s", envInfo)
+		prompt += fmt.Sprintf("\n8. ENVIRONMENT INFO:\n%s", envInfo)
 	}
 
 	return prompt
