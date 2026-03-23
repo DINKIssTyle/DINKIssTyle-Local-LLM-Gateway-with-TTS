@@ -392,27 +392,42 @@ func ExtractKeywords(input string) []string {
 		cleanedWord := w
 		for _, p := range particles {
 			if strings.HasSuffix(cleanedWord, p) {
-				// Only strip if the remaining word is at least 1 Korean character (approx 3 bytes)
-				// or 2 English characters.
 				potential := strings.TrimSuffix(cleanedWord, p)
 				if len([]rune(potential)) >= 1 {
 					cleanedWord = potential
-					break // Only strip one layer of matching particle to be safe
+					break
 				}
+			}
+		}
+
+		// Priority keywords (relations, etc) - if they are part of a word, keep them
+		priorities := []string{"아내", "배우자", "아들", "딸", "부모", "아버지", "어머니", "생일", "전화번호", "주소", "이름"}
+		for _, p := range priorities {
+			if strings.Contains(w, p) {
+				keywords = append(keywords, p)
 			}
 		}
 
 		// Only add if it's meaningful length
 		if len([]rune(cleanedWord)) >= 1 {
-			// Avoid adding single-letter English stopwords that might have bypassed earlier checks
 			if len(cleanedWord) == 1 && stopwords[cleanedWord] {
 				continue
 			}
 			keywords = append(keywords, cleanedWord)
 		}
 	}
+
+	// Dedup keywords
+	uniqueMap := make(map[string]bool)
+	var finalKeywords []string
+	for _, k := range keywords {
+		if !uniqueMap[k] {
+			finalKeywords = append(finalKeywords, k)
+			uniqueMap[k] = true
+		}
+	}
 	
-	return keywords
+	return finalKeywords
 }
 
 // AutoSearchMemory searches for the most relevant memories using extracted keywords
@@ -424,35 +439,50 @@ func AutoSearchMemory(userID, input string) string {
 		return ""
 	}
 
+	var allResults []MemoryEntry
+	seenIDs := make(map[int64]bool)
+
+	// Step 1: Search with top 3 keywords (Priority)
 	searchWords := keywords
 	if len(searchWords) > 3 {
 		searchWords = searchWords[:3]
 	}
 
-	var allResults []MemoryEntry
-	seenIDs := make(map[int64]bool)
-
-	for _, kw := range searchWords {
-		results, err := SearchMemories(userID, kw)
-		if err == nil {
-			log.Printf("[MCP] AutoSearchMemory: Keyword %q found %d results", kw, len(results))
-			for _, r := range results {
-				if !seenIDs[r.ID] {
-					allResults = append(allResults, r)
-					seenIDs[r.ID] = true
+	runSearch := func(words []string) {
+		for _, kw := range words {
+			results, err := SearchMemories(userID, kw)
+			if err == nil {
+				if len(results) > 0 {
+					log.Printf("[MCP] AutoSearchMemory: Keyword %q found %d results", kw, len(results))
+				}
+				for _, r := range results {
+					if !seenIDs[r.ID] {
+						allResults = append(allResults, r)
+						seenIDs[r.ID] = true
+					}
 				}
 			}
-		} else {
-			log.Printf("[MCP] AutoSearchMemory: Search failed for %q: %v", kw, err)
 		}
+	}
+
+	runSearch(searchWords)
+
+	// Step 2: Retry with remaining keywords if no results found
+	if len(allResults) == 0 && len(keywords) > 3 {
+		log.Printf("[MCP] AutoSearchMemory: No results in Step 1. Retrying with next keywords.")
+		nextWords := keywords[3:]
+		if len(nextWords) > 5 {
+			nextWords = nextWords[:5]
+		}
+		runSearch(nextWords)
 	}
 
 	if len(allResults) == 0 {
 		return ""
 	}
 
-	// Limit to top 3 to provide rich but safe context
-	limit := 3
+	// Limit to top 5 for synthesis (increased from 3 to allow more discovery)
+	limit := 5
 	if len(allResults) < limit {
 		limit = len(allResults)
 	}
@@ -460,15 +490,23 @@ func AutoSearchMemory(userID, input string) string {
 	var rawContextSb strings.Builder
 	for i := 0; i < limit; i++ {
 		r := allResults[i]
-		rawContextSb.WriteString(fmt.Sprintf("\n--- MEMORY ID: %d | DATE: %s ---\n", r.ID, r.CreatedAt.Format("2006-01-02")))
-		rawContextSb.WriteString(fmt.Sprintf("%s\n", r.FullText))
-
-		// Increment hit count for tracking relevance
-		if err := IncrementHitCount(r.ID); err != nil {
-			log.Printf("[MCP] Failed to increment hit count for ID %d: %v", r.ID, err)
-		} else {
-			log.Printf("[MCP] IncrementHitCount success for ID %d", r.ID)
+		
+		// Metadata formatting: Handle empty summary/keywords gracefully
+		displaySummary := r.Summary
+		if displaySummary == "" {
+			displaySummary = "[Raw Interaction Record]"
 		}
+		displayKeywords := r.Keywords
+		if displayKeywords == "" {
+			displayKeywords = "[No Tags]"
+		}
+
+		rawContextSb.WriteString(fmt.Sprintf("\n--- MEMORY ID: %d | DATE: %s | KEYWORDS: %s ---\n", r.ID, r.CreatedAt.Format("2006-01-02"), displayKeywords))
+		rawContextSb.WriteString(fmt.Sprintf("Summary: %s\n", displaySummary))
+		rawContextSb.WriteString(fmt.Sprintf("Content: %s\n", r.FullText))
+
+		// Increment hit count
+		_ = IncrementHitCount(r.ID) 
 	}
 	
 	rawContext := rawContextSb.String()
@@ -480,7 +518,7 @@ func AutoSearchMemory(userID, input string) string {
 		return "\n[PROACTIVE MEMORY RETRIEVAL (Raw)]\n" + rawContext
 	}
 
-	return "\n[PROACTIVE MEMORY RETRIEVAL (Synthesized by Background Agent)]\n" + syn
+	return "\n[PROACTIVE MEMORY RETRIEVAL (Synthesized)]\n" + syn
 }
 
 // SynthesizeMemoryContext makes a quick LLM call to extract only the facts relevant to the query 

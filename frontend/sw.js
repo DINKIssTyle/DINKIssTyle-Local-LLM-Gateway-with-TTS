@@ -3,13 +3,15 @@
  * Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
  */
 
-const CACHE_NAME = 'dkst-chat-v3';
+const CACHE_NAME = 'dkst-chat-v4';
 const ASSETS = [
     '/',
     '/index.html',
     '/web.html',
     '/style.css',
+    '/icons.css',
     '/app.js',
+    '/fonts/MaterialIconsRound-Regular.otf',
     '/favicon-32x32.png',
     '/apple-touch-icon.png'
 ];

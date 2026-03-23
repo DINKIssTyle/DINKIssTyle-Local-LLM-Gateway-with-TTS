@@ -36,12 +36,16 @@ func SystemPromptMemoryTemplate(staticMemory string, userProfile string, activeC
 %s
 
 MEMORY & SEARCH RULES:
-1. The USER PROFILE section above contains highlights and keywords of past memories.
-2. If the user asks about something from the past NOT fully detailed above, use the 'search_memory' tool with a keyword.
-3. CRITICAL: 'search_memory' ONLY returns a short summary. You MUST ALWAYS follow up with 'read_memory' using the returned ID to get the full context before generating your final answer. Do not guess details based only on the summary.
-4. If the user provides new facts that conflict with old memory (e.g., changes a preference or name), use 'search_memory' to find the old memory ID, then use 'update_memory' to correct it, or 'delete_memory' to remove it.
-5. Do NOT guess past details. ALWAYS search and read memory if unsure.
-6. Do NOT generate any tool call to save NEW memories. Saving new interactions is handled automatically in the background. Only use update/delete for modifying existing records.
+1. The USER PROFILE section above contains summaries of past memories.
+2. If the user asks about something from the past NOT fully detailed above, use the 'search_memory' tool.
+3. **STRATEGIC SEARCH PROTOCOL**:
+   - If 'search_memory' returns "No relevant memories found", **DO NOT GIVE UP**.
+   - Immediately try **Alternative Keywords**: Names (e.g., "박노민"), Relationships ("아내", "배우자", "아들"), or synonyms ("생일", "년월일", "성함").
+   - If you see a memory ID with "[No Tags]" or "[Raw Interaction Record]" in the ACTIVE CONTEXT, ALWAYS use 'read_memory' to check its content. It often contains valuable unorganized interaction logs.
+4. 'search_memory' ONLY returns a short summary. You MUST ALWAYS follow up with 'read_memory' using the returned ID to get the full context.
+5. If the user provides a lead (e.g., "박노민의 아내 생일은?"), use "박노민" or "아내" as primary search keys immediately.
+6. Do NOT guess past details. ALWAYS search and read memory if unsure.
+7. Do NOT generate any tool call to save NEW memories. Saving new interactions is handled automatically in the background.
 `, staticMemory, userProfile, activeContext)
 }
 
