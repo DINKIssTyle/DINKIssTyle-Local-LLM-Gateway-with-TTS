@@ -590,6 +590,34 @@ body {
   line-height: 1.5;
 }
 
+.tool-card-summary.is-running::after {
+  content: '';
+  display: inline-block;
+  width: 1.4em;
+  text-align: left;
+  overflow: hidden;
+  vertical-align: bottom;
+  animation: runningDots 1.2s steps(4, end) infinite;
+}
+
+@keyframes runningDots {
+  0% {
+    content: '';
+  }
+  25% {
+    content: '.';
+  }
+  50% {
+    content: '..';
+  }
+  75% {
+    content: '...';
+  }
+  100% {
+    content: '';
+  }
+}
+
 .tool-card-args {
   margin-top: 10px;
   padding: 10px 12px;

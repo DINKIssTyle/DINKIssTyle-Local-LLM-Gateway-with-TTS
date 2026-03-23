@@ -2013,9 +2013,9 @@ async function processStream(response, elementId) {
 
                     // Handle MCP Tool Calls - Display only, NO SPEECH
                     else if (json.type === 'tool_call.start') {
-                        const toolName = json.tool || 'Running...';
+                        const toolName = json.tool || 'Running';
                         lastToolCallHtml = toolName;
-                        setToolCardState(elementId, 'running', 'Waiting for arguments...', null, toolName);
+                        setToolCardState(elementId, 'running', 'Running', null, toolName);
                     }
                     else if (json.type === 'tool_call.arguments' && json.arguments) {
                         const toolName = json.tool || 'Tool';
@@ -2387,7 +2387,7 @@ function ensureToolCard(elementId, toolName = 'Tool') {
         </button>
         <div class="tool-card-body">
             <div class="tool-card-name">${escapeHtml(toolName)}</div>
-            <div class="tool-card-summary">Waiting for arguments...</div>
+            <div class="tool-card-summary is-running">Running</div>
             <pre class="tool-card-args" hidden></pre>
         </div>`;
     toolsHost.appendChild(card);
@@ -2415,7 +2415,6 @@ function setToolCardState(elementId, state, summary = '', args = null, toolName 
     }
 
     const titleEl = card.querySelector('.reasoning-title');
-    const startedAt = Number(card.dataset.startedAt || Date.now());
     const summaryEl = card.querySelector('.tool-card-summary');
     const argsEl = card.querySelector('.tool-card-args');
     const activeToolName = toolName || card.dataset.toolName || 'Tool';
@@ -2436,13 +2435,13 @@ function setToolCardState(elementId, state, summary = '', args = null, toolName 
     }
 
     if (titleEl) {
-        if (state === 'success' || state === 'failure') {
-            titleEl.textContent = `MCP · ${activeToolName} · ${formatStripDuration(startedAt)}`;
-        } else {
-            titleEl.textContent = `MCP · ${activeToolName}`;
-        }
+        titleEl.textContent = `MCP · ${activeToolName}`;
     }
     if (summaryEl && summary) summaryEl.textContent = summary;
+    if (summaryEl) {
+        const shouldAnimateRunning = state === 'running' && /^running$/i.test((summaryEl.textContent || '').trim());
+        summaryEl.classList.toggle('is-running', shouldAnimateRunning);
+    }
 
     if (argsEl) {
         if (args && typeof args === 'object' && Object.keys(args).length > 0) {
