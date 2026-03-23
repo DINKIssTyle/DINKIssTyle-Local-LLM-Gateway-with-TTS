@@ -488,6 +488,7 @@ const messageInput = document.getElementById('message-input');
 const sendBtn = document.getElementById('send-btn');
 const imagePreviewVal = document.getElementById('image-preview');
 const previewContainer = document.getElementById('preview-container');
+const chatProgressDock = document.getElementById('chat-progress-dock');
 
 // Audio Context for Auto-play
 let audioContextUnlocked = false;
@@ -1712,6 +1713,7 @@ function stopGeneration() {
         abortController.abort();
         abortController = null;
     }
+    hideProgressDock();
     // Stop any currently playing audio/TTS
     stopAllAudio();
 }
@@ -1986,69 +1988,24 @@ async function processStream(response, elementId) {
                     // Handle MCP Tool Calls - Display only, NO SPEECH
                     else if (json.type === 'tool_call.start') {
                         const toolName = json.tool || 'Running...';
-                        // Store the exact HTML to be able to replace it later
-                        lastToolCallHtml = `<span class="tool-status" style="font-size: small; color: gray; display: block; margin: 4px 0;">🛠️ Tool Call: ${toolName}</span>`;
-                        contentToAdd = lastToolCallHtml;
+                        lastToolCallHtml = toolName;
+                        setToolCardState(elementId, 'running', 'Waiting for arguments...', null, toolName);
                     }
                     else if (json.type === 'tool_call.arguments' && json.arguments) {
-                        // Update the last tool call line with arguments
                         const toolName = json.tool || 'Tool';
-                        let argsDisplay = '';
-
-                        // Extract specific interesting fields (like 'query' for search)
-                        if (json.arguments.query) {
-                            argsDisplay = ` <span style="font-size: 0.9em;">(Query: "${json.arguments.query}")</span>`;
-                        } else {
-                            // Generic fallback for other args? 
-                            // Only show if small, otherwise might be huge JSON.
-                            // For now, prioritize 'query'.
-                            const keys = Object.keys(json.arguments);
-                            if (keys.length === 1 && typeof json.arguments[keys[0]] === 'string') {
-                                argsDisplay = ` <span style="font-size: 0.9em;">(${keys[0]}: "${json.arguments[keys[0]]}")</span>`;
-                            }
-                        }
-
-                        if (lastToolCallHtml && argsDisplay) {
-                            const newToolCallHtml = `<span class="tool-status" style="font-size: small; color: gray; display: block; margin: 4px 0;">🛠️ Tool Call: ${toolName}${argsDisplay}</span>`;
-
-                            // Replace in fullText
-                            if (fullText.endsWith(lastToolCallHtml)) {
-                                // Calculate start index of the tool call line
-                                const startIndex = fullText.length - lastToolCallHtml.length;
-
-                                fullText = fullText.slice(0, -lastToolCallHtml.length) + newToolCallHtml;
-                                lastToolCallHtml = newToolCallHtml; // Update for next chunk
-                                contentToAdd = null; // Already updated fullText manually
-
-                                // Rewind TTS index if it has already passed the start of this line
-                                // This ensures we re-process the full tag so the regex can strip it cleanly
-                                if (typeof streamingTTSCommittedIndex !== 'undefined' && streamingTTSCommittedIndex > startIndex) {
-                                    // console.log(`[TTS Debug] Rewinding index from ${streamingTTSCommittedIndex} to ${startIndex}`);
-                                    streamingTTSCommittedIndex = startIndex;
-                                    if (typeof streamingTTSBuffer !== 'undefined') {
-                                        streamingTTSBuffer = ""; // Clear buffer to avoid duplication
-                                    }
-                                }
-
-                                // Force UI update since we modified fullText directly
-                                let displayText = fullText;
-                                if (config.hideThink) {
-                                    // ... logic duplicated from below ...
-                                    displayText = displayText.replace(/<think>[\s\S]*?<\/think>/g, '');
-                                    if (displayText.includes('</think>')) displayText = displayText.split('</think>').pop().trim();
-                                    if (displayText.includes('<think>')) displayText = displayText.split('<think>')[0];
-                                }
-                                updateMessageContent(elementId, displayText);
-                            }
-                        }
+                        const summary = json.arguments.query
+                            ? `Query: ${json.arguments.query}`
+                            : 'Arguments received.';
+                        setToolCardState(elementId, 'running', summary, json.arguments, toolName);
                     }
                     else if (json.type === 'tool_call.success') {
-                        contentToAdd = `<span class="tool-status" style="font-size: small; color: gray; display: block; margin: 4px 0;">✅ Tool Finished</span>\n`;
+                        setToolCardState(elementId, 'success', 'Tool execution finished.');
                     }
                     else if (json.type === 'tool_call.failure') {
-                        contentToAdd = `<span class="tool-status" style="font-size: small; color: #ff6b6b; display: block; margin: 4px 0;">❌ Tool Failed: ${json.reason || 'Unknown error'}</span>\n`;
+                        setToolCardState(elementId, 'failure', json.reason || 'Unknown error');
                     }
                     else if (json.type === 'chat.end' && json.result) {
+                        hideProgressDock();
                         if (json.result.response_id) {
                             lastResponseId = json.result.response_id;
                             console.log(`[Stateful] Captured response_id from chat.end: ${lastResponseId}`);
@@ -2065,85 +2022,25 @@ async function processStream(response, elementId) {
                     }
                     // Handle Prompt Processing Progress
                     else if (json.type === 'prompt_processing.progress') {
-                        // console.log('[Progress Debug] Event Received:', json.progress);
-                        const progress = (json.progress * 100).toFixed(2);
-                        const progressId = `progress-${elementId}`;
-                        let progressEl = document.getElementById(progressId);
-
-                        // FIX: elementId already includes 'msg-' prefix
-                        let msgBubble = document.getElementById(elementId);
-                        // console.log('[Progress Debug] MsgBubble:', msgBubble ? 'Found' : 'Not Found');
-
-                        if (msgBubble) {
-                            if (!progressEl) {
-                                // console.log('[Progress Debug] Creating new progress element');
-                                progressEl = document.createElement('div');
-                                progressEl.id = progressId;
-                                progressEl.className = 'progress-status';
-                                progressEl.style.fontSize = '0.8em';
-                                progressEl.style.color = '#888';
-                                progressEl.style.marginTop = '4px';
-                                // progressEl.style.fontStyle = 'italic';
-                                const bubbleContent = msgBubble.querySelector('.message-bubble');
-                                if (bubbleContent) {
-                                    bubbleContent.append(progressEl); // Append to bottom
-                                }
-                            }
-                            progressEl.textContent = `⏳ Processing Prompt: ${progress}%`;
-                        }
+                        renderProgressDock('Processing Prompt', json.progress * 100, 'prompt-processing', false);
                     }
                     // Handle Model Loading Progress (LM Studio Mode)
                     else if (json.type === 'model_load.start') {
                         console.log('[Model Load] Start:', json.model_instance_id);
-                        const loadId = `model-load-${elementId}`;
-                        let loadEl = document.getElementById(loadId);
-                        let msgBubble = document.getElementById(elementId);
-
-                        if (msgBubble && !loadEl) {
-                            loadEl = document.createElement('div');
-                            loadEl.id = loadId;
-                            loadEl.className = 'model-load-status';
-                            loadEl.innerHTML = `
-                                <div style="font-size: 0.8em; color: #888; margin-bottom: 8px;">
-                                    <span>📦 Loading Model...</span>
-                                    <div style="background: var(--border-color); border-radius: 4px; height: 6px; margin-top: 4px; overflow: hidden;">
-                                        <div class="model-load-bar" style="background: var(--accent-color); height: 100%; width: 0%; transition: width 0.2s;"></div>
-                                    </div>
-                                    <span class="model-load-percent" style="font-size: 0.9em;">0%</span>
-                                </div>`;
-                            const bubbleContent = msgBubble.querySelector('.message-bubble');
-                            if (bubbleContent) {
-                                bubbleContent.append(loadEl); // Append to bottom
-                            }
-                        }
+                        renderProgressDock('Loading Model', null, 'model-loading', true);
                     }
                     else if (json.type === 'model_load.progress') {
-                        const loadId = `model-load-${elementId}`;
-                        const loadEl = document.getElementById(loadId);
-                        if (loadEl) {
-                            const percent = (json.progress * 100).toFixed(1);
-                            const bar = loadEl.querySelector('.model-load-bar');
-                            const percentText = loadEl.querySelector('.model-load-percent');
-                            if (bar) bar.style.width = `${percent}%`;
-                            if (percentText) percentText.textContent = `${percent}%`;
-                        }
+                        renderProgressDock('Loading Model', json.progress * 100, 'model-loading', false);
                     }
                     else if (json.type === 'model_load.end') {
                         console.log('[Model Load] End:', json.model_instance_id, 'Time:', json.load_time_seconds);
-                        const loadId = `model-load-${elementId}`;
-                        const loadEl = document.getElementById(loadId);
-                        if (loadEl) {
-                            // Show completion briefly then remove
-                            const bar = loadEl.querySelector('.model-load-bar');
-                            const percentText = loadEl.querySelector('.model-load-percent');
-                            if (bar) bar.style.width = '100%';
-                            if (percentText) percentText.textContent = `✓ Loaded (${json.load_time_seconds?.toFixed(1) || '?'}s)`;
-                            setTimeout(() => loadEl.remove(), 1500);
-                        }
+                        renderProgressDock(`Model Loaded (${json.load_time_seconds?.toFixed(1) || '?'}s)`, 100, 'model-loading', false);
+                        setTimeout(() => hideProgressDock(), 1200);
                     }
                     // Handle Generative Errors (Tool Parsing, etc.)
                     else if (json.type === 'error') {
                         console.error('[SSE Error]', json.error);
+                        hideProgressDock();
                         let errMsg = "Unknown Error";
                         if (json.error && json.error.message) {
                             errMsg = json.error.message;
@@ -2151,23 +2048,15 @@ async function processStream(response, elementId) {
                             errMsg = json.error;
                         }
 
-                        // If we are waiting for a tool call (lastToolCallHtml exists), update it
                         if (lastToolCallHtml) {
-                            contentToAdd = `<span class="tool-status" style="font-size: small; color: #ff6b6b; display: block; margin: 4px 0;">❌ Error: ${errMsg}</span>\n`;
+                            setToolCardState(elementId, 'failure', `Error: ${errMsg}`);
                         } else {
-                            // Otherwise just append as text with error styling
                             contentToAdd = `\n\n**Error:** ${errMsg}\n`;
                         }
                     }
 
-                    // If we have content, remove the progress indicator
                     if (contentToAdd) {
-                        // Remove progress indicator if exists
-                        const progressId = `progress-${elementId}`;
-                        const progressEl = document.getElementById(progressId);
-                        if (progressEl) {
-                            progressEl.remove();
-                        }
+                        hideProgressDock();
 
                         fullText += contentToAdd;
 
@@ -2297,6 +2186,7 @@ async function processStream(response, elementId) {
             throw err; // Re-throw other errors
         }
     } finally {
+        hideProgressDock();
         // Finalize (Save to history even if aborted)
         // Keep only the user-visible answer in history to avoid ballooning context.
         const historyContent = fullText.trim();
@@ -2323,45 +2213,201 @@ function appendMessage(msg) {
     div.className = `message ${msg.role}`;
     if (msg.id) div.id = msg.id;
 
-    let innerHtml = '';
-
-    // Wrapper start
-    innerHtml += `<div class="message-inner">`;
-
-    // Bubble content
-    let bubbleContent = '';
-    if (msg.image) {
-        bubbleContent += `<img src="${msg.image}" class="message-image">`;
-    }
-
     const textContent = msg.content || '';
     if (msg.role === 'user') {
-        bubbleContent += `<div class="message-bubble">${escapeHtml(textContent)}</div>`;
+        div.innerHTML = `
+            <div class="message-inner">
+                <div class="message-label">You</div>
+                ${msg.image ? `<img src="${msg.image}" class="message-image">` : ''}
+                <div class="message-bubble">${escapeHtml(textContent)}</div>
+            </div>`;
     } else {
-        bubbleContent += `<div class="message-bubble"><div class="markdown-body">${marked.parse(textContent)}</div></div>`;
-    }
-
-    innerHtml += bubbleContent;
-
-    // Action Bar (for assistant only)
-    if (msg.role === 'assistant') {
-        innerHtml += `
-            <div class="message-actions">
-                <button class="icon-btn copy-btn" onclick="copyMessage(this)" title="Copy">
-                    <span class="material-icons-round">content_copy</span>
-                </button>
-                <button class="icon-btn speak-btn" onclick="speakMessageFromBtn(this)" title="Speak">
-                    <span class="material-icons-round">volume_up</span>
-                </button>
+        div.innerHTML = `
+            <div class="message-inner">
+                <div class="message-label">Assistant</div>
+                <div class="assistant-sections">
+                    <div class="assistant-reasoning"></div>
+                    <div class="assistant-tools"></div>
+                    <section class="assistant-response-card" ${textContent.trim() ? '' : 'hidden'}>
+                        <div class="message-bubble plain-assistant-bubble">
+                            ${msg.image ? `<img src="${msg.image}" class="message-image">` : ''}
+                            <div class="markdown-body">${marked.parse(textContent)}</div>
+                        </div>
+                    </section>
+                </div>
+                <div class="message-actions" ${textContent.trim() ? '' : 'hidden'}>
+                    <button class="icon-btn copy-btn" onclick="copyMessage(this)" title="Copy">
+                        <span class="material-icons-round">content_copy</span>
+                    </button>
+                    <button class="icon-btn speak-btn" onclick="speakMessageFromBtn(this)" title="Speak">
+                        <span class="material-icons-round">volume_up</span>
+                    </button>
+                </div>
             </div>`;
     }
 
-    // Wrapper end
-    innerHtml += `</div>`;
-
-    div.innerHTML = innerHtml;
     chatMessages.appendChild(div);
     scrollToBottom(wasNearBottom || msg.role === 'user');
+}
+
+function formatThoughtDuration(durationMs = 0) {
+    const totalSeconds = Math.max(0, Math.round(durationMs / 1000));
+    if (totalSeconds < 60) return `Thought for ${totalSeconds}s`;
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return seconds === 0 ? `Thought for ${minutes}m` : `Thought for ${minutes}m ${seconds}s`;
+}
+
+function getAssistantMessageParts(elementId) {
+    const msgEl = document.getElementById(elementId);
+    if (!msgEl) return {};
+    return {
+        msgEl,
+        reasoningHost: msgEl.querySelector('.assistant-reasoning'),
+        toolsHost: msgEl.querySelector('.assistant-tools'),
+        bubble: msgEl.querySelector('.assistant-response-card .message-bubble'),
+        markdownBody: msgEl.querySelector('.assistant-response-card .markdown-body')
+    };
+}
+
+function renderProgressDock(label, percent = null, mode = 'prompt-processing', indeterminate = false) {
+    if (!chatProgressDock) return;
+    const clamped = typeof percent === 'number' ? Math.max(0, Math.min(100, percent)) : null;
+    const cardClass = `llm-progress-card ${mode}${indeterminate ? ' indeterminate' : ''}`;
+    const percentLabel = clamped === null ? '' : `${clamped.toFixed(2)}%`;
+    const width = indeterminate ? '32%' : `${clamped || 0}%`;
+
+    chatProgressDock.hidden = false;
+    chatProgressDock.innerHTML = `
+        <div class="${cardClass}">
+            <div class="llm-progress-text">
+                <span class="llm-progress-label">${escapeHtml(label)}</span>
+                <span class="llm-progress-percent">${escapeHtml(percentLabel)}</span>
+            </div>
+            <div class="llm-progress-track">
+                <div class="llm-progress-fill" style="width: ${width};"></div>
+            </div>
+        </div>`;
+}
+
+function hideProgressDock() {
+    if (!chatProgressDock) return;
+    chatProgressDock.hidden = true;
+    chatProgressDock.innerHTML = '';
+}
+
+function ensureReasoningCard(elementId) {
+    const { reasoningHost } = getAssistantMessageParts(elementId);
+    if (!reasoningHost) return null;
+
+    let card = reasoningHost.querySelector('.reasoning-status');
+    if (!card) {
+        card = document.createElement('section');
+        card.className = 'reasoning-status';
+        card.dataset.collapsed = 'false';
+        card.dataset.startedAt = String(Date.now());
+        card.innerHTML = `
+            <button type="button" class="reasoning-header" onclick="toggleReasoningCard(this)">
+                <span class="reasoning-chevron material-icons-round">play_arrow</span>
+                <span class="reasoning-title">Thinking...</span>
+            </button>
+            <div class="reasoning-body"></div>`;
+        reasoningHost.appendChild(card);
+    }
+
+    return card;
+}
+
+function toggleReasoningCard(btn) {
+    const card = btn.closest('.reasoning-status, .tool-status-card');
+    if (!card) return;
+    const nextCollapsed = card.dataset.collapsed !== 'true';
+    card.dataset.collapsed = nextCollapsed ? 'true' : 'false';
+    card.classList.toggle('collapsed', nextCollapsed);
+}
+
+function formatStripDuration(startedAt, fallbackMs = 0) {
+    const durationMs = startedAt ? Math.max(0, Date.now() - Number(startedAt)) : fallbackMs;
+    return formatThoughtDuration(durationMs);
+}
+
+function ensureToolCard(elementId, toolName = 'Tool') {
+    const { msgEl, toolsHost } = getAssistantMessageParts(elementId);
+    if (!msgEl || !toolsHost) return null;
+
+    const card = document.createElement('section');
+    card.className = 'tool-status-card is-running collapsed';
+    card.id = `${elementId}-tool-${Date.now()}-${toolsHost.children.length}`;
+    card.dataset.collapsed = 'true';
+    card.dataset.toolName = toolName;
+    card.dataset.startedAt = String(Date.now());
+    card.innerHTML = `
+        <button type="button" class="reasoning-header tool-strip-header" onclick="toggleReasoningCard(this)">
+            <span class="reasoning-chevron material-icons-round">play_arrow</span>
+            <span class="reasoning-title">${escapeHtml(`MCP · ${toolName}`)}</span>
+        </button>
+        <div class="tool-card-body">
+            <div class="tool-card-name">${escapeHtml(toolName)}</div>
+            <div class="tool-card-summary">Waiting for arguments...</div>
+            <pre class="tool-card-args" hidden></pre>
+        </div>`;
+    toolsHost.appendChild(card);
+    msgEl.dataset.activeToolCard = card.id;
+    return card;
+}
+
+function getActiveToolCard(elementId) {
+    const { msgEl } = getAssistantMessageParts(elementId);
+    if (!msgEl || !msgEl.dataset.activeToolCard) return null;
+    return document.getElementById(msgEl.dataset.activeToolCard);
+}
+
+function setToolCardState(elementId, state, summary = '', args = null, toolName = '') {
+    let card = getActiveToolCard(elementId);
+    if (!card && state === 'running') {
+        card = ensureToolCard(elementId, toolName || 'Tool');
+    }
+    if (!card) return;
+
+    if (toolName) {
+        const nameEl = card.querySelector('.tool-card-name');
+        if (nameEl) nameEl.textContent = toolName;
+        card.dataset.toolName = toolName;
+    }
+
+    const titleEl = card.querySelector('.reasoning-title');
+    const startedAt = Number(card.dataset.startedAt || Date.now());
+    const summaryEl = card.querySelector('.tool-card-summary');
+    const argsEl = card.querySelector('.tool-card-args');
+    const activeToolName = toolName || card.dataset.toolName || 'Tool';
+
+    card.classList.remove('is-running', 'is-success', 'is-failure');
+    if (state === 'failure') {
+        card.classList.add('is-failure');
+    } else if (state === 'success') {
+        card.classList.add('is-success');
+    } else {
+        card.classList.add('is-running');
+    }
+
+    if (titleEl) {
+        if (state === 'success' || state === 'failure') {
+            titleEl.textContent = `MCP · ${activeToolName} · ${formatStripDuration(startedAt)}`;
+        } else {
+            titleEl.textContent = `MCP · ${activeToolName}`;
+        }
+    }
+    if (summaryEl && summary) summaryEl.textContent = summary;
+
+    if (argsEl) {
+        if (args && typeof args === 'object' && Object.keys(args).length > 0) {
+            argsEl.hidden = false;
+            argsEl.textContent = JSON.stringify(args, null, 2);
+        } else if (typeof args === 'string' && args.trim()) {
+            argsEl.hidden = false;
+            argsEl.textContent = args;
+        }
+    }
 }
 
 // New helper functions
@@ -2492,54 +2538,48 @@ function stopAllAudio() {
 
 // Show/Hide Reasoning Status Helper with Streaming Support
 function showReasoningStatus(elementId, text, isFinal = false) {
-    const statusId = `reasoning-${elementId}`;
-    let statusEl = document.getElementById(statusId);
-    const msgBubble = document.getElementById(elementId);
+    if (config.hideThink) return;
 
-    if (!msgBubble || config.hideThink) return;
+    const card = ensureReasoningCard(elementId);
+    if (!card) return;
 
-    const bubbleContent = msgBubble.querySelector('.message-bubble');
-    if (!bubbleContent) return;
+    const metaEl = card.querySelector('.section-meta');
+    const titleEl = card.querySelector('.reasoning-title');
+    const bodyEl = card.querySelector('.reasoning-body');
+    if (!bodyEl) return;
+
+    const startedAt = Number(card.dataset.startedAt || Date.now());
+    const durationMs = Math.max(0, Date.now() - startedAt);
 
     if (isFinal) {
-        if (statusEl) statusEl.remove();
+        card.classList.add('completed');
+        card.dataset.collapsed = 'true';
+        card.classList.add('collapsed');
+        card.dataset.durationMs = String(durationMs);
+        if (metaEl) metaEl.textContent = 'Done';
+        if (titleEl) titleEl.textContent = formatThoughtDuration(durationMs);
         return;
     }
 
-    if (!statusEl) {
-        statusEl = document.createElement('div');
-        statusEl.id = statusId;
-        statusEl.className = 'reasoning-status';
-        statusEl.style.fontSize = '0.8em';
-        statusEl.style.color = '#888';
-        statusEl.style.marginTop = '4px';
-        statusEl.style.overflow = 'hidden';
-        statusEl.style.whiteSpace = 'pre-wrap';      // Allow wrapping
-        statusEl.style.wordBreak = 'break-word';     // Break long words
-        statusEl.style.maxWidth = '100%';            // Force width constraint
-        statusEl.style.display = 'block';
-        // statusEl.style.textOverflow = 'ellipsis'; // Not needed with wrapping
-        bubbleContent.append(statusEl);
+    let cleanText = (text || '')
+        .replace(/<think>/g, '')
+        .replace(/<\/think>/g, '')
+        .trim();
+
+    if (!cleanText) {
+        cleanText = 'Thinking...';
     }
 
-    // Fixed-length style matching "⏳ Processing Prompt: XX.XX%"
-    // Increased length to show more context as requested
-    const MAX_DISPLAY_LENGTH = 300;
-    const prefix = '💭 Thinking: ';
-
-    if (text) {
-        // Get last part of accumulated reasoning (most recent)
-        // cleanText might contain <think> tags, remove them for cleaner display
-        let cleanText = text.replace(/<think>/g, '').replace(/[\r\n]+/g, ' ').trim();
-
-        // Use tail truncation (show the end) instead of head truncation
-        const truncated = cleanText.length > MAX_DISPLAY_LENGTH
-            ? '...' + cleanText.slice(-MAX_DISPLAY_LENGTH)
-            : cleanText;
-        statusEl.textContent = prefix + truncated;
-    } else {
-        statusEl.textContent = prefix + '...';
+    const MAX_DISPLAY_LENGTH = 2400;
+    if (cleanText.length > MAX_DISPLAY_LENGTH) {
+        cleanText = '...\n' + cleanText.slice(-MAX_DISPLAY_LENGTH);
     }
+
+    card.classList.remove('collapsed');
+    card.dataset.collapsed = 'false';
+    if (metaEl) metaEl.textContent = 'Live';
+    if (titleEl) titleEl.textContent = 'Thinking...';
+    bodyEl.textContent = cleanText;
 }
 
 
@@ -2580,6 +2620,12 @@ function updateMessageContent(id, text) {
 
 
     mdBody.innerHTML = marked.parse(cleanText);
+
+    const responseCard = el.querySelector('.assistant-response-card');
+    const actionBar = el.querySelector('.message-actions');
+    const hasVisibleContent = !!cleanText.trim();
+    if (responseCard) responseCard.hidden = !hasVisibleContent;
+    if (actionBar) actionBar.hidden = !hasVisibleContent;
 
     // Make all links open in new window/tab
     mdBody.querySelectorAll('a').forEach((link) => {
