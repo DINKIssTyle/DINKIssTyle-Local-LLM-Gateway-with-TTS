@@ -32,6 +32,7 @@ let config = {
     disableStateful: false, // LM Studio specific
     statefulTurnLimit: 8,
     statefulCharBudget: 12000,
+    statefulTokenBudget: 10000,
     micLayout: 'none', // 'none', 'left', 'right', 'bottom'
     chatFontSize: 16
 };
@@ -453,6 +454,9 @@ let statefulEstimatedChars = 0;
 let statefulSummary = '';
 let statefulResetCount = 0;
 let pendingStatefulResetReason = null;
+let statefulLastInputTokens = 0;
+let statefulLastOutputTokens = 0;
+let statefulPeakInputTokens = 0;
 
 // Audio State
 let currentAudio = null;
@@ -1441,6 +1445,9 @@ function clearChat() {
     statefulSummary = '';
     statefulResetCount = 0;
     pendingStatefulResetReason = 'manual_clear_chat';
+    statefulLastInputTokens = 0;
+    statefulLastOutputTokens = 0;
+    statefulPeakInputTokens = 0;
     messages = [];
     chatMessages.innerHTML = '';
 }
@@ -1450,6 +1457,8 @@ function clearContext() {
     statefulTurnCount = 0;
     statefulEstimatedChars = statefulSummary.length;
     pendingStatefulResetReason = 'manual_context_reset';
+    statefulLastInputTokens = 0;
+    statefulLastOutputTokens = 0;
     showAlert(t('setting.memory.reset.success') + ' (Context/Session ID Cleared)');
     console.log('[Context] Manual context reset trigger.');
 }
@@ -1496,13 +1505,21 @@ function summarizeMessagesForStatefulReset() {
     return summary.trim();
 }
 
+function estimateTokensFromText(text) {
+    if (!text) return 0;
+    return Math.ceil(String(text).trim().length / 3.5);
+}
+
 function getStatefulRiskMetrics(nextUserText = '') {
     const limitTurns = parseInt(config.statefulTurnLimit, 10) || 8;
     const charBudget = parseInt(config.statefulCharBudget, 10) || 12000;
+    const tokenBudget = parseInt(config.statefulTokenBudget, 10) || 10000;
     const projectedChars = statefulEstimatedChars + (nextUserText ? nextUserText.length : 0);
+    const projectedTokens = statefulLastInputTokens + estimateTokensFromText(nextUserText);
     const turnFactor = Math.min(1, statefulTurnCount / Math.max(limitTurns, 1));
     const charFactor = Math.min(1, projectedChars / Math.max(charBudget, 1));
-    const score = Math.round((turnFactor * 55 + charFactor * 45) * 100) / 100;
+    const tokenFactor = Math.min(1, projectedTokens / Math.max(tokenBudget, 1));
+    const score = Math.round((turnFactor * 20 + charFactor * 15 + tokenFactor * 65) * 100) / 100;
 
     let level = 'low';
     if (score >= 0.9) level = 'critical';
@@ -1513,8 +1530,10 @@ function getStatefulRiskMetrics(nextUserText = '') {
         score,
         level,
         projectedChars,
+        projectedTokens,
         turnLimit: limitTurns,
-        charBudget
+        charBudget,
+        tokenBudget
     };
 }
 
@@ -1523,7 +1542,10 @@ function shouldResetStatefulContext(nextUserText = '') {
         return false;
     }
     const risk = getStatefulRiskMetrics(nextUserText);
-    return statefulTurnCount >= risk.turnLimit || risk.projectedChars >= risk.charBudget;
+    return statefulTurnCount >= risk.turnLimit ||
+        risk.projectedChars >= risk.charBudget ||
+        risk.projectedTokens >= risk.tokenBudget ||
+        statefulLastInputTokens >= risk.tokenBudget;
 }
 
 async function ensureStatefulContextBudget(nextUserText = '') {
@@ -1537,7 +1559,9 @@ async function ensureStatefulContextBudget(nextUserText = '') {
     statefulEstimatedChars = statefulSummary.length;
     statefulResetCount += 1;
     pendingStatefulResetReason = 'auto_summary_reset';
-    showToast('Stateful context compacted');
+    statefulLastInputTokens = estimateTokensFromText(statefulSummary);
+    statefulLastOutputTokens = 0;
+    showToast(`Stateful context compacted (${statefulPeakInputTokens || 0} -> ~${statefulLastInputTokens} tokens)`);
 }
 
 
@@ -1574,6 +1598,9 @@ async function sendMessage() {
 
     appendMessage(userMsg);
     messages.push(userMsg);
+    if (config.llmMode === 'stateful') {
+        statefulEstimatedChars += text.length;
+    }
 
     // Reset Input
     messageInput.value = '';
@@ -1717,6 +1744,9 @@ async function streamResponse(payload, elementId) {
     headers['X-Stateful-Est-Chars'] = String(statefulEstimatedChars);
     headers['X-Stateful-Summary-Chars'] = String(statefulSummary.length);
     headers['X-Stateful-Reset-Count'] = String(statefulResetCount);
+    headers['X-Stateful-Input-Tokens'] = String(statefulLastInputTokens);
+    headers['X-Stateful-Peak-Input-Tokens'] = String(statefulPeakInputTokens);
+    headers['X-Stateful-Token-Budget'] = String(parseInt(config.statefulTokenBudget, 10) || 10000);
     headers['X-Stateful-Risk-Score'] = String(statefulRisk.score);
     headers['X-Stateful-Risk-Level'] = statefulRisk.level;
     if (pendingStatefulResetReason) {
@@ -1775,6 +1805,8 @@ async function streamResponse(payload, elementId) {
                 lastResponseId = null;
                 statefulTurnCount = 0;
                 statefulEstimatedChars = statefulSummary.length;
+                statefulLastInputTokens = estimateTokensFromText(statefulSummary);
+                statefulLastOutputTokens = 0;
                 statefulResetCount += 1;
                 pendingStatefulResetReason = 'invalid_previous_response_id';
                 // Re-attempt without current lastResponseId
@@ -2016,9 +2048,20 @@ async function processStream(response, elementId) {
                     else if (json.type === 'tool_call.failure') {
                         contentToAdd = `<span class="tool-status" style="font-size: small; color: #ff6b6b; display: block; margin: 4px 0;">❌ Tool Failed: ${json.reason || 'Unknown error'}</span>\n`;
                     }
-                    else if (json.type === 'chat.end' && json.result && json.result.response_id) {
-                        lastResponseId = json.result.response_id;
-                        console.log(`[Stateful] Captured response_id from chat.end: ${lastResponseId}`);
+                    else if (json.type === 'chat.end' && json.result) {
+                        if (json.result.response_id) {
+                            lastResponseId = json.result.response_id;
+                            console.log(`[Stateful] Captured response_id from chat.end: ${lastResponseId}`);
+                        }
+                        const stats = json.result.stats || {};
+                        if (typeof stats.input_tokens === 'number' && Number.isFinite(stats.input_tokens)) {
+                            statefulLastInputTokens = stats.input_tokens;
+                            statefulPeakInputTokens = Math.max(statefulPeakInputTokens, stats.input_tokens);
+                            console.log(`[Stateful] Captured input_tokens: ${statefulLastInputTokens}`);
+                        }
+                        if (typeof stats.total_output_tokens === 'number' && Number.isFinite(stats.total_output_tokens)) {
+                            statefulLastOutputTokens = stats.total_output_tokens;
+                        }
                     }
                     // Handle Prompt Processing Progress
                     else if (json.type === 'prompt_processing.progress') {

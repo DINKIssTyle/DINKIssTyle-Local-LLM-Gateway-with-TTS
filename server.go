@@ -806,6 +806,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	statefulEstChars := strings.TrimSpace(r.Header.Get("X-Stateful-Est-Chars"))
 	statefulSummaryChars := strings.TrimSpace(r.Header.Get("X-Stateful-Summary-Chars"))
 	statefulResetCount := strings.TrimSpace(r.Header.Get("X-Stateful-Reset-Count"))
+	statefulInputTokens := strings.TrimSpace(r.Header.Get("X-Stateful-Input-Tokens"))
+	statefulPeakInputTokens := strings.TrimSpace(r.Header.Get("X-Stateful-Peak-Input-Tokens"))
+	statefulTokenBudget := strings.TrimSpace(r.Header.Get("X-Stateful-Token-Budget"))
 	statefulRiskScore := strings.TrimSpace(r.Header.Get("X-Stateful-Risk-Score"))
 	statefulRiskLevel := strings.TrimSpace(r.Header.Get("X-Stateful-Risk-Level"))
 	statefulResetReason := strings.TrimSpace(r.Header.Get("X-Stateful-Reset-Reason"))
@@ -858,6 +861,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		"stateful_turns":  statefulTurnCount,
 		"stateful_chars":  statefulEstChars,
 		"summary_chars":   statefulSummaryChars,
+		"input_tokens":    statefulInputTokens,
+		"peak_tokens":     statefulPeakInputTokens,
+		"token_budget":    statefulTokenBudget,
 		"risk_score":      statefulRiskScore,
 		"risk_level":      statefulRiskLevel,
 	})
@@ -1100,6 +1106,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		"body_bytes":     len(body),
 		"stateful_turns": statefulTurnCount,
 		"stateful_chars": statefulEstChars,
+		"input_tokens":   statefulInputTokens,
+		"peak_tokens":    statefulPeakInputTokens,
+		"token_budget":   statefulTokenBudget,
 		"risk_score":     statefulRiskScore,
 		"risk_level":     statefulRiskLevel,
 	})
