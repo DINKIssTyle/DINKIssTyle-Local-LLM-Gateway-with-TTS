@@ -12,7 +12,7 @@ import (
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-const maxDebugTraceEntries = 400
+const maxDebugTraceEntries = 200
 
 // DebugTraceEntry is the structured payload shown in the desktop debug panel.
 type DebugTraceEntry struct {

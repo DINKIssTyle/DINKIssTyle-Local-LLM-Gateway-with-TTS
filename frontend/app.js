@@ -257,6 +257,26 @@ function t(key) {
     return translations[lang]?.[key] || translations['en']?.[key] || key;
 }
 
+function normalizeMarkdownForRender(text) {
+    if (!text) return '';
+
+    let normalized = String(text);
+
+    // Remove invisible characters that can break markdown emphasis or list parsing.
+    normalized = normalized.replace(/[\u200B-\u200D\u2060\uFEFF]/g, '');
+
+    // Convert common unicode bullets into markdown list markers so streaming content
+    // renders as proper nested lists instead of raw text lines.
+    normalized = normalized
+        .replace(/(^|\n)([ \t]*)[•●▪■▸▹▻▶▷►]\s+/g, '$1$2- ')
+        .replace(/(^|\n)([ \t]*)[◦○◇◆]\s+/g, '$1$2  - ');
+
+    // Normalize stray spaces inside strong markers in list items.
+    normalized = normalized.replace(/(^|\n)([ \t]*[-*+]\s+)\*\*\s+([^*\n]+?)\s+\*\*/g, '$1$2**$3**');
+
+    return normalized;
+}
+
 function applyTranslations() {
     const lang = config.language || 'ko';
     document.querySelectorAll('[data-i18n]').forEach(el => {
@@ -585,6 +605,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Setup Markdown
     marked.setOptions({
+        gfm: true,
+        breaks: true,
         highlight: function (code, lang) {
             const language = highlight.getLanguage(lang) ? lang : 'plaintext';
             return highlight.highlight(code, { language }).value;
@@ -2248,7 +2270,7 @@ function appendMessage(msg) {
                     <section class="assistant-response-card" ${textContent.trim() ? '' : 'hidden'}>
                         <div class="message-bubble plain-assistant-bubble">
                             ${msg.image ? `<img src="${msg.image}" class="message-image">` : ''}
-                            <div class="markdown-body">${marked.parse(textContent)}</div>
+                            <div class="markdown-body">${marked.parse(normalizeMarkdownForRender(textContent))}</div>
                         </div>
                     </section>
                 </div>
@@ -2657,7 +2679,7 @@ function updateMessageContent(id, text) {
     cleanText = cleanText.replace(/<\|.*?\|>/g, '');
 
 
-    mdBody.innerHTML = marked.parse(cleanText);
+    mdBody.innerHTML = marked.parse(normalizeMarkdownForRender(cleanText));
 
     const responseCard = el.querySelector('.assistant-response-card');
     const actionBar = el.querySelector('.message-actions');

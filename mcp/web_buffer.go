@@ -92,6 +92,30 @@ func saveBufferedWebSource(userID, toolName, query, pageURL, title, content stri
 		delete(buf.Sources, oldest)
 	}
 
+	EmitTrace("mcp", "buffer.saved", "Buffered web source saved", traceDetails(
+		"tool", toolName,
+		"user", userID,
+		"source_id", source.SourceID,
+		"title", source.Title,
+		"url", source.URL,
+		"query", source.Query,
+		"chars", len(source.Content),
+		"chunks", len(source.Chunks),
+		"__payload", map[string]interface{}{
+			"kind":      "buffered_web_source",
+			"tool":      source.ToolName,
+			"user":      source.UserID,
+			"source_id": source.SourceID,
+			"title":     source.Title,
+			"query":     source.Query,
+			"url":       source.URL,
+			"summary":   source.Summary,
+			"chars":     len(source.Content),
+			"chunks":    len(source.Chunks),
+			"content":   compactMemoryText(source.Content, 24000),
+		},
+	))
+
 	return source
 }
 
@@ -246,6 +270,34 @@ func readBufferedSource(userID, sourceID, query string, maxChunks int) (string, 
 	if len(selected) == 0 {
 		return "", fmt.Errorf("no buffered passages available")
 	}
+
+	selectedPayload := make([]map[string]interface{}, 0, len(selected))
+	for _, chunk := range selected {
+		selectedPayload = append(selectedPayload, map[string]interface{}{
+			"index": chunk.Index + 1,
+			"text":  chunk.Text,
+		})
+	}
+
+	EmitTrace("mcp", "buffer.read", "Buffered web source excerpts selected", traceDetails(
+		"tool", "read_buffered_source",
+		"user", normalizeBufferedUserID(userID),
+		"source_id", source.SourceID,
+		"title", source.Title,
+		"query", query,
+		"selected_chunks", len(selected),
+		"__payload", map[string]interface{}{
+			"kind":            "buffered_web_excerpt",
+			"tool":            "read_buffered_source",
+			"user":            normalizeBufferedUserID(userID),
+			"source_id":       source.SourceID,
+			"title":           source.Title,
+			"url":             source.URL,
+			"query":           query,
+			"summary":         source.Summary,
+			"selected_chunks": selectedPayload,
+		},
+	))
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "Buffered Web Source\n")

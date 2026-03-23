@@ -895,7 +895,7 @@
     <div class="modal-overlay" id="trace-payload-modal">
         <div class="modal" style="max-width: 860px;">
             <div class="modal-header">
-                <div class="modal-title">Trace Payload</div>
+                <div class="modal-title" id="trace-payload-title">Trace Payload</div>
                 <button class="icon-btn" onclick="closeTracePayloadModal()">
                     <span class="material-icons-round">close</span>
                 </button>
@@ -1271,6 +1271,16 @@
             if (!entry || !entry.payload) return;
 
             openTracePayloadEntry = entry;
+            const titleEl = document.getElementById('trace-payload-title');
+            if (titleEl) {
+                if (entry.stage === 'buffer.saved') {
+                    titleEl.textContent = 'Buffered Source';
+                } else if (entry.stage === 'buffer.read') {
+                    titleEl.textContent = 'Buffered Excerpts';
+                } else {
+                    titleEl.textContent = 'Trace Payload';
+                }
+            }
             document.getElementById('trace-payload-meta').textContent =
                 `[${entry.timestamp || ''}] ${entry.source || 'trace'} :: ${entry.stage || 'event'}`;
             document.getElementById('trace-payload-content').value = entry.payload || '';
@@ -1279,6 +1289,10 @@
 
         function closeTracePayloadModal() {
             openTracePayloadEntry = null;
+            const titleEl = document.getElementById('trace-payload-title');
+            if (titleEl) {
+                titleEl.textContent = 'Trace Payload';
+            }
             document.getElementById('trace-payload-modal').style.display = 'none';
         }
 
@@ -1353,6 +1367,11 @@
             `).join('');
             const hasPayload = !!(entry.payload && String(entry.payload).trim());
             const entryId = hasPayload ? String(entry.id || '') : '';
+            const hint = entry.stage === 'buffer.saved'
+                ? 'Click to inspect buffered source'
+                : entry.stage === 'buffer.read'
+                    ? 'Click to inspect selected excerpts'
+                    : 'Click to view payload';
 
             return `
                 <div class="trace-entry ${hasPayload ? 'has-payload' : ''}" ${hasPayload ? `onclick="openTracePayloadById('${escapeHtml(entryId)}')"` : ''}>
@@ -1366,7 +1385,7 @@
                     <div class="trace-stage">${escapeHtml(entry.stage || 'event')}</div>
                     <div class="trace-message">${escapeHtml(entry.message || '')}</div>
                     ${chips ? `<div class="trace-details">${chips}</div>` : ''}
-                    ${hasPayload ? `<div class="trace-hint">Click to view payload</div>` : ''}
+                    ${hasPayload ? `<div class="trace-hint">${escapeHtml(hint)}</div>` : ''}
                 </div>
             `;
         }
