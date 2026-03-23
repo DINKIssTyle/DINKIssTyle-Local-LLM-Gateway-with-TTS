@@ -50,20 +50,31 @@
             height: 100%;
             display: flex;
             flex-direction: column;
+            min-height: 0;
         }
 
         .main-layout {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr);
             gap: 16px;
+            flex: 1;
+            min-height: 0;
+            align-items: stretch;
+            overflow: hidden;
             /* Height controlled by JS to match columns */
+        }
+
+        body.debug-enabled .main-layout {
+            grid-template-columns: minmax(280px, 1fr) minmax(280px, 1fr) minmax(340px, 1.1fr);
         }
 
         .col {
             display: flex;
             flex-direction: column;
             gap: 16px;
+            height: 100%;
             min-height: 0;
+            overflow: hidden;
         }
 
         .user-card {
@@ -73,6 +84,22 @@
             margin-bottom: 0 !important;
             /* Override default card margin */
             min-height: 0;
+        }
+
+        .debug-card {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .debug-col {
+            display: none;
+        }
+
+        body.debug-enabled .debug-col {
+            display: flex;
         }
 
 
@@ -98,6 +125,7 @@
             border: 1px solid var(--border-color);
             border-radius: 12px;
             padding: 16px;
+            min-height: 0;
             /* margin-bottom handled by flex gap */
         }
 
@@ -215,9 +243,196 @@
             border-color: var(--accent-color);
         }
 
+        .inline-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+            flex-wrap: wrap;
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-color);
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .btn-compact {
+            padding: 8px 12px;
+            font-size: 12px;
+            font-weight: 600;
+            gap: 5px;
+            border-radius: 10px;
+        }
+
+        .btn-compact .material-icons-round {
+            font-size: 16px;
+        }
+
         .form-row {
             display: flex;
             gap: 12px;
+        }
+
+        .trace-meta {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--text-secondary);
+            font-size: 12px;
+        }
+
+        .trace-live-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 999px;
+            background: var(--danger-color);
+            box-shadow: 0 0 0 0 rgba(248, 81, 73, 0.35);
+        }
+
+        .trace-live-dot.enabled {
+            background: var(--success-color);
+            box-shadow: 0 0 0 6px rgba(63, 185, 80, 0.08);
+        }
+
+        .trace-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .trace-list {
+            flex: 1;
+            height: 100%;
+            min-height: 0;
+            overflow-y: auto;
+            overflow-x: hidden;
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            background: rgba(13, 17, 23, 0.75);
+            padding: 10px;
+        }
+
+        .trace-empty {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 220px;
+            color: var(--text-secondary);
+            font-size: 13px;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .trace-entry {
+            padding: 10px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .trace-entry.has-payload {
+            cursor: pointer;
+            transition: background 0.18s ease, border-color 0.18s ease;
+            border-radius: 10px;
+            padding-left: 10px;
+            padding-right: 10px;
+            margin-left: -10px;
+            margin-right: -10px;
+        }
+
+        .trace-entry.has-payload:hover {
+            background: rgba(88, 166, 255, 0.06);
+        }
+
+        .trace-entry:last-child {
+            border-bottom: none;
+        }
+
+        .trace-entry-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 4px;
+        }
+
+        .trace-source {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            color: var(--accent-color);
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+
+        .trace-time {
+            color: var(--text-secondary);
+            font-size: 11px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        }
+
+        .trace-stage {
+            color: var(--text-color);
+            font-size: 13px;
+            font-weight: 600;
+            margin-bottom: 4px;
+            word-break: break-word;
+        }
+
+        .trace-message {
+            color: #b8c0cc;
+            font-size: 12px;
+            line-height: 1.45;
+            margin-bottom: 6px;
+            word-break: break-word;
+        }
+
+        .trace-details {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .trace-chip {
+            display: inline-flex;
+            align-items: center;
+            max-width: 100%;
+            padding: 3px 8px;
+            border-radius: 999px;
+            border: 1px solid rgba(88, 166, 255, 0.18);
+            background: rgba(88, 166, 255, 0.08);
+            color: #cfe3ff;
+            font-size: 11px;
+            gap: 4px;
+        }
+
+        .trace-chip strong {
+            color: #8ec5ff;
+            font-weight: 600;
+        }
+
+        .trace-hint {
+            color: var(--accent-color);
+            font-size: 11px;
+            margin-top: 6px;
+        }
+
+        .trace-payload-box {
+            width: 100%;
+            min-height: 420px;
+            max-height: 65vh;
+            resize: vertical;
+            white-space: pre-wrap;
+            word-break: break-word;
+            overflow: auto;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            line-height: 1.5;
         }
 
         .form-row .form-group {
@@ -391,6 +606,20 @@
         .btn-save-only:hover {
             background: rgba(255, 255, 255, 0.1);
         }
+
+        @media (max-width: 980px) {
+            body {
+                overflow: auto;
+            }
+
+            .main-layout {
+                grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr);
+            }
+
+            body.debug-enabled .main-layout {
+                grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr);
+            }
+        }
     </style>
 </head>
 
@@ -531,6 +760,32 @@
                             autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false"
                             inputmode="url" oninput="saveCertDomain()" />
                     </div>
+                    <div class="form-group"
+                        style="margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--border-color);">
+                        <div class="setting-row"
+                            style="display: flex; align-items: center; justify-content: space-between; padding: 4px 0;">
+                            <label style="margin:0; font-weight: 500;">Enable Debug Trace</label>
+                            <input type="checkbox" id="enable-debug-trace" style="width: auto;"
+                                onchange="toggleDebugTrace()">
+                        </div>
+                        <div style="font-size: 12px; color: var(--text-secondary); margin-top: 8px;">
+                            Collects timing and tool-flow events for chat, MCP tools, and web reading.
+                        </div>
+                        <div class="inline-actions">
+                            <button class="btn btn-secondary btn-compact" onclick="refreshDebugTrace()">
+                                <span class="material-icons-round">refresh</span>
+                                Refresh
+                            </button>
+                            <button class="btn btn-secondary btn-compact" onclick="copyDebugTrace()">
+                                <span class="material-icons-round">content_copy</span>
+                                Copy Trace
+                            </button>
+                            <button class="btn btn-secondary btn-compact" onclick="clearDebugTrace()">
+                                <span class="material-icons-round">delete_sweep</span>
+                                Clear Trace
+                            </button>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- User Management -->
@@ -543,6 +798,24 @@
                         <span class="material-icons-round">person_add</span>
                         Add User
                     </button>
+                </div>
+            </div>
+
+            <div class="col debug-col">
+                <div class="card debug-card">
+                    <div class="card-title">Debug Trace</div>
+                    <div class="trace-toolbar">
+                        <div class="trace-meta">
+                            <span id="trace-live-dot" class="trace-live-dot"></span>
+                            <span id="trace-status-text">Disabled</span>
+                        </div>
+                        <div class="trace-meta">
+                            <span id="trace-count">0 entries</span>
+                        </div>
+                    </div>
+                    <div id="debug-trace-list" class="trace-list">
+                        <div class="trace-empty">Debug trace is disabled. Turn it on in Advanced Settings to inspect the request pipeline.</div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -614,6 +887,28 @@
                 <button class="btn" style="background: var(--border-color);"
                     onclick="closeConfirmModal(false)">Cancel</button>
                 <button class="btn btn-danger" onclick="closeConfirmModal(true)">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="trace-payload-modal">
+        <div class="modal" style="max-width: 860px;">
+            <div class="modal-header">
+                <div class="modal-title">Trace Payload</div>
+                <button class="icon-btn" onclick="closeTracePayloadModal()">
+                    <span class="material-icons-round">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div id="trace-payload-meta" style="font-size: 12px; color: var(--text-secondary); margin-bottom: 12px;"></div>
+                <textarea id="trace-payload-content" class="trace-payload-box" readonly></textarea>
+            </div>
+            <div class="modal-footer" style="display: flex; gap: 8px; justify-content: flex-end;">
+                <button class="btn btn-secondary btn-compact" onclick="copyOpenTracePayload()">
+                    <span class="material-icons-round">content_copy</span>
+                    Copy Payload
+                </button>
+                <button class="btn btn-primary" onclick="closeTracePayloadModal()">Close</button>
             </div>
         </div>
     </div>
@@ -743,14 +1038,57 @@
         function adjustLayout() {
             const leftCol = document.querySelector('.left-col');
             const rightCol = document.querySelector('.right-col');
+            const debugCol = document.querySelector('.debug-col');
             if (leftCol && rightCol) {
                 // Reset height to auto first to recalculate if needed
                 rightCol.style.height = 'auto';
+                if (debugCol) debugCol.style.height = 'auto';
 
                 // Set right column height to match left column
                 const leftHeight = leftCol.offsetHeight;
                 if (leftHeight > 0) {
                     rightCol.style.height = leftHeight + 'px';
+                    if (debugCol && debugTraceEnabled) debugCol.style.height = leftHeight + 'px';
+                }
+            }
+        }
+
+        function applyDebugLayoutState() {
+            document.body.classList.toggle('debug-enabled', debugTraceEnabled);
+            adjustLayout();
+        }
+
+        async function syncDebugWindowSize(enabled) {
+            if (!window.runtime || typeof window.runtime.WindowGetSize !== 'function' || typeof window.runtime.WindowSetSize !== 'function') {
+                return;
+            }
+
+            try {
+                const size = await window.runtime.WindowGetSize();
+                const currentWidth = size?.w || window.innerWidth;
+                const currentHeight = size?.h || window.innerHeight;
+
+                if (enabled) {
+                    const targetWidth = 1360;
+                    if (currentWidth < targetWidth) {
+                        debugTracePreviousSize = { w: currentWidth, h: currentHeight };
+                        debugTraceAutoExpanded = true;
+                        window.runtime.WindowSetSize(targetWidth, currentHeight);
+                    }
+                    return;
+                }
+
+                if (debugTraceAutoExpanded && debugTracePreviousSize?.w) {
+                    const restoreWidth = Math.max(debugTracePreviousSize.w, 980);
+                    const restoreHeight = debugTracePreviousSize.h || currentHeight;
+                    window.runtime.WindowSetSize(restoreWidth, restoreHeight);
+                }
+            } catch (e) {
+                console.warn('Window resize sync failed:', e);
+            } finally {
+                if (!enabled) {
+                    debugTraceAutoExpanded = false;
+                    debugTracePreviousSize = null;
                 }
             }
         }
@@ -761,6 +1099,11 @@
         setTimeout(adjustLayout, 100);
 
         let isRunning = false;
+        let debugTraceEnabled = false;
+        let debugTraceEntries = [];
+        let debugTraceAutoExpanded = false;
+        let debugTracePreviousSize = null;
+        let openTracePayloadEntry = null;
 
         async function init() {
             if (typeof window.go !== 'undefined') {
@@ -779,6 +1122,7 @@
                     loadTTSConfig();
                     loadStartupSettings();
                     loadAdvancedConfig();
+                    await loadDebugTraceConfig();
 
                     // Listen for asset events
                     window.runtime.EventsOn("assets-ready", () => {
@@ -791,6 +1135,15 @@
                     // Listen for Show About menu action
                     window.runtime.EventsOn("show-about", () => {
                         showAbout();
+                    });
+
+                    window.runtime.EventsOn("debug-trace", (entry) => {
+                        appendDebugTraceEntry(entry);
+                    });
+
+                    window.runtime.EventsOn("debug-trace-cleared", () => {
+                        debugTraceEntries = [];
+                        renderDebugTrace();
                     });
                 } catch (e) {
                     console.error('Init failed:', e);
@@ -818,6 +1171,202 @@
             } catch (e) {
                 console.error('Advanced Config Load Failed:', e);
             }
+        }
+
+        async function loadDebugTraceConfig() {
+            if (typeof window.go === 'undefined') return;
+            try {
+                debugTraceEnabled = await window.go.main.App.GetDebugTraceEnabled();
+                document.getElementById('enable-debug-trace').checked = debugTraceEnabled;
+                applyDebugLayoutState();
+                await refreshDebugTrace();
+            } catch (e) {
+                console.error('Debug Trace Config Load Failed:', e);
+            }
+        }
+
+        async function toggleDebugTrace() {
+            const enabled = document.getElementById('enable-debug-trace').checked;
+            try {
+                await window.go.main.App.SetDebugTraceEnabled(enabled);
+                debugTraceEnabled = enabled;
+                applyDebugLayoutState();
+                await syncDebugWindowSize(enabled);
+                if (enabled) {
+                    await refreshDebugTrace();
+                } else {
+                    debugTraceEntries = [];
+                    renderDebugTrace();
+                }
+            } catch (e) {
+                console.error('Failed to set Debug Trace:', e);
+            }
+        }
+
+        async function refreshDebugTrace() {
+            if (typeof window.go === 'undefined') return;
+            try {
+                debugTraceEntries = await window.go.main.App.GetDebugTraceEntries() || [];
+                renderDebugTrace();
+            } catch (e) {
+                console.error('Failed to refresh Debug Trace:', e);
+            }
+        }
+
+        async function clearDebugTrace() {
+            if (typeof window.go === 'undefined') return;
+            try {
+                await window.go.main.App.ClearDebugTrace();
+                debugTraceEntries = [];
+                renderDebugTrace();
+            } catch (e) {
+                console.error('Failed to clear Debug Trace:', e);
+            }
+        }
+
+        async function copyDebugTrace() {
+            if (!debugTraceEntries.length) {
+                showAlert('There are no debug trace entries to copy.');
+                return;
+            }
+
+            const text = debugTraceEntries.map((entry) => {
+                const lines = [
+                    `[${entry.timestamp || ''}] ${entry.source || 'trace'} :: ${entry.stage || 'event'}`,
+                    entry.message || ''
+                ];
+
+                const details = entry.details || {};
+                const detailLines = Object.entries(details).map(([key, value]) => `- ${key}: ${value}`);
+                return [...lines, ...detailLines].join('\n');
+            }).join('\n\n');
+
+            try {
+                if (window.runtime && typeof window.runtime.ClipboardSetText === 'function') {
+                    await window.runtime.ClipboardSetText(text);
+                } else if (navigator.clipboard && navigator.clipboard.writeText) {
+                    await navigator.clipboard.writeText(text);
+                } else {
+                    throw new Error('Clipboard API unavailable');
+                }
+                showAlert('Debug trace copied to clipboard.');
+            } catch (e) {
+                console.error('Failed to copy debug trace:', e);
+                showAlert('Failed to copy debug trace: ' + e.message);
+            }
+        }
+
+        function openTracePayloadById(entryId) {
+            const entry = debugTraceEntries.find((item) => String(item.id) === String(entryId));
+            if (!entry) {
+                showAlert('Could not find the selected trace entry.');
+                return;
+            }
+            openTracePayload(entry);
+        }
+
+        function openTracePayload(entry) {
+            if (!entry || !entry.payload) return;
+
+            openTracePayloadEntry = entry;
+            document.getElementById('trace-payload-meta').textContent =
+                `[${entry.timestamp || ''}] ${entry.source || 'trace'} :: ${entry.stage || 'event'}`;
+            document.getElementById('trace-payload-content').value = entry.payload || '';
+            document.getElementById('trace-payload-modal').style.display = 'flex';
+        }
+
+        function closeTracePayloadModal() {
+            openTracePayloadEntry = null;
+            document.getElementById('trace-payload-modal').style.display = 'none';
+        }
+
+        async function copyOpenTracePayload() {
+            if (!openTracePayloadEntry?.payload) {
+                showAlert('There is no payload to copy.');
+                return;
+            }
+
+            try {
+                if (window.runtime && typeof window.runtime.ClipboardSetText === 'function') {
+                    await window.runtime.ClipboardSetText(openTracePayloadEntry.payload);
+                } else if (navigator.clipboard && navigator.clipboard.writeText) {
+                    await navigator.clipboard.writeText(openTracePayloadEntry.payload);
+                } else {
+                    throw new Error('Clipboard API unavailable');
+                }
+                showAlert('Trace payload copied to clipboard.');
+            } catch (e) {
+                console.error('Failed to copy trace payload:', e);
+                showAlert('Failed to copy trace payload: ' + e.message);
+            }
+        }
+
+        function appendDebugTraceEntry(entry) {
+            if (!entry) return;
+            debugTraceEntries.push(entry);
+            if (debugTraceEntries.length > 400) {
+                debugTraceEntries = debugTraceEntries.slice(-400);
+            }
+            renderDebugTrace(true);
+        }
+
+        function renderDebugTrace(keepScrollPinned = true) {
+            const list = document.getElementById('debug-trace-list');
+            const countEl = document.getElementById('trace-count');
+            const statusEl = document.getElementById('trace-status-text');
+            const liveDot = document.getElementById('trace-live-dot');
+            if (!list || !countEl || !statusEl || !liveDot) return;
+
+            statusEl.textContent = debugTraceEnabled ? 'Live' : 'Disabled';
+            liveDot.classList.toggle('enabled', debugTraceEnabled);
+            countEl.textContent = `${debugTraceEntries.length} ${debugTraceEntries.length === 1 ? 'entry' : 'entries'}`;
+
+            if (!debugTraceEnabled && debugTraceEntries.length === 0) {
+                list.innerHTML = '<div class="trace-empty">Debug trace is disabled. Turn it on in Advanced Settings to inspect the request pipeline.</div>';
+                adjustLayout();
+                return;
+            }
+
+            if (debugTraceEntries.length === 0) {
+                list.innerHTML = '<div class="trace-empty">No trace events yet. Send a request with debug trace enabled and events will appear here.</div>';
+                adjustLayout();
+                return;
+            }
+
+            const shouldStickToTop = keepScrollPinned && list.scrollTop <= 24;
+
+            list.innerHTML = debugTraceEntries.slice().reverse().map(renderTraceEntry).join('');
+
+            if (shouldStickToTop) {
+                list.scrollTop = 0;
+            }
+
+            adjustLayout();
+        }
+
+        function renderTraceEntry(entry) {
+            const details = entry.details || {};
+            const chips = Object.entries(details).map(([key, value]) => `
+                <span class="trace-chip"><strong>${escapeHtml(key)}</strong><span>${escapeHtml(String(value))}</span></span>
+            `).join('');
+            const hasPayload = !!(entry.payload && String(entry.payload).trim());
+            const entryId = hasPayload ? String(entry.id || '') : '';
+
+            return `
+                <div class="trace-entry ${hasPayload ? 'has-payload' : ''}" ${hasPayload ? `onclick="openTracePayloadById('${escapeHtml(entryId)}')"` : ''}>
+                    <div class="trace-entry-top">
+                        <div class="trace-source">
+                            <span class="material-icons-round" style="font-size: 14px;">monitoring</span>
+                            <span>${escapeHtml(entry.source || 'trace')}</span>
+                        </div>
+                        <div class="trace-time">${escapeHtml(entry.timestamp || '')}</div>
+                    </div>
+                    <div class="trace-stage">${escapeHtml(entry.stage || 'event')}</div>
+                    <div class="trace-message">${escapeHtml(entry.message || '')}</div>
+                    ${chips ? `<div class="trace-details">${chips}</div>` : ''}
+                    ${hasPayload ? `<div class="trace-hint">Click to view payload</div>` : ''}
+                </div>
+            `;
         }
 
         async function saveCertDomain() {
@@ -1334,6 +1883,15 @@
             } catch (e) {
                 showAlert('Failed to save settings: ' + e.message);
             }
+        }
+
+        function escapeHtml(value) {
+            return String(value)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
         }
 
         init();

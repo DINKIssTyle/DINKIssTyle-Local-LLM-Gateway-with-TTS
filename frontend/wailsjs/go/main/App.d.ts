@@ -10,11 +10,25 @@ export function CheckAssets():Promise<boolean>;
 
 export function CheckHealth():Promise<main.HealthCheckResult>;
 
+export function ClearDebugTrace():Promise<void>;
+
 export function DeleteUser(arg1:string):Promise<void>;
 
 export function DownloadAssets():Promise<void>;
 
+export function FetchAndCacheModels():Promise<Array<number>>;
+
 export function GetAutoStartServer():Promise<boolean>;
+
+export function GetCachedModels():Promise<Array<number>>;
+
+export function GetCertDomain():Promise<string>;
+
+export function GetDebugTraceEnabled():Promise<boolean>;
+
+export function GetDebugTraceEntries():Promise<Array<main.DebugTraceEntry>>;
+
+export function GetLLMApiToken():Promise<string>;
 
 export function GetLicenseText():Promise<string>;
 
@@ -30,11 +44,41 @@ export function GetTTSConfig():Promise<main.ServerTTSConfig>;
 
 export function GetTTSDictionary(arg1:string):Promise<Record<string, string>>;
 
+export function GetToolPattern(arg1:string):Promise<Record<string, string>>;
+
+export function GetUserApiToken(arg1:string):Promise<string>;
+
+export function GetUserDetail(arg1:string):Promise<Record<string, any>>;
+
+export function GetUserDisabledTools(arg1:string):Promise<Array<string>>;
+
+export function GetUserDisallowedCommands(arg1:string):Promise<Array<string>>;
+
+export function GetUserDisallowedDirectories(arg1:string):Promise<Array<string>>;
+
 export function GetUsers():Promise<Array<Record<string, string>>>;
 
 export function GetVoiceStyles():Promise<Array<string>>;
 
+export function LearnToolPattern(arg1:string,arg2:string):Promise<void>;
+
+export function LoadModel(arg1:string):Promise<void>;
+
+export function OpenMemoryFolder(arg1:string):Promise<string>;
+
+export function Quit():Promise<void>;
+
+export function ResetMemory(arg1:string):Promise<string>;
+
+export function RestartServer():Promise<void>;
+
 export function SetAutoStartServer(arg1:boolean):Promise<void>;
+
+export function SetCertDomain(arg1:string):Promise<void>;
+
+export function SetDebugTraceEnabled(arg1:boolean):Promise<void>;
+
+export function SetEnableMCP(arg1:boolean):Promise<void>;
 
 export function SetEnableTTS(arg1:boolean):Promise<void>;
 
@@ -54,10 +98,26 @@ export function SetTTSConfig(arg1:string,arg2:number):Promise<void>;
 
 export function SetTTSThreads(arg1:number):Promise<void>;
 
+export function SetUserApiToken(arg1:string,arg2:string):Promise<void>;
+
+export function SetUserDisabledTools(arg1:string,arg2:Array<string>):Promise<void>;
+
+export function SetUserDisallowedCommands(arg1:string,arg2:Array<string>):Promise<void>;
+
+export function SetUserDisallowedDirectories(arg1:string,arg2:Array<string>):Promise<void>;
+
+export function Show():Promise<void>;
+
 export function ShowAbout():Promise<void>;
+
+export function StartMemoryWorker():Promise<void>;
 
 export function StartServer(arg1:string):Promise<void>;
 
 export function StartServerWithCurrentConfig():Promise<void>;
 
 export function StopServer():Promise<void>;
+
+export function UpdateUserPassword(arg1:string,arg2:string):Promise<void>;
+
+export function UpdateUserRole(arg1:string,arg2:string):Promise<void>;

@@ -771,6 +771,7 @@ func handleModels(w http.ResponseWriter, r *http.Request, app *App) {
 // handleChat proxies chat requests to LM Studio with SSE streaming
 // handleChat proxies chat requests to LM Studio with SSE streaming
 func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthManager) {
+	requestStart := time.Now()
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -840,6 +841,14 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	// This ensures that when LM Studio calls back to MCP, it has the correct context
 	mcp.SetContext(userID, enableMemory, disabledTools, locationInfo, disallowedCmds, disallowedDirs)
 	log.Printf("[handleChat-DEBUG] userID=%s, enableMemory=%v, disabledTools=%v, Location=%s, DisallowedCmds=%v, DisallowedDirs=%v", userID, enableMemory, disabledTools, locationInfo, disallowedCmds, disallowedDirs)
+	AddDebugTrace("chat", "request.context", "Resolved chat execution context", map[string]interface{}{
+		"user":            userID,
+		"memory":          enableMemory,
+		"disabled_tools":  len(disabledTools),
+		"disallowed_cmds": len(disallowedCmds),
+		"disallowed_dirs": len(disallowedDirs),
+		"location":        compactText(locationInfo, 80),
+	})
 
 	// Sanitize endpoint: Remove trailing slash and optional /v1 suffix if user included it
 	endpoint := strings.TrimRight(endpointRaw, "/")
@@ -854,6 +863,12 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	var reqMap map[string]interface{}
 	// Always unmarshal body into reqMap to prevent nil panics later in the turn loop
 	json.Unmarshal(body, &reqMap)
+	AddDebugTrace("chat", "request.received", "Incoming chat request", map[string]interface{}{
+		"user":       userID,
+		"body_bytes": len(body),
+		"messages":   lenInterfaceSlice(reqMap["messages"]),
+		"__payload":  prettyJSONForDebug(body),
+	})
 
 	// Inject MCP integration if enabled AND NOT IN STANDARD MODE
 	// Standard Mode (OpenAI compliant) with 'integrations' field might trigger strict auth in LM Studio.
@@ -1056,6 +1071,13 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	}
 	json.Unmarshal(body, &tmpModel)
 	modelID = tmpModel.Model
+	AddDebugTrace("chat", "request.prepared", "Prepared upstream LLM request", map[string]interface{}{
+		"user":       userID,
+		"mode":       llmMode,
+		"model":      modelID,
+		"url":        llmURL,
+		"body_bytes": len(body),
+	})
 
 	// Set SSE headers ONCE before turn loop
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -1079,6 +1101,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	// --- TURN LOOP START ---
 	// We allow up to 10 turns (tool call cycles) per request
 	for turn := 0; turn < 10; turn++ {
+		turnStart := time.Now()
 		toolExecutedThisTurn := false
 		var lastToolName string
 		var lastToolArgsStr string
@@ -1111,9 +1134,19 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		}
 
 		client := &http.Client{Timeout: 5 * time.Minute}
+		AddDebugTrace("chat", "turn.start", "Dispatching upstream turn", map[string]interface{}{
+			"turn":       turn,
+			"model":      modelID,
+			"body_bytes": len(body),
+		})
 		resp, err := client.Do(req)
 		if err != nil {
 			log.Printf("LLM request failed: %v", err)
+			AddDebugTrace("chat", "turn.error", "Upstream request failed", map[string]interface{}{
+				"turn":       turn,
+				"elapsed_ms": time.Since(turnStart).Milliseconds(),
+				"error":      err.Error(),
+			})
 			if turn == 0 {
 				http.Error(w, fmt.Sprintf("LLM connection failed: %v", err), http.StatusBadGateway)
 			}
@@ -1126,6 +1159,12 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			bodyBytes, _ := io.ReadAll(resp.Body)
 			errorMsg := string(bodyBytes)
 			log.Printf("LLM error response: %s", errorMsg)
+			AddDebugTrace("chat", "turn.error", "Upstream returned an error status", map[string]interface{}{
+				"turn":        turn,
+				"status_code": resp.StatusCode,
+				"elapsed_ms":  time.Since(turnStart).Milliseconds(),
+				"error":       compactText(errorMsg, 180),
+			})
 
 			// Check for specific LM Studio auth error
 			// We return a text starting with "LM_STUDIO_AUTH_ERROR:" so frontend can localize it.
@@ -1161,6 +1200,11 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			sendSSEError(w, flusher, fmt.Sprintf("LLM error: %s", errorMsg))
 			return
 		}
+		AddDebugTrace("chat", "turn.response", "Upstream stream opened", map[string]interface{}{
+			"turn":        turn,
+			"status_code": resp.StatusCode,
+			"elapsed_ms":  time.Since(turnStart).Milliseconds(),
+		})
 
 		// Tool Pattern Logic
 		toolPattern := app.GetToolPattern(modelID)
@@ -1670,12 +1714,24 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		// 🛡️ TOOL EXECUTION & LOOP LOGIC
 		if toolExecutedThisTurn {
 			log.Printf("[handleChat] Turn %d detected Tool Call: %s. Executing...", turn, lastToolName)
+			AddDebugTrace("chat", "tool.detected", "Tool call detected in assistant output", map[string]interface{}{
+				"turn": turn,
+				"tool": lastToolName,
+				"args": compactText(lastToolArgsStr, 200),
+			})
 
 			// 1. Execute Tool
+			toolStart := time.Now()
 			result, err := mcp.ExecuteToolByName(lastToolName, []byte(lastToolArgsStr), userID, enableMemory, disabledTools)
 			var toolResultEvt map[string]interface{}
 			if err != nil {
 				log.Printf("[handleChat] Tool Execution Failed: %v", err)
+				AddDebugTrace("chat", "tool.error", "Tool execution failed", map[string]interface{}{
+					"turn":       turn,
+					"tool":       lastToolName,
+					"elapsed_ms": time.Since(toolStart).Milliseconds(),
+					"error":      err.Error(),
+				})
 				toolResultEvt = map[string]interface{}{
 					"type":   "tool_call.failure",
 					"tool":   lastToolName,
@@ -1684,6 +1740,12 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				result = fmt.Sprintf("Error executing tool %s: %v", lastToolName, err)
 			} else {
 				log.Printf("[handleChat] Tool Execution Success.")
+				AddDebugTrace("chat", "tool.success", "Tool execution completed", map[string]interface{}{
+					"turn":         turn,
+					"tool":         lastToolName,
+					"elapsed_ms":   time.Since(toolStart).Milliseconds(),
+					"result_chars": len(result),
+				})
 				toolResultEvt = map[string]interface{}{
 					"type": "tool_call.success",
 					"tool": lastToolName,
@@ -1733,16 +1795,29 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 			// Update body for next turn
 			body, _ = json.Marshal(reqMap)
+			AddDebugTrace("chat", "turn.followup", "Prepared follow-up turn with tool result", map[string]interface{}{
+				"turn":       turn,
+				"tool":       lastToolName,
+				"body_bytes": len(body),
+			})
 			continue // Start next turn loop
 		}
 
 		// If no tool executed, we are done with all turns
+		AddDebugTrace("chat", "turn.complete", "Turn completed without additional tool recursion", map[string]interface{}{
+			"turn":           turn,
+			"elapsed_ms":     time.Since(turnStart).Milliseconds(),
+			"response_chars": len(fullResponse),
+		})
 		break
 	} // --- TURN LOOP END ---
 
 	// 🛡️ SELF-CORRECTION TRIGGER (Only if we didn't loop or at the very end)
 	if needsCorrection && badContentCapture != "" {
 		log.Printf("[handleChat] Triggering Self-Correction for invalid tool format...")
+		AddDebugTrace("chat", "self_correction.start", "Triggering tool-call self-correction", map[string]interface{}{
+			"snippet": compactText(badContentCapture, 180),
+		})
 
 		// Prepare Correction Request
 		correctionPrompt := mcp.SelfCorrectionPromptTemplate(badContentCapture)
@@ -1862,6 +1937,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				}
 			} else {
 				log.Printf("[handleChat] Self-Correction Request Failed: %v", err)
+				AddDebugTrace("chat", "self_correction.error", "Self-correction request failed", map[string]interface{}{
+					"error": err.Error(),
+				})
 			}
 		}
 	}
@@ -1871,6 +1949,13 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		log.Printf("[handleChat] Final Assistant Response Captured (Len: %d). Logging to DB...", len(fullResponse))
 		go logChatToHistory(userID, messagesForMemory, fullResponse, modelID)
 	}
+	AddDebugTrace("chat", "request.complete", "Chat request finished", map[string]interface{}{
+		"user":           userID,
+		"elapsed_ms":     time.Since(requestStart).Milliseconds(),
+		"response_chars": len(fullResponse),
+		"memory_logged":  enableMemory && len(messagesForMemory) > 0 && fullResponse != "",
+		"__payload":      fullResponse,
+	})
 }
 
 // handleTTS converts text to speech using Supertonic
@@ -2122,4 +2207,29 @@ func sendSSEError(w http.ResponseWriter, flusher http.Flusher, msg string) {
 	// Also send a specialized error event if the frontend supports it
 	fmt.Fprintf(w, "event: error\ndata: %s\n\n", msg)
 	flusher.Flush()
+}
+
+func lenInterfaceSlice(v interface{}) int {
+	items, ok := v.([]interface{})
+	if !ok {
+		return 0
+	}
+	return len(items)
+}
+
+func prettyJSONForDebug(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+
+	var decoded interface{}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return string(raw)
+	}
+
+	pretty, err := json.MarshalIndent(decoded, "", "  ")
+	if err != nil {
+		return string(raw)
+	}
+	return string(pretty)
 }

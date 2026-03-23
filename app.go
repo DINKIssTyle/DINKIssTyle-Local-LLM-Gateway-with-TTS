@@ -29,21 +29,22 @@ import (
 
 // App struct for Wails binding
 type App struct {
-	ctx         context.Context
-	server      *http.Server // HTTPS Server
-	httpServer  *http.Server // HTTP Compatibility Server
-	serverMux   sync.Mutex
-	isRunning   bool
-	port        string
-	llmEndpoint string
-	llmApiToken string
-	llmMode     string // "standard" or "stateful"
-	enableTTS   bool
-	enableMCP   bool
-	certDomain  string
-	authMgr     *AuthManager
-	assets      embed.FS
-	isQuitting  bool
+	ctx              context.Context
+	server           *http.Server // HTTPS Server
+	httpServer       *http.Server // HTTP Compatibility Server
+	serverMux        sync.Mutex
+	isRunning        bool
+	port             string
+	llmEndpoint      string
+	llmApiToken      string
+	llmMode          string // "standard" or "stateful"
+	enableTTS        bool
+	enableMCP        bool
+	enableDebugTrace bool
+	certDomain       string
+	authMgr          *AuthManager
+	assets           embed.FS
+	isQuitting       bool
 
 	// Server-side Model Cache
 	modelCache     []byte
@@ -58,17 +59,18 @@ type App struct {
 
 // AppConfig holds the persistent application configuration
 type AppConfig struct {
-	Port            string                       `json:"port"`
-	LLMEndpoint     string                       `json:"llmEndpoint"`
-	LLMApiToken     string                       `json:"llmApiToken"`
-	LLMMode         string                       `json:"llmMode"`
-	EnableTTS       bool                         `json:"enableTTS"`
-	TTS             ServerTTSConfig              `json:"tts"`
-	StartOnBoot     bool                         `json:"startOnBoot"`
-	MinimizeToTray  bool                         `json:"minimizeToTray"`
-	AutoStartServer bool                         `json:"autoStartServer"`
-	CertDomain      string                       `json:"certDomain"`
-	ToolPatterns    map[string]map[string]string `json:"toolPatterns"`
+	Port              string                       `json:"port"`
+	LLMEndpoint       string                       `json:"llmEndpoint"`
+	LLMApiToken       string                       `json:"llmApiToken"`
+	LLMMode           string                       `json:"llmMode"`
+	EnableTTS         bool                         `json:"enableTTS"`
+	TTS               ServerTTSConfig              `json:"tts"`
+	StartOnBoot       bool                         `json:"startOnBoot"`
+	MinimizeToTray    bool                         `json:"minimizeToTray"`
+	AutoStartServer   bool                         `json:"autoStartServer"`
+	CertDomain        string                       `json:"certDomain"`
+	DebugTraceEnabled bool                         `json:"debugTraceEnabled"`
+	ToolPatterns      map[string]map[string]string `json:"toolPatterns"`
 }
 
 // HealthCheckResult holds the result of system health checks
@@ -235,6 +237,10 @@ func NewApp(assets embed.FS) *App {
 		assets:  assets,
 	}
 	a.loadConfig()
+	setDebugTraceCollectorEnabled(a.enableDebugTrace)
+	mcp.SetTraceHook(func(ev mcp.TraceEvent) {
+		AddDebugTrace(ev.Source, ev.Stage, ev.Message, ev.Details)
+	})
 	return a
 }
 
@@ -273,6 +279,8 @@ func (a *App) loadConfig() {
 	}
 	a.llmApiToken = cfg.LLMApiToken
 	a.enableTTS = cfg.EnableTTS
+	a.enableDebugTrace = cfg.DebugTraceEnabled
+	setDebugTraceCollectorEnabled(a.enableDebugTrace)
 	if cfg.CertDomain != "" {
 		a.certDomain = cfg.CertDomain
 	}
@@ -310,6 +318,7 @@ func (a *App) saveConfig() {
 	cfg.LLMMode = a.llmMode
 	cfg.LLMApiToken = a.llmApiToken
 	cfg.EnableTTS = a.enableTTS
+	cfg.DebugTraceEnabled = a.enableDebugTrace
 	cfg.CertDomain = a.certDomain
 	cfg.TTS = ttsConfig
 	cfg.ToolPatterns = a.toolPatterns
@@ -328,6 +337,7 @@ func (a *App) saveConfig() {
 // startup is called when the app starts
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	globalApp = a
 
 	// Setup paths for non-Windows
 	a.CheckAndSetupPaths()
@@ -423,13 +433,14 @@ func (a *App) GetServerStatus() map[string]interface{} {
 	a.serverMux.Lock()
 	defer a.serverMux.Unlock()
 	return map[string]interface{}{
-		"running":     a.isRunning,
-		"port":        a.port,
-		"llmEndpoint": a.llmEndpoint,
-		"llmMode":     a.llmMode,
-		"hasApiToken": a.llmApiToken != "",
-		"enableTTS":   a.enableTTS,
-		"enableMCP":   a.enableMCP,
+		"running":          a.isRunning,
+		"port":             a.port,
+		"llmEndpoint":      a.llmEndpoint,
+		"llmMode":          a.llmMode,
+		"hasApiToken":      a.llmApiToken != "",
+		"enableTTS":        a.enableTTS,
+		"enableMCP":        a.enableMCP,
+		"enableDebugTrace": a.enableDebugTrace,
 	}
 }
 
@@ -495,6 +506,32 @@ func (a *App) SetEnableMCP(enabled bool) {
 	defer a.serverMux.Unlock()
 	a.enableMCP = enabled
 	a.saveConfig()
+}
+
+// GetDebugTraceEnabled returns whether structured debug tracing is enabled.
+func (a *App) GetDebugTraceEnabled() bool {
+	a.serverMux.Lock()
+	defer a.serverMux.Unlock()
+	return a.enableDebugTrace
+}
+
+// SetDebugTraceEnabled enables or disables structured debug tracing.
+func (a *App) SetDebugTraceEnabled(enabled bool) {
+	a.serverMux.Lock()
+	defer a.serverMux.Unlock()
+	a.enableDebugTrace = enabled
+	setDebugTraceCollectorEnabled(enabled)
+	a.saveConfig()
+}
+
+// GetDebugTraceEntries returns the buffered debug trace entries.
+func (a *App) GetDebugTraceEntries() []DebugTraceEntry {
+	return getDebugTraceEntriesSnapshot()
+}
+
+// ClearDebugTrace clears the buffered debug trace entries.
+func (a *App) ClearDebugTrace() {
+	clearDebugTraceEntries()
 }
 
 // GetCertDomain returns the certificate domain

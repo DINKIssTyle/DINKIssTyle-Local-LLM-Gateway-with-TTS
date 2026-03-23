@@ -426,15 +426,23 @@ func HandleMessages(w http.ResponseWriter, r *http.Request) {
 // This is used for text-based tool call parsing (when model outputs tool call as plain text).
 // Returns the result text and an error if any.
 func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, enableMemory bool, disabledTools []string) (string, error) {
+	start := time.Now()
 	// Re-fetch context to get location since signature change is hard across all callsites (or we can just use global if thread-safe enough for this hack)
 	// Better: Use the global GetContext to retrieve the location for this execution
 	_, _, _, locationInfo, disallowedCmds, disallowedDirs := GetContext()
 
 	log.Printf("[MCP] ExecuteToolByName: %s (User: %s, Memory: %v, Loc: %s)", toolName, userID, enableMemory, locationInfo)
+	EmitTrace("mcp", "tool.start", "Executing MCP tool", traceDetails(
+		"tool", toolName,
+		"user", userID,
+		"args_bytes", len(argumentsJSON),
+		"memory", enableMemory,
+	))
 
 	// Check if tool is disabled
 	for _, disabled := range disabledTools {
 		if disabled == toolName {
+			EmitTrace("mcp", "tool.error", "Tool blocked by user policy", traceDetails("tool", toolName, "elapsed_ms", durationMs(start)))
 			return "", fmt.Errorf("tool '%s' is disabled for this user", toolName)
 		}
 	}
@@ -447,7 +455,9 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
 			return "", fmt.Errorf("invalid arguments for search_web: %v", err)
 		}
-		return SearchWeb(args.Query)
+		result, err := SearchWeb(args.Query)
+		emitToolResultTrace(toolName, start, result, err)
+		return result, err
 
 	case "read_web_page":
 		var args struct {
@@ -456,7 +466,9 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
 			return "", fmt.Errorf("invalid arguments for read_web_page: %v", err)
 		}
-		return ReadPage(args.URL)
+		result, err := ReadPage(args.URL)
+		emitToolResultTrace(toolName, start, result, err)
+		return result, err
 
 	case "search_memory":
 		if !enableMemory {
@@ -468,7 +480,9 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
 			return "", fmt.Errorf("invalid arguments for search_memory: %v", err)
 		}
-		return SearchMemoryDB(userID, args.Query)
+		result, err := SearchMemoryDB(userID, args.Query)
+		emitToolResultTrace(toolName, start, result, err)
+		return result, err
 
 	case "read_memory":
 		if !enableMemory {
@@ -480,7 +494,9 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
 			return "", fmt.Errorf("invalid arguments for read_memory: %v", err)
 		}
-		return ReadMemoryDB(userID, args.MemoryID)
+		result, err := ReadMemoryDB(userID, args.MemoryID)
+		emitToolResultTrace(toolName, start, result, err)
+		return result, err
 
 	case "update_memory":
 		if !enableMemory {
@@ -494,7 +510,9 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
 			return "", fmt.Errorf("invalid arguments for update_memory: %v", err)
 		}
-		return UpdateMemoryDB(userID, args.MemoryID, args.Summary, args.Keywords)
+		result, err := UpdateMemoryDB(userID, args.MemoryID, args.Summary, args.Keywords)
+		emitToolResultTrace(toolName, start, result, err)
+		return result, err
 
 	case "delete_memory":
 		if !enableMemory {
@@ -506,10 +524,14 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
 			return "", fmt.Errorf("invalid arguments for delete_memory: %v", err)
 		}
-		return DeleteMemoryDB(userID, args.MemoryID)
+		result, err := DeleteMemoryDB(userID, args.MemoryID)
+		emitToolResultTrace(toolName, start, result, err)
+		return result, err
 
 	case "get_current_time":
-		return GetCurrentTime()
+		result, err := GetCurrentTime()
+		emitToolResultTrace(toolName, start, result, err)
+		return result, err
 
 	case "namu_wiki":
 		var args struct {
@@ -518,7 +540,9 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
 			return "", fmt.Errorf("invalid arguments for namu_wiki: %v", err)
 		}
-		return SearchNamuwiki(args.Keyword)
+		result, err := SearchNamuwiki(args.Keyword)
+		emitToolResultTrace(toolName, start, result, err)
+		return result, err
 
 	case "naver_search":
 		var args struct {
@@ -527,12 +551,17 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
 			return "", fmt.Errorf("invalid arguments for naver_search: %v", err)
 		}
-		return SearchNaver(args.Query)
+		result, err := SearchNaver(args.Query)
+		emitToolResultTrace(toolName, start, result, err)
+		return result, err
 
 	case "get_current_location":
 		if locationInfo == "" {
-			return "Location information not provided by client.", nil
+			result := "Location information not provided by client."
+			emitToolResultTrace(toolName, start, result, nil)
+			return result, nil
 		}
+		emitToolResultTrace(toolName, start, locationInfo, nil)
 		return locationInfo, nil
 
 	case "execute_command":
@@ -544,11 +573,31 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 		if !ok {
 			return "", fmt.Errorf("argument 'command' is required")
 		}
-		return ExecuteCommand(command, disallowedCmds, disallowedDirs)
+		result, err := ExecuteCommand(command, disallowedCmds, disallowedDirs)
+		emitToolResultTrace(toolName, start, result, err)
+		return result, err
 
 	default:
+		EmitTrace("mcp", "tool.error", "Unknown tool requested", traceDetails("tool", toolName, "elapsed_ms", durationMs(start)))
 		return "", fmt.Errorf("tool not found: %s", toolName)
 	}
+}
+
+func emitToolResultTrace(toolName string, start time.Time, result string, err error) {
+	if err != nil {
+		EmitTrace("mcp", "tool.error", "Tool execution failed", traceDetails(
+			"tool", toolName,
+			"elapsed_ms", durationMs(start),
+			"error", errorDetail(err),
+		))
+		return
+	}
+
+	EmitTrace("mcp", "tool.complete", "Tool execution completed", traceDetails(
+		"tool", toolName,
+		"elapsed_ms", durationMs(start),
+		"result_chars", len(result),
+	))
 }
 
 // Helper to handle tool calls

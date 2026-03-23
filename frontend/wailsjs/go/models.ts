@@ -1,5 +1,29 @@
 export namespace main {
 	
+	export class DebugTraceEntry {
+	    id: number;
+	    timestamp: string;
+	    source: string;
+	    stage: string;
+	    message: string;
+	    details?: Record<string, string>;
+	    payload?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DebugTraceEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.timestamp = source["timestamp"];
+	        this.source = source["source"];
+	        this.stage = source["stage"];
+	        this.message = source["message"];
+	        this.details = source["details"];
+	        this.payload = source["payload"];
+	    }
+	}
 	export class HealthCheckResult {
 	    llmStatus: string;
 	    llmMessage: string;

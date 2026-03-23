@@ -36,6 +36,7 @@ var windowIcon []byte
 var assets embed.FS
 
 func main() {
+	initLoggingFilter()
 	app := NewApp(assets)
 
 	// Select tray icon based on OS (Windows prefers ICO)
@@ -51,9 +52,9 @@ func main() {
 
 	err := wails.Run(&options.App{
 		Title:     "DKST LLM Chat Server",
-		Width:     780,
+		Width:     980,
 		Height:    760,
-		MinWidth:  600,
+		MinWidth:  980,
 		MinHeight: 760,
 		AssetServer: &assetserver.Options{
 			Assets: assets,

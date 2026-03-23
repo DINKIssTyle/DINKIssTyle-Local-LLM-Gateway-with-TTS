@@ -44,6 +44,8 @@ func GetCurrentTime() (string, error) {
 // SearchWeb performs a search using DuckDuckGo Lite and returns a summary.
 func SearchWeb(query string) (string, error) {
 	log.Printf("[MCP] Searching Web for: %s", query)
+	start := time.Now()
+	EmitTrace("mcp", "search_web.start", "Starting web search", traceDetails("query", query))
 
 	// Use DuckDuckGo Lite for easier parsing
 	searchURL := fmt.Sprintf("https://lite.duckduckgo.com/lite/?q=%s", url.QueryEscape(query))
@@ -57,12 +59,14 @@ func SearchWeb(query string) (string, error) {
 
 	resp, err := client.Do(req)
 	if err != nil {
+		EmitTrace("mcp", "search_web.error", "Web search failed", traceDetails("query", query, "elapsed_ms", durationMs(start), "error", errorDetail(err)))
 		return "", err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		EmitTrace("mcp", "search_web.error", "Web search body read failed", traceDetails("query", query, "elapsed_ms", durationMs(start), "error", errorDetail(err)))
 		return "", err
 	}
 
@@ -118,9 +122,11 @@ func SearchWeb(query string) (string, error) {
 	}
 
 	if len(results) == 0 {
+		EmitTrace("mcp", "search_web.complete", "Web search returned no parsed results", traceDetails("query", query, "elapsed_ms", durationMs(start)))
 		return "No results found or parsing failed.", nil
 	}
 
+	EmitTrace("mcp", "search_web.complete", "Web search completed", traceDetails("query", query, "elapsed_ms", durationMs(start), "results", len(results)))
 	return strings.Join(results, "\n---\n"), nil
 }
 
@@ -162,6 +168,8 @@ func SearchNaver(query string) (string, error) {
 // ReadPage fetches the text content of a URL using a headless browser with anti-detection.
 func ReadPage(pageURL string) (string, error) {
 	log.Printf("[MCP] Reading Page (Advanced + Anti-Detection): %s", pageURL)
+	start := time.Now()
+	EmitTrace("mcp", "read_web_page.start", "Starting page read", traceDetails("url", pageURL))
 
 	// 1. Anti-Detection: Configure browser with stealth flags
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
@@ -309,6 +317,7 @@ func ReadPage(pageURL string) (string, error) {
 	)
 
 	if err != nil {
+		EmitTrace("mcp", "read_web_page.error", "Page read failed", traceDetails("url", pageURL, "elapsed_ms", durationMs(start), "error", errorDetail(err)))
 		return "", fmt.Errorf("failed to read page: %v", err)
 	}
 
@@ -317,6 +326,7 @@ func ReadPage(pageURL string) (string, error) {
 		res = res[:30000] + "... (truncated)"
 	}
 
+	EmitTrace("mcp", "read_web_page.complete", "Page read completed", traceDetails("url", pageURL, "elapsed_ms", durationMs(start), "chars", len(res)))
 	return res, nil
 }
 
