@@ -30,6 +30,8 @@ let config = {
     apiToken: '',
     llmMode: 'standard', // 'standard' or 'stateful'
     disableStateful: false, // LM Studio specific
+    statefulTurnLimit: 8,
+    statefulCharBudget: 12000,
     micLayout: 'none', // 'none', 'left', 'right', 'bottom'
     chatFontSize: 16
 };
@@ -446,6 +448,11 @@ let pendingImage = null;
 let isGenerating = false;
 let abortController = null;
 let lastResponseId = null; // For Stateful Chat
+let statefulTurnCount = 0;
+let statefulEstimatedChars = 0;
+let statefulSummary = '';
+let statefulResetCount = 0;
+let pendingStatefulResetReason = null;
 
 // Audio State
 let currentAudio = null;
@@ -465,6 +472,14 @@ let ttsSessionId = 0;
 
 // DOM Elements
 const chatMessages = document.getElementById('chat-messages');
+const AUTO_SCROLL_THRESHOLD_PX = 80;
+let shouldAutoScroll = true;
+
+if (chatMessages) {
+    chatMessages.addEventListener('scroll', () => {
+        shouldAutoScroll = isChatNearBottom();
+    }, { passive: true });
+}
 const messageInput = document.getElementById('message-input');
 const sendBtn = document.getElementById('send-btn');
 const imagePreviewVal = document.getElementById('image-preview');
@@ -1421,14 +1436,108 @@ function clearChat() {
     }
 
     lastResponseId = null; // Clear session ID for Stateful Chat
+    statefulTurnCount = 0;
+    statefulEstimatedChars = 0;
+    statefulSummary = '';
+    statefulResetCount = 0;
+    pendingStatefulResetReason = 'manual_clear_chat';
     messages = [];
     chatMessages.innerHTML = '';
 }
 
 function clearContext() {
     lastResponseId = null;
+    statefulTurnCount = 0;
+    statefulEstimatedChars = statefulSummary.length;
+    pendingStatefulResetReason = 'manual_context_reset';
     showAlert(t('setting.memory.reset.success') + ' (Context/Session ID Cleared)');
     console.log('[Context] Manual context reset trigger.');
+}
+
+function buildStatefulSystemPrompt() {
+    let prompt = config.systemPrompt || 'You are a helpful AI assistant.';
+    if (statefulSummary) {
+        prompt += `\n\n### Conversation Summary ###\n${statefulSummary}\n\nUse this summary as compressed context from earlier turns.`;
+    }
+    return prompt;
+}
+
+function cleanContentForStatefulSummary(text) {
+    if (!text) return '';
+    return String(text)
+        .replace(/<think>[\s\S]*?<\/think>/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function summarizeMessagesForStatefulReset() {
+    const recent = messages.slice(-12);
+    const lines = recent.map((m, idx) => {
+        const label = m.role === 'assistant' ? 'Assistant' : 'User';
+        let content = cleanContentForStatefulSummary(m.content || '');
+        if (content.length > 320) {
+            content = content.slice(0, 320) + '...';
+        }
+        if (m.image) {
+            content = `[Image Attached] ${content}`.trim();
+        }
+        return `${idx + 1}. ${label}: ${content}`;
+    }).filter(Boolean);
+
+    let summary = lines.join('\n');
+    if (statefulSummary) {
+        summary = `Previous summary:\n${statefulSummary}\n\nRecent turns:\n${summary}`;
+    }
+
+    const maxLen = 1800;
+    if (summary.length > maxLen) {
+        summary = summary.slice(summary.length - maxLen);
+    }
+    return summary.trim();
+}
+
+function getStatefulRiskMetrics(nextUserText = '') {
+    const limitTurns = parseInt(config.statefulTurnLimit, 10) || 8;
+    const charBudget = parseInt(config.statefulCharBudget, 10) || 12000;
+    const projectedChars = statefulEstimatedChars + (nextUserText ? nextUserText.length : 0);
+    const turnFactor = Math.min(1, statefulTurnCount / Math.max(limitTurns, 1));
+    const charFactor = Math.min(1, projectedChars / Math.max(charBudget, 1));
+    const score = Math.round((turnFactor * 55 + charFactor * 45) * 100) / 100;
+
+    let level = 'low';
+    if (score >= 0.9) level = 'critical';
+    else if (score >= 0.7) level = 'high';
+    else if (score >= 0.45) level = 'medium';
+
+    return {
+        score,
+        level,
+        projectedChars,
+        turnLimit: limitTurns,
+        charBudget
+    };
+}
+
+function shouldResetStatefulContext(nextUserText = '') {
+    if (config.llmMode !== 'stateful' || config.disableStateful) {
+        return false;
+    }
+    const risk = getStatefulRiskMetrics(nextUserText);
+    return statefulTurnCount >= risk.turnLimit || risk.projectedChars >= risk.charBudget;
+}
+
+async function ensureStatefulContextBudget(nextUserText = '') {
+    if (!shouldResetStatefulContext(nextUserText)) {
+        return;
+    }
+
+    statefulSummary = summarizeMessagesForStatefulReset();
+    lastResponseId = null;
+    statefulTurnCount = 0;
+    statefulEstimatedChars = statefulSummary.length;
+    statefulResetCount += 1;
+    pendingStatefulResetReason = 'auto_summary_reset';
+    showToast('Stateful context compacted');
 }
 
 
@@ -1447,6 +1556,10 @@ async function sendMessage() {
     // Default text for vision if empty
     if (!text && currentImage) {
         text = (config.language === 'ko') ? '이미지를 설명해주세요.' : 'Please describe this image.';
+    }
+
+    if (config.llmMode === 'stateful') {
+        await ensureStatefulContextBudget(text);
     }
 
     // Stop and clear any existing audio/TTS
@@ -1502,7 +1615,7 @@ async function sendMessage() {
         payload = {
             model: config.model,
             input: inputData,
-            system_prompt: config.systemPrompt,
+            system_prompt: buildStatefulSystemPrompt(),
             temperature: config.temperature,
             stream: true
         };
@@ -1599,6 +1712,16 @@ async function streamResponse(payload, elementId) {
     if (currentUserLocation) {
         headers['X-User-Location'] = currentUserLocation;
     }
+    const statefulRisk = getStatefulRiskMetrics(typeof payload.input === 'string' ? payload.input : '');
+    headers['X-Stateful-Turn-Count'] = String(statefulTurnCount);
+    headers['X-Stateful-Est-Chars'] = String(statefulEstimatedChars);
+    headers['X-Stateful-Summary-Chars'] = String(statefulSummary.length);
+    headers['X-Stateful-Reset-Count'] = String(statefulResetCount);
+    headers['X-Stateful-Risk-Score'] = String(statefulRisk.score);
+    headers['X-Stateful-Risk-Level'] = statefulRisk.level;
+    if (pendingStatefulResetReason) {
+        headers['X-Stateful-Reset-Reason'] = pendingStatefulResetReason;
+    }
 
     // Use the Go server's API endpoint
     const response = await fetch('/api/chat', {
@@ -1650,6 +1773,10 @@ async function streamResponse(payload, elementId) {
             if (errorBody.includes("Could not find stored response for previous_response_id")) {
                 console.warn("[Stateful] previous_response_id became invalid. Resetting and retrying without it...");
                 lastResponseId = null;
+                statefulTurnCount = 0;
+                statefulEstimatedChars = statefulSummary.length;
+                statefulResetCount += 1;
+                pendingStatefulResetReason = 'invalid_previous_response_id';
                 // Re-attempt without current lastResponseId
                 delete payload.previous_response_id;
                 return await streamResponse(payload, elementId);
@@ -1660,6 +1787,7 @@ async function streamResponse(payload, elementId) {
         }
         throw new Error(errorDetails);
     }
+    pendingStatefulResetReason = null;
 
     await processStream(response, elementId);
 }
@@ -2131,6 +2259,10 @@ async function processStream(response, elementId) {
         const historyContent = fullText.trim();
         if (historyContent) {
             messages.push({ role: 'assistant', content: historyContent });
+            if (config.llmMode === 'stateful') {
+                statefulTurnCount += 1;
+                statefulEstimatedChars += historyContent.length;
+            }
         }
 
 
@@ -2143,6 +2275,7 @@ async function processStream(response, elementId) {
 }
 
 function appendMessage(msg) {
+    const wasNearBottom = isChatNearBottom();
     const div = document.createElement('div');
     div.className = `message ${msg.role}`;
     if (msg.id) div.id = msg.id;
@@ -2185,7 +2318,7 @@ function appendMessage(msg) {
 
     div.innerHTML = innerHtml;
     chatMessages.appendChild(div);
-    scrollToBottom();
+    scrollToBottom(wasNearBottom || msg.role === 'user');
 }
 
 // New helper functions
@@ -2370,6 +2503,7 @@ function showReasoningStatus(elementId, text, isFinal = false) {
 function updateMessageContent(id, text) {
     const el = document.getElementById(id);
     if (!el) return;
+    const wasNearBottom = isChatNearBottom();
 
     const bubble = el.querySelector('.message-bubble');
     let mdBody = bubble.querySelector('.markdown-body');
@@ -2415,12 +2549,21 @@ function updateMessageContent(id, text) {
         highlight.highlightElement(block);
     });
 
-    scrollToBottom();
+    scrollToBottom(wasNearBottom);
 }
 
 
-function scrollToBottom() {
+function isChatNearBottom() {
+    if (!chatMessages) return true;
+    const distanceFromBottom = chatMessages.scrollHeight - chatMessages.clientHeight - chatMessages.scrollTop;
+    return distanceFromBottom <= AUTO_SCROLL_THRESHOLD_PX;
+}
+
+function scrollToBottom(force = false) {
+    if (!chatMessages) return;
+    if (!force && !shouldAutoScroll) return;
     chatMessages.scrollTop = chatMessages.scrollHeight;
+    shouldAutoScroll = true;
 }
 
 // TTS: Speak a message using the Go server's /api/tts endpoint

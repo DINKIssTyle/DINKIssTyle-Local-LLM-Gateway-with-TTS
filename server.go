@@ -802,6 +802,13 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	userID := r.Header.Get("X-User-ID")
 	// Extract Client Location
 	locationInfo = r.Header.Get("X-User-Location")
+	statefulTurnCount := strings.TrimSpace(r.Header.Get("X-Stateful-Turn-Count"))
+	statefulEstChars := strings.TrimSpace(r.Header.Get("X-Stateful-Est-Chars"))
+	statefulSummaryChars := strings.TrimSpace(r.Header.Get("X-Stateful-Summary-Chars"))
+	statefulResetCount := strings.TrimSpace(r.Header.Get("X-Stateful-Reset-Count"))
+	statefulRiskScore := strings.TrimSpace(r.Header.Get("X-Stateful-Risk-Score"))
+	statefulRiskLevel := strings.TrimSpace(r.Header.Get("X-Stateful-Risk-Level"))
+	statefulResetReason := strings.TrimSpace(r.Header.Get("X-Stateful-Reset-Reason"))
 
 	if userID != "" {
 		authMgr.mu.RLock()
@@ -848,7 +855,21 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		"disallowed_cmds": len(disallowedCmds),
 		"disallowed_dirs": len(disallowedDirs),
 		"location":        compactText(locationInfo, 80),
+		"stateful_turns":  statefulTurnCount,
+		"stateful_chars":  statefulEstChars,
+		"summary_chars":   statefulSummaryChars,
+		"risk_score":      statefulRiskScore,
+		"risk_level":      statefulRiskLevel,
 	})
+	if statefulResetReason != "" {
+		AddDebugTrace("stateful", "reset", "Stateful conversation was compacted or reset", map[string]interface{}{
+			"user":         userID,
+			"reason":       statefulResetReason,
+			"turns_before": statefulTurnCount,
+			"chars_before": statefulEstChars,
+			"reset_count":  statefulResetCount,
+		})
+	}
 
 	// Sanitize endpoint: Remove trailing slash and optional /v1 suffix if user included it
 	endpoint := strings.TrimRight(endpointRaw, "/")
@@ -1072,11 +1093,15 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	json.Unmarshal(body, &tmpModel)
 	modelID = tmpModel.Model
 	AddDebugTrace("chat", "request.prepared", "Prepared upstream LLM request", map[string]interface{}{
-		"user":       userID,
-		"mode":       llmMode,
-		"model":      modelID,
-		"url":        llmURL,
-		"body_bytes": len(body),
+		"user":           userID,
+		"mode":           llmMode,
+		"model":          modelID,
+		"url":            llmURL,
+		"body_bytes":     len(body),
+		"stateful_turns": statefulTurnCount,
+		"stateful_chars": statefulEstChars,
+		"risk_score":     statefulRiskScore,
+		"risk_level":     statefulRiskLevel,
 	})
 
 	// Set SSE headers ONCE before turn loop
@@ -1954,6 +1979,10 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		"elapsed_ms":     time.Since(requestStart).Milliseconds(),
 		"response_chars": len(fullResponse),
 		"memory_logged":  enableMemory && len(messagesForMemory) > 0 && fullResponse != "",
+		"stateful_turns": statefulTurnCount,
+		"stateful_chars": statefulEstChars,
+		"risk_score":     statefulRiskScore,
+		"risk_level":     statefulRiskLevel,
 		"__payload":      fullResponse,
 	})
 }

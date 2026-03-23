@@ -155,7 +155,6 @@ body {
   overflow-x: hidden;
   /* Force horizontal containment */
   padding: 20px;
-  scroll-behavior: smooth;
   min-width: 0;
 }
 
