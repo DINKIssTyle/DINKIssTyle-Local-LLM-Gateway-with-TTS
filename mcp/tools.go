@@ -25,6 +25,15 @@ var (
 	memoryMu sync.Mutex
 )
 
+func compactMemoryText(input string, limit int) string {
+	input = strings.TrimSpace(input)
+	if limit <= 0 || len([]rune(input)) <= limit {
+		return input
+	}
+	runes := []rune(input)
+	return strings.TrimSpace(string(runes[:limit])) + "... (truncated)"
+}
+
 // GetCurrentTime returns the current local time in a readable format including timezone.
 func GetCurrentTime() (string, error) {
 	now := time.Now()
@@ -337,7 +346,7 @@ func SearchMemoryDB(userID, query string) (string, error) {
 
 // GetMemorySnapshot returns a formatted string of the most recent memories for system prompt injection.
 func GetMemorySnapshot(userID string) string {
-	results, err := SearchMemoriesByRecent(userID, 10)
+	results, err := SearchMemoriesByRecent(userID, 5)
 	if err != nil {
 		log.Printf("[MCP] Failed to get memory snapshot: %v", err)
 		return "No recent memories found."
@@ -348,7 +357,16 @@ func GetMemorySnapshot(userID string) string {
 
 	var sb strings.Builder
 	for _, r := range results {
-		sb.WriteString(fmt.Sprintf("- [%s] %s (Keywords: %s)\n", r.CreatedAt.Format("2006-01-02"), r.Summary, r.Keywords))
+		summary := strings.TrimSpace(r.Summary)
+		if summary == "" {
+			summary = "[Raw Interaction Record]"
+		}
+		keywords := strings.TrimSpace(r.Keywords)
+		if keywords != "" {
+			sb.WriteString(fmt.Sprintf("- [%s] %s | %s\n", r.CreatedAt.Format("2006-01-02"), compactMemoryText(summary, 120), compactMemoryText(keywords, 60)))
+			continue
+		}
+		sb.WriteString(fmt.Sprintf("- [%s] %s\n", r.CreatedAt.Format("2006-01-02"), compactMemoryText(summary, 120)))
 	}
 	return sb.String()
 }
@@ -357,22 +375,22 @@ func GetMemorySnapshot(userID string) string {
 // by stripping common Korean particles (조사) and stopwords.
 func ExtractKeywords(input string) []string {
 	inputLower := strings.ToLower(input)
-	
+
 	// Remove common punctuation
 	replacer := strings.NewReplacer(",", " ", ".", " ", "?", " ", "!", " ", "\"", " ", "'", " ", "(", " ", ")", " ", "-", " ")
 	clean := replacer.Replace(inputLower)
 	words := strings.Fields(clean)
 
 	var keywords []string
-	
+
 	// Words to completely ignore
 	stopwords := map[string]bool{
-		"그리고": true, "그래서": true, "하지만": true, "알려줘": true, "해줘": true, 
+		"그리고": true, "그래서": true, "하지만": true, "알려줘": true, "해줘": true,
 		"뭐야": true, "어때": true, "어디": true, "누구": true, "어떻게": true, "왜": true,
-		"the": true, "a": true, "an": true, "and": true, "or": true, "but": true, 
-		"in": true, "on": true, "at": true, "to": true, "for": true, "of": true, 
+		"the": true, "a": true, "an": true, "and": true, "or": true, "but": true,
+		"in": true, "on": true, "at": true, "to": true, "for": true, "of": true,
 		"with": true, "about": true, "like": true, "this": true, "that": true,
-		"tell": true, "me": true, "what": true, "who": true, "when": true, 
+		"tell": true, "me": true, "what": true, "who": true, "when": true,
 		"where": true, "why": true, "how": true,
 	}
 
@@ -426,7 +444,7 @@ func ExtractKeywords(input string) []string {
 			uniqueMap[k] = true
 		}
 	}
-	
+
 	return finalKeywords
 }
 
@@ -481,8 +499,8 @@ func AutoSearchMemory(userID, input string) string {
 		return ""
 	}
 
-	// Limit to top 5 for synthesis (increased from 3 to allow more discovery)
-	limit := 5
+	// Limit to top 3 for synthesis to keep the prompt compact.
+	limit := 3
 	if len(allResults) < limit {
 		limit = len(allResults)
 	}
@@ -490,7 +508,7 @@ func AutoSearchMemory(userID, input string) string {
 	var rawContextSb strings.Builder
 	for i := 0; i < limit; i++ {
 		r := allResults[i]
-		
+
 		// Metadata formatting: Handle empty summary/keywords gracefully
 		displaySummary := r.Summary
 		if displaySummary == "" {
@@ -503,25 +521,29 @@ func AutoSearchMemory(userID, input string) string {
 
 		rawContextSb.WriteString(fmt.Sprintf("\n--- MEMORY ID: %d | DATE: %s | KEYWORDS: %s ---\n", r.ID, r.CreatedAt.Format("2006-01-02"), displayKeywords))
 		rawContextSb.WriteString(fmt.Sprintf("Summary: %s\n", displaySummary))
-		rawContextSb.WriteString(fmt.Sprintf("Content: %s\n", r.FullText))
+		rawContextSb.WriteString(fmt.Sprintf("Content: %s\n", compactMemoryText(r.FullText, 400)))
 
 		// Increment hit count
-		_ = IncrementHitCount(r.ID) 
+		_ = IncrementHitCount(r.ID)
 	}
-	
+
 	rawContext := rawContextSb.String()
 
 	// Perform server-side memory synthesis
 	syn, err := SynthesizeMemoryContext(userID, input, rawContext)
 	if err != nil {
-		log.Printf("[MCP] Synthesize failed, falling back to raw context: %v", err)
-		return "\n[PROACTIVE MEMORY RETRIEVAL (Raw)]\n" + rawContext
+		log.Printf("[MCP] Synthesize failed, falling back to compact context: %v", err)
+		return "\n[PROACTIVE MEMORY RETRIEVAL]\n" + rawContext
+	}
+
+	if strings.TrimSpace(syn) == "" || strings.TrimSpace(syn) == "NO_RELEVANT_INFO" {
+		return ""
 	}
 
 	return "\n[PROACTIVE MEMORY RETRIEVAL (Synthesized)]\n" + syn
 }
 
-// SynthesizeMemoryContext makes a quick LLM call to extract only the facts relevant to the query 
+// SynthesizeMemoryContext makes a quick LLM call to extract only the facts relevant to the query
 // from the raw database records, filtering out noise.
 func SynthesizeMemoryContext(userID, query, rawMemories string) (string, error) {
 	prompt := fmt.Sprintf(`You are a background memory filtering agent.
@@ -553,7 +575,7 @@ Raw Logs:
 	}
 
 	reqBody, _ := json.Marshal(payload)
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -580,7 +602,6 @@ Raw Logs:
 		return "", err
 	}
 
-
 	if len(resData.Choices) > 0 {
 		content := strings.TrimSpace(resData.Choices[0].Message.Content)
 		if content == "NO_RELEVANT_INFO" || content == "" {
@@ -600,7 +621,7 @@ func ReadMemoryDB(userID string, memoryID int64) (string, error) {
 		return "", fmt.Errorf("db read failed: %v", err)
 	}
 
-	return fmt.Sprintf("Memory ID: %d\nDate: %s\nSummary: %s\nKeywords: %s\n\n--- Full Context ---\n%s", 
+	return fmt.Sprintf("Memory ID: %d\nDate: %s\nSummary: %s\nKeywords: %s\n\n--- Full Context ---\n%s",
 		mem.ID, mem.CreatedAt.Format("2006-01-02 15:04"), mem.Summary, mem.Keywords, mem.FullText), nil
 }
 

@@ -53,6 +53,24 @@ type StructuredToolCall struct {
 	ToolArguments interface{} `json:"tool_arguments"`
 }
 
+func compactText(input string, limit int) string {
+	input = strings.TrimSpace(input)
+	if limit <= 0 || len([]rune(input)) <= limit {
+		return input
+	}
+	runes := []rune(input)
+	return strings.TrimSpace(string(runes[:limit])) + "... (truncated)"
+}
+
+func compactToolResult(toolName, result string) string {
+	result = strings.TrimSpace(result)
+	if result == "" {
+		return fmt.Sprintf("Tool Result (%s): [empty]", toolName)
+	}
+
+	return fmt.Sprintf("Tool Result (%s):\n%s", toolName, compactText(result, 1200))
+}
+
 // getActiveCertPaths returns the paths to the active certificate and key pair.
 func getActiveCertPaths(appDataDir string, certDomain string) (string, string, bool) {
 	// 1. Try `{certDomain}.crt` / `{certDomain}.key`
@@ -883,11 +901,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			if !isStatefulTurn {
 				var envInfo string
 				if cwd, err := os.Getwd(); err == nil {
-					envInfo += fmt.Sprintf("- Current Working Directory: %s\n", cwd)
-				}
-				if home, err := os.UserHomeDir(); err == nil {
-					desktop := filepath.Join(home, "Desktop")
-					envInfo += fmt.Sprintf("- Desktop Path: %s\n", desktop)
+					envInfo = fmt.Sprintf("- Current Working Directory: %s\n", cwd)
 				}
 
 				// We use a marker to detect if we already injected instructions
@@ -897,7 +911,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				if enableMemory {
 					// 1. Memory Snapshot: 10 most recent summaries
 					snapshot := mcp.GetMemorySnapshot(userID)
-					
+
 					// 2. Auto-RAG: Proactively search for full context based on the current user request
 					var autoContext string
 					if messages, ok := reqMap["messages"].([]interface{}); ok && len(messages) > 0 {
@@ -906,7 +920,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 							if m, ok := messages[i].(map[string]interface{}); ok {
 								if role, ok := m["role"].(string); ok && role == "user" {
 									if content, ok := m["content"].(string); ok {
-										autoContext = mcp.AutoSearchMemory(userID, content)
+										autoContext = compactText(mcp.AutoSearchMemory(userID, content), 1200)
 										break
 									}
 								}
@@ -1692,7 +1706,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				}
 				reqMap = map[string]interface{}{
 					"model":                modelID,
-					"input":                fmt.Sprintf("Tool Result (%s): %s", lastToolName, result),
+					"input":                compactToolResult(lastToolName, result),
 					"previous_response_id": lastResponseID,
 					"stream":               true,
 				}
@@ -1702,12 +1716,12 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				// Add what the assistant just said (the tool call) - use the saved buffer
 				msgs = append(msgs, map[string]interface{}{
 					"role":    "assistant",
-					"content": lastSavedBufferForTurn,
+					"content": compactText(lastSavedBufferForTurn, 400),
 				})
 				// Add the result
 				msgs = append(msgs, map[string]interface{}{
 					"role":    "user",
-					"content": fmt.Sprintf("Tool Result (%s): %s", lastToolName, result),
+					"content": compactToolResult(lastToolName, result),
 				})
 				reqMap["messages"] = msgs
 			}
@@ -1773,29 +1787,18 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				}
 			}
 		} else {
-			// Standard/Stateless: Send full messages array with correction appended
-			var tempMap map[string]interface{}
-			if err := json.Unmarshal(body, &tempMap); err == nil {
-				if msgs, ok := tempMap["messages"].([]interface{}); ok {
-					newMessages := append(msgs, map[string]interface{}{
-						"role":    "assistant",
-						"content": fullResponse,
-					})
-					newMessages = append(newMessages, map[string]interface{}{
-						"role":    "system",
-						"content": correctionPrompt,
-					})
-
-					correctionReq = map[string]interface{}{
-						"model":       modelID,
-						"messages":    newMessages,
-						"stream":      true,
-						"temperature": 0.1,
-					}
-					if enableMCP {
-						correctionReq["integrations"] = []string{"mcp/dinkisstyle-gateway"}
-					}
-				}
+			// Standard/Stateless: Use a minimal correction request instead of replaying the full conversation.
+			correctionReq = map[string]interface{}{
+				"model": modelID,
+				"messages": []map[string]string{
+					{"role": "system", "content": "Return only the corrected tool call or plain answer."},
+					{"role": "user", "content": correctionPrompt},
+				},
+				"stream":      true,
+				"temperature": 0.1,
+			}
+			if enableMCP {
+				correctionReq["integrations"] = []string{"mcp/dinkisstyle-gateway"}
 			}
 		}
 
@@ -2091,7 +2094,7 @@ func logChatToHistory(userID string, messages []map[string]interface{}, assistan
 
 	// 2. Real-time Raw Memory Storage: Insert directly into SQLite
 	fullContext := fmt.Sprintf("User: %s\nAssistant: %s", lastUserMsg, assistantResponse)
-	
+
 	// We'll leave summary/keywords empty for raw interactions to keep the DB clean as requested.
 	id, err := mcp.InsertMemory(userID, "", "", fullContext)
 	if err != nil {

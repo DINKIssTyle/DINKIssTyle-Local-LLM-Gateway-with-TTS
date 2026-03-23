@@ -30,7 +30,8 @@ let config = {
     apiToken: '',
     llmMode: 'standard', // 'standard' or 'stateful'
     disableStateful: false, // LM Studio specific
-    micLayout: 'none' // 'none', 'left', 'right', 'bottom'
+    micLayout: 'none', // 'none', 'left', 'right', 'bottom'
+    chatFontSize: 16
 };
 
 // ============================================================================
@@ -854,6 +855,8 @@ function loadConfig() {
         headerModelName.textContent = config.model || 'No Model Set';
     }
 
+    applyChatFontSize();
+
     // Apply i18n translations
     // Apply i18n translations
     applyTranslations();
@@ -1122,10 +1125,12 @@ function saveConfig(closeModal = true) {
     config.llmMode = document.getElementById('cfg-llm-mode').value;
     config.disableStateful = document.getElementById('cfg-disable-stateful').checked;
     config.micLayout = document.getElementById('cfg-mic-layout').value;
+    config.chatFontSize = Math.max(12, Math.min(24, parseInt(config.chatFontSize, 10) || 16));
 
     // Update visibility immediately
     updateSettingsVisibility();
     updateMicLayout();
+    applyChatFontSize();
 
     // Reload dictionary since language changes
     loadTTSDictionary(config.ttsLang);
@@ -1215,6 +1220,31 @@ function saveConfig(closeModal = true) {
         closeSettingsModal();
     }
     showToast(t('action.save') + ' ✓');
+}
+
+function applyChatFontSize() {
+    const root = document.documentElement;
+    const fontSize = Math.max(12, Math.min(24, parseInt(config.chatFontSize, 10) || 16));
+    const lineHeight = fontSize >= 20 ? 1.7 : 1.6;
+
+    config.chatFontSize = fontSize;
+    root.style.setProperty('--chat-font-size', `${fontSize}px`);
+    root.style.setProperty('--chat-line-height', String(lineHeight));
+
+    if (typeof autoResizeInput === 'function') {
+        autoResizeInput();
+    }
+}
+
+function adjustChatFontSize(delta) {
+    const nextSize = Math.max(12, Math.min(24, (parseInt(config.chatFontSize, 10) || 16) + delta));
+    if (nextSize === config.chatFontSize) {
+        return;
+    }
+
+    config.chatFontSize = nextSize;
+    applyChatFontSize();
+    localStorage.setItem('appConfig', JSON.stringify(config));
 }
 
 async function syncServerConfig() {
@@ -2097,8 +2127,8 @@ async function processStream(response, elementId) {
         }
     } finally {
         // Finalize (Save to history even if aborted)
-        // Combine reasoning and content for history (reasoning first, then response)
-        const historyContent = reasoningBuffer + fullText;
+        // Keep only the user-visible answer in history to avoid ballooning context.
+        const historyContent = fullText.trim();
         if (historyContent) {
             messages.push({ role: 'assistant', content: historyContent });
         }
