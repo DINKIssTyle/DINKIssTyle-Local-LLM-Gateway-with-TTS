@@ -1591,7 +1591,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 							hasToolName := strings.Contains(lc, "search_web") ||
 								strings.Contains(lc, "personal_memory") ||
 								strings.Contains(lc, "read_user_document") ||
-								strings.Contains(lc, "read_web_page")
+								strings.Contains(lc, "read_web_page") ||
+								strings.Contains(lc, "read_buffered_source")
 
 							if strings.Contains(lc, "<|") ||
 								strings.Contains(lc, "function") ||

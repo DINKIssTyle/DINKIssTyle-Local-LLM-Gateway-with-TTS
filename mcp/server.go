@@ -87,13 +87,25 @@ func GetToolList() []Tool {
 		},
 		{
 			Name:        "read_web_page",
-			Description: "Read the text content of a specific URL. Use this ONLY when the user provides a URL or explicitly asks to read a specific page. DO NOT use this for describing images or identifying people in photos unless specifically requested.",
+			Description: "Fetch and buffer the text content of a specific URL for the current user. This returns a source handle plus summary, not the full page. After this tool, use read_buffered_source with the source_id and the user's question to inspect relevant excerpts.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"url": map[string]interface{}{"type": "string", "description": "URL to visit"},
 				},
 				"required": []string{"url"},
+			},
+		},
+		{
+			Name:        "read_buffered_source",
+			Description: "Read relevant excerpts from a previously buffered web source for the current user. Prefer this after read_web_page, naver_search, namu_wiki, or a buffered search result. If source_id is omitted, the most recent buffered source for this user is used.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"source_id":  map[string]interface{}{"type": "string", "description": "Buffered source ID returned by another web tool. Optional if you want the latest source."},
+					"query":      map[string]interface{}{"type": "string", "description": "Focused question or keywords to retrieve the most relevant excerpts."},
+					"max_chunks": map[string]interface{}{"type": "integer", "description": "Maximum number of excerpts to return. Optional."},
+				},
 			},
 		},
 		{
@@ -456,6 +468,10 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 			return "", fmt.Errorf("invalid arguments for search_web: %v", err)
 		}
 		result, err := SearchWeb(args.Query)
+		if err == nil {
+			source := saveBufferedWebSource(userID, toolName, args.Query, "", fmt.Sprintf("Search: %s", compactMemoryText(args.Query, 80)), result)
+			result = formatBufferedSourceHandle(source)
+		}
 		emitToolResultTrace(toolName, start, result, err)
 		return result, err
 
@@ -467,6 +483,23 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 			return "", fmt.Errorf("invalid arguments for read_web_page: %v", err)
 		}
 		result, err := ReadPage(args.URL)
+		if err == nil {
+			source := saveBufferedWebSource(userID, toolName, "", args.URL, "", result)
+			result = formatBufferedSourceHandle(source)
+		}
+		emitToolResultTrace(toolName, start, result, err)
+		return result, err
+
+	case "read_buffered_source":
+		var args struct {
+			SourceID  string `json:"source_id"`
+			Query     string `json:"query"`
+			MaxChunks int    `json:"max_chunks"`
+		}
+		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
+			return "", fmt.Errorf("invalid arguments for read_buffered_source: %v", err)
+		}
+		result, err := readBufferedSource(userID, args.SourceID, args.Query, args.MaxChunks)
 		emitToolResultTrace(toolName, start, result, err)
 		return result, err
 
@@ -541,6 +574,10 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 			return "", fmt.Errorf("invalid arguments for namu_wiki: %v", err)
 		}
 		result, err := SearchNamuwiki(args.Keyword)
+		if err == nil {
+			source := saveBufferedWebSource(userID, toolName, args.Keyword, fmt.Sprintf("https://namu.wiki/w/%s", args.Keyword), "", result)
+			result = formatBufferedSourceHandle(source)
+		}
 		emitToolResultTrace(toolName, start, result, err)
 		return result, err
 
@@ -552,6 +589,10 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 			return "", fmt.Errorf("invalid arguments for naver_search: %v", err)
 		}
 		result, err := SearchNaver(args.Query)
+		if err == nil {
+			source := saveBufferedWebSource(userID, toolName, args.Query, "", fmt.Sprintf("Naver: %s", compactMemoryText(args.Query, 80)), result)
+			result = formatBufferedSourceHandle(source)
+		}
 		emitToolResultTrace(toolName, start, result, err)
 		return result, err
 
@@ -638,6 +679,8 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 			}
 			Broadcast(fmt.Sprintf(`{"type": "tool_call.failure", "tool": "search_web", "reason": "%v"}`, err))
 		} else {
+			source := saveBufferedWebSource(userID, "search_web", args.Query, "", fmt.Sprintf("Search: %s", compactMemoryText(args.Query, 80)), content)
+			content = formatBufferedSourceHandle(source)
 			res.Result = map[string]interface{}{
 				"content": []map[string]interface{}{
 					{"type": "text", "text": content},
@@ -660,12 +703,38 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 			}
 			Broadcast(fmt.Sprintf(`{"type": "tool_call.failure", "tool": "read_web_page", "reason": "%v"}`, err))
 		} else {
+			source := saveBufferedWebSource(userID, "read_web_page", "", args.URL, "", content)
+			content = formatBufferedSourceHandle(source)
 			res.Result = map[string]interface{}{
 				"content": []map[string]interface{}{
 					{"type": "text", "text": content},
 				},
 			}
 			Broadcast(`{"type": "tool_call.success", "tool": "read_web_page"}`)
+		}
+	} else if params.Name == "read_buffered_source" {
+		var args struct {
+			SourceID  string `json:"source_id"`
+			Query     string `json:"query"`
+			MaxChunks int    `json:"max_chunks"`
+		}
+		json.Unmarshal(params.Arguments, &args)
+		content, err := readBufferedSource(userID, args.SourceID, args.Query, args.MaxChunks)
+		if err != nil {
+			res.Result = map[string]interface{}{
+				"content": []map[string]interface{}{
+					{"type": "text", "text": fmt.Sprintf("Error: %v", err)},
+				},
+				"isError": true,
+			}
+			Broadcast(fmt.Sprintf(`{"type": "tool_call.failure", "tool": "read_buffered_source", "reason": "%v"}`, err))
+		} else {
+			res.Result = map[string]interface{}{
+				"content": []map[string]interface{}{
+					{"type": "text", "text": content},
+				},
+			}
+			Broadcast(`{"type": "tool_call.success", "tool": "read_buffered_source"}`)
 		}
 	} else if params.Name == "search_memory" {
 		if !enableMemory {
@@ -806,6 +875,8 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 			}
 			Broadcast(fmt.Sprintf(`{"type": "tool_call.failure", "tool": "namu_wiki", "reason": "%v"}`, err))
 		} else {
+			source := saveBufferedWebSource(userID, "namu_wiki", args.Keyword, "", "", content)
+			content = formatBufferedSourceHandle(source)
 			res.Result = map[string]interface{}{
 				"content": []map[string]interface{}{
 					{"type": "text", "text": content},
@@ -828,6 +899,8 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 			}
 			Broadcast(fmt.Sprintf(`{"type": "tool_call.failure", "tool": "naver_search", "reason": "%v"}`, err))
 		} else {
+			source := saveBufferedWebSource(userID, "naver_search", args.Query, "", fmt.Sprintf("Naver: %s", compactMemoryText(args.Query, 80)), content)
+			content = formatBufferedSourceHandle(source)
 			res.Result = map[string]interface{}{
 				"content": []map[string]interface{}{
 					{"type": "text", "text": content},
