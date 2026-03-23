@@ -318,7 +318,15 @@
 
         <div id="chat-header">
             <span id="header-model-name" class="header-model-name">Loading...</span>
-            <div style="display: flex; gap: 4px;">
+            <div class="chat-header-actions">
+                <div class="font-size-controls" aria-label="Text size controls">
+                    <button class="icon-btn" onclick="adjustChatFontSize(-1)" title="Decrease text size">
+                        <span class="material-icons-round">remove</span>
+                    </button>
+                    <button class="icon-btn" onclick="adjustChatFontSize(1)" title="Increase text size">
+                        <span class="material-icons-round">add</span>
+                    </button>
+                </div>
                 <button class="icon-btn" onclick="clearChat()" title="Clear Chat">
                     <span class="material-icons-round">delete_outline</span>
                 </button>

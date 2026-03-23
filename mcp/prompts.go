@@ -9,12 +9,13 @@ import (
 // SystemPromptToolUsage: server.go에서 모델에게 도구 사용 가이드라인(TOOL CALL GUIDELINES)을 제공할 때 사용됩니다.
 func SystemPromptToolUsage(envInfo string) string {
 	prompt := fmt.Sprintf("\n\n### TOOL CALL GUIDELINES ###\n"+
-		"1. Use a SINGLE valid <tool_call> block for tool requests.\n"+
-		"2. DO NOT use search_web or read_web_page for person identification or image description unless explicitly asked.\n"+
-		"3. CURRENT_TIME: %s", time.Now().Format("2006-01-02 15:04:05 Monday"))
+		"1. For any tool use, output exactly one valid <tool_call> block.\n"+
+		"2. If no tool is needed, answer normally.\n"+
+		"3. Avoid search_web or read_web_page for person identification or image description unless explicitly asked.\n"+
+		"4. CURRENT_TIME: %s", time.Now().Format("2006-01-02 15:04:05 Monday"))
 
 	if envInfo != "" {
-		prompt += fmt.Sprintf("\n4. ENVIRONMENT INFO:\n%s", envInfo)
+		prompt += fmt.Sprintf("\n5. ENVIRONMENT INFO:\n%s", envInfo)
 	}
 
 	return prompt
@@ -26,26 +27,22 @@ func SystemPromptMemoryTemplate(staticMemory string, userProfile string, activeC
 	return fmt.Sprintf(`
 ### MEMORY CONTEXT ###
 
-#### STATIC MEMORY (Highest Authority)
+#### STATIC MEMORY
 %s
 
-#### USER PROFILE & LONG-TERM MEMORY
+#### USER PROFILE
 %s
 
-#### ACTIVE CONTEXT (Recent, Temporary)
+#### ACTIVE CONTEXT
 %s
 
 MEMORY & SEARCH RULES:
-1. The USER PROFILE section above contains summaries of past memories.
-2. If the user asks about something from the past NOT fully detailed above, use the 'search_memory' tool.
-3. **STRATEGIC SEARCH PROTOCOL**:
-   - If 'search_memory' returns "No relevant memories found", **DO NOT GIVE UP**.
-   - Immediately try **Alternative Keywords**: Names (e.g., "박노민"), Relationships ("아내", "배우자", "아들"), or synonyms ("생일", "년월일", "성함").
-   - If you see a memory ID with "[No Tags]" or "[Raw Interaction Record]" in the ACTIVE CONTEXT, ALWAYS use 'read_memory' to check its content. It often contains valuable unorganized interaction logs.
-4. 'search_memory' ONLY returns a short summary. You MUST ALWAYS follow up with 'read_memory' using the returned ID to get the full context.
-5. If the user provides a lead (e.g., "박노민의 아내 생일은?"), use "박노민" or "아내" as primary search keys immediately.
-6. Do NOT guess past details. ALWAYS search and read memory if unsure.
-7. Do NOT generate any tool call to save NEW memories. Saving new interactions is handled automatically in the background.
+1. Treat USER PROFILE as summary only.
+2. If past details are missing or uncertain, use 'search_memory'.
+3. After 'search_memory', call 'read_memory' for the most relevant result before relying on it.
+4. Try alternative names, relationships, or synonyms if the first search fails.
+5. Do not guess past details.
+6. Do not create tool calls to save memory; saving happens automatically.
 `, staticMemory, userProfile, activeContext)
 }
 
@@ -172,26 +169,15 @@ CONVERSATION:
 // SelfCorrectionPromptTemplate: 도구 호출 형식 오류 시 즉각 수정을 요청합니다.
 func SelfCorrectionPromptTemplate(badContent string) string {
 	return fmt.Sprintf(`
-SYSTEM ALERT: INVALID TOOL CALL FORMAT DETECTED.
+Return only one valid <tool_call> block.
+Do not explain anything.
+Do not include markdown.
 
-You MUST correct this immediately.
-
-If you output anything other than a single <tool_call> block, the request will fail.
-
-❌ WRONG:
-<tool_call>
-name: search_web
-query: test
-</tool_call>
-
-✅ CORRECT:
-<tool_call>{"name":"search_web","arguments":{"query":"weather in Seoul"}}</tool_call>
-
-Output ONLY the corrected <tool_call> block.
-Do not apologize.
-
-DETECTED CONTENT:
+Malformed output:
 %s
+
+Valid example:
+<tool_call>{"name":"search_web","arguments":{"query":"weather in Seoul"}}</tool_call>
 `, badContent[:min(len(badContent), 100)])
 }
 
