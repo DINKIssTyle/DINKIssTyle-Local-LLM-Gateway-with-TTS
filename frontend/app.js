@@ -2401,10 +2401,16 @@ function setToolCardState(elementId, state, summary = '', args = null, toolName 
     card.classList.remove('is-running', 'is-success', 'is-failure');
     if (state === 'failure') {
         card.classList.add('is-failure');
+        card.dataset.collapsed = 'true';
+        card.classList.add('collapsed');
     } else if (state === 'success') {
         card.classList.add('is-success');
+        card.dataset.collapsed = 'true';
+        card.classList.add('collapsed');
     } else {
         card.classList.add('is-running');
+        card.dataset.collapsed = 'false';
+        card.classList.remove('collapsed');
     }
 
     if (titleEl) {
@@ -2420,9 +2426,17 @@ function setToolCardState(elementId, state, summary = '', args = null, toolName 
         if (args && typeof args === 'object' && Object.keys(args).length > 0) {
             argsEl.hidden = false;
             argsEl.textContent = JSON.stringify(args, null, 2);
+            if (!summary && args.query) {
+                summaryEl.textContent = `Searching: ${args.query}`;
+            } else if (!summary && args.url) {
+                summaryEl.textContent = `Opening: ${args.url}`;
+            }
         } else if (typeof args === 'string' && args.trim()) {
             argsEl.hidden = false;
             argsEl.textContent = args;
+            if (!summary) {
+                summaryEl.textContent = args.trim();
+            }
         }
     }
 }

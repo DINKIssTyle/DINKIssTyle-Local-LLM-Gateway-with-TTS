@@ -345,9 +345,9 @@ func (a *App) startup(ctx context.Context) {
 	// Reload config now that paths are set up and files potentially copied
 	a.loadConfig()
 	if a.enableDebugTrace {
-		wruntime.WindowSetSize(ctx, 1000, 734)
+		wruntime.WindowSetSize(ctx, 1470, 800)
 	} else {
-		wruntime.WindowSetSize(ctx, 832, 683)
+		wruntime.WindowSetSize(ctx, 980, 800)
 	}
 
 	// Start Async Memory Worker (Disabled: Transitioned to real-time raw-to-DB model)
