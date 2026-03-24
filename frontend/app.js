@@ -89,6 +89,12 @@ const translations = {
         'setting.enableMCP.desc': 'Model Context Protocol 기능(웹 검색, 브라우징)을 활성화합니다.',
         'setting.enableMemory.label': '개인 메모리 활성화',
         'setting.enableMemory.desc': 'LLM이 사용자 정보를 파일에 기록하고 기억할 수 있게 합니다.',
+        'setting.statefulTurnLimit.label': 'Stateful Turn Limit',
+        'setting.statefulTurnLimit.desc': '(기본값: 8) LM Studio 모드에서 몇 턴까지 유지한 뒤 대화 문맥을 요약하고 새 체인으로 이어갈지 지정합니다.',
+        'setting.statefulCharBudget.label': 'Stateful Character Budget',
+        'setting.statefulCharBudget.desc': '(기본값: 12000) 활성 문맥의 예상 총 글자 수가 이 값을 넘기면 자동 compact가 실행됩니다.',
+        'setting.statefulTokenBudget.label': 'Stateful Token Budget',
+        'setting.statefulTokenBudget.desc': '(기본값: 10000) 자동 compact 판단에서 가장 우선으로 사용하는 예상 토큰 예산입니다.',
         'setting.memory.warning': '주의: 개인 정보가 PC에 평문으로 저장됩니다.',
         'setting.memory.open': '파일 열기',
         'setting.memory.reset': '메모리 초기화',
@@ -195,6 +201,12 @@ const translations = {
         'setting.enableMCP.desc': 'Enable integration with Model Context Protocol (web search, browsing)',
         'setting.enableMemory.label': 'Enable Personal Memory',
         'setting.enableMemory.desc': 'Allow LLM to remember personal details in a local file.',
+        'setting.statefulTurnLimit.label': 'Stateful Turn Limit',
+        'setting.statefulTurnLimit.desc': '(Default: 8) Choose how many turns LM Studio keeps before compacting the conversation into a summary and starting a fresh chain.',
+        'setting.statefulCharBudget.label': 'Stateful Character Budget',
+        'setting.statefulCharBudget.desc': '(Default: 12000) If the estimated active context grows past this many characters, automatic compaction runs.',
+        'setting.statefulTokenBudget.label': 'Stateful Token Budget',
+        'setting.statefulTokenBudget.desc': '(Default: 10000) Primary token safety threshold used to decide when automatic context compaction should trigger.',
         'setting.memory.warning': 'Warning: Personal data is stored unencrypted on local disk.',
         'setting.memory.open': 'Open File',
         'setting.memory.reset': 'Reset Memory',
@@ -617,7 +629,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Register Service Worker for PWA
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-            navigator.serviceWorker.register('/sw.js?v=2')
+            navigator.serviceWorker.register('/sw.js?v=3')
                 .then(reg => console.log('[PWA] Service Worker registered:', reg.scope))
                 .catch(err => console.warn('[PWA] Service Worker failed:', err));
         });
@@ -869,6 +881,12 @@ function loadConfig() {
     if (memEl) memEl.checked = config.enableMemory || false;
     const memControls = document.getElementById('memory-controls');
     if (memControls) memControls.style.display = config.enableMemory ? 'block' : 'none';
+    const statefulTurnLimitEl = document.getElementById('cfg-stateful-turn-limit');
+    if (statefulTurnLimitEl) statefulTurnLimitEl.value = parseInt(config.statefulTurnLimit, 10) || 8;
+    const statefulCharBudgetEl = document.getElementById('cfg-stateful-char-budget');
+    if (statefulCharBudgetEl) statefulCharBudgetEl.value = parseInt(config.statefulCharBudget, 10) || 12000;
+    const statefulTokenBudgetEl = document.getElementById('cfg-stateful-token-budget');
+    if (statefulTokenBudgetEl) statefulTokenBudgetEl.value = parseInt(config.statefulTokenBudget, 10) || 10000;
 
     document.getElementById('cfg-auto-tts').checked = config.autoTTS || false;
     document.getElementById('cfg-tts-lang').value = config.ttsLang;
@@ -921,6 +939,7 @@ function updateSettingsVisibility() {
     const disableStatefulContainer = document.getElementById('container-disable-stateful');
     const mcpContainer = document.getElementById('container-enable-mcp');
     const memContainer = document.getElementById('container-enable-memory');
+    const statefulBudgetContainer = document.getElementById('container-stateful-budget');
 
     // Default (Standard/OpenAI Compatible)
     let showToken = true; // User requested API Token visible in BOTH modes
@@ -949,6 +968,7 @@ function updateSettingsVisibility() {
     if (historyContainer) historyContainer.style.display = showHistory ? 'block' : 'none';
     if (disableStatefulContainer) disableStatefulContainer.style.display = showDisableStateful ? 'block' : 'none';
     if (mcpContainer) mcpContainer.style.display = showMCP ? 'block' : 'none';
+    if (statefulBudgetContainer) statefulBudgetContainer.style.display = mode === 'stateful' ? 'block' : 'none';
 
     // Memory setting is visible only when MCP is both supported (LM Studio mode) and enabled
     const mcpEnabled = document.getElementById('cfg-enable-mcp').checked;
@@ -979,7 +999,7 @@ function setupSettingsListeners() {
     });
 
     // Selects & Inputs: save on change
-    const autoSaveIds = ['cfg-api', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-disable-stateful'];
+    const autoSaveIds = ['cfg-api', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-disable-stateful', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget'];
     autoSaveIds.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.onchange = () => saveConfig(false);
@@ -1167,6 +1187,9 @@ function saveConfig(closeModal = true) {
 
     config.llmMode = document.getElementById('cfg-llm-mode').value;
     config.disableStateful = document.getElementById('cfg-disable-stateful').checked;
+    config.statefulTurnLimit = Math.max(1, parseInt(document.getElementById('cfg-stateful-turn-limit')?.value, 10) || 8);
+    config.statefulCharBudget = Math.max(1000, parseInt(document.getElementById('cfg-stateful-char-budget')?.value, 10) || 12000);
+    config.statefulTokenBudget = Math.max(1000, parseInt(document.getElementById('cfg-stateful-token-budget')?.value, 10) || 10000);
     config.micLayout = document.getElementById('cfg-mic-layout').value;
     config.chatFontSize = Math.max(12, Math.min(24, parseInt(config.chatFontSize, 10) || 16));
 

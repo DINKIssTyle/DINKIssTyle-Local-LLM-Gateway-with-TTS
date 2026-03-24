@@ -560,7 +560,7 @@ func handleLogin(am *AuthManager) http.HandlerFunc {
 			return
 		}
 
-		token, err := am.Authenticate(req.ID, req.Password)
+		token, err := am.Authenticate(req.ID, req.Password, req.RememberMe, r.UserAgent(), getClientAddress(r))
 		if err != nil || token == "" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
@@ -569,7 +569,7 @@ func handleLogin(am *AuthManager) http.HandlerFunc {
 		}
 
 		// Set session cookie
-		maxAge := 86400 // 24 hours default
+		maxAge := 0
 		if req.RememberMe {
 			maxAge = 86400 * 30 // 30 days
 		}
@@ -579,6 +579,8 @@ func handleLogin(am *AuthManager) http.HandlerFunc {
 			Value:    token,
 			Path:     "/",
 			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+			Secure:   r.TLS != nil,
 			MaxAge:   maxAge,
 		})
 
@@ -596,10 +598,13 @@ func handleLogout(am *AuthManager) http.HandlerFunc {
 		}
 
 		http.SetCookie(w, &http.Cookie{
-			Name:   "session",
-			Value:  "",
-			Path:   "/",
-			MaxAge: -1,
+			Name:     "session",
+			Value:    "",
+			Path:     "/",
+			MaxAge:   -1,
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+			Secure:   r.TLS != nil,
 		})
 
 		w.Header().Set("Content-Type", "application/json")

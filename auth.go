@@ -6,15 +6,20 @@
 package main
 
 import (
+	"crypto/sha256"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
+
+	"dinkisstyle-chat/mcp"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -51,7 +56,6 @@ type Session struct {
 // AuthManager handles user authentication
 type AuthManager struct {
 	users     map[string]*User
-	sessions  map[string]*Session
 	usersFile string
 	mu        sync.RWMutex
 	sessionMu sync.RWMutex
@@ -61,7 +65,6 @@ type AuthManager struct {
 func NewAuthManager(usersFile string) *AuthManager {
 	am := &AuthManager{
 		users:     make(map[string]*User),
-		sessions:  make(map[string]*Session),
 		usersFile: usersFile,
 	}
 	am.LoadUsers()
@@ -200,13 +203,16 @@ func (am *AuthManager) DeleteUser(id string) error {
 	defer am.mu.Unlock()
 
 	delete(am.users, id)
+	if err := mcp.DeleteAuthSessionsByUser(id); err != nil {
+		return err
+	}
 
 	// Save while still holding lock
 	return am.saveUsersLocked()
 }
 
-// Authenticate validates credentials and returns a session token
-func (am *AuthManager) Authenticate(id, password string) (string, error) {
+// Authenticate validates credentials and returns a session token.
+func (am *AuthManager) Authenticate(id, password string, rememberMe bool, userAgent, clientAddr string) (string, error) {
 	am.mu.RLock()
 	user, exists := am.users[id]
 	am.mu.RUnlock()
@@ -221,26 +227,34 @@ func (am *AuthManager) Authenticate(id, password string) (string, error) {
 
 	// Generate session token
 	token := generateToken()
-
-	am.sessionMu.Lock()
-	am.sessions[token] = &Session{
-		UserID:    id,
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+	tokenHash := hashToken(token)
+	expiresAt := time.Now().Add(24 * time.Hour)
+	if rememberMe {
+		expiresAt = time.Now().Add(30 * 24 * time.Hour)
 	}
-	am.sessionMu.Unlock()
+
+	if err := mcp.PurgeExpiredAuthSessions(time.Now()); err != nil {
+		return "", err
+	}
+	if err := mcp.InsertAuthSession(id, tokenHash, rememberMe, userAgent, clientAddr, expiresAt); err != nil {
+		return "", err
+	}
 
 	return token, nil
 }
 
 // ValidateSession checks if a session token is valid
 func (am *AuthManager) ValidateSession(token string) (*User, bool) {
-	am.sessionMu.RLock()
-	session, exists := am.sessions[token]
-	am.sessionMu.RUnlock()
-
-	if !exists || time.Now().After(session.ExpiresAt) {
+	tokenHash := hashToken(token)
+	session, err := mcp.GetAuthSessionByTokenHash(tokenHash)
+	if err != nil {
 		return nil, false
 	}
+	if time.Now().After(session.ExpiresAt) {
+		_ = mcp.DeleteAuthSession(tokenHash)
+		return nil, false
+	}
+	_ = mcp.TouchAuthSession(tokenHash, time.Now())
 
 	am.mu.RLock()
 	user := am.users[session.UserID]
@@ -251,9 +265,7 @@ func (am *AuthManager) ValidateSession(token string) (*User, bool) {
 
 // InvalidateSession removes a session
 func (am *AuthManager) InvalidateSession(token string) {
-	am.sessionMu.Lock()
-	delete(am.sessions, token)
-	am.sessionMu.Unlock()
+	_ = mcp.DeleteAuthSession(hashToken(token))
 }
 
 // GetUsers returns list of users (without passwords)
@@ -321,6 +333,9 @@ func (am *AuthManager) UpdatePassword(id, newPassword string) error {
 	}
 
 	user.PasswordHash = string(hash)
+	if err := mcp.DeleteAuthSessionsByUser(id); err != nil {
+		return err
+	}
 
 	return am.saveUsersLocked()
 }
@@ -412,6 +427,36 @@ func generateToken() string {
 	bytes := make([]byte, 32)
 	rand.Read(bytes)
 	return hex.EncodeToString(bytes)
+}
+
+func hashToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+func getClientAddress(r *http.Request) string {
+	for _, header := range []string{"X-Forwarded-For", "X-Real-IP"} {
+		value := strings.TrimSpace(r.Header.Get(header))
+		if value == "" {
+			continue
+		}
+		if header == "X-Forwarded-For" {
+			parts := strings.Split(value, ",")
+			if len(parts) > 0 {
+				return strings.TrimSpace(parts[0])
+			}
+		}
+		return value
+	}
+
+	host := strings.TrimSpace(r.RemoteAddr)
+	if host == "" {
+		return ""
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return h
+	}
+	return host
 }
 
 // AuthMiddleware wraps an http handler with authentication
