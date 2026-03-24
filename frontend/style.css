@@ -25,10 +25,18 @@
   --success-color: #53b37d;
   --chat-font-size: 16px;
   --chat-line-height: 1.6;
+  --app-height: 100vh;
+  --viewport-bottom-offset: 0px;
 }
 
 * {
   box-sizing: border-box;
+}
+
+html {
+  height: 100%;
+  min-height: 100%;
+  overflow: hidden;
 }
 
 body {
@@ -36,9 +44,16 @@ body {
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   background-color: var(--bg-color);
   color: var(--text-color);
-  height: 100vh;
+  height: var(--app-height);
+  min-height: var(--app-height);
   display: flex;
   overflow: hidden;
+}
+
+@supports (height: 100dvh) {
+  :root {
+    --app-height: 100dvh;
+  }
 }
 
 /* Setting Group (used in modal) */
@@ -109,6 +124,8 @@ body {
   flex-direction: column;
   background-color: var(--chat-bg);
   position: relative;
+  height: 100%;
+  max-height: 100%;
   min-height: 0;
   min-width: 0;
   /* Ensure container can shrink */
@@ -338,11 +355,14 @@ body {
 
 /* Input Area */
 #input-area {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
   padding: 12px 14px 14px;
-  padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px) + var(--viewport-bottom-offset));
   background-color: var(--chat-bg);
   border-top: 1px solid var(--border-color);
-  margin-bottom: 12px;
+  margin-bottom: 0;
 }
 
 .input-container {
@@ -773,9 +793,6 @@ body {
 
   /* Input Area Sticky */
   #input-area {
-    position: sticky;
-    bottom: 0;
-    z-index: 10;
     padding-bottom: env(safe-area-inset-bottom, 20px);
     background-color: var(--chat-bg);
   }
@@ -1456,7 +1473,7 @@ a:hover {
   width: 25vw;
   min-width: 200px;
   max-width: 400px;
-  height: 100vh;
+  height: var(--app-height);
   display: flex;
 }
 
@@ -1476,7 +1493,7 @@ body.layout-mic-bottom {
 
 
 #mic-layout-container.mic-layout-bottom {
-  width: 100vw;
+  width: 100%;
   height: 20vh;
   min-height: 120px;
   display: flex;

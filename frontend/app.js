@@ -523,6 +523,25 @@ const previewContainer = document.getElementById('preview-container');
 const chatProgressDock = document.getElementById('chat-progress-dock');
 const inputArea = document.getElementById('input-area');
 
+function updateViewportMetrics() {
+    const root = document.documentElement;
+    const vv = window.visualViewport;
+    const visibleHeight = vv ? vv.height : window.innerHeight;
+    const offsetTop = vv ? vv.offsetTop : 0;
+    const occupiedBottom = vv ? Math.max(0, window.innerHeight - (vv.height + vv.offsetTop)) : 0;
+
+    root.style.setProperty('--app-height', `${Math.round(visibleHeight + offsetTop)}px`);
+    root.style.setProperty('--viewport-bottom-offset', `${Math.round(occupiedBottom)}px`);
+}
+
+if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', updateViewportMetrics);
+    window.visualViewport.addEventListener('scroll', updateViewportMetrics);
+}
+window.addEventListener('resize', updateViewportMetrics, { passive: true });
+window.addEventListener('orientationchange', updateViewportMetrics);
+updateViewportMetrics();
+
 // Audio Context for Auto-play
 let audioContextUnlocked = false;
 let audioCtx = null;
@@ -588,6 +607,7 @@ function updateMediaSessionMetadata(text) {
 
 // Initialization
 document.addEventListener('DOMContentLoaded', async () => {
+    updateViewportMetrics();
     // Check authentication first
     await checkAuth();
 
