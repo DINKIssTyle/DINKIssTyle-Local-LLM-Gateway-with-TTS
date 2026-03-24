@@ -656,6 +656,7 @@ body {
 
 .chat-progress-dock {
   padding: 8px 14px 0;
+  margin-bottom: var(--input-bottom-gap);
   border-top: 1px solid rgba(255, 255, 255, 0.04);
   background: rgba(11, 15, 20, 0.96);
 }
