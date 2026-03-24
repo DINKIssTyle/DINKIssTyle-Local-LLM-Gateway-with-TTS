@@ -3,7 +3,7 @@
  * Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
  */
 
-const CACHE_NAME = 'dkst-chat-v6';
+const CACHE_NAME = 'dkst-chat-v7';
 const ASSETS = [
     '/',
     '/index.html',

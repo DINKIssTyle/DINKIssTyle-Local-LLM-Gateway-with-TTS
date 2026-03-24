@@ -2754,7 +2754,17 @@ function isChatNearBottom() {
 function scrollToBottom(force = false) {
     if (!chatMessages) return;
     if (!force && !shouldAutoScroll) return;
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    const applyScroll = () => {
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    };
+
+    applyScroll();
+    requestAnimationFrame(() => {
+        applyScroll();
+        requestAnimationFrame(applyScroll);
+    });
+    setTimeout(applyScroll, 0);
+    setTimeout(applyScroll, 32);
     shouldAutoScroll = true;
 }
 

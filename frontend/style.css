@@ -27,6 +27,7 @@
   --chat-line-height: 1.6;
   --app-height: 100vh;
   --viewport-bottom-offset: 0px;
+  --input-bottom-gap: 12px;
 }
 
 * {
@@ -356,7 +357,7 @@ body {
 /* Input Area */
 #input-area {
   position: sticky;
-  bottom: 0;
+  bottom: var(--input-bottom-gap);
   z-index: 20;
   padding: 12px 14px 14px;
   padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px) + var(--viewport-bottom-offset));
