@@ -1604,11 +1604,6 @@ async function sendMessage() {
     if (!text && !currentImage) return;
     if (isGenerating) return;
 
-    // Default text for vision if empty
-    if (!text && currentImage) {
-        text = (config.language === 'ko') ? '이미지를 설명해주세요.' : 'Please describe this image.';
-    }
-
     if (config.llmMode === 'stateful') {
         await ensureStatefulContextBudget(text);
     }
@@ -1661,10 +1656,14 @@ async function sendMessage() {
         // Stateful Chat Mode
         // LM Studio Stateful API (Experimental) uses a specific multimodal format:
         // { type: 'text', content: '...' } and { type: 'image', data_url: '...' }
-        const inputData = currentImage ? [
-            { type: 'text', content: text },
-            { type: 'image', data_url: currentImage }
-        ] : text;
+        let inputData = text;
+        if (currentImage) {
+            inputData = [];
+            if (text) {
+                inputData.push({ type: 'text', content: text });
+            }
+            inputData.push({ type: 'image', data_url: currentImage });
+        }
 
         payload = {
             model: config.model,
@@ -1686,12 +1685,14 @@ async function sendMessage() {
         const payloadHistory = messages.map(m => {
             if (m.image) {
                 // Vision format
+                const visionContent = [];
+                if (m.content) {
+                    visionContent.push({ type: 'text', text: m.content });
+                }
+                visionContent.push({ type: 'image_url', image_url: { url: m.image } });
                 return {
                     role: m.role,
-                    content: [
-                        { type: 'text', text: m.content || 'Please describe this image.' },
-                        { type: 'image_url', image_url: { url: m.image } }
-                    ]
+                    content: visionContent
                 };
             } else {
                 // Clean content for history
@@ -2245,7 +2246,7 @@ function appendMessage(msg) {
             <div class="message-inner">
                 <div class="message-label">You</div>
                 ${msg.image ? `<img src="${msg.image}" class="message-image">` : ''}
-                <div class="message-bubble">${escapeHtml(textContent)}</div>
+                ${textContent ? `<div class="message-bubble">${escapeHtml(textContent)}</div>` : ''}
             </div>`;
     } else if (msg.role === 'system') {
         div.innerHTML = `
