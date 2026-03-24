@@ -68,6 +68,21 @@ func createSchema() error {
 	);
 	
 	CREATE INDEX IF NOT EXISTS idx_memories_user_id ON memories(user_id);
+
+	CREATE TABLE IF NOT EXISTS auth_sessions (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id TEXT NOT NULL,
+		token_hash TEXT NOT NULL UNIQUE,
+		remember_me INTEGER NOT NULL DEFAULT 0,
+		user_agent TEXT NOT NULL DEFAULT '',
+		client_addr TEXT NOT NULL DEFAULT '',
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		last_used_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		expires_at DATETIME NOT NULL
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id);
+	CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires_at ON auth_sessions(expires_at);
 	`
 	_, err := db.Exec(query)
 	if err != nil {
@@ -79,6 +94,123 @@ func createSchema() error {
 
 	log.Println("[DB] Schema initialized successfully.")
 	return nil
+}
+
+type AuthSessionEntry struct {
+	ID         int64
+	UserID     string
+	TokenHash  string
+	RememberMe bool
+	UserAgent  string
+	ClientAddr string
+	CreatedAt  time.Time
+	LastUsedAt time.Time
+	ExpiresAt  time.Time
+}
+
+func InsertAuthSession(userID, tokenHash string, rememberMe bool, userAgent, clientAddr string, expiresAt time.Time) error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	query := `
+	INSERT INTO auth_sessions (user_id, token_hash, remember_me, user_agent, client_addr, expires_at)
+	VALUES (?, ?, ?, ?, ?, ?)`
+
+	_, err := db.Exec(query, userID, tokenHash, boolToInt(rememberMe), userAgent, clientAddr, expiresAt.UTC())
+	if err != nil {
+		return fmt.Errorf("failed to insert auth session: %w", err)
+	}
+	return nil
+}
+
+func GetAuthSessionByTokenHash(tokenHash string) (AuthSessionEntry, error) {
+	var s AuthSessionEntry
+	if db == nil {
+		return s, fmt.Errorf("database not initialized")
+	}
+
+	query := `
+	SELECT id, user_id, token_hash, remember_me, user_agent, client_addr, created_at, last_used_at, expires_at
+	FROM auth_sessions
+	WHERE token_hash = ?`
+
+	var rememberInt int
+	err := db.QueryRow(query, tokenHash).Scan(
+		&s.ID,
+		&s.UserID,
+		&s.TokenHash,
+		&rememberInt,
+		&s.UserAgent,
+		&s.ClientAddr,
+		&s.CreatedAt,
+		&s.LastUsedAt,
+		&s.ExpiresAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return s, err
+		}
+		return s, fmt.Errorf("failed to fetch auth session: %w", err)
+	}
+
+	s.RememberMe = rememberInt != 0
+	return s, nil
+}
+
+func TouchAuthSession(tokenHash string, usedAt time.Time) error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	_, err := db.Exec(`UPDATE auth_sessions SET last_used_at = ? WHERE token_hash = ?`, usedAt.UTC(), tokenHash)
+	if err != nil {
+		return fmt.Errorf("failed to update auth session: %w", err)
+	}
+	return nil
+}
+
+func DeleteAuthSession(tokenHash string) error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	_, err := db.Exec(`DELETE FROM auth_sessions WHERE token_hash = ?`, tokenHash)
+	if err != nil {
+		return fmt.Errorf("failed to delete auth session: %w", err)
+	}
+	return nil
+}
+
+func DeleteAuthSessionsByUser(userID string) error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	_, err := db.Exec(`DELETE FROM auth_sessions WHERE user_id = ?`, userID)
+	if err != nil {
+		return fmt.Errorf("failed to delete user auth sessions: %w", err)
+	}
+	return nil
+}
+
+func PurgeExpiredAuthSessions(now time.Time) error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	_, err := db.Exec(`DELETE FROM auth_sessions WHERE expires_at <= ?`, now.UTC())
+	if err != nil {
+		return fmt.Errorf("failed to purge expired auth sessions: %w", err)
+	}
+	return nil
+}
+
+func boolToInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
 }
 
 // InsertMemory saves a new memory entry into the database.

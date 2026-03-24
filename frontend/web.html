@@ -116,6 +116,20 @@
                         </div>
                     </div>
 
+                    <div class="setting-item" id="container-stateful-budget" style="display: none;">
+                        <label data-i18n="setting.statefulTurnLimit.label">Stateful Turn Limit</label>
+                        <p class="setting-desc" data-i18n="setting.statefulTurnLimit.desc">Maximum conversation turns before the app compacts context into a summary and starts a fresh LM Studio chain.</p>
+                        <input type="number" id="cfg-stateful-turn-limit" value="8" min="1" step="1">
+
+                        <label style="margin-top: 12px;" data-i18n="setting.statefulCharBudget.label">Stateful Character Budget</label>
+                        <p class="setting-desc" data-i18n="setting.statefulCharBudget.desc">Approximate total character budget for the active LM Studio context before auto-compaction runs.</p>
+                        <input type="number" id="cfg-stateful-char-budget" value="12000" min="1000" step="500">
+
+                        <label style="margin-top: 12px;" data-i18n="setting.statefulTokenBudget.label">Stateful Token Budget</label>
+                        <p class="setting-desc" data-i18n="setting.statefulTokenBudget.desc">Approximate token threshold used as the primary safety limit for automatic context compaction.</p>
+                        <input type="number" id="cfg-stateful-token-budget" value="10000" min="1000" step="500">
+                    </div>
+
                     <div class="setting-item" id="container-history">
                         <label data-i18n="setting.history.label">History Count</label>
                         <p class="setting-desc" data-i18n="setting.history.desc">(기본값: 10) 대화 기억 횟수</p>
@@ -376,7 +390,7 @@
     <!-- Libraries -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-    <script src="app.js"></script>
+    <script src="app.js?v=5"></script>
 
 </body>
 
