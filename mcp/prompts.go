@@ -15,10 +15,12 @@ func SystemPromptToolUsage(envInfo string) string {
 		"4. Web-reading tools may return a buffered source handle instead of the full text to save context.\n"+
 		"5. After search_web, read_web_page, naver_search, or namu_wiki, call read_buffered_source with source_id and the user's actual question when you need detailed evidence.\n"+
 		"6. If read_buffered_source omits source_id, it will use the most recent buffered source for this user.\n"+
-		"7. CURRENT_TIME: %s", time.Now().Format("2006-01-02 15:04:05 Monday"))
+		"7. Avoid repeating the same search_web or read_web_page call with near-identical inputs in one answer, but one refined follow-up search is acceptable if it materially improves evidence quality.\n"+
+		"8. If read_web_page fails or times out, do not retry the exact same page immediately. Prefer answering from the buffered search evidence, or read a different relevant source if that would clearly improve quality.\n"+
+		"9. CURRENT_TIME: %s", time.Now().Format("2006-01-02 15:04:05 Monday"))
 
 	if envInfo != "" {
-		prompt += fmt.Sprintf("\n8. ENVIRONMENT INFO:\n%s", envInfo)
+		prompt += fmt.Sprintf("\n10. ENVIRONMENT INFO:\n%s", envInfo)
 	}
 
 	return prompt

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
@@ -43,9 +44,15 @@ func GetCurrentTime() (string, error) {
 
 // SearchWeb performs a search using DuckDuckGo Lite and returns a summary.
 func SearchWeb(query string) (string, error) {
+	originalQuery := query
+	query = normalizeSearchQuery(query)
 	log.Printf("[MCP] Searching Web for: %s", query)
 	start := time.Now()
-	EmitTrace("mcp", "search_web.start", "Starting web search", traceDetails("query", query))
+	traceArgs := []interface{}{"query", query}
+	if query != originalQuery {
+		traceArgs = append(traceArgs, "original_query", originalQuery)
+	}
+	EmitTrace("mcp", "search_web.start", "Starting web search", traceDetails(traceArgs...))
 
 	// Use DuckDuckGo Lite for easier parsing
 	searchURL := fmt.Sprintf("https://lite.duckduckgo.com/lite/?q=%s", url.QueryEscape(query))
@@ -188,8 +195,8 @@ func ReadPage(pageURL string) (string, error) {
 	ctx, cancel := chromedp.NewContext(allocCtx)
 	defer cancel()
 
-	// Set a generous timeout for complex pages + Cloudflare challenge
-	ctx, cancel = context.WithTimeout(ctx, 60*time.Second)
+	timeout := readPageTimeoutForURL(pageURL)
+	ctx, cancel = context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	var res string
@@ -208,9 +215,10 @@ func ReadPage(pageURL string) (string, error) {
 
 		chromedp.Navigate(pageURL),
 
-		// 3. Anti-Detection: Wait for Cloudflare challenge to resolve (dynamic, up to 15s)
+		// 3. Anti-Detection: Wait briefly for challenge pages, but keep the total budget bounded.
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			for i := 0; i < 15; i++ {
+			maxChallengeWait := challengeWaitIterations(timeout)
+			for i := 0; i < maxChallengeWait; i++ {
 				var title string
 				if err := chromedp.Evaluate(`document.title`, &title).Do(ctx); err != nil {
 					return nil // Page might not be ready yet
@@ -221,7 +229,7 @@ func ReadPage(pageURL string) (string, error) {
 					strings.Contains(titleLower, "attention required") ||
 					strings.Contains(titleLower, "checking your browser") ||
 					strings.Contains(titleLower, "please wait") {
-					log.Printf("[MCP] Cloudflare challenge detected (title: %s), waiting... (%d/15)", title, i+1)
+					log.Printf("[MCP] Cloudflare challenge detected (title: %s), waiting... (%d/%d)", title, i+1, maxChallengeWait)
 					time.Sleep(1 * time.Second)
 					continue
 				}
@@ -328,6 +336,82 @@ func ReadPage(pageURL string) (string, error) {
 
 	EmitTrace("mcp", "read_web_page.complete", "Page read completed", traceDetails("url", pageURL, "elapsed_ms", durationMs(start), "chars", len(res)))
 	return res, nil
+}
+
+func readPageTimeoutForURL(pageURL string) time.Duration {
+	parsed, err := url.Parse(pageURL)
+	if err != nil {
+		return 25 * time.Second
+	}
+
+	host := strings.ToLower(parsed.Hostname())
+	switch {
+	case host == "":
+		return 25 * time.Second
+	case strings.Contains(host, "wikipedia.org"),
+		strings.Contains(host, "wikimedia.org"),
+		strings.Contains(host, "docs."),
+		strings.Contains(host, ".gov"),
+		strings.Contains(host, ".edu"),
+		strings.Contains(host, "developer."),
+		strings.Contains(host, "openai.com"):
+		return 35 * time.Second
+	case strings.Contains(host, "instagram.com"),
+		strings.Contains(host, "facebook.com"),
+		strings.Contains(host, "x.com"),
+		strings.Contains(host, "twitter.com"),
+		strings.Contains(host, "mydramalist.com"),
+		strings.Contains(host, "tiktok.com"):
+		return 18 * time.Second
+	default:
+		return 25 * time.Second
+	}
+}
+
+func challengeWaitIterations(timeout time.Duration) int {
+	seconds := int(timeout / time.Second)
+	switch {
+	case seconds >= 35:
+		return 12
+	case seconds >= 25:
+		return 9
+	default:
+		return 6
+	}
+}
+
+func normalizeSearchQuery(query string) string {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return query
+	}
+
+	var symbolCount int
+	for _, r := range query {
+		if unicode.IsSymbol(r) {
+			symbolCount++
+		}
+	}
+
+	// Heuristic: if the query is visibly polluted with symbol-heavy mojibake,
+	// strip symbol runes but keep letters, numbers, marks, spaces and punctuation.
+	if symbolCount == 0 || symbolCount*4 < len([]rune(query)) {
+		return query
+	}
+
+	var b strings.Builder
+	for _, r := range query {
+		switch {
+		case unicode.IsLetter(r), unicode.IsNumber(r), unicode.IsMark(r), unicode.IsSpace(r), unicode.IsPunct(r):
+			b.WriteRune(r)
+		}
+	}
+
+	cleaned := strings.Join(strings.Fields(b.String()), " ")
+	if cleaned == "" {
+		return query
+	}
+	return cleaned
 }
 
 // ManageMemory is deprecated. All memory is handled via SQLite (SearchMemoryDB / ReadMemoryDB).

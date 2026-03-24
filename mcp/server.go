@@ -486,6 +486,15 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 		if err == nil {
 			source := saveBufferedWebSource(userID, toolName, "", args.URL, "", result)
 			result = formatBufferedSourceHandle(source)
+		} else {
+			result = formatBufferedFallbackAfterToolError(userID, toolName, args.URL, err)
+			EmitTrace("mcp", "tool.fallback", "Using buffered fallback after page read failure", traceDetails(
+				"tool", toolName,
+				"user", userID,
+				"url", args.URL,
+				"error", errorDetail(err),
+			))
+			err = nil
 		}
 		emitToolResultTrace(toolName, start, result, err)
 		return result, err
@@ -695,13 +704,19 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 		json.Unmarshal(params.Arguments, &args)
 		content, err := ReadPage(args.URL)
 		if err != nil {
+			content = formatBufferedFallbackAfterToolError(userID, "read_web_page", args.URL, err)
 			res.Result = map[string]interface{}{
 				"content": []map[string]interface{}{
-					{"type": "text", "text": fmt.Sprintf("Error: %v", err)},
+					{"type": "text", "text": content},
 				},
-				"isError": true,
 			}
-			Broadcast(fmt.Sprintf(`{"type": "tool_call.failure", "tool": "read_web_page", "reason": "%v"}`, err))
+			EmitTrace("mcp", "tool.fallback", "Using buffered fallback after page read failure", traceDetails(
+				"tool", "read_web_page",
+				"user", userID,
+				"url", args.URL,
+				"error", errorDetail(err),
+			))
+			Broadcast(`{"type": "tool_call.success", "tool": "read_web_page"}`)
 		} else {
 			source := saveBufferedWebSource(userID, "read_web_page", "", args.URL, "", content)
 			content = formatBufferedSourceHandle(source)

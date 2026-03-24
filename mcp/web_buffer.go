@@ -151,6 +151,36 @@ func getBufferedWebSource(userID, sourceID string) (*BufferedWebSource, error) {
 	return source, nil
 }
 
+func formatBufferedFallbackAfterToolError(userID, failedTool, target string, err error) string {
+	source, sourceErr := getBufferedWebSource(userID, "")
+	if sourceErr != nil || source == nil {
+		return fmt.Sprintf(
+			"%s could not be completed for target %q. Error: %v. Do not retry the same page read immediately. Answer using the evidence already gathered, and clearly note that direct page fetch failed.",
+			failedTool,
+			strings.TrimSpace(target),
+			err,
+		)
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s could not be completed for target %q.\n", failedTool, strings.TrimSpace(target))
+	fmt.Fprintf(&b, "Error: %v\n", err)
+	fmt.Fprintf(&b, "Use the existing buffered source instead of retrying the same page immediately.\n")
+	fmt.Fprintf(&b, "Buffered Source ID: %s\n", source.SourceID)
+	if source.Title != "" {
+		fmt.Fprintf(&b, "Buffered Title: %s\n", source.Title)
+	}
+	if source.Query != "" {
+		fmt.Fprintf(&b, "Buffered Query: %s\n", source.Query)
+	}
+	if source.URL != "" {
+		fmt.Fprintf(&b, "Buffered URL: %s\n", source.URL)
+	}
+	fmt.Fprintf(&b, "Buffered Summary: %s\n", source.Summary)
+	fmt.Fprintf(&b, "If more detail is needed, call read_buffered_source with this source_id and the user's question. Otherwise answer from the buffered evidence now.")
+	return b.String()
+}
+
 func summarizeBufferedContent(content string) string {
 	lines := strings.FieldsFunc(content, func(r rune) bool {
 		return r == '\n' || r == '\r'

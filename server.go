@@ -1131,6 +1131,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	needsCorrection := false
 	var badContentCapture string
 	var lastResponseID string // Captured from chat.end for stateful chaining
+	toolUsageCounts := make(map[string]int)
+	toolSignatureCounts := make(map[string]int)
 
 	// --- TURN LOOP START ---
 	// We allow up to 10 turns (tool call cycles) per request
@@ -1757,7 +1759,36 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 			// 1. Execute Tool
 			toolStart := time.Now()
-			result, err := mcp.ExecuteToolByName(lastToolName, []byte(lastToolArgsStr), userID, enableMemory, disabledTools)
+			toolUsageCounts[lastToolName]++
+			toolSig := lastToolName + ":" + compactText(strings.TrimSpace(lastToolArgsStr), 240)
+			toolSignatureCounts[toolSig]++
+
+			var result string
+			var err error
+			if (lastToolName == "search_web" || lastToolName == "naver_search") && toolUsageCounts[lastToolName] > 3 {
+				result = fmt.Sprintf("Tool budget reached for %s. Do not search again in this answer. Use the evidence already buffered and answer the user directly.", lastToolName)
+				AddDebugTrace("chat", "tool.skipped", "Skipped repeated web search due to per-request budget", map[string]interface{}{
+					"turn":  turn,
+					"tool":  lastToolName,
+					"count": toolUsageCounts[lastToolName],
+				})
+			} else if lastToolName == "read_web_page" && toolUsageCounts[lastToolName] > 2 {
+				result = "read_web_page already ran multiple times in this answer. Avoid more page reads unless the user explicitly asks to retry. Answer from buffered search evidence or use read_buffered_source."
+				AddDebugTrace("chat", "tool.skipped", "Skipped repeated page read due to per-request budget", map[string]interface{}{
+					"turn":  turn,
+					"tool":  lastToolName,
+					"count": toolUsageCounts[lastToolName],
+				})
+			} else if toolSignatureCounts[toolSig] > 1 {
+				result = fmt.Sprintf("Duplicate tool call prevented for %s with near-identical arguments. Use existing buffered evidence and continue answering.", lastToolName)
+				AddDebugTrace("chat", "tool.skipped", "Skipped duplicate tool call with same arguments", map[string]interface{}{
+					"turn":  turn,
+					"tool":  lastToolName,
+					"count": toolSignatureCounts[toolSig],
+				})
+			} else {
+				result, err = mcp.ExecuteToolByName(lastToolName, []byte(lastToolArgsStr), userID, enableMemory, disabledTools)
+			}
 			var toolResultEvt map[string]interface{}
 			if err != nil {
 				log.Printf("[handleChat] Tool Execution Failed: %v", err)
