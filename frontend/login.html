@@ -76,6 +76,12 @@
             background: rgba(255, 255, 255, 0.05);
         }
 
+        .refresh-btn svg {
+            width: 20px;
+            height: 20px;
+            display: block;
+        }
+
         .cert-btn {
             display: inline-flex;
             align-items: center;
@@ -114,6 +120,33 @@
         .login-header p {
             color: var(--text-secondary);
             margin-top: 8px;
+        }
+
+        .status-banner {
+            display: none;
+            margin-top: 16px;
+            padding: 14px 16px;
+            border-radius: 10px;
+            font-size: 14px;
+            line-height: 1.5;
+            text-align: left;
+            border: 1px solid transparent;
+        }
+
+        .status-banner.show {
+            display: block;
+        }
+
+        .status-banner.offline {
+            background: rgba(248, 81, 73, 0.12);
+            border-color: rgba(248, 81, 73, 0.28);
+            color: #ffb3ad;
+        }
+
+        .status-banner.info {
+            background: rgba(88, 166, 255, 0.12);
+            border-color: rgba(88, 166, 255, 0.24);
+            color: #c6e2ff;
         }
 
         .form-group {
@@ -182,19 +215,27 @@
             color: var(--text-secondary);
             font-size: 12px;
         }
+
+        .hidden {
+            display: none !important;
+        }
     </style>
 </head>
 
 <body>
     <div class="login-container">
         <button class="refresh-btn" onclick="window.location.reload(true)" title="새로고침(PWA, 캐시 등등)">
-            <span class="material-icons-round" style="font-size: 20px;">autorenew</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path fill="currentColor"
+                    d="M12 6V3L8 7l4 4V8c2.76 0 5 2.24 5 5a5 5 0 0 1-8.66 3.54l-1.42 1.42A7 7 0 1 0 19 13c0-3.87-3.13-7-7-7Zm-5 5a5 5 0 0 1 8.66-3.54l1.42-1.42A7 7 0 1 0 5 11h2Z" />
+            </svg>
         </button>
 
         <div class="login-header">
             <img src="appicon.png" alt="App Icon" style="width: 48px; height: 48px; margin-bottom: 15px;">
             <h1>DKST LLM Chat</h1>
             <p>Sign in to continue</p>
+            <div id="status-banner" class="status-banner" role="status" aria-live="polite"></div>
         </div>
 
         <div id="auth-container" style="display: none; text-align: center;">
@@ -244,8 +285,66 @@
     </div>
 
     <script>
+        const authContainer = document.getElementById('auth-container');
+        const loginForm = document.getElementById('login-form');
+        const statusBanner = document.getElementById('status-banner');
+        const loginSubtitle = document.querySelector('.login-header p');
+        const certBtn = document.querySelector('.cert-btn');
+
+        function setBanner(message = '', kind = 'info') {
+            statusBanner.textContent = message;
+            statusBanner.className = `status-banner ${kind}`;
+            if (message) {
+                statusBanner.classList.add('show');
+            }
+        }
+
+        function showOfflineState() {
+            authContainer.style.display = 'none';
+            loginForm.style.display = 'none';
+            loginSubtitle.textContent = 'Offline';
+            setBanner('현재 오프라인입니다. 서버에 다시 연결되면 로그인할 수 있습니다.', 'offline');
+            if (certBtn) certBtn.classList.add('hidden');
+        }
+
+        function showLoginState() {
+            authContainer.style.display = 'none';
+            loginForm.style.display = 'block';
+            loginSubtitle.textContent = 'Sign in to continue';
+            setBanner('', 'info');
+            if (certBtn) certBtn.classList.remove('hidden');
+        }
+
+        function showAuthenticatedState(userID) {
+            document.getElementById('auth-user').textContent = userID;
+            authContainer.style.display = 'block';
+            loginForm.style.display = 'none';
+            loginSubtitle.textContent = 'Signed in';
+            setBanner('', 'info');
+            if (certBtn) certBtn.classList.remove('hidden');
+        }
+
+        async function fetchJSONWithTimeout(url, options = {}, timeoutMs = 2500) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+            try {
+                const response = await fetch(url, {
+                    ...options,
+                    signal: controller.signal
+                });
+                return response;
+            } finally {
+                clearTimeout(timeoutId);
+            }
+        }
+
         async function handleLogin(e) {
             e.preventDefault();
+
+            if (!navigator.onLine) {
+                showOfflineState();
+                return;
+            }
 
             const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
@@ -257,7 +356,7 @@
             errorEl.classList.remove('show');
 
             try {
-                const response = await fetch('/api/login', {
+                const response = await fetchJSONWithTimeout('/api/login', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -281,8 +380,7 @@
                     errorEl.classList.add('show');
                 }
             } catch (err) {
-                errorEl.textContent = 'Connection error';
-                errorEl.classList.add('show');
+                showOfflineState();
             } finally {
                 btn.disabled = false;
             }
@@ -291,8 +389,8 @@
         async function handleLogout() {
             try {
                 await fetch('/api/logout', { method: 'POST' });
-                document.getElementById('auth-container').style.display = 'none';
-                document.getElementById('login-form').style.display = 'block';
+                authContainer.style.display = 'none';
+                loginForm.style.display = 'block';
                 document.getElementById('password').value = '';
                 // Keep username if saved
             } catch (e) {
@@ -300,34 +398,45 @@
             }
         }
 
-        // Check auth and setup UI
-        (async function () {
+        async function refreshLoginState() {
             const savedUser = localStorage.getItem('savedUsername');
             if (savedUser) {
                 document.getElementById('username').value = savedUser;
                 document.getElementById('remember-me').checked = true;
             }
 
+            if (!navigator.onLine) {
+                showOfflineState();
+                return;
+            }
+
             try {
-                const response = await fetch('/api/auth/check');
+                const response = await fetchJSONWithTimeout('/api/auth/check', {}, 2500);
                 const data = await response.json();
 
-                const authContainer = document.getElementById('auth-container');
-                const loginForm = document.getElementById('login-form');
-
                 if (data.authenticated) {
-                    document.getElementById('auth-user').textContent = data.user_id;
-                    authContainer.style.display = 'block';
-                    loginForm.style.display = 'none';
+                    showAuthenticatedState(data.user_id);
                 } else {
-                    authContainer.style.display = 'none';
-                    loginForm.style.display = 'block';
+                    showLoginState();
                 }
             } catch (e) {
-                // Fallback to login form on error
-                document.getElementById('login-form').style.display = 'block';
+                showOfflineState();
             }
-        })();
+        }
+
+        // Check auth and setup UI
+        window.addEventListener('online', refreshLoginState);
+        window.addEventListener('offline', showOfflineState);
+
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js?v=5').catch(err => {
+                    console.warn('Service worker registration failed:', err);
+                });
+            });
+        }
+
+        refreshLoginState();
     </script>
 </body>
 

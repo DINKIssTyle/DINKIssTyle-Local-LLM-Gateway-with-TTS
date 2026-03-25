@@ -3,14 +3,16 @@
  * Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
  */
 
-const CACHE_NAME = 'dkst-chat-v8';
+const CACHE_NAME = 'dkst-chat-v10';
 const ASSETS = [
     '/',
     '/index.html',
+    '/login.html',
     '/web.html',
     '/style.css',
     '/icons.css',
     '/app.js',
+    '/appicon.png',
     '/fonts/MaterialIconsRound-Regular.otf',
     '/favicon-32x32.png',
     '/apple-touch-icon.png'
@@ -47,6 +49,18 @@ self.addEventListener('fetch', event => {
 
     event.respondWith(
         fetch(event.request).catch(() => {
+            if (event.request.mode === 'navigate') {
+                return caches.match('/login.html').then(response => {
+                    if (response) {
+                        return response;
+                    }
+                    return new Response('Offline login page is not cached.', {
+                        status: 503,
+                        headers: new Headers({ 'Content-Type': 'text/plain' })
+                    });
+                });
+            }
+
             return caches.match(event.request).then(response => {
                 if (response) {
                     return response;
