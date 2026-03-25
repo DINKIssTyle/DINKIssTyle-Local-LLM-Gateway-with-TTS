@@ -2515,6 +2515,7 @@ function setToolCardState(elementId, state, summary = '', args = null, toolName 
     const historyEl = card.querySelector('.tool-card-history');
     const activeToolName = toolName || card.dataset.toolName || 'Tool';
     const previewText = extractToolPreview(args, summary);
+    const lastPreviewText = card.dataset.lastPreviewText || '';
 
     card.classList.remove('is-running', 'is-success', 'is-failure');
     if (state === 'failure') {
@@ -2538,13 +2539,18 @@ function setToolCardState(elementId, state, summary = '', args = null, toolName 
         nameEl.textContent = formatToolDisplayName(activeToolName);
     }
     card.dataset.toolName = activeToolName;
+    if (previewText) {
+        card.dataset.lastPreviewText = previewText;
+    }
 
     if (summaryEl) {
         let statusLabel = 'Done';
-        if (state === 'running') statusLabel = 'Running';
+        if (state === 'running') statusLabel = previewText || lastPreviewText || 'Running';
         else if (state === 'failure') statusLabel = 'Failed';
         else if (summary && !/tool execution finished/i.test(summary)) statusLabel = summary;
         summaryEl.textContent = statusLabel;
+        summaryEl.classList.toggle('is-query-preview', state === 'running' && !!(previewText || lastPreviewText));
+        summaryEl.title = state === 'running' && (previewText || lastPreviewText) ? (previewText || lastPreviewText) : statusLabel;
     }
     if (headerGroupEl) {
         headerGroupEl.classList.toggle('is-live', state === 'running');
