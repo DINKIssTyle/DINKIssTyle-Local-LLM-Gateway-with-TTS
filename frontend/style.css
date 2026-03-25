@@ -549,6 +549,25 @@ body {
   color: #aeb7c4;
 }
 
+.reasoning-title.is-live,
+.tool-header-group.is-live {
+  color: transparent;
+  background-image: linear-gradient(
+    110deg,
+    rgba(190, 199, 212, 0.7) 0%,
+    rgba(190, 199, 212, 0.7) 34%,
+    rgba(255, 255, 255, 0.98) 50%,
+    rgba(190, 199, 212, 0.72) 66%,
+    rgba(190, 199, 212, 0.7) 100%
+  );
+  background-size: 220% 100%;
+  background-position: 120% 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: toolQuerySheen 2.8s ease-in-out infinite;
+}
+
 .reasoning-status.collapsed .reasoning-chevron,
 .tool-status-card.collapsed .reasoning-chevron {
   transform: rotate(0deg);
@@ -591,51 +610,55 @@ body {
 }
 
 .tool-card-body {
-  padding: 12px 14px 6px;
+  padding: 8px 14px 4px 42px;
 }
 
 .tool-status-card.collapsed .tool-card-body {
   display: none;
 }
 
-.tool-card-name {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text-color);
+.tool-header-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.tool-card-summary {
-  margin-top: 8px;
+.tool-header-separator {
+  color: rgba(174, 183, 196, 0.52);
+}
+
+.tool-header-name,
+.tool-header-status {
+  font-size: 13px;
+  font-weight: 600;
+  color: #c6d0de;
+}
+
+.tool-header-status {
   color: var(--text-muted);
-  font-size: 13px;
+}
+
+.tool-card-query {
+  font-size: 12px;
   line-height: 1.5;
+  color: rgba(188, 198, 214, 0.9);
+  letter-spacing: 0.01em;
+  padding-left: 2px;
 }
 
-.tool-card-summary.is-running::after {
-  content: '';
-  display: inline-block;
-  width: 1.4em;
-  text-align: left;
-  overflow: hidden;
-  vertical-align: bottom;
-  animation: runningDots 1.2s steps(4, end) infinite;
-}
-
-@keyframes runningDots {
+@keyframes toolQuerySheen {
   0% {
-    content: '';
-  }
-  25% {
-    content: '.';
-  }
-  50% {
-    content: '..';
-  }
-  75% {
-    content: '...';
+    background-position: 120% 0;
   }
   100% {
-    content: '';
+    background-position: -120% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reasoning-title.is-live,
+  .tool-header-group.is-live {
+    animation: none;
   }
 }
 

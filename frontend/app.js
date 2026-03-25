@@ -2057,16 +2057,13 @@ async function processStream(response, elementId) {
 
                     // Handle MCP Tool Calls - Display only, NO SPEECH
                     else if (json.type === 'tool_call.start') {
-                        const toolName = json.tool || 'Running';
+                        const toolName = json.tool || 'Tool';
                         lastToolCallHtml = toolName;
-                        setToolCardState(elementId, 'running', 'Running', null, toolName);
+                        setToolCardState(elementId, 'running', '', null, toolName);
                     }
                     else if (json.type === 'tool_call.arguments' && json.arguments) {
                         const toolName = json.tool || 'Tool';
-                        const summary = json.arguments.query
-                            ? `Query: ${json.arguments.query}`
-                            : 'Arguments received.';
-                        setToolCardState(elementId, 'running', summary, json.arguments, toolName);
+                        setToolCardState(elementId, 'running', '', json.arguments, toolName);
                     }
                     else if (json.type === 'tool_call.success') {
                         setToolCardState(elementId, 'success', 'Tool execution finished.');
@@ -2392,7 +2389,7 @@ function ensureReasoningCard(elementId) {
         card.innerHTML = `
             <button type="button" class="reasoning-header" onclick="toggleReasoningCard(this)">
                 <span class="reasoning-chevron material-icons-round">play_arrow</span>
-                <span class="reasoning-title">Thinking...</span>
+                <span class="reasoning-title is-live">Thinking...</span>
             </button>
             <div class="reasoning-body"></div>`;
         reasoningHost.appendChild(card);
@@ -2427,12 +2424,16 @@ function ensureToolCard(elementId, toolName = 'Tool') {
     card.innerHTML = `
         <button type="button" class="reasoning-header tool-strip-header" onclick="toggleReasoningCard(this)">
             <span class="reasoning-chevron material-icons-round">play_arrow</span>
-            <span class="reasoning-title">${escapeHtml(`MCP · ${toolName}`)}</span>
+            <span class="tool-header-group is-live">
+                <span class="reasoning-title">MCP</span>
+                <span class="tool-header-separator" aria-hidden="true">•</span>
+                <span class="tool-header-name">${escapeHtml(formatToolDisplayName(toolName))}</span>
+                <span class="tool-header-separator" aria-hidden="true">•</span>
+                <span class="tool-header-status">Running</span>
+            </span>
         </button>
         <div class="tool-card-body">
-            <div class="tool-card-name">${escapeHtml(toolName)}</div>
-            <div class="tool-card-summary is-running">Running</div>
-            <pre class="tool-card-args" hidden></pre>
+            <div class="tool-card-query" hidden></div>
         </div>`;
     toolsHost.appendChild(card);
     msgEl.dataset.activeToolCard = card.id;
@@ -2452,16 +2453,13 @@ function setToolCardState(elementId, state, summary = '', args = null, toolName 
     }
     if (!card) return;
 
-    if (toolName) {
-        const nameEl = card.querySelector('.tool-card-name');
-        if (nameEl) nameEl.textContent = toolName;
-        card.dataset.toolName = toolName;
-    }
-
     const titleEl = card.querySelector('.reasoning-title');
-    const summaryEl = card.querySelector('.tool-card-summary');
-    const argsEl = card.querySelector('.tool-card-args');
+    const headerGroupEl = card.querySelector('.tool-header-group');
+    const nameEl = card.querySelector('.tool-header-name');
+    const summaryEl = card.querySelector('.tool-header-status');
+    const queryEl = card.querySelector('.tool-card-query');
     const activeToolName = toolName || card.dataset.toolName || 'Tool';
+    const previewText = extractToolPreview(args, summary);
 
     card.classList.remove('is-running', 'is-success', 'is-failure');
     if (state === 'failure') {
@@ -2479,31 +2477,61 @@ function setToolCardState(elementId, state, summary = '', args = null, toolName 
     }
 
     if (titleEl) {
-        titleEl.textContent = `MCP · ${activeToolName}`;
+        titleEl.textContent = 'MCP';
     }
-    if (summaryEl && summary) summaryEl.textContent = summary;
+    if (nameEl) {
+        nameEl.textContent = formatToolDisplayName(activeToolName);
+    }
+    card.dataset.toolName = activeToolName;
+
     if (summaryEl) {
-        const shouldAnimateRunning = state === 'running' && /^running$/i.test((summaryEl.textContent || '').trim());
-        summaryEl.classList.toggle('is-running', shouldAnimateRunning);
+        let statusLabel = 'Done';
+        if (state === 'running') statusLabel = 'Running';
+        else if (state === 'failure') statusLabel = 'Failed';
+        else if (summary && !/tool execution finished/i.test(summary)) statusLabel = summary;
+        summaryEl.textContent = statusLabel;
+    }
+    if (headerGroupEl) {
+        headerGroupEl.classList.toggle('is-live', state === 'running');
     }
 
-    if (argsEl) {
-        if (args && typeof args === 'object' && Object.keys(args).length > 0) {
-            argsEl.hidden = false;
-            argsEl.textContent = JSON.stringify(args, null, 2);
-            if (!summary && args.query) {
-                summaryEl.textContent = `Searching: ${args.query}`;
-            } else if (!summary && args.url) {
-                summaryEl.textContent = `Opening: ${args.url}`;
-            }
-        } else if (typeof args === 'string' && args.trim()) {
-            argsEl.hidden = false;
-            argsEl.textContent = args;
-            if (!summary) {
-                summaryEl.textContent = args.trim();
+    if (queryEl) {
+        const detailText = previewText || (state === 'failure' ? summary : '');
+        queryEl.hidden = !detailText || state !== 'running';
+        queryEl.textContent = detailText || '';
+    }
+}
+
+function extractToolPreview(args, summary = '') {
+    if (args && typeof args === 'object') {
+        const candidateKeys = ['query', 'url', 'text', 'prompt', 'input', 'title'];
+        for (const key of candidateKeys) {
+            const value = args[key];
+            if (typeof value === 'string' && value.trim()) {
+                return value.trim();
             }
         }
     }
+
+    if (typeof args === 'string' && args.trim()) {
+        return args.trim();
+    }
+
+    if (summary && !/^running$/i.test(summary.trim()) && !/^tool execution finished\.?$/i.test(summary.trim())) {
+        return summary.trim();
+    }
+
+    return '';
+}
+
+function formatToolDisplayName(toolName = '') {
+    const cleaned = String(toolName || '').trim();
+    if (!cleaned) return 'Tool';
+
+    return cleaned
+        .replace(/[_-]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .replace(/\b\w/g, char => char.toUpperCase());
 }
 
 // New helper functions
@@ -2660,7 +2688,10 @@ function showReasoningStatus(elementId, text, isFinal = false) {
         card.classList.add('collapsed');
         card.dataset.durationMs = String(durationMs);
         if (metaEl) metaEl.textContent = 'Done';
-        if (titleEl) titleEl.textContent = formatThoughtDuration(durationMs);
+        if (titleEl) {
+            titleEl.classList.remove('is-live');
+            titleEl.textContent = formatThoughtDuration(durationMs);
+        }
         return;
     }
 
@@ -2681,7 +2712,10 @@ function showReasoningStatus(elementId, text, isFinal = false) {
     card.classList.remove('collapsed');
     card.dataset.collapsed = 'false';
     if (metaEl) metaEl.textContent = 'Live';
-    if (titleEl) titleEl.textContent = 'Thinking...';
+    if (titleEl) {
+        titleEl.classList.add('is-live');
+        titleEl.textContent = 'Thinking...';
+    }
     bodyEl.textContent = cleanText;
 }
 
@@ -2860,7 +2894,7 @@ async function speakMessage(text, btn = null) {
 function cleanTextForTTS(text) {
     if (!text) return '';
 
-    let cleaned = text;
+    let cleaned = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
     // 1. Remove Structural Artifacts (Tools, Thinking, HTML)
     // Remove tool status messages (content validation)
@@ -2902,9 +2936,13 @@ function cleanTextForTTS(text) {
     // Let's remove blocks entirely. Inline: keep text.
     cleaned = cleaned.replace(/`/g, ''); // Remove inline backticks
 
-    // Remove Header Hashes (# Title -> Title.)
-    // Add period if missing to ensure pause
-    cleaned = cleaned.replace(/^(#{1,6})\s+(.+?)([.!?]?)$/gm, '$2$3.');
+    // Convert Markdown headings into explicit paragraph breaks for stronger pauses.
+    cleaned = cleaned.replace(/^(#{1,6})\s+(.+?)([.!?]?)$/gm, (_, hashes, title, punct) => {
+        const level = hashes.length;
+        const suffix = punct || '.';
+        const pauseBreak = level <= 2 ? '\n\n' : '\n';
+        return `${title}${suffix}${pauseBreak}`;
+    });
 
     // Remove Bold/Italic wrappers (**text**, __text__, *text*, _text_)
     cleaned = cleaned.replace(/(\*\*|__)(.*?)\1/g, '$2');
@@ -2913,10 +2951,10 @@ function cleanTextForTTS(text) {
     // Remove Blockquotes (>)
     cleaned = cleaned.replace(/^>\s+/gm, '');
     // Remove Horizontal Rules (---)
-    cleaned = cleaned.replace(/^([-*_]){3,}\s*$/gm, '.');
-    // Remove List Markers (-, *, 1.)
-    cleaned = cleaned.replace(/^\s*[-*+]\s+/gm, '');
-    cleaned = cleaned.replace(/^\s*\d+\.\s+/gm, '');
+    cleaned = cleaned.replace(/^([-*_]){3,}\s*$/gm, '\n\n');
+    // Treat list items as separate spoken units with an explicit boundary.
+    cleaned = cleaned.replace(/^\s*[-*+]\s+(.+)$/gm, '\n$1.\n');
+    cleaned = cleaned.replace(/^\s*(\d+)[\.\)]\s+(.+)$/gm, '\n$1. $2.\n');
 
     // 5. Remove Emojis and Symbols (Consolidated Regex)
     // Ranges: Emoticons, Symbols, Transport, Flags, Dingbats, Shapes, Arrows, etc.
@@ -2937,10 +2975,11 @@ function cleanTextForTTS(text) {
 
     // Ensure sentence spacing (e.g. "end.Next" -> "end. Next")
     cleaned = cleaned.replace(/([.!?])(?=[^ \n])/g, '$1 ');
+    cleaned = cleaned.replace(/([^\s.!?])\n/g, '$1.\n');
+    cleaned = cleaned.replace(/\n([^\s])/g, '\n$1');
 
     // Normalize Whitespace
-    cleaned = cleaned.replace(/\r\n/g, '\n');
-    cleaned = cleaned.replace(/\n{3,}/g, '\n\n'); // Max 2 newlines
+    cleaned = cleaned.replace(/\n{4,}/g, '\n\n\n'); // Preserve strong paragraph/list pauses
     cleaned = cleaned.replace(/[ \t]+/g, ' ');    // Collapse spaces
     cleaned = cleaned.replace(/^\s+|\s+$/gm, ''); // Trim lines
 
@@ -2988,10 +3027,13 @@ function feedStreamingTTS(displayText) {
 
         // Get the new portion of text since last commit
         const newText = displayText.substring(streamingTTSCommittedIndex);
-        if (!newText || newText.length < 5) break; // Need at least some content
+        if (!newText || newText.length < 3) break; // Need at least some content
 
         let committed = null;
         let advanceBy = 0;
+        const hasQueuedAudio = firstChunkPlayedInCurrentSession();
+        const firstChunkTarget = Math.min(parseInt(config.chunkSize) || 200, 40);
+        const regularChunkTarget = Math.max(parseInt(config.chunkSize) || 200, 80);
 
         // PRIORITY 1: Check for Code Blocks (Skip them entirely)
         const codeBlockMatch = newText.match(/(.*?)```[\s\S]*?```/);
@@ -3028,7 +3070,8 @@ function feedStreamingTTS(displayText) {
             const newlineMatch = newText.match(/^([\s\S]*?\n)/);
             if (newlineMatch && newlineMatch[1].trim()) {
                 const potentialCommit = streamingTTSBuffer + cleanTextForTTS(newlineMatch[1]);
-                if (potentialCommit.length >= 10 || streamingTTSBuffer.length > 0) {
+                const newlineTarget = hasQueuedAudio ? 10 : 6;
+                if (potentialCommit.length >= newlineTarget || streamingTTSBuffer.length > 0) {
                     committed = potentialCommit;
                     streamingTTSBuffer = "";
                     advanceBy = newlineMatch[1].length;
@@ -3042,10 +3085,11 @@ function feedStreamingTTS(displayText) {
 
         // PRIORITY 3: Sentence Endings (.!?)
         if (!committed) {
-            const sentenceMatch = newText.match(/^([\s\S]*?[.!?])(\s+[A-Z가-힣])/);
+            const sentenceMatch = newText.match(/^([\s\S]*?[.!?])(?:\s+|$)/);
             if (sentenceMatch && sentenceMatch[1].trim()) {
                 const potentialCommit = streamingTTSBuffer + cleanTextForTTS(sentenceMatch[1]);
-                if (potentialCommit.length >= config.chunkSize) {
+                const targetLength = hasQueuedAudio ? regularChunkTarget : firstChunkTarget;
+                if (potentialCommit.length >= targetLength) {
                     committed = potentialCommit;
                     streamingTTSBuffer = "";
                     advanceBy = sentenceMatch[1].length;
@@ -3098,10 +3142,11 @@ function finalizeStreamingTTS(finalDisplayText) {
 function pushToStreamingTTSQueue(text, force = false) {
     if (!text || !text.trim()) return;
 
-    const MIN_CHUNK_LENGTH = 50;
+    const hasQueuedAudio = ttsQueue.length > 0 || isPlayingQueue;
+    const minChunkLength = hasQueuedAudio ? 40 : 18;
 
     // Split into smaller chunks if needed (by paragraph/sentence within the segment)
-    const paragraphs = text.split(/\n\s*\n+/);
+    const paragraphs = text.split(/\n+/);
     const newChunks = [];
 
     for (const para of paragraphs) {
@@ -3119,7 +3164,7 @@ function pushToStreamingTTSQueue(text, force = false) {
             if (!trimmedPart) continue;
 
             // If adding this part exceeds chunkSize and we have content, queue current chunk
-            if ((currentChunk + " " + trimmedPart).length > config.chunkSize && (currentChunk.length >= MIN_CHUNK_LENGTH || force)) {
+            if ((currentChunk + " " + trimmedPart).length > config.chunkSize && (currentChunk.length >= minChunkLength || force)) {
                 // Only add if it has actual speakable content
                 if (/[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ0-9]/.test(currentChunk)) {
                     ttsQueue.push(currentChunk.trim());
@@ -3131,7 +3176,7 @@ function pushToStreamingTTSQueue(text, force = false) {
         }
 
         // Queue paragraph remainder if long enough OR forced
-        if ((currentChunk.length >= MIN_CHUNK_LENGTH || force) && /[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ0-9]/.test(currentChunk)) {
+        if ((currentChunk.length >= minChunkLength || force) && /[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ0-9]/.test(currentChunk)) {
             ttsQueue.push(currentChunk.trim());
             newChunks.push(currentChunk.trim());
             currentChunk = "";
@@ -3153,6 +3198,10 @@ function pushToStreamingTTSQueue(text, force = false) {
 // Global TTS Audio Cache and Prefetch System
 // ============================================================================
 const ttsAudioCache = new Map(); // text -> Promise<url>
+
+function firstChunkPlayedInCurrentSession() {
+    return ttsQueue.length > 0 || isPlayingQueue;
+}
 
 /**
  * Prefetch audio for a given text chunk

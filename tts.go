@@ -9,6 +9,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -28,6 +29,46 @@ import (
 	ort "github.com/yalue/onnxruntime_go"
 	"golang.org/x/text/unicode/norm"
 )
+
+type memoryWriteSeeker struct {
+	buf []byte
+	pos int64
+}
+
+func (m *memoryWriteSeeker) Write(p []byte) (int, error) {
+	end := m.pos + int64(len(p))
+	if end > int64(len(m.buf)) {
+		grow := make([]byte, end)
+		copy(grow, m.buf)
+		m.buf = grow
+	}
+	copy(m.buf[m.pos:end], p)
+	m.pos = end
+	return len(p), nil
+}
+
+func (m *memoryWriteSeeker) Seek(offset int64, whence int) (int64, error) {
+	var next int64
+	switch whence {
+	case 0:
+		next = offset
+	case 1:
+		next = m.pos + offset
+	case 2:
+		next = int64(len(m.buf)) + offset
+	default:
+		return 0, fmt.Errorf("invalid whence: %d", whence)
+	}
+	if next < 0 {
+		return 0, fmt.Errorf("negative position: %d", next)
+	}
+	m.pos = next
+	return next, nil
+}
+
+func (m *memoryWriteSeeker) Bytes() []byte {
+	return bytes.Clone(m.buf)
+}
 
 // Available languages for multilingual TTS
 var AvailableLangs = []string{"en", "ko", "es", "pt", "fr"}
@@ -579,21 +620,14 @@ func LoadTTSConfig(onnxDir string) (TTSConfig, error) {
 
 // GenerateWAV generates WAV bytes from audio data
 func GenerateWAV(audioData []float32, sampleRate int) ([]byte, error) {
-	// Create temp file (wav.NewEncoder needs io.WriteSeeker)
-	tmpFile, err := os.CreateTemp("", "tts_*.wav")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create temp file: %w", err)
-	}
-	defer os.Remove(tmpFile.Name())
-	defer tmpFile.Close()
-
 	intData := make([]int, len(audioData))
 	for i, sample := range audioData {
 		clamped := math.Max(-1.0, math.Min(1.0, float64(sample)))
 		intData[i] = int(clamped * 32767)
 	}
 
-	encoder := wav.NewEncoder(tmpFile, sampleRate, 16, 1, 1)
+	out := &memoryWriteSeeker{}
+	encoder := wav.NewEncoder(out, sampleRate, 16, 1, 1)
 	audioBuf := &audio.IntBuffer{
 		Data:           intData,
 		Format:         &audio.Format{SampleRate: sampleRate, NumChannels: 1},
@@ -608,9 +642,7 @@ func GenerateWAV(audioData []float32, sampleRate int) ([]byte, error) {
 		return nil, err
 	}
 
-	// Read back the file
-	tmpFile.Seek(0, 0)
-	return os.ReadFile(tmpFile.Name())
+	return out.Bytes(), nil
 }
 
 // GenerateMP3 generates MP3 bytes from audio data using LAME encoder
@@ -677,6 +709,18 @@ func GenerateAudio(audioData []float32, sampleRate int, format string) ([]byte, 
 // Helper functions
 func preprocessText(text string, lang string) string {
 	text = norm.NFKD.String(text)
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+
+	// Convert markdown structure into explicit pause boundaries before stripping symbols.
+	text = regexp.MustCompile(`(?m)^(#{1,6})\s+(.+?)([.!?]?)\s*$`).ReplaceAllString(text, "$2$3\n\n")
+	text = regexp.MustCompile(`(?m)^\s*[-*+]\s+(.+?)\s*$`).ReplaceAllString(text, "$1.\n")
+	text = regexp.MustCompile(`(?m)^\s*(\d+)[\.\)]\s+(.+?)\s*$`).ReplaceAllString(text, "$1. $2.\n")
+	text = regexp.MustCompile(`(?m)^([-*_]){3,}\s*$`).ReplaceAllString(text, "\n\n")
+
+	text = regexp.MustCompile(`\n\s*\n+`).ReplaceAllString(text, ". . ")
+	text = regexp.MustCompile(`([^\s.!?])\n`).ReplaceAllString(text, "$1. ")
+	text = regexp.MustCompile(`\n+`).ReplaceAllString(text, ", ")
 
 	// Remove all characters except allowed ones (Letters, Numbers, Basic Punctuation)
 	// We use \p{L} to support accented characters for French, Spanish, Portuguese, etc.
