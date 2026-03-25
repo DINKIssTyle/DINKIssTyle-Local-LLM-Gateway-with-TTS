@@ -708,10 +708,17 @@ body {
 }
 
 .chat-progress-dock {
-  padding: 8px 14px 0;
-  margin-bottom: var(--input-bottom-gap);
-  border-top: 1px solid rgba(255, 255, 255, 0.04);
-  background: rgba(11, 15, 20, 0.96);
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: calc(100% + 8px);
+  z-index: 24;
+  padding: 10px 12px 8px;
+  border: 1px solid rgba(95, 140, 255, 0.12);
+  border-radius: 14px;
+  background: rgba(11, 15, 20, 0.94);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(10px);
 }
 
 .llm-progress-card {

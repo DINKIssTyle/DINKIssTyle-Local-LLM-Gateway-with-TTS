@@ -2435,7 +2435,7 @@ function ensureReasoningCard(elementId) {
     if (!card) {
         card = document.createElement('section');
         card.className = 'reasoning-status';
-        card.dataset.collapsed = 'false';
+        card.dataset.collapsed = 'true';
         card.dataset.startedAt = String(Date.now());
         card.innerHTML = `
             <button type="button" class="reasoning-header" onclick="toggleReasoningCard(this)">
@@ -2444,6 +2444,7 @@ function ensureReasoningCard(elementId) {
             </button>
             <div class="reasoning-body"></div>`;
         reasoningHost.appendChild(card);
+        card.classList.add('collapsed');
     }
 
     return card;
@@ -2526,8 +2527,8 @@ function setToolCardState(elementId, state, summary = '', args = null, toolName 
         card.classList.add('collapsed');
     } else {
         card.classList.add('is-running');
-        card.dataset.collapsed = 'false';
-        card.classList.remove('collapsed');
+        card.dataset.collapsed = 'true';
+        card.classList.add('collapsed');
     }
 
     if (titleEl) {
@@ -2806,7 +2807,8 @@ function showReasoningStatus(elementId, text, isFinal = false) {
     }
 
     card.classList.remove('collapsed');
-    card.dataset.collapsed = 'false';
+    card.dataset.collapsed = 'true';
+    card.classList.add('collapsed');
     if (metaEl) metaEl.textContent = 'Live';
     if (titleEl) {
         titleEl.classList.add('is-live');
@@ -2965,12 +2967,22 @@ function observeAutoScrollResizes(elements) {
 }
 
 function scrollActiveMessageIntoView() {
-    if (!activeStreamingMessageId) return;
+    if (!chatMessages || !activeStreamingMessageId) return;
     const activeMessage = document.getElementById(activeStreamingMessageId);
     if (!activeMessage) return;
     const responseCard = activeMessage.querySelector('.assistant-response-card');
     const target = responseCard || activeMessage;
-    target.scrollIntoView({ block: 'end', inline: 'nearest' });
+    const containerRect = chatMessages.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const inputRect = inputArea ? inputArea.getBoundingClientRect() : null;
+    const occlusion = inputRect ? Math.max(0, containerRect.bottom - inputRect.top) : 0;
+    const desiredBottom = containerRect.bottom - occlusion - 16;
+    const delta = targetRect.bottom - desiredBottom;
+
+    if (delta > 0) {
+        suppressNextScrollEvent = true;
+        chatMessages.scrollTop += delta;
+    }
 }
 
 function startStreamingMessageAutoScroll(messageId) {
