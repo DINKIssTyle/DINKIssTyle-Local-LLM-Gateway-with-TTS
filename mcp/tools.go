@@ -419,7 +419,9 @@ func normalizeSearchQuery(query string) string {
 // SearchMemoryDB calls the SQLite db to search memory by keyword
 func SearchMemoryDB(userID, query string) (string, error) {
 	log.Printf("[MCP] SearchMemoryDB: User=%s, Query=%s", userID, query)
-	results, err := SearchMemories(userID, query)
+	rewrittenQuery := rewriteMemoryQuery(query)
+	searchQueries := buildSearchQueries(query, rewrittenQuery)
+	results, err := SearchMemoriesMultiQuery(userID, searchQueries)
 	if err != nil {
 		return "", fmt.Errorf("db search failed: %v", err)
 	}
@@ -430,12 +432,125 @@ func SearchMemoryDB(userID, query string) (string, error) {
 
 	var sb strings.Builder
 	sb.WriteString("Found records:\n")
+	if rewrittenQuery != query {
+		sb.WriteString(fmt.Sprintf("(query rewritten from %q to %q)\n", query, rewrittenQuery))
+	}
+	if len(searchQueries) > 0 {
+		sb.WriteString(fmt.Sprintf("(search terms: %s)\n", strings.Join(searchQueries, ", ")))
+	}
 	for _, r := range results {
 		sb.WriteString(fmt.Sprintf("\n--- MEMORY ID: %d | DATE: %s | KWs: %s ---\n", r.ID, r.CreatedAt.Format("2006-01-02"), r.Keywords))
 		sb.WriteString(fmt.Sprintf("SUMMARY: %s\n", r.Summary))
 		sb.WriteString(fmt.Sprintf("FULL TEXT:\n%s\n", r.FullText))
 	}
 	return sb.String(), nil
+}
+
+func rewriteMemoryQuery(input string) string {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return ""
+	}
+
+	lower := strings.ToLower(trimmed)
+	if strings.Contains(trimmed, "내 이름") || strings.Contains(trimmed, "제 이름") || strings.Contains(lower, "my name") || strings.Contains(lower, "who am i") {
+		return "user name 이름 불러줘 call me my name"
+	}
+
+	if len([]rune(trimmed)) < 12 {
+		return trimmed
+	}
+
+	prompt := fmt.Sprintf(`Rewrite the user's message into a short memory search query.
+
+Rules:
+- Keep only stable entities, names, preferences, dates, or technical topics.
+- Resolve vague references like "that project" into a searchable phrase if possible.
+- Output a single plain text query only.
+- If rewriting would not help, return the original message unchanged.
+
+User message:
+%s`, trimmed)
+
+	type message struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+
+	payload := map[string]interface{}{
+		"model": "local-model",
+		"messages": []message{
+			{Role: "system", Content: "You rewrite user messages into concise memory retrieval queries. Output plain text only."},
+			{Role: "user", Content: prompt},
+		},
+		"temperature": 0.0,
+	}
+
+	reqBody, _ := json.Marshal(payload)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", "http://127.0.0.1:1234/v1/chat/completions", strings.NewReader(string(reqBody)))
+	if err != nil {
+		return trimmed
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		return trimmed
+	}
+	defer resp.Body.Close()
+
+	var resData struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&resData); err != nil {
+		return trimmed
+	}
+	if len(resData.Choices) == 0 {
+		return trimmed
+	}
+
+	rewritten := strings.TrimSpace(resData.Choices[0].Message.Content)
+	rewritten = strings.Trim(rewritten, "\"'`")
+	if rewritten == "" {
+		return trimmed
+	}
+	return compactMemoryText(rewritten, 120)
+}
+
+func buildSearchQueries(originalQuery, rewrittenQuery string) []string {
+	var queries []string
+	seen := map[string]bool{}
+
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		key := strings.ToLower(value)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		queries = append(queries, value)
+	}
+
+	add(originalQuery)
+	add(rewrittenQuery)
+	for _, keyword := range ExtractKeywords(rewrittenQuery) {
+		add(keyword)
+	}
+	for _, keyword := range ExtractKeywords(originalQuery) {
+		add(keyword)
+	}
+
+	return queries
 }
 
 // GetMemorySnapshot returns a formatted string of the most recent memories for system prompt injection.

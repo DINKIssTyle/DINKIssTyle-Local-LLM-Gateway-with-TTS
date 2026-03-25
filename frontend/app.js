@@ -2599,6 +2599,7 @@ function appendToolHistory(card, toolName, previewText, args) {
 
     const displayTool = formatToolDisplayName(toolName);
     const detail = (previewText || extractToolPreview(args, '') || '').trim();
+    if (!detail) return;
     const signature = `${displayTool}::${detail}`;
     const last = card._history[card._history.length - 1];
     if (last && last.signature === signature) return;

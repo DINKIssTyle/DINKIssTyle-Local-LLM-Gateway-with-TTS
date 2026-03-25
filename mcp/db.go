@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -285,6 +286,41 @@ func SearchMemories(userID, queryStr string) ([]MemoryEntry, error) {
 	}
 
 	return results, nil
+}
+
+// SearchMemoriesMultiQuery searches with multiple candidate queries and merges results.
+func SearchMemoriesMultiQuery(userID string, queryStrs []string) ([]MemoryEntry, error) {
+	if db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+
+	seen := make(map[int64]bool)
+	var merged []MemoryEntry
+
+	for _, queryStr := range queryStrs {
+		trimmed := strings.TrimSpace(queryStr)
+		if trimmed == "" {
+			continue
+		}
+
+		results, err := SearchMemories(userID, trimmed)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, result := range results {
+			if seen[result.ID] {
+				continue
+			}
+			seen[result.ID] = true
+			merged = append(merged, result)
+			if len(merged) >= 10 {
+				return merged, nil
+			}
+		}
+	}
+
+	return merged, nil
 }
 
 // SearchMemoriesByRecent gets the most recent N memories for a user.
