@@ -286,6 +286,21 @@ function normalizeMarkdownForRender(text) {
     // Normalize stray spaces inside strong markers in list items.
     normalized = normalized.replace(/(^|\n)([ \t]*[-*+]\s+)\*\*\s+([^*\n]+?)\s+\*\*/g, '$1$2**$3**');
 
+    // Normalize markdown headings/lists/tables when streamed without enough spacing.
+    normalized = normalized
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
+        .replace(/([^\n])\n(#{1,6}\s)/g, '$1\n\n$2')
+        .replace(/([^\n])\n((?:[-*+]\s|\d+\.\s))/g, '$1\n\n$2')
+        .replace(/([^\n])\n(\|.+\|)/g, '$1\n\n$2')
+        .replace(/(\|[^\n]+\|)\n(?=\|[-:\s|]+\|)/g, '$1\n')
+        // Streaming sometimes inserts blank lines between markdown table rows.
+        // Collapse those gaps so GFM parsers can recognize the table again.
+        .replace(/(\|[^\n]+\|)\n\s*\n(?=\|[-:\s|]+\|)/g, '$1\n')
+        .replace(/(\|[-:\s|]+\|)\n\s*\n(?=\|)/g, '$1\n')
+        .replace(/(\|[^\n]+\|)\n\s*\n(?=\|[^\n]+\|)/g, '$1\n')
+        .replace(/\n{3,}/g, '\n\n');
+
     return normalized;
 }
 
@@ -510,10 +525,30 @@ let ttsSessionId = 0;
 const chatMessages = document.getElementById('chat-messages');
 const AUTO_SCROLL_THRESHOLD_PX = 80;
 let shouldAutoScroll = true;
+let autoScrollHoldTimeout = null;
+let autoScrollResizeObserver = null;
+let lockScrollToLatest = false;
+let suppressNextScrollEvent = false;
+let activeStreamingMessageId = null;
 
 if (chatMessages) {
     chatMessages.addEventListener('scroll', () => {
+        if (suppressNextScrollEvent) {
+            suppressNextScrollEvent = false;
+            return;
+        }
+
         shouldAutoScroll = isChatNearBottom();
+        if (isGenerating) {
+            if (shouldAutoScroll) {
+                lockScrollToLatest = true;
+            } else {
+                const distanceFromBottom = chatMessages.scrollHeight - chatMessages.clientHeight - chatMessages.scrollTop;
+                if (distanceFromBottom > AUTO_SCROLL_THRESHOLD_PX * 2) {
+                    lockScrollToLatest = false;
+                }
+            }
+        }
     }, { passive: true });
 }
 const messageInput = document.getElementById('message-input');
@@ -522,6 +557,7 @@ const imagePreviewVal = document.getElementById('image-preview');
 const previewContainer = document.getElementById('preview-container');
 const chatProgressDock = document.getElementById('chat-progress-dock');
 const inputArea = document.getElementById('input-area');
+const inputContainer = document.querySelector('#input-area .input-container');
 
 function updateViewportMetrics() {
     const root = document.documentElement;
@@ -1410,6 +1446,15 @@ function toggleSwitch(id) {
 function setupEventListeners() {
     document.getElementById('save-cfg-btn').addEventListener('click', saveConfig);
 
+    if (inputContainer) {
+        inputContainer.addEventListener('click', (e) => {
+            if (e.target.closest('.input-actions')) return;
+            if (e.target === messageInput) return;
+
+            messageInput.focus();
+        });
+    }
+
     messageInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             // Fix Korean IME duplicate submission / residual character issue
@@ -1674,13 +1719,16 @@ async function sendMessage() {
 
     // Prepare Assistant Placeholder
     isGenerating = true;
+    lockScrollToLatest = true;
     updateSendButtonState();
 
     // Create new AbortController
     abortController = new AbortController();
 
     const assistantId = 'msg-' + Date.now();
+    activeStreamingMessageId = assistantId;
     appendMessage({ role: 'assistant', content: '', id: assistantId });
+    startStreamingMessageAutoScroll(assistantId);
 
     // Build API Payload
     // Always start with a system prompt to define behavior and anchor the context
@@ -1773,6 +1821,9 @@ async function sendMessage() {
         }
     } finally {
         isGenerating = false;
+        lockScrollToLatest = false;
+        stopStreamingMessageAutoScroll();
+        activeStreamingMessageId = null;
         abortController = null;
         updateSendButtonState();
     }
@@ -2421,6 +2472,7 @@ function ensureToolCard(elementId, toolName = 'Tool') {
     card.dataset.collapsed = 'true';
     card.dataset.toolName = toolName;
     card.dataset.startedAt = String(Date.now());
+    card._history = [];
     card.innerHTML = `
         <button type="button" class="reasoning-header tool-strip-header" onclick="toggleReasoningCard(this)">
             <span class="reasoning-chevron material-icons-round">play_arrow</span>
@@ -2434,6 +2486,7 @@ function ensureToolCard(elementId, toolName = 'Tool') {
         </button>
         <div class="tool-card-body">
             <div class="tool-card-query" hidden></div>
+            <div class="tool-card-history" hidden></div>
         </div>`;
     toolsHost.appendChild(card);
     msgEl.dataset.activeToolCard = card.id;
@@ -2458,6 +2511,7 @@ function setToolCardState(elementId, state, summary = '', args = null, toolName 
     const nameEl = card.querySelector('.tool-header-name');
     const summaryEl = card.querySelector('.tool-header-status');
     const queryEl = card.querySelector('.tool-card-query');
+    const historyEl = card.querySelector('.tool-card-history');
     const activeToolName = toolName || card.dataset.toolName || 'Tool';
     const previewText = extractToolPreview(args, summary);
 
@@ -2495,11 +2549,16 @@ function setToolCardState(elementId, state, summary = '', args = null, toolName 
         headerGroupEl.classList.toggle('is-live', state === 'running');
     }
 
+    if (state === 'running' && (previewText || activeToolName)) {
+        appendToolHistory(card, activeToolName, previewText, args);
+    }
+
     if (queryEl) {
         const detailText = previewText || (state === 'failure' ? summary : '');
         queryEl.hidden = !detailText || state !== 'running';
         queryEl.textContent = detailText || '';
     }
+    renderToolHistory(card, historyEl, state);
 }
 
 function extractToolPreview(args, summary = '') {
@@ -2532,6 +2591,42 @@ function formatToolDisplayName(toolName = '') {
         .replace(/[_-]+/g, ' ')
         .replace(/\s+/g, ' ')
         .replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function appendToolHistory(card, toolName, previewText, args) {
+    if (!card) return;
+    if (!Array.isArray(card._history)) card._history = [];
+
+    const displayTool = formatToolDisplayName(toolName);
+    const detail = (previewText || extractToolPreview(args, '') || '').trim();
+    const signature = `${displayTool}::${detail}`;
+    const last = card._history[card._history.length - 1];
+    if (last && last.signature === signature) return;
+
+    card._history.push({
+        signature,
+        tool: displayTool,
+        detail
+    });
+}
+
+function renderToolHistory(card, historyEl, state) {
+    if (!historyEl || !card) return;
+    const history = Array.isArray(card._history) ? card._history : [];
+
+    if (state === 'running' || history.length === 0) {
+        historyEl.hidden = true;
+        historyEl.innerHTML = '';
+        return;
+    }
+
+    historyEl.hidden = false;
+    historyEl.innerHTML = history.map((entry, index) => `
+        <div class="tool-history-item">
+            <div class="tool-history-title">${escapeHtml(`${index + 1}. ${entry.tool}`)}</div>
+            <div class="tool-history-detail">${escapeHtml(entry.detail || 'No query details')}</div>
+        </div>
+    `).join('');
 }
 
 // New helper functions
@@ -2771,11 +2866,16 @@ function updateMessageContent(id, text) {
     });
 
     // Re-highlight code blocks
-    mdBody.querySelectorAll('pre code').forEach((block) => {
+    const codeBlocks = mdBody.querySelectorAll('pre code');
+    codeBlocks.forEach((block) => {
         highlight.highlightElement(block);
     });
 
     scrollToBottom(wasNearBottom);
+    if (wasNearBottom && codeBlocks.length > 0) {
+        holdAutoScrollAtBottom(900);
+        observeAutoScrollResizes([el, bubble, mdBody, ...mdBody.querySelectorAll('pre')]);
+    }
 }
 
 
@@ -2787,9 +2887,11 @@ function isChatNearBottom() {
 
 function scrollToBottom(force = false) {
     if (!chatMessages) return;
-    if (!force && !shouldAutoScroll) return;
+    if (!force && !shouldAutoScroll && !lockScrollToLatest) return;
     const applyScroll = () => {
+        suppressNextScrollEvent = true;
         chatMessages.scrollTop = chatMessages.scrollHeight;
+        scrollActiveMessageIntoView();
     };
 
     applyScroll();
@@ -2799,7 +2901,92 @@ function scrollToBottom(force = false) {
     });
     setTimeout(applyScroll, 0);
     setTimeout(applyScroll, 32);
+    setTimeout(applyScroll, 96);
+    setTimeout(applyScroll, 180);
     shouldAutoScroll = true;
+}
+
+function holdAutoScrollAtBottom(durationMs = 700) {
+    if (!chatMessages) return;
+
+    const startedAt = Date.now();
+    if (autoScrollHoldTimeout) {
+        clearTimeout(autoScrollHoldTimeout);
+        autoScrollHoldTimeout = null;
+    }
+
+    const tick = () => {
+        if (!chatMessages || (!shouldAutoScroll && !lockScrollToLatest)) return;
+        suppressNextScrollEvent = true;
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+        scrollActiveMessageIntoView();
+        if (Date.now() - startedAt < durationMs) {
+            requestAnimationFrame(tick);
+        }
+    };
+
+    tick();
+    autoScrollHoldTimeout = setTimeout(() => {
+        if (chatMessages && (shouldAutoScroll || lockScrollToLatest)) {
+            suppressNextScrollEvent = true;
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            scrollActiveMessageIntoView();
+        }
+        autoScrollHoldTimeout = null;
+    }, durationMs);
+}
+
+function observeAutoScrollResizes(elements) {
+    if (!chatMessages || typeof ResizeObserver === 'undefined') return;
+    if (autoScrollResizeObserver) {
+        autoScrollResizeObserver.disconnect();
+        autoScrollResizeObserver = null;
+    }
+
+    const targets = (elements || []).filter(Boolean);
+    if (targets.length === 0) return;
+
+    autoScrollResizeObserver = new ResizeObserver(() => {
+        if (!shouldAutoScroll && !lockScrollToLatest) return;
+        suppressNextScrollEvent = true;
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+        scrollActiveMessageIntoView();
+        requestAnimationFrame(() => {
+            if (chatMessages && (shouldAutoScroll || lockScrollToLatest)) {
+                suppressNextScrollEvent = true;
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+                scrollActiveMessageIntoView();
+            }
+        });
+    });
+
+    targets.forEach((target) => autoScrollResizeObserver.observe(target));
+}
+
+function scrollActiveMessageIntoView() {
+    if (!activeStreamingMessageId) return;
+    const activeMessage = document.getElementById(activeStreamingMessageId);
+    if (!activeMessage) return;
+    const responseCard = activeMessage.querySelector('.assistant-response-card');
+    const target = responseCard || activeMessage;
+    target.scrollIntoView({ block: 'end', inline: 'nearest' });
+}
+
+function startStreamingMessageAutoScroll(messageId) {
+    activeStreamingMessageId = messageId;
+    const activeMessage = document.getElementById(messageId);
+    if (!activeMessage) return;
+    const responseCard = activeMessage.querySelector('.assistant-response-card');
+    const markdownBody = activeMessage.querySelector('.markdown-body');
+    const codeBlocks = activeMessage.querySelectorAll('pre');
+    observeAutoScrollResizes([activeMessage, responseCard, markdownBody, ...codeBlocks]);
+}
+
+function stopStreamingMessageAutoScroll() {
+    if (autoScrollResizeObserver) {
+        autoScrollResizeObserver.disconnect();
+        autoScrollResizeObserver = null;
+    }
 }
 
 // TTS: Speak a message using the Go server's /api/tts endpoint
