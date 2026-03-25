@@ -129,6 +129,13 @@ const translations = {
         // Chat
         'chat.welcome': '안녕하세요! 채팅할 준비가 되었습니다. 우측 상단 기어 아이콘에서 설정하세요.',
         'chat.instruction': '우측 상단 설정(⚙️)에서 설정을 변경하실 수 있습니다.',
+        'chat.startup.welcomeTitle': '환영합니다.',
+        'chat.startup.welcomeBody': '바로 대화를 시작하실 수 있습니다.',
+        'chat.startup.issueBody': '아래 항목을 확인해 주세요.',
+        'chat.startup.restore': '마지막 대화 불러오기',
+        'chat.startup.restoreLoaded': '마지막 대화를 불러왔습니다.',
+        'chat.startup.restoreMissing': '불러올 마지막 대화가 없습니다.',
+        'chat.startup.restoreFailed': '마지막 대화를 불러오지 못했습니다.',
         'input.placeholder': '메시지를 입력하세요...',
         // Health Check
         'health.systemReady': '시스템 준비 완료',
@@ -241,6 +248,13 @@ const translations = {
         // Chat
         'chat.welcome': 'Hello! I am ready to chat. Configure settings using the gear icon.',
         'chat.instruction': 'You can configure settings in the top right menu.',
+        'chat.startup.welcomeTitle': 'Welcome.',
+        'chat.startup.welcomeBody': 'You can start chatting right away.',
+        'chat.startup.issueBody': 'Please check the items below.',
+        'chat.startup.restore': 'Load last conversation',
+        'chat.startup.restoreLoaded': 'Last conversation loaded.',
+        'chat.startup.restoreMissing': 'No saved conversation to load.',
+        'chat.startup.restoreFailed': 'Could not load the last conversation.',
         'input.placeholder': 'Type a message...',
         // Health Check
         'health.systemReady': 'System Ready',
@@ -695,6 +709,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 // Current user state
 let currentUser = null;
 let currentUserLocation = null; // Store location: {lat, lon, accuracy}
+let lastSessionCache = null;
 
 // Location Tracking
 function updateUserLocation() {
@@ -1358,6 +1373,101 @@ function applyChatFontSize() {
     }
 }
 
+async function fetchLastSession() {
+    try {
+        const response = await fetch('/api/last-session', { credentials: 'include' });
+        if (!response.ok) {
+            return null;
+        }
+        const data = await response.json();
+        if (!data.has_session) {
+            return null;
+        }
+        return data;
+    } catch (e) {
+        console.warn('Failed to fetch last session:', e);
+        return null;
+    }
+}
+
+function buildRestoredStatefulSummary(session) {
+    const userText = cleanContentForStatefulSummary(session?.user_message || '');
+    const assistantText = cleanContentForStatefulSummary(session?.assistant_message || '');
+    if (!userText && !assistantText) return '';
+
+    return [
+        'Restored last conversation:',
+        userText ? `User: ${userText}` : '',
+        assistantText ? `Assistant: ${assistantText}` : ''
+    ].filter(Boolean).join('\n');
+}
+
+async function saveLastSessionTurn(userMsg, assistantText) {
+    const userText = (userMsg?.content || '').trim();
+    const assistantMessage = (assistantText || '').trim();
+    if (!currentUser || !userText || !assistantMessage) {
+        return;
+    }
+
+    const payload = {
+        user_message: userText,
+        assistant_message: assistantMessage,
+        mode: config.llmMode || 'standard'
+    };
+
+    try {
+        const response = await fetch('/api/last-session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify(payload)
+        });
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        lastSessionCache = {
+            has_session: true,
+            ...payload,
+            updated_at: new Date().toISOString()
+        };
+    } catch (e) {
+        console.warn('Failed to save last session:', e);
+    }
+}
+
+async function restoreLastSession() {
+    if (!lastSessionCache) {
+        showToast(t('chat.startup.restoreMissing'), true);
+        return;
+    }
+
+    clearChat();
+
+    const restoredUser = {
+        role: 'user',
+        content: lastSessionCache.user_message || ''
+    };
+    const restoredAssistant = {
+        role: 'assistant',
+        content: lastSessionCache.assistant_message || ''
+    };
+
+    appendMessage(restoredUser);
+    appendMessage(restoredAssistant);
+    messages.push(restoredUser, restoredAssistant);
+
+    if (config.llmMode === 'stateful') {
+        statefulSummary = buildRestoredStatefulSummary(lastSessionCache);
+        statefulEstimatedChars = statefulSummary.length;
+        statefulTurnCount = 1;
+        statefulLastInputTokens = estimateTokensFromText(statefulSummary);
+        statefulLastOutputTokens = estimateTokensFromText(restoredAssistant.content);
+        statefulPeakInputTokens = Math.max(statefulPeakInputTokens, statefulLastInputTokens);
+    }
+
+    showToast(t('chat.startup.restoreLoaded'));
+}
+
 function adjustChatFontSize(delta) {
     const nextSize = Math.max(12, Math.min(24, (parseInt(config.chatFontSize, 10) || 16) + delta));
     if (nextSize === config.chatFontSize) {
@@ -1811,8 +1921,9 @@ async function sendMessage() {
     console.log('History Count:', history.length);
     console.log('Messages:', JSON.stringify(payload.messages, null, 2));
 
+    let assistantContent = '';
     try {
-        await streamResponse(payload, assistantId);
+        assistantContent = await streamResponse(payload, assistantId);
     } catch (e) {
         if (e.name === 'AbortError') {
             updateMessageContent(assistantId, `**[Stopped by User]**`);
@@ -1826,6 +1937,10 @@ async function sendMessage() {
         activeStreamingMessageId = null;
         abortController = null;
         updateSendButtonState();
+    }
+
+    if (assistantContent && assistantContent.trim()) {
+        await saveLastSessionTurn(userMsg, assistantContent);
     }
 }
 
@@ -1944,7 +2059,7 @@ async function streamResponse(payload, elementId) {
     }
     pendingStatefulResetReason = null;
 
-    await processStream(response, elementId);
+    return await processStream(response, elementId);
 }
 
 // Helper to process the stream reader (shared by direct and proxy)
@@ -1958,6 +2073,7 @@ async function processStream(response, elementId) {
     let speechBuffer = '';        // Dedicated buffer for speech content (no HTML/Tools)
     let currentlyReasoning = false; // State track for reasoning blocks
     let reasoningSource = null;    // 'sse' or 'field' to prevent duplication
+    let historyContent = '';
 
 
 
@@ -2307,7 +2423,7 @@ async function processStream(response, elementId) {
         hideProgressDock();
         // Finalize (Save to history even if aborted)
         // Keep only the user-visible answer in history to avoid ballooning context.
-        const historyContent = fullText.trim();
+        historyContent = fullText.trim();
         if (historyContent) {
             messages.push({ role: 'assistant', content: historyContent });
             if (config.llmMode === 'stateful') {
@@ -2323,6 +2439,8 @@ async function processStream(response, elementId) {
         }
         releaseWakeLock(); // Release screen lock after generation and TTS streaming is done
     }
+
+    return historyContent;
 }
 
 function appendMessage(msg) {
@@ -2348,6 +2466,32 @@ function appendMessage(msg) {
                         <div class="reasoning-header system-strip-header">
                             <span class="reasoning-chevron material-icons-round">info</span>
                             <span class="reasoning-title">${escapeHtml(textContent)}</span>
+                        </div>
+                    </section>
+                </div>
+            </div>`;
+    } else if (msg.startup) {
+        const startup = msg.startup;
+        const issues = Array.isArray(startup.issues) ? startup.issues : [];
+        const issuesHtml = issues.length > 0
+            ? `<ul class="startup-issues">${issues.map(issue => `<li>${escapeHtml(issue)}</li>`).join('')}</ul>`
+            : '';
+        const actionHtml = startup.showRestoreButton
+            ? `<div class="startup-actions"><button class="startup-action-btn" onclick="restoreLastSession()">${escapeHtml(startup.restoreLabel || t('chat.startup.restore'))}</button></div>`
+            : '';
+
+        div.innerHTML = `
+            <div class="message-inner">
+                <div class="message-label">Assistant</div>
+                <div class="assistant-sections">
+                    <section class="assistant-response-card startup-response-card">
+                        <div class="message-bubble plain-assistant-bubble">
+                            <div class="startup-card">
+                                <div class="startup-title">${escapeHtml(startup.title || '')}</div>
+                                <div class="startup-body">${escapeHtml(startup.body || '')}</div>
+                                ${issuesHtml}
+                                ${actionHtml}
+                            </div>
                         </div>
                     </section>
                 </div>
@@ -3671,51 +3815,34 @@ async function checkSystemHealth() {
     }
 
     try {
-        let statusIcon = "✅";
-        let statusTitle = t('health.systemReady');
-        let statusDetails = "";
+        lastSessionCache = await fetchLastSession();
+        const issues = [];
 
-        // Display Current Mode
-        const modeLabel = config.llmMode === 'stateful' ? 'LM Studio' : 'OpenAI Compatible';
-        statusDetails += `\n- **${t('health.mode')}**: ${modeLabel}`;
-
-        // Analyze health
         if (health.llmStatus !== 'ok') {
-            statusIcon = "⚠️";
-            statusTitle = t('health.checkRequired');
-
             let errorDetail = health.llmMessage;
             if (errorDetail.includes('401')) {
                 errorDetail += t('health.checkToken');
             } else if (errorDetail.includes('connect') || errorDetail.includes('refused')) {
                 errorDetail += t('health.checkServer');
             }
-
-            statusDetails += `\n- **${t('health.llm')}**: ${errorDetail}`;
-        } else {
-            // Translate "Connected" if exact match, otherwise keep
-            let llmDisplay = health.llmMessage === 'Connected' ? t('health.status.connected') : health.llmMessage;
-            statusDetails += `\n- **${t('health.llm')}**: ${llmDisplay}`;
-            if (health.serverModel) {
-                statusDetails += ` (${health.serverModel})`;
-            }
+            issues.push(`${t('health.llm')}: ${errorDetail}`);
         }
 
         if (health.ttsStatus !== 'ok') {
-            if (health.ttsStatus === 'disabled') {
-                statusDetails += `\n- **${t('health.tts')}**: ${t('health.status.disabled')}`;
-            } else {
-                statusIcon = "⚠️";
-                if (statusTitle === t('health.systemReady')) statusTitle = t('health.checkRequired');
-                statusDetails += `\n- **${t('health.tts')}**: ${health.ttsMessage}`;
+            if (health.ttsStatus !== 'disabled') {
+                issues.push(`${t('health.tts')}: ${health.ttsMessage}`);
             }
-        } else {
-            statusDetails += `\n- **${t('health.tts')}**: ${t('health.status.ready')}`;
         }
 
         const healthMsg = {
             role: 'assistant',
-            content: `### ${statusIcon} ${statusTitle}\n${statusDetails}\n\n${t('chat.instruction') || 'You can configure settings in the top right menu.'}`
+            startup: {
+                title: issues.length === 0 ? t('chat.startup.welcomeTitle') : t('health.checkRequired'),
+                body: issues.length === 0 ? t('chat.startup.welcomeBody') : t('chat.startup.issueBody'),
+                issues,
+                showRestoreButton: !!lastSessionCache,
+                restoreLabel: t('chat.startup.restore')
+            }
         };
 
         appendMessage(healthMsg);
