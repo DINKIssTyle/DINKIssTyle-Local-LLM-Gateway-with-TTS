@@ -266,6 +266,10 @@ body {
   width: 100%;
 }
 
+.startup-response-card .message-bubble {
+  padding-top: 0;
+}
+
 .section-header {
   display: flex;
   align-items: center;
@@ -324,6 +328,69 @@ body {
 .plain-assistant-bubble {
   border: none;
   box-shadow: none;
+}
+
+.startup-card {
+  width: min(100%, 40rem);
+  margin: 6px auto 0;
+  padding: 26px 22px;
+  border: 1px solid rgba(95, 140, 255, 0.16);
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(20, 27, 36, 0.92), rgba(14, 20, 29, 0.96));
+  text-align: center;
+  box-shadow: 0 20px 44px rgba(0, 0, 0, 0.22);
+}
+
+.startup-title {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: #f3f7ff;
+}
+
+.startup-body {
+  margin-top: 10px;
+  color: var(--text-muted);
+}
+
+.startup-issues {
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+}
+
+.startup-issues li {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(218, 54, 51, 0.12);
+  border: 1px solid rgba(218, 54, 51, 0.18);
+  color: #ffd1d1;
+}
+
+.startup-actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 20px;
+}
+
+.startup-action-btn {
+  min-width: 220px;
+  padding: 12px 18px;
+  border: 1px solid rgba(95, 140, 255, 0.28);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(95, 140, 255, 0.22), rgba(95, 140, 255, 0.14));
+  color: #f3f7ff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.18s ease, background-color 0.18s ease, border-color 0.18s ease;
+}
+
+.startup-action-btn:hover {
+  transform: translateY(-1px);
+  background: linear-gradient(180deg, rgba(120, 161, 255, 0.28), rgba(95, 140, 255, 0.18));
+  border-color: rgba(120, 161, 255, 0.4);
 }
 
 .message-actions {

@@ -3,6 +3,7 @@ package mcp
 import (
 	"os"
 	"testing"
+	"time"
 )
 
 func TestDBCreationAndSearch(t *testing.T) {
@@ -94,4 +95,65 @@ func TestSearchMemoriesMultiQueryFindsTokenizedRewrite(t *testing.T) {
 	if results[0].ID != id {
 		t.Fatalf("Expected result ID %d, got %d", id, results[0].ID)
 	}
+}
+
+func TestLastSessionUpsertAndFetch(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "last_session_test_*.db")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	dbPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(dbPath)
+
+	if err := InitDB(dbPath); err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer CloseDB()
+
+	userID := "session_user"
+
+	if err := UpsertLastSession(userID, "hello", "hi there", "stateful", nowForTest()); err != nil {
+		t.Fatalf("UpsertLastSession failed: %v", err)
+	}
+
+	entry, err := GetLastSession(userID)
+	if err != nil {
+		t.Fatalf("GetLastSession failed: %v", err)
+	}
+	if entry.LastUserMessage != "hello" {
+		t.Fatalf("expected last user message to be hello, got %q", entry.LastUserMessage)
+	}
+	if entry.LastAssistantMessage != "hi there" {
+		t.Fatalf("expected last assistant message to be hi there, got %q", entry.LastAssistantMessage)
+	}
+	if entry.Mode != "stateful" {
+		t.Fatalf("expected mode to be stateful, got %q", entry.Mode)
+	}
+
+	if err := UpsertLastSession(userID, "updated user", "updated assistant", "standard", nowForTest()); err != nil {
+		t.Fatalf("UpsertLastSession update failed: %v", err)
+	}
+
+	updated, err := GetLastSession(userID)
+	if err != nil {
+		t.Fatalf("GetLastSession after update failed: %v", err)
+	}
+	if updated.LastUserMessage != "updated user" || updated.LastAssistantMessage != "updated assistant" {
+		t.Fatalf("last session was not updated correctly: %+v", updated)
+	}
+	if updated.Mode != "standard" {
+		t.Fatalf("expected mode to be standard after update, got %q", updated.Mode)
+	}
+
+	if err := DeleteLastSession(userID); err != nil {
+		t.Fatalf("DeleteLastSession failed: %v", err)
+	}
+	if _, err := GetLastSession(userID); err == nil {
+		t.Fatalf("expected GetLastSession to fail after delete")
+	}
+}
+
+func nowForTest() time.Time {
+	return time.Now().UTC()
 }

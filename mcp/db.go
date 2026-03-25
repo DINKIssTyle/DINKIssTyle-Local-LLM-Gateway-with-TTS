@@ -84,6 +84,14 @@ func createSchema() error {
 
 	CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id);
 	CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires_at ON auth_sessions(expires_at);
+
+	CREATE TABLE IF NOT EXISTS last_sessions (
+		user_id TEXT PRIMARY KEY,
+		last_user_message TEXT NOT NULL,
+		last_assistant_message TEXT NOT NULL,
+		mode TEXT NOT NULL DEFAULT '',
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
 	`
 	_, err := db.Exec(query)
 	if err != nil {
@@ -107,6 +115,14 @@ type AuthSessionEntry struct {
 	CreatedAt  time.Time
 	LastUsedAt time.Time
 	ExpiresAt  time.Time
+}
+
+type LastSessionEntry struct {
+	UserID               string
+	LastUserMessage      string
+	LastAssistantMessage string
+	Mode                 string
+	UpdatedAt            time.Time
 }
 
 func InsertAuthSession(userID, tokenHash string, rememberMe bool, userAgent, clientAddr string, expiresAt time.Time) error {
@@ -203,6 +219,71 @@ func PurgeExpiredAuthSessions(now time.Time) error {
 	_, err := db.Exec(`DELETE FROM auth_sessions WHERE expires_at <= ?`, now.UTC())
 	if err != nil {
 		return fmt.Errorf("failed to purge expired auth sessions: %w", err)
+	}
+	return nil
+}
+
+func UpsertLastSession(userID, userMessage, assistantMessage, mode string, updatedAt time.Time) error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return fmt.Errorf("user id is required")
+	}
+
+	query := `
+	INSERT INTO last_sessions (user_id, last_user_message, last_assistant_message, mode, updated_at)
+	VALUES (?, ?, ?, ?, ?)
+	ON CONFLICT(user_id) DO UPDATE SET
+		last_user_message = excluded.last_user_message,
+		last_assistant_message = excluded.last_assistant_message,
+		mode = excluded.mode,
+		updated_at = excluded.updated_at`
+
+	_, err := db.Exec(query, userID, userMessage, assistantMessage, mode, updatedAt.UTC())
+	if err != nil {
+		return fmt.Errorf("failed to upsert last session: %w", err)
+	}
+	return nil
+}
+
+func GetLastSession(userID string) (LastSessionEntry, error) {
+	var entry LastSessionEntry
+	if db == nil {
+		return entry, fmt.Errorf("database not initialized")
+	}
+
+	query := `
+	SELECT user_id, last_user_message, last_assistant_message, mode, updated_at
+	FROM last_sessions
+	WHERE user_id = ?`
+
+	err := db.QueryRow(query, userID).Scan(
+		&entry.UserID,
+		&entry.LastUserMessage,
+		&entry.LastAssistantMessage,
+		&entry.Mode,
+		&entry.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return entry, err
+		}
+		return entry, fmt.Errorf("failed to fetch last session: %w", err)
+	}
+
+	return entry, nil
+}
+
+func DeleteLastSession(userID string) error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	_, err := db.Exec(`DELETE FROM last_sessions WHERE user_id = ?`, userID)
+	if err != nil {
+		return fmt.Errorf("failed to delete last session: %w", err)
 	}
 	return nil
 }

@@ -12,9 +12,11 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"database/sql"
 	"dinkisstyle-chat/mcp"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -309,6 +311,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 		handleChat(w, r, app, authMgr)
 	}))
 	mux.HandleFunc("/api/tts", AuthMiddleware(authMgr, handleTTS))
+	mux.HandleFunc("/api/last-session", AuthMiddleware(authMgr, handleLastSession()))
 
 	// MCP Endpoints (Conditional)
 	// MCP Endpoints (Always Enabled if server runs)
@@ -701,6 +704,72 @@ func handleDeleteUser(am *AuthManager) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}
+}
+
+func handleLastSession() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.Method {
+		case http.MethodGet:
+			entry, err := mcp.GetLastSession(userID)
+			if err != nil {
+				if !errors.Is(err, sql.ErrNoRows) {
+					log.Printf("[handleLastSession] Failed to load last session for user %s: %v", userID, err)
+				}
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"has_session": false,
+				})
+				return
+			}
+
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"has_session":       true,
+				"user_message":      entry.LastUserMessage,
+				"assistant_message": entry.LastAssistantMessage,
+				"mode":              entry.Mode,
+				"updated_at":        entry.UpdatedAt,
+			})
+		case http.MethodPost:
+			var req struct {
+				UserMessage      string `json:"user_message"`
+				AssistantMessage string `json:"assistant_message"`
+				Mode             string `json:"mode"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "Invalid request", http.StatusBadRequest)
+				return
+			}
+
+			if strings.TrimSpace(req.UserMessage) == "" || strings.TrimSpace(req.AssistantMessage) == "" {
+				http.Error(w, "Both user_message and assistant_message are required", http.StatusBadRequest)
+				return
+			}
+
+			if err := mcp.UpsertLastSession(userID, req.UserMessage, req.AssistantMessage, req.Mode, time.Now()); err != nil {
+				log.Printf("[handleLastSession] Failed to save last session for %s: %v", userID, err)
+				http.Error(w, "Failed to save last session", http.StatusInternalServerError)
+				return
+			}
+
+			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		case http.MethodDelete:
+			if err := mcp.DeleteLastSession(userID); err != nil {
+				log.Printf("[handleLastSession] Failed to delete last session for %s: %v", userID, err)
+				http.Error(w, "Failed to delete last session", http.StatusInternalServerError)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
 	}
 }
 

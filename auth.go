@@ -6,8 +6,8 @@
 package main
 
 import (
-	"crypto/sha256"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -181,15 +181,15 @@ func (am *AuthManager) AddUser(id, password, role string) error {
 				Speed:      speed,
 				Threads:    threads,
 			},
-                        DisallowedCommands: []string{
-                                "rm", "rmdir", "unlink", "dd", "mkfs", "mkfs.ext4", "mkfs.xfs", "mkfs.apfs",
-                                "fsck", "fsck.ext4", "fsck.xfs", "fsck_apfs", "mount", "umount", "chmod", "chown", "chgrp",
-                                "kill", "killall", "pkill", "shutdown", "reboot", "poweroff", "init", "telinit",
-                                "systemctl", "service", "crontab", "at", "curl", "wget", "scp", "rsync",
-                                "nc", "ncat", "ssh", "sudo", "su", "visudo", "useradd", "userdel", "usermod",
-                                "groupadd", "groupdel", "passwd", "export", "env", "set", "unset", "source",
-                                "exec", "nohup", "screen", "tmux", "history", "alias", "unalias",
-                        },
+			DisallowedCommands: []string{
+				"rm", "rmdir", "unlink", "dd", "mkfs", "mkfs.ext4", "mkfs.xfs", "mkfs.apfs",
+				"fsck", "fsck.ext4", "fsck.xfs", "fsck_apfs", "mount", "umount", "chmod", "chown", "chgrp",
+				"kill", "killall", "pkill", "shutdown", "reboot", "poweroff", "init", "telinit",
+				"systemctl", "service", "crontab", "at", "curl", "wget", "scp", "rsync",
+				"nc", "ncat", "ssh", "sudo", "su", "visudo", "useradd", "userdel", "usermod",
+				"groupadd", "groupdel", "passwd", "export", "env", "set", "unset", "source",
+				"exec", "nohup", "screen", "tmux", "history", "alias", "unalias",
+			},
 		},
 	}
 
@@ -203,6 +203,9 @@ func (am *AuthManager) DeleteUser(id string) error {
 	defer am.mu.Unlock()
 
 	delete(am.users, id)
+	if err := mcp.DeleteLastSession(id); err != nil {
+		return err
+	}
 	if err := mcp.DeleteAuthSessionsByUser(id); err != nil {
 		return err
 	}
