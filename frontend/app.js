@@ -1894,6 +1894,7 @@ function setupEventListeners() {
 function autoResizeInput() {
     messageInput.style.height = 'auto';
     messageInput.style.height = Math.min(messageInput.scrollHeight, 150) + 'px';
+    messageInput.style.overflowY = messageInput.scrollHeight > 150 ? 'auto' : 'hidden';
 }
 
 function handleImageUpload(input) {
@@ -2244,25 +2245,33 @@ function hasComposableUserInput() {
     return !!text || !!pendingImage;
 }
 
+function setComposerPrimaryButtons({ showSend, showInlineMic }) {
+    if (sendBtn) {
+        sendBtn.hidden = !showSend;
+        sendBtn.style.display = showSend ? 'inline-flex' : 'none';
+    }
+    if (inlineMicBtn) {
+        inlineMicBtn.hidden = !showInlineMic;
+        inlineMicBtn.style.display = showInlineMic ? 'inline-flex' : 'none';
+    }
+}
+
 function updateInlineComposerActionVisibility() {
     if (!sendBtn || !inlineMicBtn) return;
 
-    const isInlineMicLayout = config.micLayout === 'inline';
-    if (!isInlineMicLayout) {
-        sendBtn.hidden = false;
-        inlineMicBtn.hidden = !inlineMicBtn.classList.contains('is-visible');
+    const inlineMicAvailable = inlineMicBtn.classList.contains('is-visible');
+    if (!inlineMicAvailable) {
+        setComposerPrimaryButtons({ showSend: true, showInlineMic: false });
         return;
     }
 
     if (isGenerating) {
-        sendBtn.hidden = false;
-        inlineMicBtn.hidden = true;
+        setComposerPrimaryButtons({ showSend: true, showInlineMic: false });
         return;
     }
 
     const shouldShowSend = hasComposableUserInput();
-    sendBtn.hidden = !shouldShowSend;
-    inlineMicBtn.hidden = shouldShowSend || !inlineMicBtn.classList.contains('is-visible');
+    setComposerPrimaryButtons({ showSend: shouldShowSend, showInlineMic: !shouldShowSend });
 }
 
 
@@ -2742,6 +2751,9 @@ async function processStream(response, elementId) {
         if (useStreamingTTS) {
             finalizeStreamingTTS(speechBuffer); // Pass final speech buffer
         }
+        if (historyContent) {
+            setAssistantActionBarReady(elementId);
+        }
         releaseWakeLock(); // Release screen lock after generation and TTS streaming is done
     }
 
@@ -2816,7 +2828,7 @@ function createMessageElement(msg) {
                         </div>
                     </section>
                 </div>
-                <div class="message-actions" ${textContent.trim() ? '' : 'hidden'}>
+                <div class="message-actions${textContent.trim() ? ' is-ready' : ' is-pending'}" ${textContent.trim() ? '' : 'hidden'}>
                     <button class="icon-btn copy-btn" onclick="copyMessage(this)" title="Copy">
                         <span class="material-icons-round">content_copy</span>
                     </button>
@@ -2886,6 +2898,17 @@ function getAssistantMessageParts(elementId) {
         committedHost: msgEl.querySelector('.assistant-response-card .markdown-committed'),
         pendingHost: msgEl.querySelector('.assistant-response-card .markdown-pending')
     };
+}
+
+function setAssistantActionBarReady(elementId) {
+    const { msgEl } = getAssistantMessageParts(elementId);
+    const actionBar = msgEl?.querySelector('.message-actions');
+    if (!actionBar) return;
+    actionBar.hidden = false;
+    actionBar.classList.remove('is-pending');
+    requestAnimationFrame(() => {
+        actionBar.classList.add('is-ready');
+    });
 }
 
 function renderProgressDock(label, percent = null, mode = 'prompt-processing', indeterminate = false) {
@@ -3719,7 +3742,13 @@ function updateMessageContent(id, text) {
     const actionBar = el.querySelector('.message-actions');
     const hasVisibleContent = !!cleanText.trim();
     if (responseCard) responseCard.hidden = !hasVisibleContent;
-    if (actionBar) actionBar.hidden = !hasVisibleContent;
+    if (actionBar) {
+        if (el.id && !actionBar.classList.contains('is-ready')) {
+            actionBar.hidden = true;
+        } else {
+            actionBar.hidden = !hasVisibleContent;
+        }
+    }
 
     scrollToBottom(wasNearBottom);
     const codeBlocks = mdBody.querySelectorAll('pre code');
@@ -4729,18 +4758,22 @@ function syncMicRecordingUI() {
  * Hook into global state to update giant mic icon if generating
  */
 function updateMicUIForGeneration(generating) {
-    const micButtons = [
-        document.getElementById('giant-mic-btn'),
-        inlineMicBtn
-    ].filter(Boolean);
+    const giantMicBtn = document.getElementById('giant-mic-btn');
+    const micButtons = [giantMicBtn, inlineMicBtn].filter(Boolean);
 
     micButtons.forEach((micBtn) => {
         micBtn.classList.toggle('gen-active', generating);
         const icon = micBtn.querySelector('.material-icons-round');
         if (icon) {
-            icon.textContent = generating ? 'stop' : 'mic';
+            icon.textContent = 'mic';
         }
     });
+
+    const micContainer = document.getElementById('mic-layout-container');
+    if (micContainer) {
+        micContainer.style.pointerEvents = generating ? 'none' : '';
+        micContainer.style.opacity = generating ? '0.45' : '';
+    }
 
     if (!generating) {
         syncMicRecordingUI();

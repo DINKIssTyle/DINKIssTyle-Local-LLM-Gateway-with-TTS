@@ -28,7 +28,7 @@
     <link rel="stylesheet" href="icons.css?v=1">
 
     <!-- Styles -->
-    <link rel="stylesheet" href="style.css?v=7">
+    <link rel="stylesheet" href="style.css?v=8">
 
     <!-- Highlight.js -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
@@ -368,6 +368,9 @@
 
         <div id="input-area">
             <div class="input-container">
+                <span class="composer-spark-shell" aria-hidden="true">
+                    <span class="composer-spark"></span>
+                </span>
                 <div id="chat-progress-dock" class="chat-progress-dock" hidden></div>
                 <div class="input-main">
                     <textarea id="message-input" rows="1" placeholder="Type a message..."
@@ -383,7 +386,7 @@
                         <button class="icon-btn mic-inline-btn" id="inline-mic-btn" onclick="toggleSTT()" title="Voice Input">
                             <span class="material-icons-round">mic</span>
                         </button>
-                        <button class="icon-btn send-btn" id="send-btn" title="Send Message">
+                        <button class="icon-btn send-btn" id="send-btn" title="Send Message" hidden>
                             <span class="material-icons-round">send</span>
                         </button>
                     </div>
@@ -395,7 +398,7 @@
     <!-- Libraries -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-    <script src="app.js?v=6"></script>
+    <script src="app.js?v=7"></script>
 
 </body>
 
