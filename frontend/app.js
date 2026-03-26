@@ -59,9 +59,22 @@ const translations = {
         'action.clearChat': '대화 기록 삭제',
         'action.logout': '로그아웃',
         'action.save': '저장',
+        'action.saveTurn': '대화 저장',
         'action.cancel': '취소',
         'action.reload': '새로고침',
         'action.clearContext': '문맥 초기화',
+        'library.searchPlaceholder': '저장된 대화를 검색하세요...',
+        'library.empty': '저장된 대화가 없습니다.',
+        'library.emptyFiltered': '검색 결과가 없습니다.',
+        'library.saved': '대화를 저장했습니다.',
+        'library.deleted': '저장된 대화를 삭제했습니다.',
+        'library.saveFailed': '대화를 저장하지 못했습니다.',
+        'library.deleteConfirm': '이 저장된 대화를 삭제할까요?',
+        'library.deleteFailed': '저장된 대화를 삭제하지 못했습니다.',
+        'library.modalTitle': '저장된 대화',
+        'library.prompt': '프롬프트',
+        'library.response': '응답',
+        'library.savedAt': '저장 시각',
         // Settings - LLM
         'setting.llmEndpoint.label': 'LLM 엔드포인트',
         'setting.model.label': '모델 이름',
@@ -202,9 +215,22 @@ const translations = {
         'action.clearChat': 'Clear Chat History',
         'action.logout': 'Logout',
         'action.save': 'Save Settings',
+        'action.saveTurn': 'Save Turn',
         'action.cancel': 'Cancel',
         'action.reload': 'Reload',
         'action.clearContext': 'Reset Context',
+        'library.searchPlaceholder': 'Search saved turns...',
+        'library.empty': 'No saved turns yet.',
+        'library.emptyFiltered': 'No saved turns match your search.',
+        'library.saved': 'Saved this turn.',
+        'library.deleted': 'Saved turn deleted.',
+        'library.saveFailed': 'Failed to save this turn.',
+        'library.deleteConfirm': 'Delete this saved turn?',
+        'library.deleteFailed': 'Failed to delete saved turn.',
+        'library.modalTitle': 'Saved Turn',
+        'library.prompt': 'Prompt',
+        'library.response': 'Response',
+        'library.savedAt': 'Saved at',
         // Settings - LLM
         'setting.llmEndpoint.label': 'LLM Endpoint',
         'setting.model.label': 'Model Name',
@@ -398,7 +424,11 @@ function applyTranslations() {
     // Update language selector
     const langSelect = document.getElementById('cfg-lang');
     if (langSelect) langSelect.value = lang;
+    if (savedLibrarySearchInput) {
+        savedLibrarySearchInput.placeholder = t('library.searchPlaceholder');
+    }
     updateMessageInputPlaceholder();
+    renderSavedLibraryList();
 }
 
 function setLanguage(lang) {
@@ -545,6 +575,218 @@ function closeSettingsModal() {
     document.getElementById('settings-modal').classList.remove('active');
 }
 
+function generateTurnId() {
+    return `turn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function escapeAttr(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
+
+function summarizeSavedTurn(item) {
+    const prompt = (item?.prompt_text || '').trim();
+    const response = (item?.response_text || '').trim();
+    const preview = [prompt, response].filter(Boolean).join(' ');
+    return preview.length > 180 ? `${preview.slice(0, 180)}...` : preview;
+}
+
+function filterSavedTurns(query) {
+    const needle = String(query || '').trim().toLowerCase();
+    if (!needle) return savedTurns;
+    return savedTurns.filter((item) => {
+        const haystack = [
+            item.title,
+            item.prompt_text,
+            item.response_text
+        ].join('\n').toLowerCase();
+        return haystack.includes(needle);
+    });
+}
+
+function renderSavedLibraryList() {
+    if (!savedLibraryList) return;
+    const items = filterSavedTurns(savedLibraryQuery);
+    if (items.length === 0) {
+        const emptyLabel = savedTurns.length === 0 ? t('library.empty') : t('library.emptyFiltered');
+        savedLibraryList.innerHTML = `<div class="saved-library-empty">${escapeHtml(emptyLabel)}</div>`;
+        return;
+    }
+
+    savedLibraryList.innerHTML = items.map((item) => `
+        <article class="saved-library-item">
+            <div class="saved-library-item-main" onclick="openSavedTurnModal(${item.id})">
+                <div class="saved-library-item-title">${escapeHtml(item.title || '')}</div>
+                <div class="saved-library-item-preview">${escapeHtml(summarizeSavedTurn(item))}</div>
+                <div class="saved-library-item-meta">${escapeHtml(t('library.savedAt'))}: ${escapeHtml(new Date(item.created_at).toLocaleString())}</div>
+            </div>
+            <button class="icon-btn" onclick="deleteSavedTurn(${item.id})" title="Delete">
+                <span class="material-icons-round">delete</span>
+            </button>
+        </article>
+    `).join('');
+}
+
+async function loadSavedTurns() {
+    if (!currentUser) return;
+    try {
+        const response = await fetch('/api/saved-turns', { credentials: 'include' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        savedTurns = Array.isArray(data.items) ? data.items : [];
+        savedLibraryLoaded = true;
+        renderSavedLibraryList();
+        scheduleSavedTitleRefresh();
+    } catch (e) {
+        console.warn('Failed to load saved turns:', e);
+    }
+}
+
+function openSavedLibrary() {
+    if (!savedLibraryView) return;
+    isSavedLibraryOpen = true;
+    savedLibraryView.hidden = false;
+    if (!savedLibraryLoaded) {
+        loadSavedTurns();
+    } else {
+        renderSavedLibraryList();
+    }
+    if (savedLibrarySearchInput) {
+        savedLibrarySearchInput.value = savedLibraryQuery;
+        requestAnimationFrame(() => savedLibrarySearchInput.focus());
+    }
+}
+
+function closeSavedLibrary() {
+    if (!savedLibraryView) return;
+    isSavedLibraryOpen = false;
+    savedLibraryView.hidden = true;
+}
+
+function handleSavedLibrarySearch(value) {
+    savedLibraryQuery = value || '';
+    renderSavedLibraryList();
+}
+
+function openSavedTurnModal(id) {
+    const item = savedTurns.find((entry) => entry.id === id);
+    if (!item || !savedTurnModal) return;
+
+    document.getElementById('saved-turn-modal-title').textContent = item.title || t('library.modalTitle');
+    document.getElementById('saved-turn-modal-prompt').textContent = item.prompt_text || '';
+    const responseHost = document.getElementById('saved-turn-modal-response');
+    responseHost.innerHTML = renderInitialAssistantMarkdown(item.response_text || '');
+    savedTurnModal.classList.add('active');
+}
+
+function closeSavedTurnModal() {
+    savedTurnModal?.classList.remove('active');
+}
+
+async function saveTurn(promptText, responseText) {
+    try {
+        const response = await fetch('/api/saved-turns', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+                prompt_text: promptText,
+                response_text: responseText
+            })
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        const item = data.item;
+        if (item) {
+            savedTurns = [item, ...savedTurns.filter((entry) => entry.id !== item.id)];
+            savedLibraryLoaded = true;
+            renderSavedLibraryList();
+            scheduleSavedTitleRefresh();
+        }
+        showToast(t('library.saved'));
+    } catch (e) {
+        console.warn('Failed to save turn:', e);
+        showToast(t('library.saveFailed'), true);
+    }
+}
+
+async function deleteSavedTurn(id) {
+    if (!confirm(t('library.deleteConfirm'))) return;
+    try {
+        const response = await fetch(`/api/saved-turns?id=${encodeURIComponent(String(id))}`, {
+            method: 'DELETE',
+            credentials: 'include'
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        savedTurns = savedTurns.filter((item) => item.id !== id);
+        renderSavedLibraryList();
+        closeSavedTurnModal();
+        showToast(t('library.deleted'));
+    } catch (e) {
+        console.warn('Failed to delete saved turn:', e);
+        showToast(t('library.deleteFailed'), true);
+    }
+}
+
+function scheduleSavedTitleRefresh(delay = 1200) {
+    if (savedTitleRefreshTimer) {
+        clearTimeout(savedTitleRefreshTimer);
+    }
+    const hasPending = savedTurns.some((item) => item.title_source === 'fallback');
+    if (!hasPending) return;
+
+    savedTitleRefreshTimer = setTimeout(() => {
+        const runner = () => refreshSavedTurnTitle();
+        if ('requestIdleCallback' in window) {
+            window.requestIdleCallback(runner, { timeout: 2000 });
+        } else {
+            runner();
+        }
+    }, delay);
+}
+
+async function refreshSavedTurnTitle() {
+    if (savedTitleRefreshInFlight || !currentUser || document.hidden) return;
+    if (!savedTurns.some((item) => item.title_source === 'fallback')) return;
+
+    savedTitleRefreshInFlight = true;
+    try {
+        const response = await fetch('/api/saved-turns/title-refresh', {
+            method: 'POST',
+            credentials: 'include'
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        if (data.updated && data.item) {
+            savedTurns = savedTurns.map((item) => item.id === data.item.id ? data.item : item);
+            renderSavedLibraryList();
+            scheduleSavedTitleRefresh(5000);
+        }
+    } catch (e) {
+        console.warn('Failed to refresh saved turn title:', e);
+    } finally {
+        savedTitleRefreshInFlight = false;
+    }
+}
+
+function getTurnDataFromAssistantButton(btn) {
+    const messageEl = btn?.closest('.message.assistant');
+    const turnId = messageEl?.dataset.turnId;
+    if (!turnId) return null;
+    const userEl = document.querySelector(`.message.user[data-turn-id="${turnId}"] .message-bubble`);
+    const responseEl = messageEl.querySelector('.markdown-body');
+    const promptText = userEl?.innerText?.trim() || '';
+    const responseText = responseEl?.innerText?.trim() || '';
+    if (!promptText || !responseText) return null;
+    return {
+        promptText,
+        responseText
+    };
+}
+
 /**
  * Handle certificate download
  */
@@ -643,6 +885,10 @@ const chatProgressDock = document.getElementById('chat-progress-dock');
 const inputArea = document.getElementById('input-area');
 const inputContainer = document.querySelector('#input-area .input-container');
 const inlineMicBtn = document.getElementById('inline-mic-btn');
+const savedLibraryView = document.getElementById('saved-library-view');
+const savedLibraryList = document.getElementById('saved-library-list');
+const savedLibrarySearchInput = document.getElementById('saved-library-search');
+const savedTurnModal = document.getElementById('saved-turn-modal');
 
 function updateViewportMetrics() {
     const root = document.documentElement;
@@ -909,9 +1155,8 @@ async function combinePlayableChunks(primaryUrl, queuedTexts) {
 // Initialization
 document.addEventListener('DOMContentLoaded', async () => {
     updateViewportMetrics();
+    closeSavedLibrary();
     // Check authentication first
-    await checkAuth();
-
     await checkAuth();
 
     // Initial Config Load
@@ -955,12 +1200,24 @@ document.addEventListener('DOMContentLoaded', async () => {
                 .catch(err => console.warn('[PWA] Service Worker failed:', err));
         });
     }
+
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) {
+            scheduleSavedTitleRefresh(800);
+        }
+    });
 });
 
 // Current user state
 let currentUser = null;
 let currentUserLocation = null; // Store location: {lat, lon, accuracy}
 let lastSessionCache = null;
+let savedTurns = [];
+let savedLibraryQuery = '';
+let savedLibraryLoaded = false;
+let savedTitleRefreshInFlight = false;
+let savedTitleRefreshTimer = null;
+let isSavedLibraryOpen = false;
 
 // Location Tracking
 function updateUserLocation() {
@@ -1003,6 +1260,8 @@ async function checkAuth() {
             id: data.user_id,
             role: data.role
         };
+
+        loadSavedTurns();
 
         // Show admin features if admin
         if (currentUser.role === 'admin') {
@@ -2058,6 +2317,9 @@ async function ensureStatefulContextBudget(nextUserText = '') {
 /* Chat Logic */
 
 async function sendMessage() {
+    if (isSavedLibraryOpen) {
+        closeSavedLibrary();
+    }
     // Unlock audio context on user interaction
     unlockAudioContext();
 
@@ -2077,10 +2339,12 @@ async function sendMessage() {
     stopAllAudio();
 
     // Prepare User Message
+    const turnId = generateTurnId();
     const userMsg = {
         role: 'user',
         content: text,
-        image: currentImage
+        image: currentImage,
+        turnId
     };
 
     appendMessage(userMsg);
@@ -2189,7 +2453,7 @@ async function sendMessage() {
 
     let assistantContent = '';
     try {
-        assistantContent = await streamResponse(payload, assistantId);
+        assistantContent = await streamResponse(payload, assistantId, turnId);
     } catch (e) {
         if (e.name === 'AbortError') {
             finalizeAssistantStatusCards(assistantId, 'stopped', t('status.stopped'));
@@ -2275,7 +2539,7 @@ function updateInlineComposerActionVisibility() {
 }
 
 
-async function streamResponse(payload, elementId) {
+async function streamResponse(payload, elementId, turnId = '') {
     const headers = { 'Content-Type': 'application/json' };
     if (currentUserLocation) {
         headers['X-User-Location'] = currentUserLocation;
@@ -2362,11 +2626,12 @@ async function streamResponse(payload, elementId) {
     }
     pendingStatefulResetReason = null;
 
-    return await processStream(response, elementId);
+    return await processStream(response, elementId, turnId);
 }
 
 // Helper to process the stream reader (shared by direct and proxy)
-async function processStream(response, elementId) {
+async function processStream(response, elementId, turnId = '') {
+    ensureAssistantMessageElement(elementId, turnId);
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -2739,7 +3004,7 @@ async function processStream(response, elementId) {
         // Keep only the user-visible answer in history to avoid ballooning context.
         historyContent = fullText.trim();
         if (historyContent) {
-            messages.push({ role: 'assistant', content: historyContent });
+            messages.push({ role: 'assistant', content: historyContent, turnId });
             if (config.llmMode === 'stateful') {
                 statefulTurnCount += 1;
                 statefulEstimatedChars += historyContent.length;
@@ -2764,6 +3029,7 @@ function createMessageElement(msg) {
     const div = document.createElement('div');
     div.className = `message ${msg.role}`;
     if (msg.id) div.id = msg.id;
+    if (msg.turnId) div.dataset.turnId = msg.turnId;
 
     const textContent = msg.content || '';
     if (msg.role === 'user') {
@@ -2829,6 +3095,9 @@ function createMessageElement(msg) {
                     </section>
                 </div>
                 <div class="message-actions${textContent.trim() ? ' is-ready' : ' is-pending'}" ${textContent.trim() ? '' : 'hidden'}>
+                    <button class="icon-btn save-btn" onclick="saveMessageTurn(this)" title="${escapeAttr(t('action.saveTurn'))}">
+                        <span class="material-icons-round">bookmark_add</span>
+                    </button>
                     <button class="icon-btn copy-btn" onclick="copyMessage(this)" title="Copy">
                         <span class="material-icons-round">content_copy</span>
                     </button>
@@ -2879,15 +3148,15 @@ function formatThoughtDuration(durationMs = 0) {
         .replace('{seconds}', String(seconds));
 }
 
-function ensureAssistantMessageElement(id) {
+function ensureAssistantMessageElement(id, turnId = '') {
     let el = document.getElementById(id);
     if (el) return el;
-    appendMessage({ role: 'assistant', content: '', id });
+    appendMessage({ role: 'assistant', content: '', id, turnId });
     return document.getElementById(id);
 }
 
-function getAssistantMessageParts(elementId) {
-    const msgEl = ensureAssistantMessageElement(elementId);
+function getAssistantMessageParts(elementId, turnId = '') {
+    const msgEl = ensureAssistantMessageElement(elementId, turnId);
     if (!msgEl) return {};
     return {
         msgEl,
@@ -3307,6 +3576,15 @@ function renderToolHistory(card, historyEl, state) {
 
 // New helper functions
 // New helper functions
+async function saveMessageTurn(btn) {
+    const turnData = getTurnDataFromAssistantButton(btn);
+    if (!turnData) {
+        showToast(t('library.saveFailed'), true);
+        return;
+    }
+    await saveTurn(turnData.promptText, turnData.responseText);
+}
+
 async function copyMessage(btn) {
     const bubble = btn.closest('.message-inner').querySelector('.markdown-body');
     if (!bubble) return;

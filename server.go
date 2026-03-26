@@ -27,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -312,6 +313,8 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	}))
 	mux.HandleFunc("/api/tts", AuthMiddleware(authMgr, handleTTS))
 	mux.HandleFunc("/api/last-session", AuthMiddleware(authMgr, handleLastSession()))
+	mux.HandleFunc("/api/saved-turns", AuthMiddleware(authMgr, handleSavedTurns()))
+	mux.HandleFunc("/api/saved-turns/title-refresh", AuthMiddleware(authMgr, handleSavedTurnTitleRefresh()))
 
 	// MCP Endpoints (Conditional)
 	// MCP Endpoints (Always Enabled if server runs)
@@ -770,6 +773,159 @@ func handleLastSession() http.HandlerFunc {
 		default:
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
+	}
+}
+
+func buildSavedTurnLLMTitle(promptText, responseText string) string {
+	request := fmt.Sprintf(`Create a short title for this saved chat turn.
+
+Rules:
+- Use the main language of the assistant response.
+- Keep it under 18 characters if possible.
+- Make it specific and readable.
+- Output only the title text.
+
+User prompt:
+%s
+
+Assistant response:
+%s`, compactText(promptText, 600), compactText(responseText, 1200))
+
+	title := strings.TrimSpace(callLLMInternal(request, "local-model"))
+	title = strings.Trim(title, "\"'`")
+	title = strings.Join(strings.Fields(title), " ")
+	if title == "" {
+		return ""
+	}
+	runes := []rune(title)
+	if len(runes) > 42 {
+		title = strings.TrimSpace(string(runes[:42])) + "..."
+	}
+	return title
+}
+
+func handleSavedTurns() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.Method {
+		case http.MethodGet:
+			queryStr := strings.TrimSpace(r.URL.Query().Get("q"))
+			var (
+				entries []mcp.SavedTurnEntry
+				err     error
+			)
+			if queryStr == "" {
+				entries, err = mcp.ListSavedTurns(userID, 200)
+			} else {
+				entries, err = mcp.SearchSavedTurns(userID, queryStr, 200)
+			}
+			if err != nil {
+				log.Printf("[handleSavedTurns] Failed to load saved turns for %s: %v", userID, err)
+				http.Error(w, "Failed to load saved turns", http.StatusInternalServerError)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{"items": entries})
+		case http.MethodPost:
+			var req struct {
+				PromptText   string `json:"prompt_text"`
+				ResponseText string `json:"response_text"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "Invalid request", http.StatusBadRequest)
+				return
+			}
+			entry, err := mcp.SaveSavedTurn(userID, req.PromptText, req.ResponseText)
+			if err != nil {
+				log.Printf("[handleSavedTurns] Failed to save turn for %s: %v", userID, err)
+				http.Error(w, "Failed to save turn", http.StatusInternalServerError)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"status": "ok",
+				"item":   entry,
+			})
+		case http.MethodDelete:
+			idStr := strings.TrimSpace(r.URL.Query().Get("id"))
+			turnID, err := strconv.ParseInt(idStr, 10, 64)
+			if err != nil || turnID <= 0 {
+				http.Error(w, "Valid id is required", http.StatusBadRequest)
+				return
+			}
+			if err := mcp.DeleteSavedTurn(userID, turnID); err != nil {
+				log.Printf("[handleSavedTurns] Failed to delete turn %d for %s: %v", turnID, userID, err)
+				http.Error(w, "Failed to delete turn", http.StatusInternalServerError)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
+}
+
+func handleSavedTurnTitleRefresh() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		entry, err := mcp.GetNextSavedTurnPendingTitle(userID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"status":  "idle",
+					"updated": false,
+				})
+				return
+			}
+			log.Printf("[handleSavedTurnTitleRefresh] Failed to load pending title for %s: %v", userID, err)
+			http.Error(w, "Failed to load pending title", http.StatusInternalServerError)
+			return
+		}
+
+		title := buildSavedTurnLLMTitle(entry.PromptText, entry.ResponseText)
+		if title == "" {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"status":  "noop",
+				"updated": false,
+			})
+			return
+		}
+
+		if err := mcp.UpdateSavedTurnTitle(userID, entry.ID, title, "generated"); err != nil {
+			log.Printf("[handleSavedTurnTitleRefresh] Failed to update title for %s turn %d: %v", userID, entry.ID, err)
+			http.Error(w, "Failed to update title", http.StatusInternalServerError)
+			return
+		}
+
+		updatedEntry, err := mcp.GetSavedTurn(userID, entry.ID)
+		if err != nil {
+			log.Printf("[handleSavedTurnTitleRefresh] Failed to fetch updated turn %d for %s: %v", entry.ID, userID, err)
+			http.Error(w, "Failed to fetch updated turn", http.StatusInternalServerError)
+			return
+		}
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":  "ok",
+			"updated": true,
+			"item":    updatedEntry,
+		})
 	}
 }
 

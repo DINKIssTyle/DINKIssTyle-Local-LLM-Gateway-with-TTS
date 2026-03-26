@@ -319,6 +319,27 @@
         </div>
     </div>
 
+    <div id="saved-turn-modal" class="modal-overlay" onclick="if(event.target===this)closeSavedTurnModal()">
+        <div class="modal saved-turn-modal">
+            <div class="modal-header">
+                <h2 id="saved-turn-modal-title">Saved Turn</h2>
+                <button class="modal-close" onclick="closeSavedTurnModal()">
+                    <span class="material-icons-round">close</span>
+                </button>
+            </div>
+            <div class="modal-body saved-turn-modal-body">
+                <section class="saved-turn-modal-section">
+                    <div class="saved-turn-modal-label" data-i18n="library.prompt">Prompt</div>
+                    <div id="saved-turn-modal-prompt" class="saved-turn-modal-content"></div>
+                </section>
+                <section class="saved-turn-modal-section">
+                    <div class="saved-turn-modal-label" data-i18n="library.response">Response</div>
+                    <div id="saved-turn-modal-response" class="saved-turn-modal-content markdown-body"></div>
+                </section>
+            </div>
+        </div>
+    </div>
+
     <!-- Mic Layout Support -->
     <div id="mic-layout-container" class="mic-layout-none" onclick="toggleSTT()">
         <div id="giant-mic-btn">
@@ -332,7 +353,12 @@
     <div id="main-chat">
 
         <div id="chat-header">
-            <span id="header-model-name" class="header-model-name">Loading...</span>
+            <div class="chat-header-left">
+                <button class="icon-btn header-library-btn" onclick="openSavedLibrary()" title="Saved Library">
+                    <span class="material-icons-round">local_library</span>
+                </button>
+                <span id="header-model-name" class="header-model-name">Loading...</span>
+            </div>
             <div class="chat-header-actions">
                 <div class="font-size-controls" aria-label="Text size controls">
                     <button class="icon-btn" onclick="adjustChatFontSize(-1)" title="Decrease text size">
@@ -356,6 +382,20 @@
             <!-- Messages will be injected here -->
 
         </div>
+
+        <section id="saved-library-view" class="saved-library-view" hidden>
+            <div class="saved-library-header">
+                <button class="icon-btn" onclick="closeSavedLibrary()" title="Back to Chat">
+                    <span class="material-icons-round">arrow_back</span>
+                </button>
+                <input
+                    id="saved-library-search"
+                    type="text"
+                    placeholder="Search saved turns..."
+                    oninput="handleSavedLibrarySearch(this.value)">
+            </div>
+            <div id="saved-library-list" class="saved-library-list"></div>
+        </section>
 
         <div id="preview-container">
             <div class="preview-wrapper">
@@ -398,7 +438,7 @@
     <!-- Libraries -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-    <script src="app.js?v=7"></script>
+    <script src="app.js?v=8"></script>
 
 </body>
 

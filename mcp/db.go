@@ -94,6 +94,23 @@ func createSchema() error {
 		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
 
+	CREATE TABLE IF NOT EXISTS saved_turns (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id TEXT NOT NULL,
+		title TEXT NOT NULL,
+		title_source TEXT NOT NULL DEFAULT 'fallback',
+		prompt_text TEXT NOT NULL,
+		response_text TEXT NOT NULL,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_saved_turns_user_created
+	ON saved_turns(user_id, created_at DESC);
+
+	CREATE INDEX IF NOT EXISTS idx_saved_turns_user_title_source
+	ON saved_turns(user_id, title_source, created_at DESC);
+
 	CREATE TABLE IF NOT EXISTS request_patterns (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		user_id TEXT NOT NULL,
@@ -201,6 +218,17 @@ type LastSessionEntry struct {
 	LastAssistantMessage string
 	Mode                 string
 	UpdatedAt            time.Time
+}
+
+type SavedTurnEntry struct {
+	ID           int64     `json:"id"`
+	UserID       string    `json:"user_id"`
+	Title        string    `json:"title"`
+	TitleSource  string    `json:"title_source"`
+	PromptText   string    `json:"prompt_text"`
+	ResponseText string    `json:"response_text"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 type RequestExecutionEntry struct {
@@ -796,6 +824,249 @@ func boolToInt(v bool) int {
 		return 1
 	}
 	return 0
+}
+
+func buildSavedTurnFallbackTitle(responseText string) string {
+	text := strings.TrimSpace(responseText)
+	if text == "" {
+		return "Saved response"
+	}
+
+	text = strings.Join(strings.Fields(text), " ")
+	runes := []rune(text)
+	if len(runes) <= 42 {
+		return text
+	}
+	return strings.TrimSpace(string(runes[:42])) + "..."
+}
+
+func SaveSavedTurn(userID, promptText, responseText string) (SavedTurnEntry, error) {
+	var entry SavedTurnEntry
+	if db == nil {
+		return entry, fmt.Errorf("database not initialized")
+	}
+
+	userID = strings.TrimSpace(userID)
+	promptText = strings.TrimSpace(promptText)
+	responseText = strings.TrimSpace(responseText)
+	if userID == "" {
+		return entry, fmt.Errorf("user id is required")
+	}
+	if promptText == "" || responseText == "" {
+		return entry, fmt.Errorf("prompt and response are required")
+	}
+
+	title := buildSavedTurnFallbackTitle(responseText)
+	now := time.Now().UTC()
+	query := `
+	INSERT INTO saved_turns (
+		user_id, title, title_source, prompt_text, response_text, created_at, updated_at
+	) VALUES (?, ?, 'fallback', ?, ?, ?, ?)`
+
+	result, err := db.Exec(query, userID, title, promptText, responseText, now, now)
+	if err != nil {
+		return entry, fmt.Errorf("failed to save turn: %w", err)
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return entry, fmt.Errorf("failed to fetch saved turn id: %w", err)
+	}
+
+	return GetSavedTurn(userID, id)
+}
+
+func ListSavedTurns(userID string, limit int) ([]SavedTurnEntry, error) {
+	if db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+
+	rows, err := db.Query(`
+		SELECT id, user_id, title, title_source, prompt_text, response_text, created_at, updated_at
+		FROM saved_turns
+		WHERE user_id = ?
+		ORDER BY created_at DESC
+		LIMIT ?`, userID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list saved turns: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []SavedTurnEntry
+	for rows.Next() {
+		var entry SavedTurnEntry
+		if err := rows.Scan(
+			&entry.ID,
+			&entry.UserID,
+			&entry.Title,
+			&entry.TitleSource,
+			&entry.PromptText,
+			&entry.ResponseText,
+			&entry.CreatedAt,
+			&entry.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan saved turn: %w", err)
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
+func SearchSavedTurns(userID, queryStr string, limit int) ([]SavedTurnEntry, error) {
+	if db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+
+	queryStr = strings.TrimSpace(queryStr)
+	if queryStr == "" {
+		return ListSavedTurns(userID, limit)
+	}
+
+	pattern := "%" + queryStr + "%"
+	rows, err := db.Query(`
+		SELECT id, user_id, title, title_source, prompt_text, response_text, created_at, updated_at
+		FROM saved_turns
+		WHERE user_id = ?
+		  AND (title LIKE ? OR prompt_text LIKE ? OR response_text LIKE ?)
+		ORDER BY created_at DESC
+		LIMIT ?`, userID, pattern, pattern, pattern, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search saved turns: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []SavedTurnEntry
+	for rows.Next() {
+		var entry SavedTurnEntry
+		if err := rows.Scan(
+			&entry.ID,
+			&entry.UserID,
+			&entry.Title,
+			&entry.TitleSource,
+			&entry.PromptText,
+			&entry.ResponseText,
+			&entry.CreatedAt,
+			&entry.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan saved turn: %w", err)
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
+func GetSavedTurn(userID string, turnID int64) (SavedTurnEntry, error) {
+	var entry SavedTurnEntry
+	if db == nil {
+		return entry, fmt.Errorf("database not initialized")
+	}
+
+	err := db.QueryRow(`
+		SELECT id, user_id, title, title_source, prompt_text, response_text, created_at, updated_at
+		FROM saved_turns
+		WHERE id = ? AND user_id = ?`, turnID, userID).Scan(
+		&entry.ID,
+		&entry.UserID,
+		&entry.Title,
+		&entry.TitleSource,
+		&entry.PromptText,
+		&entry.ResponseText,
+		&entry.CreatedAt,
+		&entry.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return entry, fmt.Errorf("saved turn not found")
+		}
+		return entry, fmt.Errorf("failed to get saved turn: %w", err)
+	}
+	return entry, nil
+}
+
+func DeleteSavedTurn(userID string, turnID int64) error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	res, err := db.Exec(`DELETE FROM saved_turns WHERE id = ? AND user_id = ?`, turnID, userID)
+	if err != nil {
+		return fmt.Errorf("failed to delete saved turn: %w", err)
+	}
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to verify deletion: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("saved turn not found or not owned by user")
+	}
+	return nil
+}
+
+func GetNextSavedTurnPendingTitle(userID string) (SavedTurnEntry, error) {
+	var entry SavedTurnEntry
+	if db == nil {
+		return entry, fmt.Errorf("database not initialized")
+	}
+
+	err := db.QueryRow(`
+		SELECT id, user_id, title, title_source, prompt_text, response_text, created_at, updated_at
+		FROM saved_turns
+		WHERE user_id = ? AND title_source = 'fallback'
+		ORDER BY created_at ASC
+		LIMIT 1`, userID).Scan(
+		&entry.ID,
+		&entry.UserID,
+		&entry.Title,
+		&entry.TitleSource,
+		&entry.PromptText,
+		&entry.ResponseText,
+		&entry.CreatedAt,
+		&entry.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return entry, err
+		}
+		return entry, fmt.Errorf("failed to load pending saved turn title: %w", err)
+	}
+	return entry, nil
+}
+
+func UpdateSavedTurnTitle(userID string, turnID int64, title string, titleSource string) error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	title = strings.TrimSpace(title)
+	titleSource = strings.TrimSpace(titleSource)
+	if title == "" {
+		return fmt.Errorf("title is required")
+	}
+	if titleSource == "" {
+		titleSource = "generated"
+	}
+
+	res, err := db.Exec(`
+		UPDATE saved_turns
+		SET title = ?, title_source = ?, updated_at = ?
+		WHERE id = ? AND user_id = ?`, title, titleSource, time.Now().UTC(), turnID, userID)
+	if err != nil {
+		return fmt.Errorf("failed to update saved turn title: %w", err)
+	}
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to verify title update: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("saved turn not found or not owned by user")
+	}
+	return nil
 }
 
 // InsertMemory saves a new memory entry into the database.

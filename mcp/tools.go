@@ -466,8 +466,12 @@ func SearchMemoryDB(userID, query string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("db search failed: %v", err)
 	}
+	savedTurns, err := searchSavedTurnsMultiQuery(userID, searchQueries)
+	if err != nil {
+		return "", fmt.Errorf("saved turn search failed: %v", err)
+	}
 
-	if len(results) == 0 {
+	if len(results) == 0 && len(savedTurns) == 0 {
 		return "No relevant memories found.", nil
 	}
 
@@ -484,7 +488,38 @@ func SearchMemoryDB(userID, query string) (string, error) {
 		sb.WriteString(fmt.Sprintf("SUMMARY: %s\n", r.Summary))
 		sb.WriteString(fmt.Sprintf("FULL TEXT:\n%s\n", r.FullText))
 	}
+	for _, turn := range savedTurns {
+		sb.WriteString(fmt.Sprintf("\n--- SAVED TURN ID: %d | DATE: %s | TITLE: %s ---\n", turn.ID, turn.CreatedAt.Format("2006-01-02"), turn.Title))
+		sb.WriteString(fmt.Sprintf("USER PROMPT:\n%s\n", turn.PromptText))
+		sb.WriteString(fmt.Sprintf("ASSISTANT RESPONSE:\n%s\n", turn.ResponseText))
+	}
 	return sb.String(), nil
+}
+
+func searchSavedTurnsMultiQuery(userID string, queryStrs []string) ([]SavedTurnEntry, error) {
+	seen := make(map[int64]bool)
+	var merged []SavedTurnEntry
+	for _, queryStr := range queryStrs {
+		trimmed := strings.TrimSpace(queryStr)
+		if trimmed == "" {
+			continue
+		}
+		results, err := SearchSavedTurns(userID, trimmed, 10)
+		if err != nil {
+			return nil, err
+		}
+		for _, result := range results {
+			if seen[result.ID] {
+				continue
+			}
+			seen[result.ID] = true
+			merged = append(merged, result)
+			if len(merged) >= 10 {
+				return merged, nil
+			}
+		}
+	}
+	return merged, nil
 }
 
 func rewriteMemoryQuery(input string) string {
@@ -601,7 +636,11 @@ func GetMemorySnapshot(userID string) string {
 		log.Printf("[MCP] Failed to get memory snapshot: %v", err)
 		return "No recent memories found."
 	}
-	if len(results) == 0 {
+	savedTurns, savedErr := ListSavedTurns(userID, 5)
+	if savedErr != nil {
+		log.Printf("[MCP] Failed to get saved turn snapshot: %v", savedErr)
+	}
+	if len(results) == 0 && len(savedTurns) == 0 {
 		return "No recent memories found."
 	}
 
@@ -617,6 +656,9 @@ func GetMemorySnapshot(userID string) string {
 			continue
 		}
 		sb.WriteString(fmt.Sprintf("- [%s] %s\n", r.CreatedAt.Format("2006-01-02"), compactMemoryText(summary, 120)))
+	}
+	for _, turn := range savedTurns {
+		sb.WriteString(fmt.Sprintf("- [%s] Saved turn: %s\n", turn.CreatedAt.Format("2006-01-02"), compactMemoryText(turn.Title, 120)))
 	}
 	return sb.String()
 }
@@ -730,6 +772,25 @@ func AutoSearchMemory(userID, input string) string {
 					}
 				}
 			}
+
+			savedTurns, err := SearchSavedTurns(userID, kw, 5)
+			if err == nil {
+				for _, turn := range savedTurns {
+					if seenIDs[turn.ID+1_000_000_000] {
+						continue
+					}
+					allResults = append(allResults, MemoryEntry{
+						ID:        turn.ID + 1_000_000_000,
+						UserID:    turn.UserID,
+						Summary:   "Saved turn: " + turn.Title,
+						Keywords:  "",
+						FullText:  fmt.Sprintf("User Prompt:\n%s\n\nAssistant Response:\n%s", turn.PromptText, turn.ResponseText),
+						HitCount:  0,
+						CreatedAt: turn.CreatedAt,
+					})
+					seenIDs[turn.ID+1_000_000_000] = true
+				}
+			}
 		}
 	}
 
@@ -773,8 +834,10 @@ func AutoSearchMemory(userID, input string) string {
 		rawContextSb.WriteString(fmt.Sprintf("Summary: %s\n", displaySummary))
 		rawContextSb.WriteString(fmt.Sprintf("Content: %s\n", compactMemoryText(r.FullText, 400)))
 
-		// Increment hit count
-		_ = IncrementHitCount(r.ID)
+		// Increment hit count only for actual memory records.
+		if r.ID < 1_000_000_000 {
+			_ = IncrementHitCount(r.ID)
+		}
 	}
 
 	rawContext := rawContextSb.String()
