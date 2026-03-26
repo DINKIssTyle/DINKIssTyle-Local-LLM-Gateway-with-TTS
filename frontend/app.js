@@ -660,6 +660,14 @@ function openSavedLibrary() {
     }
 }
 
+function toggleSavedLibrary() {
+    if (isSavedLibraryOpen) {
+        closeSavedLibrary();
+        return;
+    }
+    openSavedLibrary();
+}
+
 function closeSavedLibrary() {
     if (!savedLibraryView) return;
     isSavedLibraryOpen = false;

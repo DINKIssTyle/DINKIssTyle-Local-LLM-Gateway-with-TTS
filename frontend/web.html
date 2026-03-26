@@ -362,7 +362,7 @@
 
         <div id="chat-header">
             <div class="chat-header-left">
-                <button class="icon-btn header-library-btn" onclick="openSavedLibrary()" title="Saved Library">
+                <button class="icon-btn header-library-btn" onclick="toggleSavedLibrary()" title="Saved Library">
                     <span class="material-icons-round">local_library</span>
                 </button>
                 <span id="header-model-name" class="header-model-name">Loading...</span>
@@ -393,9 +393,6 @@
 
         <section id="saved-library-view" class="saved-library-view" hidden>
             <div class="saved-library-header">
-                <button class="icon-btn" onclick="closeSavedLibrary()" title="Back to Chat">
-                    <span class="material-icons-round">arrow_back</span>
-                </button>
                 <input
                     id="saved-library-search"
                     type="text"
