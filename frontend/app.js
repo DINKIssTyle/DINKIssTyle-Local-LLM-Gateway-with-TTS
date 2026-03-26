@@ -114,6 +114,13 @@ const translations = {
         'status.failed': '실패',
         'status.stopped': '중단됨',
         'status.unexpectedStop': '응답이 예상치 못하게 중단되었습니다.',
+        'tool.currentTimeChecked': '현재 시간을 확인했습니다.',
+        'tool.executionFinished': '도구 실행이 완료되었습니다.',
+        'tool.noQueryDetails': '세부 질의 정보 없음',
+        'tool.unknownError': '알 수 없는 오류',
+        'progress.processingPrompt': '프롬프트 처리 중',
+        'progress.loadingModel': '모델 로딩 중',
+        'progress.modelLoaded': '모델 로딩 완료',
         // Settings - TTS
         'setting.enableTTS.label': 'TTS 활성화',
         'setting.enableTTS.desc': '응답을 음성으로 재생합니다.',
@@ -247,6 +254,13 @@ const translations = {
         'status.failed': 'Failed',
         'status.stopped': 'Stopped',
         'status.unexpectedStop': 'The response stopped unexpectedly.',
+        'tool.currentTimeChecked': 'Checked the current time.',
+        'tool.executionFinished': 'Tool execution finished.',
+        'tool.noQueryDetails': 'No query details',
+        'tool.unknownError': 'Unknown error',
+        'progress.processingPrompt': 'Processing Prompt',
+        'progress.loadingModel': 'Loading Model',
+        'progress.modelLoaded': 'Model Loaded',
         // Settings - TTS
         'setting.enableTTS.label': 'Enable TTS',
         'setting.enableTTS.desc': 'Play responses as audio.',
@@ -588,6 +602,8 @@ let autoScrollResizeObserver = null;
 let lockScrollToLatest = false;
 let suppressNextScrollEvent = false;
 let activeStreamingMessageId = null;
+let pendingScrollToBottom = false;
+let progressDockHideTimer = null;
 
 if (chatMessages) {
     chatMessages.addEventListener('scroll', () => {
@@ -1716,6 +1732,7 @@ function clearChat() {
     statefulLastOutputTokens = 0;
     statefulPeakInputTokens = 0;
     messages = [];
+    pendingScrollToBottom = false;
     chatMessages.innerHTML = '';
 }
 
@@ -2284,10 +2301,10 @@ async function processStream(response, elementId) {
                         setToolCardState(elementId, 'running', '', json.arguments, toolName);
                     }
                     else if (json.type === 'tool_call.success') {
-                        setToolCardState(elementId, 'success', 'Tool execution finished.');
+                        setToolCardState(elementId, 'success', t('tool.executionFinished'));
                     }
                     else if (json.type === 'tool_call.failure') {
-                        setToolCardState(elementId, 'failure', json.reason || 'Unknown error');
+                        setToolCardState(elementId, 'failure', json.reason || t('tool.unknownError'));
                     }
                     else if (json.type === 'chat.end' && json.result) {
                         hideProgressDock();
@@ -2307,26 +2324,26 @@ async function processStream(response, elementId) {
                     }
                     // Handle Prompt Processing Progress
                     else if (json.type === 'prompt_processing.progress') {
-                        renderProgressDock('Processing Prompt', json.progress * 100, 'prompt-processing', false);
+                        renderProgressDock(t('progress.processingPrompt'), json.progress * 100, 'prompt-processing', false);
                     }
                     // Handle Model Loading Progress (LM Studio Mode)
                     else if (json.type === 'model_load.start') {
                         console.log('[Model Load] Start:', json.model_instance_id);
-                        renderProgressDock('Loading Model', null, 'model-loading', true);
+                        renderProgressDock(t('progress.loadingModel'), null, 'model-loading', true);
                     }
                     else if (json.type === 'model_load.progress') {
-                        renderProgressDock('Loading Model', json.progress * 100, 'model-loading', false);
+                        renderProgressDock(t('progress.loadingModel'), json.progress * 100, 'model-loading', false);
                     }
                     else if (json.type === 'model_load.end') {
                         console.log('[Model Load] End:', json.model_instance_id, 'Time:', json.load_time_seconds);
-                        renderProgressDock(`Model Loaded (${json.load_time_seconds?.toFixed(1) || '?'}s)`, 100, 'model-loading', false);
+                        renderProgressDock(`${t('progress.modelLoaded')} (${json.load_time_seconds?.toFixed(1) || '?'}s)`, 100, 'model-loading', false);
                         setTimeout(() => hideProgressDock(), 1200);
                     }
                     // Handle Generative Errors (Tool Parsing, etc.)
                     else if (json.type === 'error') {
                         console.error('[SSE Error]', json.error);
                         hideProgressDock();
-                        let errMsg = "Unknown Error";
+                        let errMsg = t('tool.unknownError');
                         if (json.error && json.error.message) {
                             errMsg = json.error.message;
                         } else if (typeof json.error === 'string') {
@@ -2334,7 +2351,7 @@ async function processStream(response, elementId) {
                         }
 
                         if (lastToolCallHtml) {
-                            setToolCardState(elementId, 'failure', `Error: ${errMsg}`);
+                            setToolCardState(elementId, 'failure', errMsg);
                         } else {
                             contentToAdd = `\n\n**Error:** ${errMsg}\n`;
                         }
@@ -2503,8 +2520,7 @@ async function processStream(response, elementId) {
     return historyContent;
 }
 
-function appendMessage(msg) {
-    const wasNearBottom = isChatNearBottom();
+function createMessageElement(msg) {
     const div = document.createElement('div');
     div.className = `message ${msg.role}`;
     if (msg.id) div.id = msg.id;
@@ -2558,6 +2574,7 @@ function appendMessage(msg) {
                 </div>
             </div>`;
     } else {
+        const assistantMarkdown = renderInitialAssistantMarkdown(textContent);
         div.innerHTML = `
             <div class="message-inner">
                 <div class="message-label">Assistant</div>
@@ -2567,7 +2584,7 @@ function appendMessage(msg) {
                     <section class="assistant-response-card" ${textContent.trim() ? '' : 'hidden'}>
                         <div class="message-bubble plain-assistant-bubble">
                             ${msg.image ? `<img src="${msg.image}" class="message-image">` : ''}
-                            <div class="markdown-body">${marked.parse(normalizeMarkdownForRender(textContent))}</div>
+                            <div class="markdown-body">${assistantMarkdown}</div>
                         </div>
                     </section>
                 </div>
@@ -2582,6 +2599,12 @@ function appendMessage(msg) {
             </div>`;
     }
 
+    return div;
+}
+
+function appendMessage(msg) {
+    const wasNearBottom = isChatNearBottom();
+    const div = createMessageElement(msg);
     chatMessages.appendChild(div);
     scrollToBottom(wasNearBottom || msg.role === 'user');
 }
@@ -2615,17 +2638,24 @@ function getAssistantMessageParts(elementId) {
         reasoningHost: msgEl.querySelector('.assistant-reasoning'),
         toolsHost: msgEl.querySelector('.assistant-tools'),
         bubble: msgEl.querySelector('.assistant-response-card .message-bubble'),
-        markdownBody: msgEl.querySelector('.assistant-response-card .markdown-body')
+        markdownBody: msgEl.querySelector('.assistant-response-card .markdown-body'),
+        committedHost: msgEl.querySelector('.assistant-response-card .markdown-committed'),
+        pendingHost: msgEl.querySelector('.assistant-response-card .markdown-pending')
     };
 }
 
 function renderProgressDock(label, percent = null, mode = 'prompt-processing', indeterminate = false) {
     if (!chatProgressDock) return;
+    if (progressDockHideTimer) {
+        clearTimeout(progressDockHideTimer);
+        progressDockHideTimer = null;
+    }
     const clamped = typeof percent === 'number' ? Math.max(0, Math.min(100, percent)) : null;
     const cardClass = `llm-progress-card ${mode}${indeterminate ? ' indeterminate' : ''}`;
     const percentLabel = clamped === null ? '' : `${clamped.toFixed(2)}%`;
     const width = indeterminate ? '32%' : `${clamped || 0}%`;
 
+    const wasHidden = chatProgressDock.hidden;
     chatProgressDock.hidden = false;
     chatProgressDock.innerHTML = `
         <div class="${cardClass}">
@@ -2637,12 +2667,37 @@ function renderProgressDock(label, percent = null, mode = 'prompt-processing', i
                 <div class="llm-progress-fill" style="width: ${width};"></div>
             </div>
         </div>`;
+    if (wasHidden) {
+        requestAnimationFrame(() => {
+            if (!chatProgressDock.hidden) {
+                chatProgressDock.classList.add('is-visible');
+            }
+        });
+    } else {
+        chatProgressDock.classList.add('is-visible');
+    }
 }
 
 function hideProgressDock() {
     if (!chatProgressDock) return;
-    chatProgressDock.hidden = true;
-    chatProgressDock.innerHTML = '';
+    chatProgressDock.classList.remove('is-visible');
+    if (progressDockHideTimer) {
+        clearTimeout(progressDockHideTimer);
+    }
+    progressDockHideTimer = setTimeout(() => {
+        chatProgressDock.hidden = true;
+        chatProgressDock.innerHTML = '';
+        progressDockHideTimer = null;
+    }, 180);
+}
+
+function isToolExecutionFinishedSummary(text = '') {
+    const normalized = String(text || '').trim().toLowerCase();
+    if (!normalized) return false;
+    return normalized === translations.ko['tool.executionFinished'].toLowerCase()
+        || normalized === translations.en['tool.executionFinished'].toLowerCase()
+        || normalized === 'tool execution finished'
+        || normalized === 'tool execution finished.';
 }
 
 function getRunningToolCards(elementId) {
@@ -2720,9 +2775,7 @@ function toggleReasoningCard(btn) {
     const nextCollapsed = card.dataset.collapsed !== 'true';
     card.dataset.collapsed = nextCollapsed ? 'true' : 'false';
     card.classList.toggle('collapsed', nextCollapsed);
-    if (card.classList.contains('tool-status-card')) {
-        card.dataset.userExpanded = nextCollapsed ? 'false' : 'true';
-    }
+    card.dataset.userExpanded = nextCollapsed ? 'false' : 'true';
 }
 
 function formatStripDuration(startedAt, fallbackMs = 0) {
@@ -2781,7 +2834,7 @@ function setToolCardState(elementId, state, summary = '', args = null, toolName 
     const queryEl = card.querySelector('.tool-card-query');
     const historyEl = card.querySelector('.tool-card-history');
     const activeToolName = toolName || card.dataset.toolName || 'Tool';
-    const previewText = extractToolPreview(args, summary);
+    const previewText = extractToolPreview(args, summary, activeToolName);
     const lastPreviewText = card.dataset.lastPreviewText || '';
     const shouldKeepExpanded = card.dataset.userExpanded === 'true';
 
@@ -2826,11 +2879,11 @@ function setToolCardState(elementId, state, summary = '', args = null, toolName 
         card.dataset.lastPreviewText = previewText;
     }
 
-    if (summaryEl) {
+        if (summaryEl) {
         let statusLabel = t('status.done');
         if (state === 'running') statusLabel = previewText || lastPreviewText || t('status.running');
         else if (state === 'failure') statusLabel = summary || t('status.failed');
-        else if (summary && !/tool execution finished/i.test(summary)) statusLabel = summary;
+        else if (summary && !isToolExecutionFinishedSummary(summary)) statusLabel = summary;
         summaryEl.textContent = statusLabel;
         summaryEl.classList.toggle('is-query-preview', state === 'running' && !!(previewText || lastPreviewText));
         summaryEl.title = state === 'running' && (previewText || lastPreviewText) ? (previewText || lastPreviewText) : statusLabel;
@@ -2851,8 +2904,19 @@ function setToolCardState(elementId, state, summary = '', args = null, toolName 
     renderToolHistory(card, historyEl, state);
 }
 
-function extractToolPreview(args, summary = '') {
+function extractToolPreview(args, summary = '', toolName = '') {
+    const normalizedTool = String(toolName || '').trim().toLowerCase();
+
+    if (normalizedTool === 'get_current_time') {
+        return t('tool.currentTimeChecked');
+    }
+
     if (args && typeof args === 'object') {
+        if (normalizedTool === 'namu_wiki') {
+            const keyword = extractToolObjectValue(args, ['keyword', 'query', 'title', 'input']);
+            if (keyword) return keyword;
+        }
+
         const candidateKeys = ['query', 'url', 'text', 'prompt', 'input', 'title'];
         for (const key of candidateKeys) {
             const value = args[key];
@@ -2868,13 +2932,26 @@ function extractToolPreview(args, summary = '') {
     }
 
     if (typeof args === 'string' && args.trim()) {
+        if (normalizedTool === 'get_current_time' && args.trim() === '{}') {
+            return t('tool.currentTimeChecked');
+        }
         return args.trim();
     }
 
-    if (summary && !/^running$/i.test(summary.trim()) && !/^tool execution finished\.?$/i.test(summary.trim())) {
+    if (summary && !/^running$/i.test(summary.trim()) && !isToolExecutionFinishedSummary(summary.trim())) {
         return summary.trim();
     }
 
+    return '';
+}
+
+function extractToolObjectValue(args, keys) {
+    for (const key of keys) {
+        const value = args?.[key];
+        if (typeof value === 'string' && value.trim()) {
+            return value.trim();
+        }
+    }
     return '';
 }
 
@@ -2904,7 +2981,7 @@ function appendToolHistory(card, toolName, previewText, args) {
     if (!Array.isArray(card._history)) card._history = [];
 
     const displayTool = formatToolDisplayName(toolName);
-    const detail = (previewText || extractToolPreview(args, '') || '').trim();
+    const detail = (previewText || extractToolPreview(args, '', toolName) || '').trim();
     if (!detail) return;
     const signature = `${displayTool}::${detail}`;
     const last = card._history[card._history.length - 1];
@@ -2928,12 +3005,31 @@ function renderToolHistory(card, historyEl, state) {
     }
 
     historyEl.hidden = false;
-    historyEl.innerHTML = history.map((entry, index) => `
-        <div class="tool-history-item">
-            <div class="tool-history-title">${escapeHtml(`${index + 1}. ${entry.tool}`)}</div>
-            <div class="tool-history-detail">${escapeHtml(entry.detail || 'No query details')}</div>
-        </div>
-    `).join('');
+    const renderedCount = Number(card.dataset.renderedHistoryCount || 0);
+
+    if (renderedCount > history.length || renderedCount === 0) {
+        historyEl.innerHTML = history.map((entry, index) => `
+            <div class="tool-history-item">
+                <div class="tool-history-title">${escapeHtml(`${index + 1}. ${entry.tool}`)}</div>
+                <div class="tool-history-detail">${escapeHtml(entry.detail || t('tool.noQueryDetails'))}</div>
+            </div>
+        `).join('');
+    } else if (history.length > renderedCount) {
+        const fragment = document.createDocumentFragment();
+        history.slice(renderedCount).forEach((entry, index) => {
+            const item = document.createElement('div');
+            item.className = 'tool-history-item is-new';
+            item.innerHTML = `
+                <div class="tool-history-title">${escapeHtml(`${renderedCount + index + 1}. ${entry.tool}`)}</div>
+                <div class="tool-history-detail">${escapeHtml(entry.detail || t('tool.noQueryDetails'))}</div>
+            `;
+            fragment.appendChild(item);
+            requestAnimationFrame(() => item.classList.remove('is-new'));
+        });
+        historyEl.appendChild(fragment);
+    }
+
+    card.dataset.renderedHistoryCount = String(history.length);
 }
 
 // New helper functions
@@ -3103,9 +3199,14 @@ function showReasoningStatus(elementId, text, isFinal = false) {
         cleanText = '...\n' + cleanText.slice(-MAX_DISPLAY_LENGTH);
     }
 
-    card.classList.remove('collapsed');
-    card.dataset.collapsed = 'true';
-    card.classList.add('collapsed');
+    const shouldKeepExpanded = card.dataset.userExpanded === 'true';
+    if (shouldKeepExpanded) {
+        card.dataset.collapsed = 'false';
+        card.classList.remove('collapsed');
+    } else {
+        card.dataset.collapsed = 'true';
+        card.classList.add('collapsed');
+    }
     card.classList.remove('completed', 'failed');
     if (metaEl) metaEl.textContent = t('status.live');
     if (titleEl) {
@@ -3126,11 +3227,17 @@ function finalizeReasoningStatus(elementId, outcome = 'done', detail = '') {
     const bodyEl = card.querySelector('.reasoning-body');
     const startedAt = Number(card.dataset.startedAt || Date.now());
     const durationMs = Math.max(0, Date.now() - startedAt);
+    const shouldKeepExpanded = card.dataset.userExpanded === 'true';
 
     card.classList.remove('completed', 'failed');
     card.classList.add(outcome === 'failed' ? 'failed' : 'completed');
-    card.dataset.collapsed = 'true';
-    card.classList.add('collapsed');
+    if (shouldKeepExpanded) {
+        card.dataset.collapsed = 'false';
+        card.classList.remove('collapsed');
+    } else {
+        card.dataset.collapsed = 'true';
+        card.classList.add('collapsed');
+    }
     card.dataset.durationMs = String(durationMs);
 
     if (metaEl) {
@@ -3167,6 +3274,152 @@ function finalizeAssistantStatusCards(elementId, outcome = 'done', detail = '') 
     }
 }
 
+function renderInitialAssistantMarkdown(text) {
+    const normalized = normalizeMarkdownForRender(text || '');
+    if (!normalized.trim()) {
+        return '<div class="markdown-committed"></div><div class="markdown-pending"></div>';
+    }
+    return `
+        <div class="markdown-committed">${marked.parse(normalized)}</div>
+        <div class="markdown-pending"></div>
+    `;
+}
+
+function ensureStreamingMarkdownHosts(bubble) {
+    if (!bubble) return {};
+
+    let markdownBody = bubble.querySelector('.markdown-body');
+    if (!markdownBody) {
+        markdownBody = document.createElement('div');
+        markdownBody.className = 'markdown-body';
+        bubble.prepend(markdownBody);
+    }
+
+    let committedHost = markdownBody.querySelector('.markdown-committed');
+    let pendingHost = markdownBody.querySelector('.markdown-pending');
+    if (!committedHost || !pendingHost) {
+        const existingHtml = markdownBody.innerHTML;
+        markdownBody.innerHTML = `
+            <div class="markdown-committed">${existingHtml}</div>
+            <div class="markdown-pending"></div>
+        `;
+        committedHost = markdownBody.querySelector('.markdown-committed');
+        pendingHost = markdownBody.querySelector('.markdown-pending');
+    }
+
+    return { markdownBody, committedHost, pendingHost };
+}
+
+function splitStreamingMarkdown(text) {
+    const normalized = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    if (!normalized) {
+        return { committedText: '', pendingText: '' };
+    }
+
+    const lines = normalized.split('\n');
+    let inCodeBlock = false;
+    let cursor = 0;
+    let committedParts = [];
+    let pendingParts = [];
+    let currentBlock = [];
+    let currentBlockStart = 0;
+
+    const flushCommittedBlock = (endOffsetInclusive) => {
+        if (endOffsetInclusive <= currentBlockStart) {
+            currentBlock = [];
+            return;
+        }
+        committedParts.push(normalized.slice(currentBlockStart, endOffsetInclusive));
+        currentBlock = [];
+        currentBlockStart = endOffsetInclusive;
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const lineWithBreak = i < lines.length - 1 ? `${line}\n` : line;
+        const trimmed = line.trim();
+        const lineStart = cursor;
+        const lineEnd = cursor + lineWithBreak.length;
+
+        if (/^```/.test(trimmed)) {
+            if (!inCodeBlock && currentBlock.length === 0) {
+                currentBlockStart = lineStart;
+            }
+            inCodeBlock = !inCodeBlock;
+            currentBlock.push(lineWithBreak);
+            if (!inCodeBlock) flushCommittedBlock(lineEnd);
+            cursor = lineEnd;
+            continue;
+        }
+
+        if (inCodeBlock) {
+            currentBlock.push(lineWithBreak);
+            cursor = lineEnd;
+            continue;
+        }
+
+        if (trimmed === '') {
+            if (currentBlock.length > 0) {
+                flushCommittedBlock(lineStart);
+            }
+            committedParts.push(lineWithBreak);
+            currentBlockStart = lineEnd;
+            cursor = lineEnd;
+            continue;
+        }
+
+        if (currentBlock.length === 0) {
+            currentBlockStart = lineStart;
+        }
+        currentBlock.push(lineWithBreak);
+        cursor = lineEnd;
+    }
+
+    if (currentBlock.length > 0) {
+        pendingParts.push(normalized.slice(currentBlockStart));
+    }
+
+    return {
+        committedText: committedParts.join(''),
+        pendingText: pendingParts.join('')
+    };
+}
+
+function highlightMarkdownBlocks(container) {
+    if (!container) return;
+    container.querySelectorAll('pre code').forEach((block) => {
+        highlight.highlightElement(block);
+        block.dataset.highlighted = 'true';
+    });
+}
+
+function renderMarkdownIntoHost(host, markdownText) {
+    if (!host) return;
+    const normalized = normalizeMarkdownForRender(markdownText || '');
+    host.innerHTML = normalized.trim() ? marked.parse(normalized) : '';
+    host.querySelectorAll('a').forEach((link) => {
+        link.setAttribute('target', '_blank');
+        link.setAttribute('rel', 'noopener noreferrer');
+    });
+    highlightMarkdownBlocks(host);
+}
+
+function schedulePendingMarkdownRender(el, pendingHost, pendingText) {
+    if (!el || !pendingHost) return;
+    if (!el._pendingRenderState) {
+        el._pendingRenderState = { scheduled: false, text: '' };
+    }
+
+    el._pendingRenderState.text = pendingText;
+    if (el._pendingRenderState.scheduled) return;
+
+    el._pendingRenderState.scheduled = true;
+    requestAnimationFrame(() => {
+        if (!el._pendingRenderState) return;
+        el._pendingRenderState.scheduled = false;
+        renderMarkdownIntoHost(pendingHost, el._pendingRenderState.text || '');
+    });
+}
 
 function updateMessageContent(id, text) {
     const el = document.getElementById(id);
@@ -3174,13 +3427,7 @@ function updateMessageContent(id, text) {
     const wasNearBottom = isChatNearBottom();
 
     const bubble = el.querySelector('.message-bubble');
-    let mdBody = bubble.querySelector('.markdown-body');
-    if (!mdBody) {
-        // Create if doesn't exist (ensure text stays at top if other status elements exist)
-        mdBody = document.createElement('div');
-        mdBody.className = 'markdown-body';
-        bubble.prepend(mdBody);
-    }
+    const { markdownBody: mdBody, committedHost, pendingHost } = ensureStreamingMarkdownHosts(bubble);
 
     // Filter out common special tokens that might leak during streaming
     let cleanText = text;
@@ -3202,9 +3449,37 @@ function updateMessageContent(id, text) {
 
     // Final pass for any partial tag leftovers or repeated markers
     cleanText = cleanText.replace(/<\|.*?\|>/g, '');
+    const streamState = el._streamRenderState || { committedText: '', pendingText: '' };
+    const { committedText, pendingText } = splitStreamingMarkdown(cleanText);
 
+    if (committedText !== streamState.committedText) {
+        if (committedText.startsWith(streamState.committedText)) {
+            const delta = committedText.slice(streamState.committedText.length);
+            const normalizedDelta = normalizeMarkdownForRender(delta);
+            if (normalizedDelta.trim()) {
+                committedHost.insertAdjacentHTML('beforeend', marked.parse(normalizedDelta));
+                committedHost.querySelectorAll('a').forEach((link) => {
+                    link.setAttribute('target', '_blank');
+                    link.setAttribute('rel', 'noopener noreferrer');
+                });
+                committedHost.querySelectorAll('pre code').forEach((block) => {
+                    if (!block.dataset.highlighted) {
+                        highlight.highlightElement(block);
+                        block.dataset.highlighted = 'true';
+                    }
+                });
+            }
+        } else {
+            renderMarkdownIntoHost(committedHost, committedText);
+        }
+        streamState.committedText = committedText;
+    }
 
-    mdBody.innerHTML = marked.parse(normalizeMarkdownForRender(cleanText));
+    if (pendingText !== streamState.pendingText) {
+        schedulePendingMarkdownRender(el, pendingHost, pendingText);
+        streamState.pendingText = pendingText;
+    }
+    el._streamRenderState = streamState;
 
     const responseCard = el.querySelector('.assistant-response-card');
     const actionBar = el.querySelector('.message-actions');
@@ -3212,19 +3487,8 @@ function updateMessageContent(id, text) {
     if (responseCard) responseCard.hidden = !hasVisibleContent;
     if (actionBar) actionBar.hidden = !hasVisibleContent;
 
-    // Make all links open in new window/tab
-    mdBody.querySelectorAll('a').forEach((link) => {
-        link.setAttribute('target', '_blank');
-        link.setAttribute('rel', 'noopener noreferrer');
-    });
-
-    // Re-highlight code blocks
-    const codeBlocks = mdBody.querySelectorAll('pre code');
-    codeBlocks.forEach((block) => {
-        highlight.highlightElement(block);
-    });
-
     scrollToBottom(wasNearBottom);
+    const codeBlocks = mdBody.querySelectorAll('pre code');
     if (wasNearBottom && codeBlocks.length > 0) {
         holdAutoScrollAtBottom(900);
         observeAutoScrollResizes([el, bubble, mdBody, ...mdBody.querySelectorAll('pre')]);
@@ -3241,52 +3505,35 @@ function isChatNearBottom() {
 function scrollToBottom(force = false) {
     if (!chatMessages) return;
     if (!force && !shouldAutoScroll && !lockScrollToLatest) return;
-    const applyScroll = () => {
-        suppressNextScrollEvent = true;
-        chatMessages.scrollTop = chatMessages.scrollHeight;
-        scrollActiveMessageIntoView();
-    };
-
-    applyScroll();
-    requestAnimationFrame(() => {
-        applyScroll();
-        requestAnimationFrame(applyScroll);
-    });
-    setTimeout(applyScroll, 0);
-    setTimeout(applyScroll, 32);
-    setTimeout(applyScroll, 96);
-    setTimeout(applyScroll, 180);
+    scheduleChatScrollToBottom();
     shouldAutoScroll = true;
 }
 
 function holdAutoScrollAtBottom(durationMs = 700) {
     if (!chatMessages) return;
-
-    const startedAt = Date.now();
     if (autoScrollHoldTimeout) {
         clearTimeout(autoScrollHoldTimeout);
         autoScrollHoldTimeout = null;
     }
-
-    const tick = () => {
-        if (!chatMessages || (!shouldAutoScroll && !lockScrollToLatest)) return;
-        suppressNextScrollEvent = true;
-        chatMessages.scrollTop = chatMessages.scrollHeight;
-        scrollActiveMessageIntoView();
-        if (Date.now() - startedAt < durationMs) {
-            requestAnimationFrame(tick);
-        }
-    };
-
-    tick();
+    scheduleChatScrollToBottom();
     autoScrollHoldTimeout = setTimeout(() => {
         if (chatMessages && (shouldAutoScroll || lockScrollToLatest)) {
-            suppressNextScrollEvent = true;
-            chatMessages.scrollTop = chatMessages.scrollHeight;
-            scrollActiveMessageIntoView();
+            scheduleChatScrollToBottom();
         }
         autoScrollHoldTimeout = null;
     }, durationMs);
+}
+
+function scheduleChatScrollToBottom() {
+    if (!chatMessages || pendingScrollToBottom) return;
+    pendingScrollToBottom = true;
+    requestAnimationFrame(() => {
+        pendingScrollToBottom = false;
+        if (!chatMessages) return;
+        suppressNextScrollEvent = true;
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+        scrollActiveMessageIntoView();
+    });
 }
 
 function observeAutoScrollResizes(elements) {
@@ -3301,16 +3548,7 @@ function observeAutoScrollResizes(elements) {
 
     autoScrollResizeObserver = new ResizeObserver(() => {
         if (!shouldAutoScroll && !lockScrollToLatest) return;
-        suppressNextScrollEvent = true;
-        chatMessages.scrollTop = chatMessages.scrollHeight;
-        scrollActiveMessageIntoView();
-        requestAnimationFrame(() => {
-            if (chatMessages && (shouldAutoScroll || lockScrollToLatest)) {
-                suppressNextScrollEvent = true;
-                chatMessages.scrollTop = chatMessages.scrollHeight;
-                scrollActiveMessageIntoView();
-            }
-        });
+        scheduleChatScrollToBottom();
     });
 
     targets.forEach((target) => autoScrollResizeObserver.observe(target));

@@ -199,6 +199,13 @@ body {
   overflow-anchor: none;
 }
 
+@supports (content-visibility: auto) {
+  .message {
+    content-visibility: auto;
+    contain-intrinsic-size: 280px;
+  }
+}
+
 .message.user {
   align-items: flex-end;
 }
@@ -845,6 +852,14 @@ body {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+
+.tool-history-item.is-new {
+  opacity: 0;
+  transform: translateY(6px);
 }
 
 .tool-history-title {
@@ -870,8 +885,10 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .reasoning-title.is-live,
-  .tool-header-group.is-live {
+  .tool-header-group.is-live,
+  .tool-history-item {
     animation: none;
+    transition: none;
   }
 }
 
@@ -902,6 +919,16 @@ body {
   background: rgba(11, 15, 20, 0.94);
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
   backdrop-filter: blur(10px);
+  opacity: 0;
+  transform: translateY(8px) scale(0.985);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  pointer-events: none;
+  will-change: opacity, transform;
+}
+
+.chat-progress-dock.is-visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
 }
 
 .llm-progress-card {
