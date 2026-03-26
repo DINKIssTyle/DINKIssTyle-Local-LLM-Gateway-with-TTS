@@ -1502,7 +1502,7 @@ body.is-desktop .desktop-only {
 .saved-library-header {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 0;
   padding: 16px 20px 12px;
   border-bottom: 1px solid var(--border-color);
 }
