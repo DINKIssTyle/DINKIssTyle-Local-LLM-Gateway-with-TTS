@@ -367,24 +367,26 @@
         </div>
 
         <div id="input-area">
-            <div id="chat-progress-dock" class="chat-progress-dock" hidden></div>
             <div class="input-container">
-                <textarea id="message-input" rows="1" placeholder="Type a message..."
-                    data-i18n-placeholder="input.placeholder"></textarea>
+                <div id="chat-progress-dock" class="chat-progress-dock" hidden></div>
+                <div class="input-main">
+                    <textarea id="message-input" rows="1" placeholder="Type a message..."
+                        data-i18n-placeholder="input.placeholder"></textarea>
 
-                <div class="input-actions">
-                    <input type="file" id="image-upload" accept="image/*" style="display: none"
-                        onchange="handleImageUpload(this)">
-                    <button class="icon-btn" onclick="document.getElementById('image-upload').click()"
-                        title="Upload Image">
-                        <span class="material-icons-round">add_photo_alternate</span>
-                    </button>
-                    <button class="icon-btn mic-inline-btn" id="inline-mic-btn" onclick="toggleSTT()" title="Voice Input">
-                        <span class="material-icons-round">mic</span>
-                    </button>
-                    <button class="icon-btn send-btn" id="send-btn" title="Send Message">
-                        <span class="material-icons-round">send</span>
-                    </button>
+                    <div class="input-actions">
+                        <input type="file" id="image-upload" accept="image/*" style="display: none"
+                            onchange="handleImageUpload(this)">
+                        <button class="icon-btn" onclick="document.getElementById('image-upload').click()"
+                            title="Upload Image">
+                            <span class="material-icons-round">add_photo_alternate</span>
+                        </button>
+                        <button class="icon-btn mic-inline-btn" id="inline-mic-btn" onclick="toggleSTT()" title="Voice Input">
+                            <span class="material-icons-round">mic</span>
+                        </button>
+                        <button class="icon-btn send-btn" id="send-btn" title="Send Message">
+                            <span class="material-icons-round">send</span>
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>

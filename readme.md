@@ -25,7 +25,7 @@ Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
 
 ### 1. 지능형 MCP 도구 세트 (Expanded AI Capabilities)
 AI 모델에게 '눈'과 '기억'을 제공하는 강력한 도구들이 포함되어 있습니다.
-*   **실시간 웹 검색 (`search_web`)**: DuckDuckGo를 통해 최신 정보를 검색하여 답변의 정확도를 높입니다.
+*   **실시간 웹 검색 (`search_web`)**: Google을 우선 사용하고 필요 시 DuckDuckGo Lite로 자동 fallback하여 최신 정보를 검색합니다.
 *   **웹 페이지 정밀 읽기 (`read_web_page`)**: 특정 URL의 콘텐츠를 직접 읽어 요약하거나 분석합니다.
 *   **장기 기억 시스템 (`personal_memory`)**: 사용자의 선호도, 이름, 중요한 사실들을 저장(`remember`)하고 언제든 다시 조회(`query`)합니다.
 *   **문서 가이드 (`read_user_document`)**: `personal.md`, `work.md` 등 사용자의 워크스페이스 문서를 AI가 직접 읽고 비즈니스 지침이나 개인에 맞춰 답변합니다.

@@ -610,6 +610,9 @@ let suppressNextScrollEvent = false;
 let activeStreamingMessageId = null;
 let pendingScrollToBottom = false;
 let progressDockHideTimer = null;
+let composerProgressLabel = '';
+let composerProgressActive = false;
+let composerProgressPercent = null;
 
 if (chatMessages) {
     chatMessages.addEventListener('scroll', () => {
@@ -1907,7 +1910,6 @@ async function sendMessage() {
 
     const assistantId = 'msg-' + Date.now();
     activeStreamingMessageId = assistantId;
-    appendMessage({ role: 'assistant', content: '', id: assistantId });
     startStreamingMessageAutoScroll(assistantId);
 
     // Build API Payload
@@ -2645,8 +2647,15 @@ function formatThoughtDuration(durationMs = 0) {
         .replace('{seconds}', String(seconds));
 }
 
+function ensureAssistantMessageElement(id) {
+    let el = document.getElementById(id);
+    if (el) return el;
+    appendMessage({ role: 'assistant', content: '', id });
+    return document.getElementById(id);
+}
+
 function getAssistantMessageParts(elementId) {
-    const msgEl = document.getElementById(elementId);
+    const msgEl = ensureAssistantMessageElement(elementId);
     if (!msgEl) return {};
     return {
         msgEl,
@@ -2669,15 +2678,16 @@ function renderProgressDock(label, percent = null, mode = 'prompt-processing', i
     const cardClass = `llm-progress-card ${mode}${indeterminate ? ' indeterminate' : ''}`;
     const percentLabel = clamped === null ? '' : `${clamped.toFixed(2)}%`;
     const width = indeterminate ? '32%' : `${clamped || 0}%`;
+    composerProgressLabel = label || '';
+    composerProgressActive = true;
+    composerProgressPercent = percentLabel;
+    updateMessageInputPlaceholder();
+    inputContainer?.classList.add('has-progress');
 
     const wasHidden = chatProgressDock.hidden;
     chatProgressDock.hidden = false;
     chatProgressDock.innerHTML = `
         <div class="${cardClass}">
-            <div class="llm-progress-text">
-                <span class="llm-progress-label">${escapeHtml(label)}</span>
-                <span class="llm-progress-percent">${escapeHtml(percentLabel)}</span>
-            </div>
             <div class="llm-progress-track">
                 <div class="llm-progress-fill" style="width: ${width};"></div>
             </div>
@@ -2702,6 +2712,11 @@ function hideProgressDock() {
     progressDockHideTimer = setTimeout(() => {
         chatProgressDock.hidden = true;
         chatProgressDock.innerHTML = '';
+        composerProgressLabel = '';
+        composerProgressActive = false;
+        composerProgressPercent = null;
+        inputContainer?.classList.remove('has-progress');
+        updateMessageInputPlaceholder();
         progressDockHideTimer = null;
     }, 180);
 }
@@ -3437,7 +3452,7 @@ function schedulePendingMarkdownRender(el, pendingHost, pendingText) {
 }
 
 function updateMessageContent(id, text) {
-    const el = document.getElementById(id);
+    const el = ensureAssistantMessageElement(id);
     if (!el) return;
     const wasNearBottom = isChatNearBottom();
 
@@ -4445,7 +4460,9 @@ function updateMessageInputPlaceholder() {
     ];
     const nextPlaceholder = isSTTActive
         ? listeningPhrases[sttPlaceholderIndex % listeningPhrases.length]
-        : t('input.placeholder');
+        : (composerProgressActive
+            ? [composerProgressLabel, composerProgressPercent].filter(Boolean).join(' - ')
+            : t('input.placeholder'));
 
     messageInput.placeholder = nextPlaceholder;
     messageInput.classList.toggle('stt-listening', isSTTActive);

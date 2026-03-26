@@ -471,18 +471,33 @@ body {
 
 .input-container {
   display: flex;
-  gap: 10px;
-  align-items: center;
+  flex-direction: column;
+  gap: 0;
+  align-items: stretch;
   background-color: #060a10;
   padding: 8px;
   border-radius: 16px;
   border: 1px solid var(--border-strong);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  position: relative;
+  overflow: hidden;
 }
 
 .input-container:focus-within {
   border-color: rgba(88, 166, 255, 0.6);
   box-shadow: 0 0 0 1px rgba(88, 166, 255, 0.16);
+}
+
+.input-container.has-progress {
+  border-color: rgba(88, 166, 255, 0.46);
+  box-shadow: 0 0 0 1px rgba(88, 166, 255, 0.14);
+}
+
+.input-main {
+  display: flex;
+  gap: 10px;
+  align-items: center;
 }
 
 #message-input {
@@ -527,6 +542,24 @@ body {
   background-clip: text;
   -webkit-text-fill-color: transparent;
   animation: toolQuerySheen 2.2s ease-in-out infinite;
+}
+
+.input-container.has-progress #message-input::placeholder {
+  color: transparent;
+  background-image: linear-gradient(
+    110deg,
+    rgba(126, 166, 255, 0.48) 0%,
+    rgba(126, 166, 255, 0.48) 34%,
+    rgba(255, 255, 255, 0.94) 50%,
+    rgba(126, 166, 255, 0.56) 66%,
+    rgba(126, 166, 255, 0.48) 100%
+  );
+  background-size: 220% 100%;
+  background-position: 120% 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: toolQuerySheen 1.9s ease-in-out infinite;
 }
 
 .input-actions {
@@ -909,18 +942,14 @@ body {
 
 .chat-progress-dock {
   position: absolute;
-  left: 14px;
-  right: 14px;
-  bottom: calc(100% + 8px);
-  z-index: 24;
-  padding: 10px 12px 8px;
-  border: 1px solid rgba(95, 140, 255, 0.12);
-  border-radius: 14px;
-  background: rgba(11, 15, 20, 0.94);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
-  backdrop-filter: blur(10px);
+  top: 0;
+  left: 10px;
+  right: 10px;
+  height: 2px;
+  overflow: hidden;
   opacity: 0;
-  transform: translateY(8px) scale(0.985);
+  transform: scaleX(0.96);
+  transform-origin: center;
   transition: opacity 0.18s ease, transform 0.18s ease;
   pointer-events: none;
   will-change: opacity, transform;
@@ -928,39 +957,19 @@ body {
 
 .chat-progress-dock.is-visible {
   opacity: 1;
-  transform: translateY(0) scale(1);
+  transform: scaleX(1);
 }
 
 .llm-progress-card {
   width: 100%;
-  padding: 0 2px 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.llm-progress-text {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-.llm-progress-label {
-  font-weight: 500;
-  letter-spacing: 0.01em;
-}
-
-.llm-progress-percent {
-  color: #b7c4da;
-  font-variant-numeric: tabular-nums;
+  height: 100%;
+  padding: 0;
+  display: block;
 }
 
 .llm-progress-track {
   width: 100%;
-  height: 3px;
+  height: 100%;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.08);
   overflow: hidden;
@@ -971,7 +980,7 @@ body {
   border-radius: inherit;
   background: linear-gradient(90deg, #5f6fff, #7ea6ff);
   box-shadow: 0 0 10px rgba(95, 111, 255, 0.2);
-  transition: width 0.2s ease;
+  transition: width 0.2s ease, opacity 0.18s ease;
 }
 
 .llm-progress-card.prompt-processing .llm-progress-fill {
