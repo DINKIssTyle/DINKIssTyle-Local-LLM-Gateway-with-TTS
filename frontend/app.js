@@ -4759,20 +4759,33 @@ function syncMicRecordingUI() {
  */
 function updateMicUIForGeneration(generating) {
     const giantMicBtn = document.getElementById('giant-mic-btn');
-    const micButtons = [giantMicBtn, inlineMicBtn].filter(Boolean);
+    const isInlineLayout = config.micLayout === 'inline';
 
-    micButtons.forEach((micBtn) => {
-        micBtn.classList.toggle('gen-active', generating);
-        const icon = micBtn.querySelector('.material-icons-round');
-        if (icon) {
-            icon.textContent = 'mic';
+    if (giantMicBtn) {
+        giantMicBtn.classList.toggle('gen-active', generating && !isInlineLayout);
+        const giantIcon = giantMicBtn.querySelector('.material-icons-round');
+        if (giantIcon) {
+            giantIcon.textContent = generating && !isInlineLayout ? 'stop' : 'mic';
         }
-    });
+    }
+
+    if (inlineMicBtn) {
+        inlineMicBtn.classList.toggle('gen-active', false);
+        const inlineIcon = inlineMicBtn.querySelector('.material-icons-round');
+        if (inlineIcon) {
+            inlineIcon.textContent = 'mic';
+        }
+    }
 
     const micContainer = document.getElementById('mic-layout-container');
     if (micContainer) {
-        micContainer.style.pointerEvents = generating ? 'none' : '';
-        micContainer.style.opacity = generating ? '0.45' : '';
+        if (generating && !isInlineLayout) {
+            micContainer.style.pointerEvents = '';
+            micContainer.style.opacity = '';
+        } else {
+            micContainer.style.pointerEvents = '';
+            micContainer.style.opacity = '';
+        }
     }
 
     if (!generating) {
