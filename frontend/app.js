@@ -1627,9 +1627,15 @@ function setupEventListeners() {
     document.getElementById('save-cfg-btn').addEventListener('click', saveConfig);
 
     if (inputContainer) {
+        inputContainer.addEventListener('pointerdown', (e) => {
+            if (e.target.closest('.input-actions')) return;
+            if (document.activeElement === messageInput) return;
+            requestAnimationFrame(() => messageInput.focus());
+        });
+
         inputContainer.addEventListener('click', (e) => {
             if (e.target.closest('.input-actions')) return;
-            if (e.target === messageInput) return;
+            if (document.activeElement === messageInput) return;
 
             messageInput.focus();
         });
