@@ -2665,8 +2665,14 @@ function finalizeToolCard(card, outcome = 'done', detail = '') {
     } else {
         card.classList.add('is-success');
     }
-    card.dataset.collapsed = 'true';
-    card.classList.add('collapsed');
+    const keepExpanded = card.dataset.userExpanded === 'true';
+    if (keepExpanded) {
+        card.dataset.collapsed = 'false';
+        card.classList.remove('collapsed');
+    } else {
+        card.dataset.collapsed = 'true';
+        card.classList.add('collapsed');
+    }
 
     if (headerGroupEl) {
         headerGroupEl.classList.remove('is-live');
@@ -2714,6 +2720,9 @@ function toggleReasoningCard(btn) {
     const nextCollapsed = card.dataset.collapsed !== 'true';
     card.dataset.collapsed = nextCollapsed ? 'true' : 'false';
     card.classList.toggle('collapsed', nextCollapsed);
+    if (card.classList.contains('tool-status-card')) {
+        card.dataset.userExpanded = nextCollapsed ? 'false' : 'true';
+    }
 }
 
 function formatStripDuration(startedAt, fallbackMs = 0) {
@@ -2774,20 +2783,36 @@ function setToolCardState(elementId, state, summary = '', args = null, toolName 
     const activeToolName = toolName || card.dataset.toolName || 'Tool';
     const previewText = extractToolPreview(args, summary);
     const lastPreviewText = card.dataset.lastPreviewText || '';
+    const shouldKeepExpanded = card.dataset.userExpanded === 'true';
 
     card.classList.remove('is-running', 'is-success', 'is-failure');
     if (state === 'failure') {
         card.classList.add('is-failure');
-        card.dataset.collapsed = 'true';
-        card.classList.add('collapsed');
+        if (shouldKeepExpanded) {
+            card.dataset.collapsed = 'false';
+            card.classList.remove('collapsed');
+        } else {
+            card.dataset.collapsed = 'true';
+            card.classList.add('collapsed');
+        }
     } else if (state === 'success') {
         card.classList.add('is-success');
-        card.dataset.collapsed = 'true';
-        card.classList.add('collapsed');
+        if (shouldKeepExpanded) {
+            card.dataset.collapsed = 'false';
+            card.classList.remove('collapsed');
+        } else {
+            card.dataset.collapsed = 'true';
+            card.classList.add('collapsed');
+        }
     } else {
         card.classList.add('is-running');
-        card.dataset.collapsed = 'true';
-        card.classList.add('collapsed');
+        if (shouldKeepExpanded) {
+            card.dataset.collapsed = 'false';
+            card.classList.remove('collapsed');
+        } else {
+            card.dataset.collapsed = 'true';
+            card.classList.add('collapsed');
+        }
     }
 
     if (titleEl) {
@@ -2835,6 +2860,11 @@ function extractToolPreview(args, summary = '') {
                 return value.trim();
             }
         }
+
+        const compactJson = stringifyToolArgs(args);
+        if (compactJson) {
+            return compactJson;
+        }
     }
 
     if (typeof args === 'string' && args.trim()) {
@@ -2846,6 +2876,17 @@ function extractToolPreview(args, summary = '') {
     }
 
     return '';
+}
+
+function stringifyToolArgs(args) {
+    try {
+        const json = JSON.stringify(args);
+        if (!json) return '';
+        if (json.length <= 220) return json;
+        return `${json.slice(0, 220)}...`;
+    } catch (_) {
+        return '';
+    }
 }
 
 function formatToolDisplayName(toolName = '') {
@@ -2880,7 +2921,7 @@ function renderToolHistory(card, historyEl, state) {
     if (!historyEl || !card) return;
     const history = Array.isArray(card._history) ? card._history : [];
 
-    if (state === 'running' || history.length === 0) {
+    if (history.length === 0) {
         historyEl.hidden = true;
         historyEl.innerHTML = '';
         return;
