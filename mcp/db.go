@@ -4,6 +4,7 @@ package mcp
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -92,6 +93,83 @@ func createSchema() error {
 		mode TEXT NOT NULL DEFAULT '',
 		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
+
+	CREATE TABLE IF NOT EXISTS request_patterns (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id TEXT NOT NULL,
+		intent_key TEXT NOT NULL,
+		sample_query TEXT NOT NULL,
+		query_fingerprint TEXT NOT NULL,
+		hit_count INTEGER NOT NULL DEFAULT 1,
+		first_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		last_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_request_patterns_user_intent
+	ON request_patterns(user_id, intent_key);
+
+	CREATE UNIQUE INDEX IF NOT EXISTS idx_request_patterns_user_fingerprint
+	ON request_patterns(user_id, query_fingerprint);
+
+	CREATE TABLE IF NOT EXISTS request_executions (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id TEXT NOT NULL,
+		intent_key TEXT NOT NULL,
+		request_pattern_id INTEGER,
+		raw_query TEXT NOT NULL,
+		normalized_query TEXT NOT NULL,
+		tool_chain_json TEXT NOT NULL,
+		tool_count INTEGER NOT NULL DEFAULT 0,
+		total_latency_ms INTEGER NOT NULL DEFAULT 0,
+		tool_latency_ms INTEGER NOT NULL DEFAULT 0,
+		success INTEGER NOT NULL DEFAULT 0,
+		fallback_used INTEGER NOT NULL DEFAULT 0,
+		repeated_tool_blocked INTEGER NOT NULL DEFAULT 0,
+		self_correction_used INTEGER NOT NULL DEFAULT 0,
+		followup_within_2m INTEGER NOT NULL DEFAULT 0,
+		user_feedback_score REAL NOT NULL DEFAULT 0,
+		recipe_version TEXT NOT NULL DEFAULT '',
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY(request_pattern_id) REFERENCES request_patterns(id)
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_request_executions_user_intent
+	ON request_executions(user_id, intent_key, created_at DESC);
+
+	CREATE TABLE IF NOT EXISTS request_intent_stats (
+		user_id TEXT NOT NULL,
+		intent_key TEXT NOT NULL,
+		total_count INTEGER NOT NULL DEFAULT 0,
+		success_count INTEGER NOT NULL DEFAULT 0,
+		avg_latency_ms REAL NOT NULL DEFAULT 0,
+		last_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY (user_id, intent_key)
+	);
+
+	CREATE TABLE IF NOT EXISTS procedure_recipes (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id TEXT NOT NULL,
+		intent_key TEXT NOT NULL,
+		recipe_name TEXT NOT NULL,
+		trigger_hint TEXT NOT NULL DEFAULT '',
+		tool_chain_template_json TEXT NOT NULL,
+		preconditions_json TEXT NOT NULL DEFAULT '{}',
+		avg_latency_ms REAL NOT NULL DEFAULT 0,
+		success_rate REAL NOT NULL DEFAULT 0,
+		quality_score REAL NOT NULL DEFAULT 0,
+		final_score REAL NOT NULL DEFAULT 0,
+		usage_count INTEGER NOT NULL DEFAULT 0,
+		last_used_at DATETIME,
+		active INTEGER NOT NULL DEFAULT 1,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_procedure_recipes_user_intent
+	ON procedure_recipes(user_id, intent_key, active, final_score DESC);
+
+	CREATE UNIQUE INDEX IF NOT EXISTS idx_procedure_recipes_user_intent_name
+	ON procedure_recipes(user_id, intent_key, recipe_name);
 	`
 	_, err := db.Exec(query)
 	if err != nil {
@@ -123,6 +201,45 @@ type LastSessionEntry struct {
 	LastAssistantMessage string
 	Mode                 string
 	UpdatedAt            time.Time
+}
+
+type RequestExecutionEntry struct {
+	UserID               string
+	IntentKey            string
+	RequestPatternID     sql.NullInt64
+	RawQuery             string
+	NormalizedQuery      string
+	ToolChainJSON        string
+	ToolCount            int
+	TotalLatencyMS       int64
+	ToolLatencyMS        int64
+	Success              bool
+	FallbackUsed         bool
+	RepeatedToolBlocked  bool
+	SelfCorrectionUsed   bool
+	FollowupWithinTwoMin bool
+	UserFeedbackScore    float64
+	RecipeVersion        string
+	CreatedAt            time.Time
+}
+
+type ProcedureRecipeEntry struct {
+	ID                    int64
+	UserID                string
+	IntentKey             string
+	RecipeName            string
+	TriggerHint           string
+	ToolChainTemplateJSON string
+	PreconditionsJSON     string
+	AvgLatencyMS          float64
+	SuccessRate           float64
+	QualityScore          float64
+	FinalScore            float64
+	UsageCount            int
+	LastUsedAt            sql.NullTime
+	Active                bool
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
 func InsertAuthSession(userID, tokenHash string, rememberMe bool, userAgent, clientAddr string, expiresAt time.Time) error {
@@ -286,6 +403,392 @@ func DeleteLastSession(userID string) error {
 		return fmt.Errorf("failed to delete last session: %w", err)
 	}
 	return nil
+}
+
+func UpsertRequestPattern(userID, intentKey, sampleQuery, queryFingerprint string) (int64, error) {
+	if db == nil {
+		return 0, fmt.Errorf("database not initialized")
+	}
+	queryFingerprint = strings.TrimSpace(queryFingerprint)
+	if queryFingerprint == "" {
+		return 0, fmt.Errorf("query fingerprint is required")
+	}
+
+	query := `
+	INSERT INTO request_patterns (user_id, intent_key, sample_query, query_fingerprint, hit_count, first_seen_at, last_seen_at)
+	VALUES (?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+	ON CONFLICT(user_id, query_fingerprint) DO UPDATE SET
+		intent_key = excluded.intent_key,
+		sample_query = excluded.sample_query,
+		hit_count = request_patterns.hit_count + 1,
+		last_seen_at = CURRENT_TIMESTAMP`
+
+	if _, err := db.Exec(query, userID, intentKey, sampleQuery, queryFingerprint); err != nil {
+		return 0, fmt.Errorf("failed to upsert request pattern: %w", err)
+	}
+
+	var id int64
+	if err := db.QueryRow(
+		`SELECT id FROM request_patterns WHERE user_id = ? AND query_fingerprint = ?`,
+		userID,
+		queryFingerprint,
+	).Scan(&id); err != nil {
+		return 0, fmt.Errorf("failed to fetch request pattern id: %w", err)
+	}
+
+	return id, nil
+}
+
+func InsertRequestExecution(entry RequestExecutionEntry) error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	query := `
+	INSERT INTO request_executions (
+		user_id, intent_key, request_pattern_id, raw_query, normalized_query,
+		tool_chain_json, tool_count, total_latency_ms, tool_latency_ms, success,
+		fallback_used, repeated_tool_blocked, self_correction_used,
+		followup_within_2m, user_feedback_score, recipe_version, created_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	_, err := db.Exec(
+		query,
+		entry.UserID,
+		entry.IntentKey,
+		entry.RequestPatternID,
+		entry.RawQuery,
+		entry.NormalizedQuery,
+		entry.ToolChainJSON,
+		entry.ToolCount,
+		entry.TotalLatencyMS,
+		entry.ToolLatencyMS,
+		boolToInt(entry.Success),
+		boolToInt(entry.FallbackUsed),
+		boolToInt(entry.RepeatedToolBlocked),
+		boolToInt(entry.SelfCorrectionUsed),
+		boolToInt(entry.FollowupWithinTwoMin),
+		entry.UserFeedbackScore,
+		entry.RecipeVersion,
+		entry.CreatedAt.UTC(),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to insert request execution: %w", err)
+	}
+
+	return nil
+}
+
+func UpsertRequestIntentStat(userID, intentKey string, success bool, latencyMS int64, seenAt time.Time) error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	query := `
+	INSERT INTO request_intent_stats (
+		user_id, intent_key, total_count, success_count, avg_latency_ms, last_seen_at
+	) VALUES (?, ?, 1, ?, ?, ?)
+	ON CONFLICT(user_id, intent_key) DO UPDATE SET
+		total_count = request_intent_stats.total_count + 1,
+		success_count = request_intent_stats.success_count + excluded.success_count,
+		avg_latency_ms = (
+			(request_intent_stats.avg_latency_ms * request_intent_stats.total_count) + excluded.avg_latency_ms
+		) / (request_intent_stats.total_count + 1),
+		last_seen_at = excluded.last_seen_at`
+
+	_, err := db.Exec(query, userID, intentKey, boolToInt(success), float64(latencyMS), seenAt.UTC())
+	if err != nil {
+		return fmt.Errorf("failed to upsert request intent stats: %w", err)
+	}
+
+	return nil
+}
+
+func UpsertProcedureRecipe(entry ProcedureRecipeEntry) error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	query := `
+	INSERT INTO procedure_recipes (
+		user_id, intent_key, recipe_name, trigger_hint, tool_chain_template_json,
+		preconditions_json, avg_latency_ms, success_rate, quality_score, final_score,
+		usage_count, last_used_at, active, created_at, updated_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+	ON CONFLICT(user_id, intent_key, recipe_name) DO UPDATE SET
+		trigger_hint = excluded.trigger_hint,
+		tool_chain_template_json = excluded.tool_chain_template_json,
+		preconditions_json = excluded.preconditions_json,
+		avg_latency_ms = excluded.avg_latency_ms,
+		success_rate = excluded.success_rate,
+		quality_score = excluded.quality_score,
+		final_score = excluded.final_score,
+		usage_count = excluded.usage_count,
+		last_used_at = excluded.last_used_at,
+		active = excluded.active,
+		updated_at = CURRENT_TIMESTAMP`
+
+	_, err := db.Exec(
+		query,
+		entry.UserID,
+		entry.IntentKey,
+		entry.RecipeName,
+		entry.TriggerHint,
+		entry.ToolChainTemplateJSON,
+		entry.PreconditionsJSON,
+		entry.AvgLatencyMS,
+		entry.SuccessRate,
+		entry.QualityScore,
+		entry.FinalScore,
+		entry.UsageCount,
+		entry.LastUsedAt,
+		boolToInt(entry.Active),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to upsert procedure recipe: %w", err)
+	}
+
+	return nil
+}
+
+func RefreshProcedureRecipes(userID, intentKey string) error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	userID = strings.TrimSpace(userID)
+	intentKey = strings.TrimSpace(intentKey)
+	if userID == "" || intentKey == "" {
+		return fmt.Errorf("user id and intent key are required")
+	}
+
+	rows, err := db.Query(`
+		SELECT tool_chain_json, total_latency_ms, success, fallback_used, repeated_tool_blocked,
+		       self_correction_used, created_at
+		FROM request_executions
+		WHERE user_id = ? AND intent_key = ?
+		ORDER BY created_at DESC
+		LIMIT 50`,
+		userID,
+		intentKey,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to query request executions: %w", err)
+	}
+	defer rows.Close()
+
+	type executionSample struct {
+		ToolChainJSON      string
+		TotalLatencyMS     int64
+		Success            bool
+		FallbackUsed       bool
+		RepeatedBlocked    bool
+		SelfCorrectionUsed bool
+		CreatedAt          time.Time
+	}
+
+	var samples []executionSample
+	for rows.Next() {
+		var sample executionSample
+		var successInt int
+		var fallbackInt int
+		var repeatedInt int
+		var selfCorrectionInt int
+		if err := rows.Scan(
+			&sample.ToolChainJSON,
+			&sample.TotalLatencyMS,
+			&successInt,
+			&fallbackInt,
+			&repeatedInt,
+			&selfCorrectionInt,
+			&sample.CreatedAt,
+		); err != nil {
+			return fmt.Errorf("failed to scan request execution: %w", err)
+		}
+		sample.Success = successInt != 0
+		sample.FallbackUsed = fallbackInt != 0
+		sample.RepeatedBlocked = repeatedInt != 0
+		sample.SelfCorrectionUsed = selfCorrectionInt != 0
+		samples = append(samples, sample)
+	}
+
+	if len(samples) == 0 {
+		return nil
+	}
+
+	type recipeAgg struct {
+		ToolChainJSON  string
+		UsageCount     int
+		SuccessCount   int
+		TotalLatencyMS int64
+		QualityTotal   float64
+		LastUsedAt     time.Time
+	}
+
+	aggregates := make(map[string]*recipeAgg)
+	for _, sample := range samples {
+		recipeName := deriveRecipeName(intentKey, sample.ToolChainJSON)
+		agg, ok := aggregates[recipeName]
+		if !ok {
+			agg = &recipeAgg{ToolChainJSON: sample.ToolChainJSON}
+			aggregates[recipeName] = agg
+		}
+		agg.UsageCount++
+		if sample.Success {
+			agg.SuccessCount++
+		}
+		agg.TotalLatencyMS += sample.TotalLatencyMS
+		agg.QualityTotal += computeExecutionQuality(sample.Success, sample.TotalLatencyMS, sample.FallbackUsed, sample.RepeatedBlocked, sample.SelfCorrectionUsed)
+		if sample.CreatedAt.After(agg.LastUsedAt) {
+			agg.LastUsedAt = sample.CreatedAt
+		}
+	}
+
+	for recipeName, agg := range aggregates {
+		avgLatency := float64(agg.TotalLatencyMS) / float64(agg.UsageCount)
+		successRate := float64(agg.SuccessCount) / float64(agg.UsageCount)
+		qualityScore := agg.QualityTotal / float64(agg.UsageCount)
+		speedScore := latencyToSpeedScore(avgLatency)
+		finalScore := successRate*0.45 + qualityScore*0.35 + speedScore*0.20
+
+		entry := ProcedureRecipeEntry{
+			UserID:                userID,
+			IntentKey:             intentKey,
+			RecipeName:            recipeName,
+			TriggerHint:           intentKey,
+			ToolChainTemplateJSON: agg.ToolChainJSON,
+			PreconditionsJSON:     "{}",
+			AvgLatencyMS:          avgLatency,
+			SuccessRate:           successRate,
+			QualityScore:          qualityScore,
+			FinalScore:            finalScore,
+			UsageCount:            agg.UsageCount,
+			LastUsedAt:            sql.NullTime{Time: agg.LastUsedAt, Valid: !agg.LastUsedAt.IsZero()},
+			Active:                true,
+		}
+
+		if err := UpsertProcedureRecipe(entry); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func GetTopProcedureRecipe(userID, intentKey string) (ProcedureRecipeEntry, error) {
+	var entry ProcedureRecipeEntry
+	if db == nil {
+		return entry, fmt.Errorf("database not initialized")
+	}
+
+	query := `
+	SELECT id, user_id, intent_key, recipe_name, trigger_hint, tool_chain_template_json,
+	       preconditions_json, avg_latency_ms, success_rate, quality_score, final_score,
+	       usage_count, last_used_at, active, created_at, updated_at
+	FROM procedure_recipes
+	WHERE user_id = ? AND intent_key = ? AND active = 1
+	ORDER BY final_score DESC, usage_count DESC, updated_at DESC
+	LIMIT 1`
+
+	var activeInt int
+	err := db.QueryRow(query, userID, intentKey).Scan(
+		&entry.ID,
+		&entry.UserID,
+		&entry.IntentKey,
+		&entry.RecipeName,
+		&entry.TriggerHint,
+		&entry.ToolChainTemplateJSON,
+		&entry.PreconditionsJSON,
+		&entry.AvgLatencyMS,
+		&entry.SuccessRate,
+		&entry.QualityScore,
+		&entry.FinalScore,
+		&entry.UsageCount,
+		&entry.LastUsedAt,
+		&activeInt,
+		&entry.CreatedAt,
+		&entry.UpdatedAt,
+	)
+	if err != nil {
+		return entry, err
+	}
+	entry.Active = activeInt != 0
+	return entry, nil
+}
+
+func deriveRecipeName(intentKey, toolChainJSON string) string {
+	var events []struct {
+		Tool string `json:"tool"`
+	}
+	if err := json.Unmarshal([]byte(toolChainJSON), &events); err != nil || len(events) == 0 {
+		if strings.TrimSpace(intentKey) == "" {
+			return "direct_answer"
+		}
+		return intentKey + "_direct"
+	}
+
+	parts := make([]string, 0, len(events))
+	for _, event := range events {
+		name := strings.TrimSpace(event.Tool)
+		if name == "" {
+			continue
+		}
+		parts = append(parts, name)
+	}
+	if len(parts) == 0 {
+		return intentKey + "_direct"
+	}
+	return strings.Join(parts, "__")
+}
+
+func computeExecutionQuality(success bool, latencyMS int64, fallbackUsed bool, repeatedBlocked bool, selfCorrectionUsed bool) float64 {
+	score := 0.0
+	if success {
+		score += 1.0
+	} else {
+		score -= 1.0
+	}
+
+	switch {
+	case latencyMS > 0 && latencyMS <= 1500:
+		score += 0.5
+	case latencyMS <= 3000:
+		score += 0.2
+	}
+
+	if fallbackUsed {
+		score -= 0.2
+	}
+	if repeatedBlocked {
+		score -= 0.2
+	}
+	if selfCorrectionUsed {
+		score -= 0.3
+	}
+
+	if score < 0 {
+		return 0
+	}
+	if score > 1 {
+		return 1
+	}
+	return score
+}
+
+func latencyToSpeedScore(avgLatencyMS float64) float64 {
+	switch {
+	case avgLatencyMS <= 0:
+		return 0
+	case avgLatencyMS <= 1500:
+		return 1.0
+	case avgLatencyMS <= 3000:
+		return 0.8
+	case avgLatencyMS <= 5000:
+		return 0.5
+	case avgLatencyMS <= 8000:
+		return 0.2
+	default:
+		return 0
+	}
 }
 
 func boolToInt(v bool) int {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"net/http"
@@ -42,7 +43,7 @@ func GetCurrentTime() (string, error) {
 	return fmt.Sprintf("Current Local Time: %s", now.Format("2006-01-02 15:04:05 Monday MST")), nil
 }
 
-// SearchWeb performs a search using DuckDuckGo Lite and returns a summary.
+// SearchWeb performs a web search using Google first, then falls back to DuckDuckGo Lite.
 func SearchWeb(query string) (string, error) {
 	originalQuery := query
 	query = normalizeSearchQuery(query)
@@ -54,56 +55,68 @@ func SearchWeb(query string) (string, error) {
 	}
 	EmitTrace("mcp", "search_web.start", "Starting web search", traceDetails(traceArgs...))
 
-	// Use DuckDuckGo Lite for easier parsing
-	searchURL := fmt.Sprintf("https://lite.duckduckgo.com/lite/?q=%s", url.QueryEscape(query))
-
 	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest("GET", searchURL, nil)
-	if err != nil {
-		return "", err
+	if results, err := searchGoogle(query, client); err == nil && len(results) > 0 {
+		EmitTrace("mcp", "search_web.complete", "Google search completed", traceDetails("query", query, "elapsed_ms", durationMs(start), "results", len(results), "provider", "google"))
+		return strings.Join(results, "\n---\n"), nil
+	} else if err != nil {
+		log.Printf("[MCP] Google search failed, falling back to DuckDuckGo: %v", err)
+	} else {
+		log.Printf("[MCP] Google search returned no parsed results, falling back to DuckDuckGo")
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36")
 
-	resp, err := client.Do(req)
+	results, err := searchDuckDuckGo(query, client)
 	if err != nil {
 		EmitTrace("mcp", "search_web.error", "Web search failed", traceDetails("query", query, "elapsed_ms", durationMs(start), "error", errorDetail(err)))
 		return "", err
 	}
-	defer resp.Body.Close()
+	if len(results) == 0 {
+		EmitTrace("mcp", "search_web.complete", "Web search returned no parsed results", traceDetails("query", query, "elapsed_ms", durationMs(start), "provider", "duckduckgo"))
+		return "No results found or parsing failed.", nil
+	}
 
-	body, err := io.ReadAll(resp.Body)
+	EmitTrace("mcp", "search_web.complete", "DuckDuckGo search completed", traceDetails("query", query, "elapsed_ms", durationMs(start), "results", len(results), "provider", "duckduckgo"))
+	return strings.Join(results, "\n---\n"), nil
+}
+
+func searchGoogle(query string, client *http.Client) ([]string, error) {
+	searchURL := fmt.Sprintf("https://www.google.com/search?hl=en&q=%s", url.QueryEscape(query))
+	htmlContent, err := fetchSearchPage(client, searchURL)
 	if err != nil {
-		EmitTrace("mcp", "search_web.error", "Web search body read failed", traceDetails("query", query, "elapsed_ms", durationMs(start), "error", errorDetail(err)))
-		return "", err
+		return nil, err
 	}
 
-	htmlContent := string(body)
-
-	// Debug log to see what we got
-	preview := htmlContent
-	if len(preview) > 500 {
-		preview = preview[:500]
-	}
-	log.Printf("[MCP-DEBUG] Search HTML Preview: %s", preview)
-
-	// Simple regex parsing for DDG Lite results
-	// Pattern to find links and snippets
-	// <a rel="nofollow" href="http://...">Title</a><br><span class="result-snippet">Snippet</span>
-	// This is approximate and might need adjustment if DDG changes HTML
-
-	// Strategy: Extract the table rows that contain results
-	// DDG Lite uses tables. We look for class="result-link" and result-snippet
-	// Use (?s) to allow . to match newlines
+	blockRegex := regexp.MustCompile(`(?s)<a href="/url\?q=(https?://[^"&]+)[^"]*".*?<h3[^>]*>(.*?)</h3>.*?</a>(.*?)</div>`)
+	snippetRegex := regexp.MustCompile(`(?s)<div[^>]*data-sncf="1"[^>]*>(.*?)</div>`)
+	matches := blockRegex.FindAllStringSubmatch(htmlContent, 5)
 
 	var results []string
+	for _, match := range matches {
+		link := html.UnescapeString(match[1])
+		title := cleanSearchText(match[2])
+		snippet := ""
+		if parts := snippetRegex.FindStringSubmatch(match[3]); len(parts) > 1 {
+			snippet = cleanSearchText(parts[1])
+		}
+		if title == "" || link == "" {
+			continue
+		}
+		results = append(results, fmt.Sprintf("Title: %s\nLink: %s\nSnippet: %s\n", title, link, snippet))
+	}
+	return results, nil
+}
 
-	// Extract titles and links
-	// HTML: <a rel="nofollow" href="..." class='result-link'>Title</a>
-	// HTML: <td class='result-snippet'>Snippet</td>
+func searchDuckDuckGo(query string, client *http.Client) ([]string, error) {
+	searchURL := fmt.Sprintf("https://lite.duckduckgo.com/lite/?q=%s", url.QueryEscape(query))
+	htmlContent, err := fetchSearchPage(client, searchURL)
+	if err != nil {
+		return nil, err
+	}
+
 	linkRegex := regexp.MustCompile(`(?s)href="(.*?)" class='result-link'>(.*?)</a>`)
 	snippetRegex := regexp.MustCompile(`(?s)class='result-snippet'>(.*?)</td>`)
 
-	matches := linkRegex.FindAllStringSubmatch(htmlContent, 5) // Limit to top 5
+	matches := linkRegex.FindAllStringSubmatch(htmlContent, 5)
 	snippets := snippetRegex.FindAllStringSubmatch(htmlContent, 5)
 
 	count := len(matches)
@@ -111,30 +124,58 @@ func SearchWeb(query string) (string, error) {
 		count = len(snippets)
 	}
 
+	var results []string
 	for i := 0; i < count; i++ {
-		link := matches[i][1]
-		title := matches[i][2]
-		snippet := snippets[i][1]
-
-		// Clean up HTML entities if needed (basic ones)
-		title = strings.ReplaceAll(title, "<b>", "")
-		title = strings.ReplaceAll(title, "</b>", "")
-		title = strings.ReplaceAll(title, "&quot;", "\"")
-		title = strings.ReplaceAll(title, "&amp;", "&")
-
-		snippet = strings.ReplaceAll(snippet, "&quot;", "\"")
-		snippet = strings.ReplaceAll(snippet, "&amp;", "&")
-
+		link := cleanSearchText(matches[i][1])
+		title := cleanSearchText(matches[i][2])
+		snippet := cleanSearchText(snippets[i][1])
+		if title == "" || link == "" {
+			continue
+		}
 		results = append(results, fmt.Sprintf("Title: %s\nLink: %s\nSnippet: %s\n", title, link, snippet))
 	}
 
-	if len(results) == 0 {
-		EmitTrace("mcp", "search_web.complete", "Web search returned no parsed results", traceDetails("query", query, "elapsed_ms", durationMs(start)))
-		return "No results found or parsing failed.", nil
+	return results, nil
+}
+
+func fetchSearchPage(client *http.Client, searchURL string) (string, error) {
+	req, err := http.NewRequest("GET", searchURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("search provider returned status %d", resp.StatusCode)
 	}
 
-	EmitTrace("mcp", "search_web.complete", "Web search completed", traceDetails("query", query, "elapsed_ms", durationMs(start), "results", len(results)))
-	return strings.Join(results, "\n---\n"), nil
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	htmlContent := string(body)
+	preview := htmlContent
+	if len(preview) > 500 {
+		preview = preview[:500]
+	}
+	log.Printf("[MCP-DEBUG] Search HTML Preview: %s", preview)
+	return htmlContent, nil
+}
+
+func cleanSearchText(input string) string {
+	input = regexp.MustCompile(`(?s)<[^>]+>`).ReplaceAllString(input, " ")
+	input = html.UnescapeString(input)
+	input = strings.ReplaceAll(input, "\u00a0", " ")
+	input = strings.Join(strings.Fields(input), " ")
+	return strings.TrimSpace(input)
 }
 
 // SearchNamuwiki searches Namuwiki by constructing a direct URL and reading the page.
