@@ -114,6 +114,9 @@ const translations = {
         'status.failed': '실패',
         'status.stopped': '중단됨',
         'status.unexpectedStop': '응답이 예상치 못하게 중단되었습니다.',
+        'status.thoughtForSeconds': '{seconds}초 동안 생각함',
+        'status.thoughtForMinutes': '{minutes}분 동안 생각함',
+        'status.thoughtForMinutesSeconds': '{minutes}분 {seconds}초 동안 생각함',
         'tool.currentTimeChecked': '현재 시간을 확인했습니다.',
         'tool.executionFinished': '도구 실행이 완료되었습니다.',
         'tool.noQueryDetails': '세부 질의 정보 없음',
@@ -254,6 +257,9 @@ const translations = {
         'status.failed': 'Failed',
         'status.stopped': 'Stopped',
         'status.unexpectedStop': 'The response stopped unexpectedly.',
+        'status.thoughtForSeconds': 'Thought for {seconds}s',
+        'status.thoughtForMinutes': 'Thought for {minutes}m',
+        'status.thoughtForMinutesSeconds': 'Thought for {minutes}m {seconds}s',
         'tool.currentTimeChecked': 'Checked the current time.',
         'tool.executionFinished': 'Tool execution finished.',
         'tool.noQueryDetails': 'No query details',
@@ -2624,10 +2630,19 @@ function dismissStartupCards() {
 
 function formatThoughtDuration(durationMs = 0) {
     const totalSeconds = Math.max(0, Math.round(durationMs / 1000));
-    if (totalSeconds < 60) return `Thought for ${totalSeconds}s`;
+    if (totalSeconds < 60) {
+        return t('status.thoughtForSeconds')
+            .replace('{seconds}', String(totalSeconds));
+    }
     const minutes = Math.floor(totalSeconds / 60);
     const seconds = totalSeconds % 60;
-    return seconds === 0 ? `Thought for ${minutes}m` : `Thought for ${minutes}m ${seconds}s`;
+    if (seconds === 0) {
+        return t('status.thoughtForMinutes')
+            .replace('{minutes}', String(minutes));
+    }
+    return t('status.thoughtForMinutesSeconds')
+        .replace('{minutes}', String(minutes))
+        .replace('{seconds}', String(seconds));
 }
 
 function getAssistantMessageParts(elementId) {
