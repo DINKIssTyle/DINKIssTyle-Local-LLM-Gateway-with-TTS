@@ -18,8 +18,45 @@ if ! command -v wails &> /dev/null; then
     exit 1
 fi
 
+resolve_signing_identity() {
+    if [ -n "${MACOS_SIGN_IDENTITY:-}" ]; then
+        echo "$MACOS_SIGN_IDENTITY"
+        return 0
+    fi
+
+    local detected_identity
+    detected_identity=$(
+        security find-identity -v -p codesigning 2>/dev/null \
+            | sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' \
+            | head -n 1
+    )
+    if [ -n "$detected_identity" ]; then
+        echo "$detected_identity"
+        return 0
+    fi
+
+    detected_identity=$(
+        security find-identity -v -p codesigning 2>/dev/null \
+            | sed -n 's/.*"\(Apple Development:[^"]*\)".*/\1/p' \
+            | head -n 1
+    )
+    if [ -n "$detected_identity" ]; then
+        echo "$detected_identity"
+        return 0
+    fi
+
+    echo "-"
+}
+
 echo "Clean complete. Building for macOS..."
 echo "Using wails at: $(which wails)"
+SIGN_IDENTITY="$(resolve_signing_identity)"
+if [ "$SIGN_IDENTITY" = "-" ]; then
+    echo "Warning: no fixed macOS signing identity found. Falling back to ad-hoc signing; permission prompts may still reset between builds."
+else
+    echo "Using signing identity: $SIGN_IDENTITY"
+fi
+
 # You can change darwin/universal to darwin/amd64 or darwin/arm64 if needed
 wails build -platform darwin/universal -skipbindings
 
@@ -62,8 +99,9 @@ if [ $? -eq 0 ]; then
     # Remove hidden metadata attributes that can break code signing
     xattr -cr "$APP_BUNDLE_PATH"
     
-    codesign -f -s - "$DYLIB_PATH"
-    codesign -f -s - --deep "$APP_BUNDLE_PATH"
+    codesign --force --sign "$SIGN_IDENTITY" --timestamp=none "$DYLIB_PATH"
+    codesign --force --sign "$SIGN_IDENTITY" --timestamp=none "$EXE_PATH"
+    codesign --force --sign "$SIGN_IDENTITY" --timestamp=none --deep "$APP_BUNDLE_PATH"
 
     echo "Build success!"
 else

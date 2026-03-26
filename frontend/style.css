@@ -22,7 +22,7 @@
   --ai-text-color: #d7deea;
   --code-bg: #0a0f14;
   --danger-color: #da3633;
-  --success-color: #53b37d;
+  --success-color: #719985;
   --chat-font-size: 16px;
   --chat-line-height: 1.6;
   --app-height: 100vh;
@@ -401,6 +401,25 @@ body {
   border-color: rgba(120, 161, 255, 0.4);
 }
 
+.message.has-startup-card.is-dismissing {
+  pointer-events: none;
+  animation: startupCardDismiss 0.32s ease forwards;
+}
+
+@keyframes startupCardDismiss {
+  0% {
+    opacity: 1;
+    transform: translateY(0);
+    max-height: 360px;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-18px);
+    max-height: 0;
+    margin-bottom: 0;
+  }
+}
+
 .message-actions {
   display: flex;
   gap: 8px;
@@ -483,6 +502,24 @@ body {
 
 #message-input:focus {
   outline: none;
+}
+
+#message-input.stt-listening::placeholder {
+  color: transparent;
+  background-image: linear-gradient(
+    110deg,
+    rgba(174, 183, 196, 0.52) 0%,
+    rgba(174, 183, 196, 0.52) 34%,
+    rgba(255, 255, 255, 0.92) 50%,
+    rgba(174, 183, 196, 0.6) 66%,
+    rgba(174, 183, 196, 0.52) 100%
+  );
+  background-size: 220% 100%;
+  background-position: 120% 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: toolQuerySheen 2.2s ease-in-out infinite;
 }
 
 .input-actions {
@@ -754,6 +791,10 @@ body {
   color: rgba(174, 183, 196, 0.52);
 }
 
+.tool-header-group .tool-header-separator:last-of-type {
+  margin-left: auto;
+}
+
 .tool-header-name,
 .tool-header-status {
   font-size: 13px;
@@ -768,11 +809,16 @@ body {
 .tool-header-status {
   color: var(--text-muted);
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   display: block;
+  text-align: right;
+  max-width: 40%;
 }
 
 .tool-header-status.is-query-preview {
+  flex: 1 1 auto;
+  text-align: left;
+  max-width: none;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: clip;

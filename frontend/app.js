@@ -149,6 +149,8 @@ const translations = {
         'chat.startup.restoreMissing': '불러올 마지막 대화가 없습니다.',
         'chat.startup.restoreFailed': '마지막 대화를 불러오지 못했습니다.',
         'input.placeholder': '메시지를 입력하세요...',
+        'input.placeholder.sttA': '지금 말하세요...',
+        'input.placeholder.sttB': '듣는 중...',
         // Health Check
         'health.systemReady': '시스템 준비 완료',
         'health.checkRequired': '시스템 점검 필요',
@@ -280,6 +282,8 @@ const translations = {
         'chat.startup.restoreMissing': 'No saved conversation to load.',
         'chat.startup.restoreFailed': 'Could not load the last conversation.',
         'input.placeholder': 'Type a message...',
+        'input.placeholder.sttA': 'Speak now...',
+        'input.placeholder.sttB': 'Listening...',
         // Health Check
         'health.systemReady': 'System Ready',
         'health.checkRequired': 'System Check Required',
@@ -307,6 +311,18 @@ function t(key) {
     return translations[lang]?.[key] || translations['en']?.[key] || key;
 }
 
+function normalizeInlineMarkdownSpacing(segment) {
+    return segment.replace(/\*\*\s+([^*\n](?:[^*\n]*?[^*\s\n])?)\s+\*\*/g, '**$1**');
+}
+
+function normalizeMarkdownOutsideCode(text, transform) {
+    const parts = String(text).split(/(```[\s\S]*?```|`[^`\n]+`)/g);
+    return parts.map((part, index) => {
+        if (index % 2 === 1) return part;
+        return transform(part);
+    }).join('');
+}
+
 function normalizeMarkdownForRender(text) {
     if (!text) return '';
 
@@ -321,8 +337,11 @@ function normalizeMarkdownForRender(text) {
         .replace(/(^|\n)([ \t]*)[•●▪■▸▹▻▶▷►]\s+/g, '$1$2- ')
         .replace(/(^|\n)([ \t]*)[◦○◇◆]\s+/g, '$1$2  - ');
 
-    // Normalize stray spaces inside strong markers in list items.
-    normalized = normalized.replace(/(^|\n)([ \t]*[-*+]\s+)\*\*\s+([^*\n]+?)\s+\*\*/g, '$1$2**$3**');
+    // Normalize stray spaces inside strong markers without touching code spans/blocks.
+    normalized = normalizeMarkdownOutsideCode(normalized, (segment) =>
+        normalizeInlineMarkdownSpacing(segment)
+            .replace(/(^|\n)([ \t]*[-*+]\s+)\*\*\s+([^*\n]+?)\s+\*\*/g, '$1$2**$3**')
+    );
 
     // Normalize markdown headings/lists/tables when streamed without enough spacing.
     normalized = normalized
@@ -359,6 +378,7 @@ function applyTranslations() {
     // Update language selector
     const langSelect = document.getElementById('cfg-lang');
     if (langSelect) langSelect.value = lang;
+    updateMessageInputPlaceholder();
 }
 
 function setLanguage(lang) {
@@ -1831,6 +1851,8 @@ async function sendMessage() {
         await ensureStatefulContextBudget(text);
     }
 
+    dismissStartupCards();
+
     // Stop and clear any existing audio/TTS
     stopAllAudio();
 
@@ -2509,6 +2531,7 @@ function appendMessage(msg) {
                 </div>
             </div>`;
     } else if (msg.startup) {
+        div.classList.add('has-startup-card');
         const startup = msg.startup;
         const issues = Array.isArray(startup.issues) ? startup.issues : [];
         const issuesHtml = issues.length > 0
@@ -2561,6 +2584,19 @@ function appendMessage(msg) {
 
     chatMessages.appendChild(div);
     scrollToBottom(wasNearBottom || msg.role === 'user');
+}
+
+function dismissStartupCards() {
+    const startupMessages = Array.from(document.querySelectorAll('.message.has-startup-card'));
+    startupMessages.forEach((msgEl) => {
+        if (msgEl.classList.contains('is-dismissing')) return;
+        msgEl.classList.add('is-dismissing');
+        window.setTimeout(() => {
+            if (msgEl.parentNode) {
+                msgEl.remove();
+            }
+        }, 320);
+    });
 }
 
 function formatThoughtDuration(durationMs = 0) {
@@ -4011,6 +4047,8 @@ function updateMicLayout() {
 // Global STT state
 let recognition = null;
 let isSTTActive = false;
+let sttPlaceholderTimer = null;
+let sttPlaceholderIndex = 0;
 
 /**
  * Toggles Speech-to-Text (STT) recognition
@@ -4050,6 +4088,7 @@ function startSTT() {
 
         recognition.onstart = () => {
             isSTTActive = true;
+            startSTTPlaceholderAnimation();
             syncMicRecordingUI();
             console.log("[STT] Recording started");
         };
@@ -4076,11 +4115,13 @@ function startSTT() {
 
         recognition.onerror = (event) => {
             console.error("[STT] Error:", event.error);
+            stopSTTPlaceholderAnimation();
             stopSTT();
         };
 
         recognition.onend = () => {
             isSTTActive = false;
+            stopSTTPlaceholderAnimation();
             syncMicRecordingUI();
             console.log("[STT] Recording ended");
 
@@ -4099,6 +4140,40 @@ function stopSTT() {
     if (recognition) {
         recognition.stop();
     }
+}
+
+function updateMessageInputPlaceholder() {
+    if (!messageInput) return;
+
+    const listeningPhrases = [
+        t('input.placeholder.sttA'),
+        t('input.placeholder.sttB')
+    ];
+    const nextPlaceholder = isSTTActive
+        ? listeningPhrases[sttPlaceholderIndex % listeningPhrases.length]
+        : t('input.placeholder');
+
+    messageInput.placeholder = nextPlaceholder;
+    messageInput.classList.toggle('stt-listening', isSTTActive);
+}
+
+function startSTTPlaceholderAnimation() {
+    stopSTTPlaceholderAnimation();
+    sttPlaceholderIndex = 0;
+    updateMessageInputPlaceholder();
+    sttPlaceholderTimer = window.setInterval(() => {
+        sttPlaceholderIndex = (sttPlaceholderIndex + 1) % 2;
+        updateMessageInputPlaceholder();
+    }, 1400);
+}
+
+function stopSTTPlaceholderAnimation() {
+    if (sttPlaceholderTimer) {
+        window.clearInterval(sttPlaceholderTimer);
+        sttPlaceholderTimer = null;
+    }
+    sttPlaceholderIndex = 0;
+    updateMessageInputPlaceholder();
 }
 
 function syncMicRecordingUI() {
