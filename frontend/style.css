@@ -553,30 +553,26 @@ body {
   z-index: 1;
 }
 
-.composer-spark-shell {
+.composer-progress-shimmer {
   position: absolute;
-  inset: 0;
-  border-radius: inherit;
+  top: 0;
+  left: 10px;
+  right: 10px;
+  height: 2px;
+  border-radius: 999px;
   overflow: hidden;
   pointer-events: none;
   z-index: 2;
   opacity: 0;
-  transition: opacity 0.2s ease;
-  padding: 1px;
-  -webkit-mask:
-    linear-gradient(#fff 0 0) content-box,
-    linear-gradient(#fff 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
+  transition: opacity 0.18s ease;
 }
 
-.composer-spark {
+.composer-progress-shimmer__beam {
   position: absolute;
-  top: 50%;
-  left: -38%;
-  width: 72%;
-  height: 260%;
-  translate: 0 -50%;
+  top: 0;
+  left: -32%;
+  width: 42%;
+  height: 100%;
   background: linear-gradient(
     168deg,
     rgba(255, 255, 255, 0) 0%,
@@ -585,7 +581,7 @@ body {
     rgba(255, 255, 255, 0.08) 62%,
     rgba(255, 255, 255, 0) 100%
   );
-  filter: blur(0.3px);
+  filter: blur(0.15px);
   animation: composerSweepX 2.2s ease-in-out infinite;
 }
 
@@ -625,24 +621,8 @@ body {
     0 0 16px rgba(255, 255, 255, 0.03);
 }
 
-.input-container.has-progress .composer-spark-shell {
+.input-container.has-progress .composer-progress-shimmer {
   opacity: 1;
-  inset: 0 auto auto 10px;
-  width: calc(100% - 20px);
-  height: 2px;
-  padding: 0;
-  border-radius: 999px;
-  -webkit-mask: none;
-  mask: none;
-}
-
-.input-container.has-progress .composer-spark {
-  top: 0;
-  left: -32%;
-  width: 42%;
-  height: 100%;
-  translate: 0 0;
-  filter: blur(0.15px);
 }
 
 .input-main {
