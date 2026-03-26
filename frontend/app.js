@@ -4059,6 +4059,101 @@ function initStreamingTTS(elementId) {
     console.log("[Streaming TTS] Initialized");
 }
 
+function getStreamingChunkTargets() {
+    const baseTarget = Math.max(parseInt(config.chunkSize) || 200, 80);
+    const firstChunkTarget = Math.min(baseTarget, 48);
+    return {
+        firstChunkTarget,
+        weakBoundaryTarget: Math.max(Math.floor(baseTarget * 0.45), 36),
+        strongBoundaryTarget: Math.max(Math.floor(baseTarget * 0.72), 64),
+        hardCeiling: Math.max(Math.floor(baseTarget * 1.2), 120)
+    };
+}
+
+function detectStreamingBoundary(newText) {
+    const patterns = [
+        { kind: 'strong', regex: /^([\s\S]*?\n{2,})/ },
+        { kind: 'strong', regex: /^([\s\S]*?\n)/ },
+        { kind: 'strong', regex: /^([\s\S]*?[.!?])(?:\s+|$)/ },
+        { kind: 'weak', regex: /^([\s\S]*?[,;:])(?:\s+|$)/ }
+    ];
+
+    for (const pattern of patterns) {
+        const match = newText.match(pattern.regex);
+        if (match && match[1] && match[1].trim()) {
+            return { text: match[1], kind: pattern.kind };
+        }
+    }
+    return null;
+}
+
+function shouldCommitStreamingBoundary(length, boundaryKind, hasQueuedAudio) {
+    const targets = getStreamingChunkTargets();
+    if (!hasQueuedAudio) {
+        return length >= targets.firstChunkTarget || boundaryKind === 'strong';
+    }
+    if (boundaryKind === 'strong') {
+        return length >= targets.strongBoundaryTarget;
+    }
+    return length >= targets.weakBoundaryTarget;
+}
+
+function splitTTSParagraphByPriority(text, maxChunkSize, minChunkLength, force = false) {
+    const chunks = [];
+    let remaining = (text || '').trim();
+    if (!remaining) return chunks;
+
+    const boundaryRegex = /([\s\S]*?(?:\n{2,}|\n|[.!?](?=\s|$)|[,;:](?=\s|$)))/g;
+
+    while (remaining) {
+        if (remaining.length <= maxChunkSize) {
+            if ((remaining.length >= minChunkLength || force) && /[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ0-9]/.test(remaining)) {
+                chunks.push(remaining.trim());
+            }
+            break;
+        }
+
+        const windowText = remaining.slice(0, maxChunkSize + Math.floor(maxChunkSize * 0.25));
+        let bestStrong = null;
+        let bestWeak = null;
+        let match;
+
+        boundaryRegex.lastIndex = 0;
+        while ((match = boundaryRegex.exec(windowText)) !== null) {
+            const segment = match[1];
+            const boundaryEnd = match.index + segment.length;
+            if (boundaryEnd < minChunkLength) continue;
+            if (boundaryEnd > maxChunkSize) break;
+
+            const trimmed = segment.trimEnd();
+            if (!trimmed) continue;
+
+            const isStrong = /(?:\n{2,}|\n|[.!?])\s*$/.test(trimmed);
+            if (isStrong) {
+                bestStrong = boundaryEnd;
+            } else {
+                bestWeak = boundaryEnd;
+            }
+        }
+
+        let splitAt = bestStrong || bestWeak;
+        if (!splitAt) {
+            splitAt = remaining.lastIndexOf(' ', maxChunkSize);
+            if (splitAt < minChunkLength) {
+                splitAt = maxChunkSize;
+            }
+        }
+
+        const chunk = remaining.slice(0, splitAt).trim();
+        if (chunk && /[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ0-9]/.test(chunk)) {
+            chunks.push(chunk);
+        }
+        remaining = remaining.slice(splitAt).trimStart();
+    }
+
+    return chunks;
+}
+
 /**
  * Feed new display text to the streaming TTS processor
  * This is called every time the LLM emits new tokens
@@ -4085,8 +4180,7 @@ function feedStreamingTTS(displayText) {
         let committed = null;
         let advanceBy = 0;
         const hasQueuedAudio = firstChunkPlayedInCurrentSession();
-        const firstChunkTarget = Math.min(parseInt(config.chunkSize) || 200, 40);
-        const regularChunkTarget = Math.max(parseInt(config.chunkSize) || 200, 80);
+        const targets = getStreamingChunkTargets();
 
         // PRIORITY 1: Check for Code Blocks (Skip them entirely)
         const codeBlockMatch = newText.match(/(.*?)```[\s\S]*?```/);
@@ -4118,41 +4212,33 @@ function feedStreamingTTS(displayText) {
             }
         }
 
-        // PRIORITY 2: Newlines (Fast response)
+        // PRIORITY 2: Weighted punctuation/newline boundaries
         if (!committed) {
-            const newlineMatch = newText.match(/^([\s\S]*?\n)/);
-            if (newlineMatch && newlineMatch[1].trim()) {
-                const potentialCommit = streamingTTSBuffer + cleanTextForTTS(newlineMatch[1]);
-                const newlineTarget = hasQueuedAudio ? 10 : 6;
-                if (potentialCommit.length >= newlineTarget || streamingTTSBuffer.length > 0) {
+            const boundary = detectStreamingBoundary(newText);
+            if (boundary) {
+                const potentialCommit = streamingTTSBuffer + cleanTextForTTS(boundary.text);
+                if (shouldCommitStreamingBoundary(potentialCommit.length, boundary.kind, hasQueuedAudio)) {
                     committed = potentialCommit;
                     streamingTTSBuffer = "";
-                    advanceBy = newlineMatch[1].length;
+                    advanceBy = boundary.text.length;
                 } else {
-                    streamingTTSBuffer = potentialCommit + " "; // Keep buffering
-                    streamingTTSCommittedIndex += newlineMatch[1].length;
+                    streamingTTSBuffer = potentialCommit + " ";
+                    streamingTTSCommittedIndex += boundary.text.length;
                     continue;
                 }
             }
         }
 
-        // PRIORITY 3: Sentence Endings (.!?)
-        if (!committed) {
-            const sentenceMatch = newText.match(/^([\s\S]*?[.!?])(?:\s+|$)/);
-            if (sentenceMatch && sentenceMatch[1].trim()) {
-                const potentialCommit = streamingTTSBuffer + cleanTextForTTS(sentenceMatch[1]);
-                const targetLength = hasQueuedAudio ? regularChunkTarget : firstChunkTarget;
-                if (potentialCommit.length >= targetLength) {
-                    committed = potentialCommit;
-                    streamingTTSBuffer = "";
-                    advanceBy = sentenceMatch[1].length;
-                } else {
-                    streamingTTSBuffer = potentialCommit + " ";
-                    streamingTTSCommittedIndex += sentenceMatch[1].length;
-                    continue;
-                }
+        if (!committed && (streamingTTSBuffer.length + cleanTextForTTS(newText).length) >= targets.hardCeiling) {
+            const forcedCommit = (streamingTTSBuffer + " " + cleanTextForTTS(newText.slice(0, targets.hardCeiling))).trim();
+            if (forcedCommit) {
+                committed = forcedCommit;
+                streamingTTSBuffer = "";
+                advanceBy = Math.min(newText.length, targets.hardCeiling);
             }
-        }      // If nothing matched, stop the loop
+        }
+
+        // If nothing matched, stop the loop
         if (!committed) break;
 
         // Commit the segment
@@ -4198,41 +4284,18 @@ function pushToStreamingTTSQueue(text, force = false) {
     const hasQueuedAudio = ttsQueue.length > 0 || isPlayingQueue;
     const minChunkLength = hasQueuedAudio ? 40 : 18;
 
-    // Split into smaller chunks if needed (by paragraph/sentence within the segment)
+    const maxChunkSize = Math.max(parseInt(config.chunkSize) || 200, 80);
+
+    // Split into smaller chunks if needed (using weighted boundaries)
     const paragraphs = text.split(/\n+/);
     const newChunks = [];
 
     for (const para of paragraphs) {
         if (!para.trim()) continue;
-
-        // Smart sentence splitting - avoid breaking on numbered lists like "1.", "2."
-        const sentencePattern = /(?<=[.!?])(?=\s+(?:[A-Z가-힣]|$))/g;
-        const rawChunks = para.split(sentencePattern).filter(s => s.trim());
-        const sentences = rawChunks.length > 0 ? rawChunks : [para];
-
-        let currentChunk = "";
-
-        for (const part of sentences) {
-            const trimmedPart = part.trim();
-            if (!trimmedPart) continue;
-
-            // If adding this part exceeds chunkSize and we have content, queue current chunk
-            if ((currentChunk + " " + trimmedPart).length > config.chunkSize && (currentChunk.length >= minChunkLength || force)) {
-                // Only add if it has actual speakable content
-                if (/[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ0-9]/.test(currentChunk)) {
-                    ttsQueue.push(currentChunk.trim());
-                    newChunks.push(currentChunk.trim());
-                }
-                currentChunk = "";
-            }
-            currentChunk = currentChunk ? currentChunk + " " + trimmedPart : trimmedPart;
-        }
-
-        // Queue paragraph remainder if long enough OR forced
-        if ((currentChunk.length >= minChunkLength || force) && /[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ0-9]/.test(currentChunk)) {
-            ttsQueue.push(currentChunk.trim());
-            newChunks.push(currentChunk.trim());
-            currentChunk = "";
+        const chunks = splitTTSParagraphByPriority(para, maxChunkSize, minChunkLength, force);
+        for (const chunk of chunks) {
+            ttsQueue.push(chunk);
+            newChunks.push(chunk);
         }
     }
 
