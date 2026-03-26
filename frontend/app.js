@@ -3483,25 +3483,7 @@ function updateMessageContent(id, text) {
     const { committedText, pendingText } = splitStreamingMarkdown(cleanText);
 
     if (committedText !== streamState.committedText) {
-        if (committedText.startsWith(streamState.committedText)) {
-            const delta = committedText.slice(streamState.committedText.length);
-            const normalizedDelta = normalizeMarkdownForRender(delta);
-            if (normalizedDelta.trim()) {
-                committedHost.insertAdjacentHTML('beforeend', marked.parse(normalizedDelta));
-                committedHost.querySelectorAll('a').forEach((link) => {
-                    link.setAttribute('target', '_blank');
-                    link.setAttribute('rel', 'noopener noreferrer');
-                });
-                committedHost.querySelectorAll('pre code').forEach((block) => {
-                    if (!block.dataset.highlighted) {
-                        highlight.highlightElement(block);
-                        block.dataset.highlighted = 'true';
-                    }
-                });
-            }
-        } else {
-            renderMarkdownIntoHost(committedHost, committedText);
-        }
+        renderMarkdownIntoHost(committedHost, committedText);
         streamState.committedText = committedText;
     }
 
