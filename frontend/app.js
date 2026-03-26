@@ -33,7 +33,7 @@ let config = {
     statefulTurnLimit: 8,
     statefulCharBudget: 12000,
     statefulTokenBudget: 10000,
-    micLayout: 'none', // 'none', 'left', 'right', 'bottom'
+    micLayout: 'none', // 'none', 'left', 'right', 'bottom', 'inline'
     chatFontSize: 16
 };
 
@@ -101,7 +101,19 @@ const translations = {
         'setting.memory.reset.confirm': '개인 메모리를 초기화하시겠습니까? 이 작업은 되돌릴 수 없습니다.',
         'setting.memory.reset.success': '메모리가 초기화되었습니다.',
         'setting.micLayout.label': '마이크 레이아웃',
-        'setting.micLayout.desc': '화면에 거대 마이크 버튼을 배치합니다.',
+        'setting.micLayout.desc': '화면에 마이크를 배치합니다.',
+        'setting.micLayout.option.none': '사용 안 함',
+        'setting.micLayout.option.left': '왼쪽',
+        'setting.micLayout.option.right': '오른쪽',
+        'setting.micLayout.option.bottom': '하단',
+        'setting.micLayout.option.inline': '메시지 창 내부',
+        'status.thinking': '생각 중...',
+        'status.live': '진행 중',
+        'status.running': '실행 중',
+        'status.done': '완료',
+        'status.failed': '실패',
+        'status.stopped': '중단됨',
+        'status.unexpectedStop': '응답이 예상치 못하게 중단되었습니다.',
         // Settings - TTS
         'setting.enableTTS.label': 'TTS 활성화',
         'setting.enableTTS.desc': '응답을 음성으로 재생합니다.',
@@ -220,7 +232,19 @@ const translations = {
         'setting.memory.reset.confirm': 'Are you sure you want to reset your personal memory? This cannot be undone.',
         'setting.memory.reset.success': 'Memory reset successfully.',
         'setting.micLayout.label': 'Mic Layout',
-        'setting.micLayout.desc': 'Place a giant microphone button on the screen.',
+        'setting.micLayout.desc': 'Place a microphone on the screen.',
+        'setting.micLayout.option.none': 'None',
+        'setting.micLayout.option.left': 'Left Side',
+        'setting.micLayout.option.right': 'Right Side',
+        'setting.micLayout.option.bottom': 'Bottom',
+        'setting.micLayout.option.inline': 'In Message Input',
+        'status.thinking': 'Thinking...',
+        'status.live': 'Live',
+        'status.running': 'Running',
+        'status.done': 'Done',
+        'status.failed': 'Failed',
+        'status.stopped': 'Stopped',
+        'status.unexpectedStop': 'The response stopped unexpectedly.',
         // Settings - TTS
         'setting.enableTTS.label': 'Enable TTS',
         'setting.enableTTS.desc': 'Play responses as audio.',
@@ -572,6 +596,7 @@ const previewContainer = document.getElementById('preview-container');
 const chatProgressDock = document.getElementById('chat-progress-dock');
 const inputArea = document.getElementById('input-area');
 const inputContainer = document.querySelector('#input-area .input-container');
+const inlineMicBtn = document.getElementById('inline-mic-btn');
 
 function updateViewportMetrics() {
     const root = document.documentElement;
@@ -1926,8 +1951,10 @@ async function sendMessage() {
         assistantContent = await streamResponse(payload, assistantId);
     } catch (e) {
         if (e.name === 'AbortError') {
+            finalizeAssistantStatusCards(assistantId, 'stopped', t('status.stopped'));
             updateMessageContent(assistantId, `**[Stopped by User]**`);
         } else {
+            finalizeAssistantStatusCards(assistantId, 'failed', e.message || t('status.failed'));
             updateMessageContent(assistantId, `**Error:** ${e.message}`);
         }
     } finally {
@@ -2074,6 +2101,8 @@ async function processStream(response, elementId) {
     let currentlyReasoning = false; // State track for reasoning blocks
     let reasoningSource = null;    // 'sse' or 'field' to prevent duplication
     let historyContent = '';
+    let lastToolCallHtml = '';
+    let streamAborted = false;
 
 
 
@@ -2414,6 +2443,7 @@ async function processStream(response, elementId) {
         }
     } catch (err) {
         if (err.name === 'AbortError') {
+            streamAborted = true;
             console.log('Stream aborted by user');
         } else {
             console.error('Stream Error:', err);
@@ -2421,6 +2451,14 @@ async function processStream(response, elementId) {
         }
     } finally {
         hideProgressDock();
+        if (!streamAborted) {
+            if (currentlyReasoning) {
+                finalizeReasoningStatus(elementId, 'failed', t('status.unexpectedStop'));
+            }
+            if (getRunningToolCards(elementId).length > 0) {
+                finalizeAssistantStatusCards(elementId, 'failed', t('status.failed'));
+            }
+        }
         // Finalize (Save to history even if aborted)
         // Keep only the user-visible answer in history to avoid ballooning context.
         historyContent = fullText.trim();
@@ -2571,6 +2609,45 @@ function hideProgressDock() {
     chatProgressDock.innerHTML = '';
 }
 
+function getRunningToolCards(elementId) {
+    const { toolsHost } = getAssistantMessageParts(elementId);
+    if (!toolsHost) return [];
+    return Array.from(toolsHost.querySelectorAll('.tool-status-card.is-running'));
+}
+
+function finalizeToolCard(card, outcome = 'done', detail = '') {
+    if (!card) return;
+
+    const headerGroupEl = card.querySelector('.tool-header-group');
+    const summaryEl = card.querySelector('.tool-header-status');
+    const queryEl = card.querySelector('.tool-card-query');
+    const historyEl = card.querySelector('.tool-card-history');
+
+    card.classList.remove('is-running', 'is-success', 'is-failure');
+    if (outcome === 'failed') {
+        card.classList.add('is-failure');
+    } else {
+        card.classList.add('is-success');
+    }
+    card.dataset.collapsed = 'true';
+    card.classList.add('collapsed');
+
+    if (headerGroupEl) {
+        headerGroupEl.classList.remove('is-live');
+    }
+    if (summaryEl) {
+        if (outcome === 'failed') summaryEl.textContent = detail || t('status.failed');
+        else if (outcome === 'stopped') summaryEl.textContent = detail || t('status.stopped');
+        else summaryEl.textContent = detail || t('status.done');
+        summaryEl.classList.remove('is-query-preview');
+        summaryEl.title = summaryEl.textContent;
+    }
+    if (queryEl) {
+        queryEl.hidden = true;
+    }
+    renderToolHistory(card, historyEl, outcome === 'failed' ? 'failure' : 'success');
+}
+
 function ensureReasoningCard(elementId) {
     const { reasoningHost } = getAssistantMessageParts(elementId);
     if (!reasoningHost) return null;
@@ -2584,7 +2661,8 @@ function ensureReasoningCard(elementId) {
         card.innerHTML = `
             <button type="button" class="reasoning-header" onclick="toggleReasoningCard(this)">
                 <span class="reasoning-chevron material-icons-round">play_arrow</span>
-                <span class="reasoning-title is-live">Thinking...</span>
+                <span class="reasoning-title is-live">${escapeHtml(t('status.thinking'))}</span>
+                <span class="section-meta">${escapeHtml(t('status.live'))}</span>
             </button>
             <div class="reasoning-body"></div>`;
         reasoningHost.appendChild(card);
@@ -2626,7 +2704,7 @@ function ensureToolCard(elementId, toolName = 'Tool') {
                 <span class="tool-header-separator" aria-hidden="true">•</span>
                 <span class="tool-header-name">${escapeHtml(formatToolDisplayName(toolName))}</span>
                 <span class="tool-header-separator" aria-hidden="true">•</span>
-                <span class="tool-header-status">Running</span>
+                <span class="tool-header-status">${escapeHtml(t('status.running'))}</span>
             </span>
         </button>
         <div class="tool-card-body">
@@ -2688,9 +2766,9 @@ function setToolCardState(elementId, state, summary = '', args = null, toolName 
     }
 
     if (summaryEl) {
-        let statusLabel = 'Done';
-        if (state === 'running') statusLabel = previewText || lastPreviewText || 'Running';
-        else if (state === 'failure') statusLabel = 'Failed';
+        let statusLabel = t('status.done');
+        if (state === 'running') statusLabel = previewText || lastPreviewText || t('status.running');
+        else if (state === 'failure') statusLabel = summary || t('status.failed');
         else if (summary && !/tool execution finished/i.test(summary)) statusLabel = summary;
         summaryEl.textContent = statusLabel;
         summaryEl.classList.toggle('is-query-preview', state === 'running' && !!(previewText || lastPreviewText));
@@ -2930,15 +3008,7 @@ function showReasoningStatus(elementId, text, isFinal = false) {
     const durationMs = Math.max(0, Date.now() - startedAt);
 
     if (isFinal) {
-        card.classList.add('completed');
-        card.dataset.collapsed = 'true';
-        card.classList.add('collapsed');
-        card.dataset.durationMs = String(durationMs);
-        if (metaEl) metaEl.textContent = 'Done';
-        if (titleEl) {
-            titleEl.classList.remove('is-live');
-            titleEl.textContent = formatThoughtDuration(durationMs);
-        }
+        finalizeReasoningStatus(elementId, 'done');
         return;
     }
 
@@ -2959,12 +3029,65 @@ function showReasoningStatus(elementId, text, isFinal = false) {
     card.classList.remove('collapsed');
     card.dataset.collapsed = 'true';
     card.classList.add('collapsed');
-    if (metaEl) metaEl.textContent = 'Live';
+    card.classList.remove('completed', 'failed');
+    if (metaEl) metaEl.textContent = t('status.live');
     if (titleEl) {
         titleEl.classList.add('is-live');
-        titleEl.textContent = 'Thinking...';
+        titleEl.textContent = t('status.thinking');
     }
     bodyEl.textContent = cleanText;
+}
+
+function finalizeReasoningStatus(elementId, outcome = 'done', detail = '') {
+    if (config.hideThink) return;
+
+    const card = ensureReasoningCard(elementId);
+    if (!card) return;
+
+    const metaEl = card.querySelector('.section-meta');
+    const titleEl = card.querySelector('.reasoning-title');
+    const bodyEl = card.querySelector('.reasoning-body');
+    const startedAt = Number(card.dataset.startedAt || Date.now());
+    const durationMs = Math.max(0, Date.now() - startedAt);
+
+    card.classList.remove('completed', 'failed');
+    card.classList.add(outcome === 'failed' ? 'failed' : 'completed');
+    card.dataset.collapsed = 'true';
+    card.classList.add('collapsed');
+    card.dataset.durationMs = String(durationMs);
+
+    if (metaEl) {
+        if (outcome === 'failed') metaEl.textContent = t('status.failed');
+        else if (outcome === 'stopped') metaEl.textContent = t('status.stopped');
+        else metaEl.textContent = t('status.done');
+    }
+
+    if (titleEl) {
+        titleEl.classList.remove('is-live');
+        if (outcome === 'failed') titleEl.textContent = t('status.failed');
+        else if (outcome === 'stopped') titleEl.textContent = t('status.stopped');
+        else titleEl.textContent = formatThoughtDuration(durationMs);
+    }
+
+    if (bodyEl && detail) {
+        bodyEl.textContent = detail;
+    }
+}
+
+function finalizeAssistantStatusCards(elementId, outcome = 'done', detail = '') {
+    if (!elementId) return;
+
+    const runningToolCards = getRunningToolCards(elementId);
+    if (runningToolCards.length > 0) {
+        runningToolCards.forEach((card) => {
+            finalizeToolCard(card, outcome, detail);
+        });
+    }
+
+    const reasoningCard = getAssistantMessageParts(elementId).reasoningHost?.querySelector('.reasoning-status');
+    if (reasoningCard && reasoningCard.querySelector('.reasoning-title')?.classList.contains('is-live')) {
+        finalizeReasoningStatus(elementId, outcome, detail);
+    }
 }
 
 
@@ -3862,9 +3985,17 @@ function updateMicLayout() {
     // Reset classes
     container.className = '';
     document.body.classList.remove('layout-mic-bottom');
+    if (inlineMicBtn) {
+        inlineMicBtn.classList.remove('is-visible');
+    }
 
     if (!config.micLayout || config.micLayout === 'none') {
         container.style.display = 'none';
+    } else if (config.micLayout === 'inline') {
+        container.style.display = 'none';
+        if (inlineMicBtn) {
+            inlineMicBtn.classList.add('is-visible');
+        }
     } else {
         container.style.display = 'flex';
         container.classList.add(`mic-layout-${config.micLayout}`);
@@ -3872,6 +4003,9 @@ function updateMicLayout() {
             document.body.classList.add('layout-mic-bottom');
         }
     }
+
+    updateMicUIForGeneration(isGenerating);
+    syncMicRecordingUI();
 }
 
 // Global STT state
@@ -3916,7 +4050,7 @@ function startSTT() {
 
         recognition.onstart = () => {
             isSTTActive = true;
-            document.getElementById('giant-mic-btn').classList.add('stt-active');
+            syncMicRecordingUI();
             console.log("[STT] Recording started");
         };
 
@@ -3947,7 +4081,7 @@ function startSTT() {
 
         recognition.onend = () => {
             isSTTActive = false;
-            document.getElementById('giant-mic-btn').classList.remove('stt-active');
+            syncMicRecordingUI();
             console.log("[STT] Recording ended");
 
             // Auto-send if there is content
@@ -3967,20 +4101,36 @@ function stopSTT() {
     }
 }
 
+function syncMicRecordingUI() {
+    const giantMicBtn = document.getElementById('giant-mic-btn');
+    if (giantMicBtn) {
+        giantMicBtn.classList.toggle('stt-active', isSTTActive);
+    }
+    if (inlineMicBtn) {
+        inlineMicBtn.classList.toggle('stt-active', isSTTActive);
+    }
+}
+
 
 /**
  * Hook into global state to update giant mic icon if generating
  */
 function updateMicUIForGeneration(generating) {
-    const micBtn = document.getElementById('giant-mic-btn');
-    if (!micBtn) return;
+    const micButtons = [
+        document.getElementById('giant-mic-btn'),
+        inlineMicBtn
+    ].filter(Boolean);
 
-    if (generating) {
-        micBtn.classList.add('gen-active');
-        micBtn.querySelector('.material-icons-round').textContent = 'stop';
-    } else {
-        micBtn.classList.remove('gen-active');
-        micBtn.querySelector('.material-icons-round').textContent = 'mic';
+    micButtons.forEach((micBtn) => {
+        micBtn.classList.toggle('gen-active', generating);
+        const icon = micBtn.querySelector('.material-icons-round');
+        if (icon) {
+            icon.textContent = generating ? 'stop' : 'mic';
+        }
+    });
+
+    if (!generating) {
+        syncMicRecordingUI();
     }
 }
 

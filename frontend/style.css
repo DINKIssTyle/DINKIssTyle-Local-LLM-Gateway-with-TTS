@@ -49,6 +49,8 @@ body {
   min-height: var(--app-height);
   display: flex;
   overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 @supports (height: 100dvh) {
@@ -178,6 +180,12 @@ body {
   /* Force horizontal containment */
   padding: 20px;
   min-width: 0;
+}
+
+#chat-messages,
+#chat-messages * {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .message {
@@ -463,6 +471,8 @@ body {
   max-height: 150px;
   min-height: 42px;
   padding: 9px 12px;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .markdown-body {
@@ -504,6 +514,23 @@ body {
 .icon-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.mic-inline-btn {
+  display: none;
+}
+
+.mic-inline-btn.is-visible {
+  display: inline-flex;
+}
+
+.mic-inline-btn.stt-active {
+  color: var(--accent-color);
+  background-color: rgba(var(--accent-color-rgb), 0.12);
+}
+
+.mic-inline-btn.gen-active {
+  color: var(--danger-color);
 }
 
 /* Markdown & Code */
@@ -1361,6 +1388,15 @@ body.is-desktop .desktop-only {
   box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
+.modal input[type="text"],
+.modal input[type="number"],
+.modal input[type="password"],
+.modal textarea,
+.modal select {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 .modal input[type="text"]:focus,
 .modal input[type="number"]:focus,
 .modal input[type="password"]:focus,
@@ -1600,6 +1636,16 @@ a:hover {
   animation: fadeIn 0.3s ease;
 }
 
+.reasoning-status.completed .reasoning-title,
+.tool-status-card.is-success .tool-header-status {
+  color: var(--success-color);
+}
+
+.reasoning-status.failed .reasoning-title,
+.tool-status-card.is-failure .tool-header-status {
+  color: var(--danger-color);
+}
+
 .spinner-small {
   width: 14px;
   height: 14px;
@@ -1657,6 +1703,10 @@ a:hover {
 #mic-layout-container.mic-layout-right {
   order: 1;
   border-left: 1px solid var(--border-color);
+}
+
+#mic-layout-container.mic-layout-inline {
+  display: none;
 }
 
 body.layout-mic-bottom {

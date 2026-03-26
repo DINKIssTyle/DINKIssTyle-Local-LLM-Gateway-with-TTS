@@ -179,12 +179,13 @@
                     <div class="setting-section-title" data-i18n="section.voiceInput">Voice Input</div>
                     <div class="setting-item">
                         <label data-i18n="setting.micLayout.label">Mic Layout</label>
-                        <p class="setting-desc" data-i18n="setting.micLayout.desc">화면에 거대 마이크 버튼을 배치합니다.</p>
+                        <p class="setting-desc" data-i18n="setting.micLayout.desc">화면에 마이크를 배치합니다.</p>
                         <select id="cfg-mic-layout" onchange="updateSettingsVisibility()">
-                            <option value="none">None</option>
-                            <option value="left">Left Side</option>
-                            <option value="right">Right Side</option>
-                            <option value="bottom">Bottom</option>
+                            <option value="none" data-i18n="setting.micLayout.option.none">None</option>
+                            <option value="left" data-i18n="setting.micLayout.option.left">Left Side</option>
+                            <option value="right" data-i18n="setting.micLayout.option.right">Right Side</option>
+                            <option value="bottom" data-i18n="setting.micLayout.option.bottom">Bottom</option>
+                            <option value="inline" data-i18n="setting.micLayout.option.inline">In Message Input</option>
                         </select>
                     </div>
                 </div>
@@ -377,6 +378,9 @@
                     <button class="icon-btn" onclick="document.getElementById('image-upload').click()"
                         title="Upload Image">
                         <span class="material-icons-round">add_photo_alternate</span>
+                    </button>
+                    <button class="icon-btn mic-inline-btn" id="inline-mic-btn" onclick="toggleSTT()" title="Voice Input">
+                        <span class="material-icons-round">mic</span>
                     </button>
                     <button class="icon-btn send-btn" id="send-btn" title="Send Message">
                         <span class="material-icons-round">send</span>
