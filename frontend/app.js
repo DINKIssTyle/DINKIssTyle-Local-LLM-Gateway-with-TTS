@@ -1647,7 +1647,10 @@ function setupEventListeners() {
         autoResizeInput();
     });
 
-    messageInput.addEventListener('input', autoResizeInput);
+    messageInput.addEventListener('input', () => {
+        autoResizeInput();
+        updateInlineComposerActionVisibility();
+    });
 
     // Paste Handle
     messageInput.addEventListener('paste', (e) => {
@@ -1663,6 +1666,7 @@ function setupEventListeners() {
                     pendingImage = event.target.result; // Base64 string
                     imagePreviewVal.src = pendingImage;
                     previewContainer.style.display = 'block';
+                    updateInlineComposerActionVisibility();
                 };
                 reader.readAsDataURL(blob);
             }
@@ -1712,6 +1716,7 @@ function handleImageUpload(input) {
             pendingImage = e.target.result; // Base64 string
             imagePreviewVal.src = pendingImage;
             previewContainer.style.display = 'block';
+            updateInlineComposerActionVisibility();
         };
         reader.readAsDataURL(input.files[0]);
     }
@@ -1721,6 +1726,7 @@ function removeImage() {
     pendingImage = null;
     document.getElementById('image-upload').value = '';
     previewContainer.style.display = 'none';
+    updateInlineComposerActionVisibility();
 }
 
 function clearChat() {
@@ -2043,6 +2049,33 @@ function updateSendButtonState() {
 
     // Also update giant mic icon if layout is active
     updateMicUIForGeneration(isGenerating);
+    updateInlineComposerActionVisibility();
+}
+
+function hasComposableUserInput() {
+    const text = messageInput?.value?.trim() || '';
+    return !!text || !!pendingImage;
+}
+
+function updateInlineComposerActionVisibility() {
+    if (!sendBtn || !inlineMicBtn) return;
+
+    const isInlineMicLayout = config.micLayout === 'inline';
+    if (!isInlineMicLayout) {
+        sendBtn.hidden = false;
+        inlineMicBtn.hidden = !inlineMicBtn.classList.contains('is-visible');
+        return;
+    }
+
+    if (isGenerating) {
+        sendBtn.hidden = false;
+        inlineMicBtn.hidden = true;
+        return;
+    }
+
+    const shouldShowSend = hasComposableUserInput();
+    sendBtn.hidden = !shouldShowSend;
+    inlineMicBtn.hidden = shouldShowSend || !inlineMicBtn.classList.contains('is-visible');
 }
 
 
@@ -4333,6 +4366,7 @@ function updateMicLayout() {
 
     updateMicUIForGeneration(isGenerating);
     syncMicRecordingUI();
+    updateInlineComposerActionVisibility();
 }
 
 // Global STT state
@@ -4401,6 +4435,7 @@ function startSTT() {
                 // Real-time update message input
                 input.value = finalTranscript || interimTranscript;
                 input.dispatchEvent(new Event('input')); // Auto-resize textarea
+                updateInlineComposerActionVisibility();
             }
         };
 
