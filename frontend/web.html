@@ -332,6 +332,14 @@
                     <div class="saved-turn-modal-label" data-i18n="library.prompt">Prompt</div>
                     <div id="saved-turn-modal-prompt" class="saved-turn-modal-content"></div>
                 </section>
+                <div class="saved-turn-modal-actions">
+                    <button class="icon-btn" onclick="copySavedTurnResponse()" title="Copy Response">
+                        <span class="material-icons-round">content_copy</span>
+                    </button>
+                    <button class="icon-btn" onclick="speakSavedTurnResponse(this)" title="Speak Response">
+                        <span class="material-icons-round">volume_up</span>
+                    </button>
+                </div>
                 <section class="saved-turn-modal-section">
                     <div class="saved-turn-modal-label" data-i18n="library.response">Response</div>
                     <div id="saved-turn-modal-response" class="saved-turn-modal-content markdown-body"></div>

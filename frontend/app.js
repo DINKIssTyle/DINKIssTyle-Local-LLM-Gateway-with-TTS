@@ -675,6 +675,7 @@ function openSavedTurnModal(id) {
     const item = savedTurns.find((entry) => entry.id === id);
     if (!item || !savedTurnModal) return;
 
+    savedTurnModal.dataset.responseText = item.response_text || '';
     document.getElementById('saved-turn-modal-title').textContent = item.title || t('library.modalTitle');
     document.getElementById('saved-turn-modal-prompt').textContent = item.prompt_text || '';
     const responseHost = document.getElementById('saved-turn-modal-response');
@@ -683,7 +684,28 @@ function openSavedTurnModal(id) {
 }
 
 function closeSavedTurnModal() {
+    if (savedTurnModal) {
+        delete savedTurnModal.dataset.responseText;
+    }
     savedTurnModal?.classList.remove('active');
+}
+
+async function copySavedTurnResponse() {
+    const text = savedTurnModal?.dataset?.responseText || '';
+    if (!text.trim()) return;
+    try {
+        await navigator.clipboard.writeText(text);
+        showToast('Copied to clipboard');
+    } catch (err) {
+        console.warn('Clipboard API failed, trying fallback', err);
+        fallbackCopyTextToClipboard(text);
+    }
+}
+
+function speakSavedTurnResponse(btn) {
+    const text = savedTurnModal?.dataset?.responseText || '';
+    if (!text.trim()) return;
+    speakMessage(text, btn);
 }
 
 async function saveTurn(promptText, responseText) {
@@ -2499,9 +2521,12 @@ function updateSendButtonState() {
         sendBtn.classList.remove('stop-btn');
     }
 
+    inputContainer?.classList.toggle('is-generating', isGenerating);
+
     // Also update giant mic icon if layout is active
     updateMicUIForGeneration(isGenerating);
     updateInlineComposerActionVisibility();
+    updateMessageInputPlaceholder();
 }
 
 function hasComposableUserInput() {
@@ -3227,7 +3252,9 @@ function hideProgressDock() {
         composerProgressLabel = '';
         composerProgressActive = false;
         composerProgressPercent = null;
-        inputContainer?.classList.remove('has-progress');
+        if (!isGenerating) {
+            inputContainer?.classList.remove('has-progress');
+        }
         updateMessageInputPlaceholder();
         progressDockHideTimer = null;
     }, 180);
