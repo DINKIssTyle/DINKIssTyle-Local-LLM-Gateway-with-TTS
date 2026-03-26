@@ -588,6 +588,7 @@ let currentAudio = null;
 let currentAudioBtn = null;
 let audioWarmup = null; // Used to bypass auto-play blocks
 let ttsQueue = [];
+let activeTTSSessionLabel = "";
 
 let isPlayingQueue = false;
 
@@ -721,6 +722,186 @@ function updateMediaSessionMetadata(text) {
         navigator.mediaSession.setActionHandler('stop', () => {
             stopAllAudio();
         });
+    }
+}
+
+function clearMediaSessionMetadata() {
+    if ('mediaSession' in navigator) {
+        navigator.mediaSession.metadata = null;
+    }
+}
+
+function readWavHeader(view) {
+    if (view.byteLength < 44) return null;
+
+    const readTag = (offset) => String.fromCharCode(
+        view.getUint8(offset),
+        view.getUint8(offset + 1),
+        view.getUint8(offset + 2),
+        view.getUint8(offset + 3)
+    );
+
+    if (readTag(0) !== 'RIFF' || readTag(8) !== 'WAVE') return null;
+
+    let offset = 12;
+    let fmt = null;
+    let dataOffset = -1;
+    let dataSize = 0;
+
+    while (offset + 8 <= view.byteLength) {
+        const chunkId = readTag(offset);
+        const chunkSize = view.getUint32(offset + 4, true);
+        const chunkDataStart = offset + 8;
+
+        if (chunkId === 'fmt ') {
+            if (chunkSize < 16 || chunkDataStart + chunkSize > view.byteLength) return null;
+            fmt = {
+                audioFormat: view.getUint16(chunkDataStart, true),
+                channelCount: view.getUint16(chunkDataStart + 2, true),
+                sampleRate: view.getUint32(chunkDataStart + 4, true),
+                bitsPerSample: view.getUint16(chunkDataStart + 14, true),
+                raw: new Uint8Array(view.buffer.slice(chunkDataStart, chunkDataStart + chunkSize))
+            };
+        } else if (chunkId === 'data') {
+            dataOffset = chunkDataStart;
+            dataSize = Math.min(chunkSize, view.byteLength - chunkDataStart);
+            break;
+        }
+
+        offset = chunkDataStart + chunkSize + (chunkSize % 2);
+    }
+
+    if (!fmt || dataOffset < 0) return null;
+
+    return { fmt, dataOffset, dataSize };
+}
+
+function concatenateWavArrayBuffers(buffers) {
+    if (!buffers || buffers.length === 0) return null;
+    if (buffers.length === 1) return buffers[0];
+
+    const parts = [];
+    let totalDataLength = 0;
+
+    for (const buffer of buffers) {
+        const header = readWavHeader(new DataView(buffer));
+        if (!header || header.fmt.audioFormat !== 1) return null;
+
+        if (parts.length > 0) {
+            const baseFmt = parts[0].fmt;
+            if (
+                header.fmt.channelCount !== baseFmt.channelCount ||
+                header.fmt.sampleRate !== baseFmt.sampleRate ||
+                header.fmt.bitsPerSample !== baseFmt.bitsPerSample
+            ) {
+                return null;
+            }
+        }
+
+        parts.push({
+            fmt: header.fmt,
+            data: new Uint8Array(buffer, header.dataOffset, header.dataSize)
+        });
+        totalDataLength += header.dataSize;
+    }
+
+    const result = new Uint8Array(44 + totalDataLength);
+    const view = new DataView(result.buffer);
+    const fmtChunk = parts[0].fmt.raw;
+
+    const writeTag = (offset, tag) => {
+        for (let i = 0; i < tag.length; i++) {
+            view.setUint8(offset + i, tag.charCodeAt(i));
+        }
+    };
+
+    writeTag(0, 'RIFF');
+    view.setUint32(4, 36 + totalDataLength, true);
+    writeTag(8, 'WAVE');
+    writeTag(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    result.set(fmtChunk.slice(0, 16), 20);
+    writeTag(36, 'data');
+    view.setUint32(40, totalDataLength, true);
+
+    let offset = 44;
+    for (const part of parts) {
+        result.set(part.data, offset);
+        offset += part.data.length;
+    }
+
+    return result.buffer;
+}
+
+async function promiseWithTimeout(promise, timeoutMs) {
+    let timeoutId = null;
+    try {
+        return await Promise.race([
+            promise,
+            new Promise((resolve) => {
+                timeoutId = setTimeout(() => resolve(null), timeoutMs);
+            })
+        ]);
+    } finally {
+        if (timeoutId) clearTimeout(timeoutId);
+    }
+}
+
+async function combinePlayableChunks(primaryUrl, queuedTexts) {
+    if (!primaryUrl || !queuedTexts || queuedTexts.length === 0) {
+        return { url: primaryUrl, revokeInputs: null };
+    }
+
+    if ((config.ttsFormat || 'wav') !== 'wav') {
+        return { url: primaryUrl, revokeInputs: null };
+    }
+
+    const urls = [primaryUrl];
+    const consumedTexts = [];
+
+    for (let i = 0; i < Math.min(2, queuedTexts.length); i++) {
+        const nextText = queuedTexts[i];
+        const cachedPromise = ttsAudioCache.get(nextText);
+        if (!cachedPromise) break;
+
+        const nextUrl = await promiseWithTimeout(cachedPromise, 120);
+        if (!nextUrl) break;
+
+        urls.push(nextUrl);
+        consumedTexts.push(nextText);
+    }
+
+    if (urls.length === 1) {
+        return { url: primaryUrl, revokeInputs: null };
+    }
+
+    try {
+        const buffers = await Promise.all(urls.map(async (url) => {
+            const response = await fetch(url);
+            return await response.arrayBuffer();
+        }));
+        const mergedBuffer = concatenateWavArrayBuffers(buffers);
+        if (!mergedBuffer) {
+            return { url: primaryUrl, revokeInputs: null };
+        }
+
+        for (const text of consumedTexts) {
+            if (ttsQueue[0] === text) {
+                ttsQueue.shift();
+            } else {
+                const idx = ttsQueue.indexOf(text);
+                if (idx >= 0) ttsQueue.splice(idx, 1);
+            }
+            ttsAudioCache.delete(text);
+        }
+
+        return {
+            url: URL.createObjectURL(new Blob([mergedBuffer], { type: 'audio/wav' })),
+            revokeInputs: urls
+        };
+    } catch (e) {
+        console.error('[TTS] Failed to combine WAV chunks:', e);
+        return { url: primaryUrl, revokeInputs: null };
     }
 }
 
@@ -3210,6 +3391,7 @@ function stopAllAudio() {
 
     // Clear audio cache to free memory
     clearTTSAudioCache();
+    clearMediaSessionMetadata();
     releaseWakeLock(); // Release lock on stop
 
     // Reset loop state
@@ -3222,6 +3404,7 @@ function stopAllAudio() {
 
     // Increment session ID to invalidate pending ops
     ttsSessionId++;
+    activeTTSSessionLabel = "";
 
     // Reset UI
     const btn = currentAudioBtn;
@@ -3661,6 +3844,7 @@ async function speakMessage(text, btn = null) {
     // Clean text for TTS (remove emojis, markdown, etc.)
     const cleanText = cleanTextForTTS(text);
     if (!cleanText) return;
+    activeTTSSessionLabel = cleanText.substring(0, 120) + (cleanText.length > 120 ? '...' : '');
 
     // Initialize/Clear queue
     ttsQueue = []; // Clear existing queue if any (though stopAllAudio called above)
@@ -3835,6 +4019,7 @@ function initStreamingTTS(elementId) {
     streamingTTSActive = true;
     streamingTTSCommittedIndex = 0;
     streamingTTSBuffer = "";
+    activeTTSSessionLabel = "Streaming TTS";
 
     // Get speak button for UI updates
     const msgEl = document.getElementById(elementId);
@@ -4117,6 +4302,7 @@ async function processTTSQueue(isFirstChunk = false) {
     requestWakeLock(); // Request screen keep-alive
     const btn = currentAudioBtn;
     const sessionId = ttsSessionId;
+    const mediaSessionLabel = activeTTSSessionLabel;
 
     if (btn) {
         const iconEl = btn.querySelector('.material-icons-round');
@@ -4158,6 +4344,7 @@ async function processTTSQueue(isFirstChunk = false) {
 
         // Get current audio
         let audioUrl = null;
+        let playbackBundle = null;
         try {
             const audioUrlPromise = prefetchTTSAudio(text);
             audioUrl = await audioUrlPromise;
@@ -4180,13 +4367,18 @@ async function processTTSQueue(isFirstChunk = false) {
 
         // Play audio using HTML5 Audio (Better for iOS Background)
         try {
-            // Update Media Session
-            updateMediaSessionMetadata(text.substring(0, 100) + (text.length > 100 ? '...' : ''));
+            if (!firstChunkPlayed && mediaSessionLabel) {
+                updateMediaSessionMetadata(mediaSessionLabel);
+            }
 
             if (!currentAudio) {
                 currentAudio = new Audio();
                 currentAudio.playsInline = true;
+                currentAudio.preload = 'auto';
             }
+
+            playbackBundle = await combinePlayableChunks(audioUrl, [...ttsQueue]);
+            const playbackUrl = playbackBundle?.url || audioUrl;
 
             // Update UI on first chunk playing
             if (!firstChunkPlayed && btn) {
@@ -4220,14 +4412,24 @@ async function processTTSQueue(isFirstChunk = false) {
                     return;
                 }
 
-                currentAudio.src = audioUrl;
+                currentAudio.src = playbackUrl;
                 currentAudio.play().catch(reject);
             });
 
         } catch (e) {
             console.error("Playback failed for chunk:", e);
         } finally {
-            URL.revokeObjectURL(audioUrl);
+            if (playbackBundle?.revokeInputs) {
+                for (const url of playbackBundle.revokeInputs) {
+                    URL.revokeObjectURL(url);
+                }
+            } else if (audioUrl) {
+                URL.revokeObjectURL(audioUrl);
+            }
+
+            if (playbackBundle?.url && playbackBundle.url !== audioUrl) {
+                URL.revokeObjectURL(playbackBundle.url);
+            }
         }
     }
 
@@ -4251,6 +4453,8 @@ function endTTS(btn, sessionId) {
         }
         currentAudioBtn = null;
         isPlayingQueue = false;
+        activeTTSSessionLabel = "";
+        clearMediaSessionMetadata();
     }
 }
 
