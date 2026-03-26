@@ -497,11 +497,15 @@ body {
 .input-main {
   display: flex;
   gap: 10px;
-  align-items: center;
+  align-items: stretch;
+  min-width: 0;
 }
 
 #message-input {
   flex: 1;
+  display: block;
+  width: 100%;
+  min-width: 0;
   background: transparent;
   border: none;
   color: var(--text-color);
@@ -1296,6 +1300,7 @@ body.is-desktop .desktop-only {
   align-items: center;
   gap: 8px;
   border: 1px solid var(--border-color);
+  pointer-events: none;
 }
 
 .toast.show {
