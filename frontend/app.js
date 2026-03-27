@@ -70,6 +70,9 @@ const translations = {
         'library.saved': '대화를 저장했습니다.',
         'library.deleted': '저장된 대화를 삭제했습니다.',
         'library.saveFailed': '대화를 저장하지 못했습니다.',
+        'library.titleRefresh': '제목 생성',
+        'library.titleRefreshed': '제목을 생성했습니다.',
+        'library.titleRefreshFailed': '제목을 생성하지 못했습니다.',
         'library.deleteConfirm': '이 저장된 대화를 삭제할까요?',
         'library.deleteFailed': '저장된 대화를 삭제하지 못했습니다.',
         'library.modalTitle': '저장된 대화',
@@ -238,6 +241,9 @@ const translations = {
         'library.saved': 'Saved this turn.',
         'library.deleted': 'Saved turn deleted.',
         'library.saveFailed': 'Failed to save this turn.',
+        'library.titleRefresh': 'Generate title',
+        'library.titleRefreshed': 'Generated the title.',
+        'library.titleRefreshFailed': 'Failed to generate the title.',
         'library.deleteConfirm': 'Delete this saved turn?',
         'library.deleteFailed': 'Failed to delete saved turn.',
         'library.modalTitle': 'Saved Turn',
@@ -647,6 +653,10 @@ function renderSavedLibraryList() {
                 <div class="saved-library-item-preview">${escapeHtml(summarizeSavedTurn(item))}</div>
                 <div class="saved-library-item-meta">${escapeHtml(t('library.savedAt'))}: ${escapeHtml(new Date(item.created_at).toLocaleString())}</div>
             </div>
+            ${item.title_source === 'fallback' ? `
+            <button class="icon-btn" onclick="refreshSavedTurnTitleById(${item.id})" title="${escapeAttr(t('library.titleRefresh'))}" ${savedTitleRefreshIds.has(item.id) ? 'disabled' : ''}>
+                <span class="material-icons-round">refresh</span>
+            </button>` : ''}
             <button class="icon-btn" onclick="deleteSavedTurn(${item.id})" title="Delete">
                 <span class="material-icons-round">delete</span>
             </button>
@@ -826,6 +836,38 @@ async function refreshSavedTurnTitle() {
     }
 }
 
+async function refreshSavedTurnTitleById(id) {
+    if (!id || savedTitleRefreshIds.has(id)) return;
+
+    savedTitleRefreshIds.add(id);
+    renderSavedLibraryList();
+
+    try {
+        const response = await fetch(`/api/saved-turns/title-refresh?id=${encodeURIComponent(String(id))}`, {
+            method: 'POST',
+            credentials: 'include'
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+
+        if (data.item) {
+            savedTurns = savedTurns.map((item) => item.id === data.item.id ? data.item : item);
+        }
+
+        if (data.updated && data.item) {
+            showToast(t('library.titleRefreshed'));
+        } else {
+            showToast(t('library.titleRefreshFailed'), true);
+        }
+    } catch (e) {
+        console.warn('Failed to refresh saved turn title by id:', e);
+        showToast(t('library.titleRefreshFailed'), true);
+    } finally {
+        savedTitleRefreshIds.delete(id);
+        renderSavedLibraryList();
+    }
+}
+
 function getTurnDataFromAssistantButton(btn) {
     const messageEl = btn?.closest('.message.assistant');
     const turnId = messageEl?.dataset.turnId;
@@ -883,6 +925,7 @@ let pendingStatefulResetReason = null;
 let statefulLastInputTokens = 0;
 let statefulLastOutputTokens = 0;
 let statefulPeakInputTokens = 0;
+let savedTitleRefreshIds = new Set();
 
 // Audio State
 let currentAudio = null;
