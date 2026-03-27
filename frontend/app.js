@@ -1520,6 +1520,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Initial System Check
     setTimeout(checkSystemHealth, 500);
+    setTimeout(() => {
+        syncCurrentChatSessionFromServer().catch(console.warn);
+    }, 700);
 
     // Start Location Tracking
     updateUserLocation();
@@ -1559,6 +1562,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 let currentUser = null;
 let currentUserLocation = null; // Store location: {lat, lon, accuracy}
 let lastSessionCache = null;
+let currentChatSessionCache = null;
+let currentChatSessionEventSeq = 0;
+let chatSessionPollTimer = null;
+let serverReplayCurrentTurnId = '';
+let serverReplayCurrentAssistantId = '';
+let serverReplayMessageBuffers = new Map();
 let savedTurns = [];
 let savedLibraryQuery = '';
 let savedLibraryLoaded = false;
@@ -2248,6 +2257,215 @@ async function fetchLastSession() {
     }
 }
 
+async function fetchCurrentChatSession() {
+    try {
+        const response = await fetch('/api/chat-session/current', { credentials: 'include' });
+        if (!response.ok) return null;
+        const data = await response.json();
+        return data?.has_session ? data.item : null;
+    } catch (e) {
+        console.warn('Failed to fetch current chat session:', e);
+        return null;
+    }
+}
+
+async function fetchCurrentChatSessionEvents(afterSeq = 0, limit = 400) {
+    try {
+        const response = await fetch(`/api/chat-session/events?after_seq=${afterSeq}&limit=${limit}`, { credentials: 'include' });
+        if (!response.ok) return { session: null, items: [] };
+        const data = await response.json();
+        return {
+            session: data?.has_session ? data.session : null,
+            items: Array.isArray(data?.items) ? data.items : []
+        };
+    } catch (e) {
+        console.warn('Failed to fetch current chat session events:', e);
+        return { session: null, items: [] };
+    }
+}
+
+function stopChatSessionPolling() {
+    if (chatSessionPollTimer) {
+        clearTimeout(chatSessionPollTimer);
+        chatSessionPollTimer = null;
+    }
+}
+
+function scheduleChatSessionPolling(delay = 1000) {
+    stopChatSessionPolling();
+    chatSessionPollTimer = window.setTimeout(() => {
+        chatSessionPollTimer = null;
+        syncCurrentChatSessionFromServer().catch((error) => {
+            console.warn('Failed to sync chat session from server:', error);
+        });
+    }, Math.max(200, delay));
+}
+
+function resetServerChatReplayState() {
+    currentChatSessionEventSeq = 0;
+    serverReplayCurrentTurnId = '';
+    serverReplayCurrentAssistantId = '';
+    serverReplayMessageBuffers = new Map();
+}
+
+function ensureServerReplayAssistant(turnId, sessionId, seq) {
+    if (!turnId) return null;
+    if (!serverReplayCurrentAssistantId) {
+        serverReplayCurrentAssistantId = `server-assistant-${sessionId}-${seq}`;
+    }
+    const messageId = serverReplayCurrentAssistantId;
+    if (!document.getElementById(messageId)) {
+        appendMessage({
+            role: 'assistant',
+            content: '',
+            id: messageId,
+            turnId
+        });
+    }
+    return messageId;
+}
+
+function applyCurrentChatSessionSnapshot(session) {
+    if (session && currentChatSessionCache && currentChatSessionCache.ID !== session.ID) {
+        resetServerChatReplayState();
+    }
+    currentChatSessionCache = session || null;
+    if (!session) return;
+
+    if (config.llmMode === 'stateful') {
+        lastResponseId = session.LastResponseID || null;
+        statefulSummary = session.SummaryText || '';
+        statefulTurnCount = Number(session.TurnCount || 0);
+        statefulEstimatedChars = Number(session.EstimatedChars || 0);
+        statefulLastInputTokens = Number(session.LastInputTokens || 0);
+        statefulLastOutputTokens = Number(session.LastOutputTokens || 0);
+        statefulPeakInputTokens = Number(session.PeakInputTokens || 0);
+        if (session.TokenBudget) {
+            config.statefulTokenBudget = Math.max(1000, Number(session.TokenBudget));
+        }
+        updateStatefulBudgetIndicator();
+    }
+}
+
+function applyCurrentChatSessionEvent(entry) {
+    if (!entry?.EventType) return;
+
+    let payload = {};
+    try {
+        payload = JSON.parse(entry.PayloadJSON || '{}');
+    } catch (_) {
+        payload = {};
+    }
+
+    const sessionId = entry.SessionID || 'default';
+    switch (entry.EventType) {
+        case 'message.created': {
+            if (entry.Role === 'user') {
+                const userContent = payload.content || '';
+                if (!userContent) break;
+                const turnId = `server-turn-${sessionId}-${entry.EventSeq}`;
+                serverReplayCurrentTurnId = turnId;
+                serverReplayCurrentAssistantId = '';
+                if (!document.querySelector(`.message.user[data-turn-id="${turnId}"]`)) {
+                    appendMessage({ role: 'user', content: userContent, turnId });
+                }
+            }
+            break;
+        }
+        case 'message.delta': {
+            if (!serverReplayCurrentTurnId) {
+                serverReplayCurrentTurnId = `server-turn-${sessionId}-${entry.EventSeq}`;
+            }
+            const assistantId = ensureServerReplayAssistant(serverReplayCurrentTurnId, sessionId, entry.EventSeq);
+            if (!assistantId) break;
+            const chunk = String(payload.content || '').trimEnd();
+            const prev = serverReplayMessageBuffers.get(assistantId) || '';
+            const next = prev + chunk;
+            serverReplayMessageBuffers.set(assistantId, next);
+            updateMessageContent(assistantId, next);
+            break;
+        }
+        case 'reasoning.start':
+            if (serverReplayCurrentAssistantId) showReasoningStatus(serverReplayCurrentAssistantId, '...');
+            break;
+        case 'reasoning.delta':
+            if (serverReplayCurrentAssistantId) showReasoningStatus(serverReplayCurrentAssistantId, payload.content || '...');
+            break;
+        case 'reasoning.end':
+            if (serverReplayCurrentAssistantId) showReasoningStatus(serverReplayCurrentAssistantId, null, true);
+            break;
+        case 'tool_call.start':
+            if (serverReplayCurrentAssistantId) setToolCardState(serverReplayCurrentAssistantId, 'running', '', null, payload.tool || '');
+            break;
+        case 'tool_call.arguments':
+            if (serverReplayCurrentAssistantId) setToolCardState(serverReplayCurrentAssistantId, 'running', '', payload.arguments || null, payload.tool || '');
+            break;
+        case 'tool_call.success':
+            if (serverReplayCurrentAssistantId) setToolCardState(serverReplayCurrentAssistantId, 'success', t('tool.executionFinished'), null, payload.tool || '');
+            break;
+        case 'tool_call.failure':
+            if (serverReplayCurrentAssistantId) setToolCardState(serverReplayCurrentAssistantId, 'failure', payload.reason || t('tool.unknownError'), null, payload.tool || '');
+            break;
+        case 'prompt_processing.progress':
+            renderProgressDock(t('progress.processingPrompt'), (payload.progress || 0) * 100, 'prompt-processing', false);
+            break;
+        case 'model_load.start':
+            renderProgressDock(t('progress.loadingModel'), null, 'model-loading', true);
+            break;
+        case 'model_load.progress':
+            renderProgressDock(t('progress.loadingModel'), (payload.progress || 0) * 100, 'model-loading', false);
+            break;
+        case 'model_load.end':
+            renderProgressDock(`${t('progress.modelLoaded')} (${payload.load_time_seconds?.toFixed?.(1) || '?'}s)`, 100, 'model-loading', false);
+            break;
+        case 'chat.end':
+        case 'request.complete':
+            if (serverReplayCurrentAssistantId) {
+                finalizeAssistantStatusCards(serverReplayCurrentAssistantId, 'done');
+                setAssistantActionBarReady(serverReplayCurrentAssistantId);
+            }
+            hideProgressDock();
+            break;
+        case 'request.cancelled':
+            if (serverReplayCurrentAssistantId) {
+                finalizeAssistantStatusCards(serverReplayCurrentAssistantId, 'stopped', t('status.stopped'));
+            }
+            hideProgressDock();
+            break;
+    }
+}
+
+async function syncCurrentChatSessionFromServer() {
+    if (!currentUser) return;
+
+    const session = await fetchCurrentChatSession();
+    applyCurrentChatSessionSnapshot(session);
+
+    if (!session) {
+        scheduleChatSessionPolling(1800);
+        return;
+    }
+
+    const result = await fetchCurrentChatSessionEvents(currentChatSessionEventSeq, 400);
+    if (result.session) {
+        applyCurrentChatSessionSnapshot(result.session);
+    }
+
+    if (Array.isArray(result.items) && result.items.length > 0) {
+        dismissStartupCards();
+        for (const entry of result.items) {
+            applyCurrentChatSessionEvent(entry);
+            currentChatSessionEventSeq = Math.max(currentChatSessionEventSeq, Number(entry.EventSeq || 0));
+        }
+    }
+
+    if (session.Status === 'running') {
+        scheduleChatSessionPolling(900);
+    } else {
+        scheduleChatSessionPolling(1600);
+    }
+}
+
 function buildRestoredStatefulSummary(session) {
     const userText = cleanContentForStatefulSummary(session?.user_message || '');
     const assistantText = cleanContentForStatefulSummary(session?.assistant_message || '');
@@ -2294,12 +2512,18 @@ async function saveLastSessionTurn(userMsg, assistantText) {
 }
 
 async function restoreLastSession() {
+    await syncCurrentChatSessionFromServer();
+    if (currentChatSessionEventSeq > 0) {
+        showToast(t('chat.startup.restoreLoaded'));
+        return;
+    }
+
     if (!lastSessionCache) {
         showToast(t('chat.startup.restoreMissing'), true);
         return;
     }
 
-    clearChat();
+    await clearChat();
     const turnId = generateTurnId();
 
     const restoredUser = {
@@ -2544,12 +2768,12 @@ function removeImage() {
     updateInlineComposerActionVisibility();
 }
 
-function clearChat() {
+async function clearChat() {
     // Stop any TTS playback and generation
     stopAllAudio();
 
     if (isGenerating) {
-        stopGeneration();
+        await stopGeneration();
     }
 
     lastResponseId = null; // Clear session ID for Stateful Chat
@@ -2564,6 +2788,9 @@ function clearChat() {
     messages = [];
     pendingScrollToBottom = false;
     chatMessages.innerHTML = '';
+    resetServerChatReplayState();
+    currentChatSessionCache = null;
+    stopChatSessionPolling();
     updateStatefulBudgetIndicator();
 }
 
@@ -2880,10 +3107,18 @@ async function sendMessage() {
     }
 }
 
-function stopGeneration() {
+async function stopGeneration() {
     if (abortController) {
         abortController.abort();
         abortController = null;
+    }
+    try {
+        await fetch('/api/chat-session/stop', {
+            method: 'POST',
+            credentials: 'include'
+        });
+    } catch (e) {
+        console.warn('Failed to stop current chat session on server:', e);
     }
     hideProgressDock();
     // Stop any currently playing audio/TTS
@@ -5654,6 +5889,3 @@ function updateMicUIForGeneration(generating) {
         syncMicRecordingUI();
     }
 }
-
-
-
