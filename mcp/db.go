@@ -62,14 +62,14 @@ func createSchema() error {
 	CREATE TABLE IF NOT EXISTS memories (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		user_id TEXT NOT NULL,
-		summary TEXT NOT NULL,
-		keywords TEXT NOT NULL,
 		full_text TEXT NOT NULL,
 		hit_count INTEGER DEFAULT 0,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		memory_type TEXT DEFAULT 'raw_interaction'
 	);
 	
 	CREATE INDEX IF NOT EXISTS idx_memories_user_id ON memories(user_id);
+	CREATE INDEX IF NOT EXISTS idx_memories_user_type ON memories(user_id, memory_type);
 
 	CREATE TABLE IF NOT EXISTS auth_sessions (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -193,10 +193,106 @@ func createSchema() error {
 		return fmt.Errorf("failed to create schema: %w", err)
 	}
 
-	// Migration: Add hit_count if it doesn't exist (for existing DBs)
-	_, _ = db.Exec("ALTER TABLE memories ADD COLUMN hit_count INTEGER DEFAULT 0")
+	if err := migrateMemoriesSchema(); err != nil {
+		return err
+	}
 
 	log.Println("[DB] Schema initialized successfully.")
+	return nil
+}
+
+func migrateMemoriesSchema() error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	rows, err := db.Query(`PRAGMA table_info(memories)`)
+	if err != nil {
+		return fmt.Errorf("failed to inspect memories schema: %w", err)
+	}
+	defer rows.Close()
+
+	hasSummary := false
+	hasKeywords := false
+	hasMemoryType := false
+
+	for rows.Next() {
+		var cid int
+		var name string
+		var colType string
+		var notNull int
+		var dflt sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			return fmt.Errorf("failed to scan memories schema: %w", err)
+		}
+		switch name {
+		case "summary":
+			hasSummary = true
+		case "keywords":
+			hasKeywords = true
+		case "memory_type":
+			hasMemoryType = true
+		}
+	}
+
+	if !hasSummary && !hasKeywords && hasMemoryType {
+		return nil
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to start memories migration: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if _, err = tx.Exec(`
+		CREATE TABLE IF NOT EXISTS memories_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id TEXT NOT NULL,
+			full_text TEXT NOT NULL,
+			hit_count INTEGER DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			memory_type TEXT DEFAULT 'raw_interaction'
+		)`); err != nil {
+		return fmt.Errorf("failed to create migrated memories table: %w", err)
+	}
+
+	if hasMemoryType {
+		_, err = tx.Exec(`
+			INSERT INTO memories_new (id, user_id, full_text, hit_count, created_at, memory_type)
+			SELECT id, user_id, full_text, COALESCE(hit_count, 0), created_at, COALESCE(memory_type, 'raw_interaction')
+			FROM memories`)
+	} else {
+		_, err = tx.Exec(`
+			INSERT INTO memories_new (id, user_id, full_text, hit_count, created_at, memory_type)
+			SELECT id, user_id, full_text, COALESCE(hit_count, 0), created_at, 'raw_interaction'
+			FROM memories`)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to copy memories into migrated table: %w", err)
+	}
+
+	if _, err = tx.Exec(`DROP TABLE memories`); err != nil {
+		return fmt.Errorf("failed to drop old memories table: %w", err)
+	}
+	if _, err = tx.Exec(`ALTER TABLE memories_new RENAME TO memories`); err != nil {
+		return fmt.Errorf("failed to rename migrated memories table: %w", err)
+	}
+	if _, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_memories_user_id ON memories(user_id)`); err != nil {
+		return fmt.Errorf("failed to recreate idx_memories_user_id: %w", err)
+	}
+	if _, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_memories_user_type ON memories(user_id, memory_type)`); err != nil {
+		return fmt.Errorf("failed to recreate idx_memories_user_type: %w", err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit memories migration: %w", err)
+	}
 	return nil
 }
 
@@ -1070,16 +1166,16 @@ func UpdateSavedTurnTitle(userID string, turnID int64, title string, titleSource
 }
 
 // InsertMemory saves a new memory entry into the database.
-func InsertMemory(userID, summary, keywords, fullText string) (int64, error) {
+func InsertMemory(userID, fullText string) (int64, error) {
 	if db == nil {
 		return 0, fmt.Errorf("database not initialized")
 	}
 
 	query := `
-	INSERT INTO memories (user_id, summary, keywords, full_text, hit_count)
-	VALUES (?, ?, ?, ?, 0)`
+	INSERT INTO memories (user_id, full_text, hit_count, memory_type)
+	VALUES (?, ?, 0, 'raw_interaction')`
 
-	result, err := db.Exec(query, userID, summary, keywords, fullText)
+	result, err := db.Exec(query, userID, fullText)
 	if err != nil {
 		return 0, fmt.Errorf("failed to insert memory: %w", err)
 	}
@@ -1099,33 +1195,30 @@ func IncrementHitCount(memoryID int64) error {
 
 // MemoryEntry represents a single memory record.
 type MemoryEntry struct {
-	ID        int64     `json:"id"`
-	UserID    string    `json:"user_id"`
-	Summary   string    `json:"summary"`
-	Keywords  string    `json:"keywords"`
-	FullText  string    `json:"full_text"`
-	HitCount  int       `json:"hit_count"`
-	CreatedAt time.Time `json:"created_at"`
+	ID         int64     `json:"id"`
+	UserID     string    `json:"user_id"`
+	FullText   string    `json:"full_text"`
+	HitCount   int       `json:"hit_count"`
+	CreatedAt  time.Time `json:"created_at"`
+	MemoryType string    `json:"memory_type"`
 }
 
-// SearchMemories searches for memories belonging to user where keywords or summary match.
+// SearchMemories searches full_text memories belonging to the user.
 func SearchMemories(userID, queryStr string) ([]MemoryEntry, error) {
 	if db == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
 
-	// Use LIKE for simple substring match on keywords, summary, or full_text.
-	// For advanced search, FTS5 could be used later.
 	searchPattern := "%" + queryStr + "%"
 
 	query := `
-	SELECT id, user_id, summary, keywords, full_text, hit_count, created_at
+	SELECT id, user_id, full_text, hit_count, created_at, memory_type
 	FROM memories
-	WHERE user_id = ? AND (keywords LIKE ? OR summary LIKE ? OR full_text LIKE ?)
+	WHERE user_id = ? AND full_text LIKE ?
 	ORDER BY created_at DESC
 	LIMIT 10`
 
-	rows, err := db.Query(query, userID, searchPattern, searchPattern, searchPattern)
+	rows, err := db.Query(query, userID, searchPattern)
 	if err != nil {
 		return nil, fmt.Errorf("search failed: %w", err)
 	}
@@ -1134,7 +1227,7 @@ func SearchMemories(userID, queryStr string) ([]MemoryEntry, error) {
 	var results []MemoryEntry
 	for rows.Next() {
 		var m MemoryEntry
-		if err := rows.Scan(&m.ID, &m.UserID, &m.Summary, &m.Keywords, &m.FullText, &m.HitCount, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.UserID, &m.FullText, &m.HitCount, &m.CreatedAt, &m.MemoryType); err != nil {
 			return nil, err
 		}
 		results = append(results, m)
@@ -1185,7 +1278,7 @@ func SearchMemoriesByRecent(userID string, limit int) ([]MemoryEntry, error) {
 	}
 
 	query := `
-	SELECT id, user_id, summary, keywords, hit_count, created_at
+	SELECT id, user_id, full_text, hit_count, created_at, memory_type
 	FROM memories
 	WHERE user_id = ?
 	ORDER BY created_at DESC
@@ -1200,7 +1293,7 @@ func SearchMemoriesByRecent(userID string, limit int) ([]MemoryEntry, error) {
 	var results []MemoryEntry
 	for rows.Next() {
 		var m MemoryEntry
-		if err := rows.Scan(&m.ID, &m.UserID, &m.Summary, &m.Keywords, &m.HitCount, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.UserID, &m.FullText, &m.HitCount, &m.CreatedAt, &m.MemoryType); err != nil {
 			return nil, err
 		}
 		results = append(results, m)
@@ -1217,11 +1310,11 @@ func ReadMemory(userID string, memoryID int64) (MemoryEntry, error) {
 	}
 
 	query := `
-	SELECT id, user_id, summary, keywords, full_text, hit_count, created_at
+	SELECT id, user_id, full_text, hit_count, created_at, memory_type
 	FROM memories
 	WHERE id = ? AND user_id = ?`
 
-	err := db.QueryRow(query, memoryID, userID).Scan(&m.ID, &m.UserID, &m.Summary, &m.Keywords, &m.FullText, &m.HitCount, &m.CreatedAt)
+	err := db.QueryRow(query, memoryID, userID).Scan(&m.ID, &m.UserID, &m.FullText, &m.HitCount, &m.CreatedAt, &m.MemoryType)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return m, fmt.Errorf("memory not found")
@@ -1230,33 +1323,6 @@ func ReadMemory(userID string, memoryID int64) (MemoryEntry, error) {
 	}
 
 	return m, nil
-}
-
-// UpdateMemory modifies an existing memory entry.
-func UpdateMemory(userID string, memoryID int64, summary string, keywords string) error {
-	if db == nil {
-		return fmt.Errorf("database not initialized")
-	}
-
-	query := `
-	UPDATE memories 
-	SET summary = ?, keywords = ?
-	WHERE id = ? AND user_id = ?`
-
-	res, err := db.Exec(query, summary, keywords, memoryID, userID)
-	if err != nil {
-		return fmt.Errorf("failed to update memory: %w", err)
-	}
-
-	rowsAffected, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to get rows affected: %w", err)
-	}
-	if rowsAffected == 0 {
-		return fmt.Errorf("memory not found or not owned by user")
-	}
-
-	return nil
 }
 
 // DeleteMemory removes an existing memory entry.

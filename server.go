@@ -2525,8 +2525,7 @@ func logChatToHistory(userID string, messages []map[string]interface{}, assistan
 	// 2. Real-time Raw Memory Storage: Insert directly into SQLite
 	fullContext := fmt.Sprintf("User: %s\nAssistant: %s", lastUserMsg, assistantResponse)
 
-	// We'll leave summary/keywords empty for raw interactions to keep the DB clean as requested.
-	id, err := mcp.InsertMemory(userID, "", "", fullContext)
+	id, err := mcp.InsertMemory(userID, fullContext)
 	if err != nil {
 		log.Printf("[AsyncMemory] ❌ Failed to insert raw memory to DB: %v", err)
 	} else {
