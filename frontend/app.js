@@ -2374,9 +2374,9 @@ function applyCurrentChatSessionSnapshot(session) {
     if (!abortController && isGenerating !== serverGenerating) {
         isGenerating = serverGenerating;
         updateSendButtonState();
-        if (!serverGenerating) {
-            hideProgressDock();
-        }
+    }
+    if (!serverGenerating) {
+        hideProgressDock();
     }
 
     if (config.llmMode === 'stateful') {
@@ -2439,6 +2439,7 @@ function applyCurrentChatSessionEvent(entry) {
                 assistantId = ensureServerReplayAssistant(serverReplayCurrentTurnId, sessionId, entry.EventSeq);
             }
             if (!assistantId) break;
+            hideProgressDock();
             const chunk = String(payload.content || '');
             const prev = serverReplayMessageBuffers.get(assistantId) || '';
             const next = prev + chunk;
@@ -3169,6 +3170,9 @@ async function sendMessage() {
     activeLocalTurnId = turnId;
     activeLocalAssistantId = assistantId;
     startStreamingMessageAutoScroll(assistantId);
+    ensureAssistantMessageElement(assistantId, turnId);
+    syncCurrentChatSessionFromServer().catch(console.warn);
+    scheduleChatSessionPolling(150);
 
     // Build API Payload
     // Always start with a system prompt to define behavior and anchor the context
