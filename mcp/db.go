@@ -1256,6 +1256,15 @@ func IncrementHitCount(memoryID int64) error {
 	return err
 }
 
+func IncrementMemoryChunkHitCount(chunkID int64) error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	query := "UPDATE memory_chunks SET hit_count = hit_count + 1 WHERE id = ?"
+	_, err := db.Exec(query, chunkID)
+	return err
+}
+
 // MemoryEntry represents a single memory record.
 type MemoryEntry struct {
 	ID         int64     `json:"id"`

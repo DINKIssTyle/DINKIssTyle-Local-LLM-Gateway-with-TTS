@@ -495,6 +495,8 @@ func SearchMemoryDB(userID, query string) (string, error) {
 			}
 			sb.WriteString(fmt.Sprintf("\n--- MEMORY ID: %d | DATE: %s | TYPE: %s | CHUNK: %d ---\n", r.ID, r.CreatedAt.Format("2006-01-02"), memoryType, r.ChunkIndex+1))
 			sb.WriteString(fmt.Sprintf("RELEVANT EXCERPT:\n%s\n", r.ChunkText))
+			_ = IncrementMemoryChunkHitCount(r.ChunkID)
+			_ = IncrementHitCount(r.ID)
 		}
 	}
 	if len(results) > 0 {
@@ -845,6 +847,8 @@ func AutoSearchMemory(userID, input string) string {
 		}
 		rawContextSb.WriteString(fmt.Sprintf("\n--- MEMORY ID: %d | DATE: %s | TYPE: %s | CHUNK: %d ---\n", r.ID, r.CreatedAt.Format("2006-01-02"), memoryType, r.ChunkIndex+1))
 		rawContextSb.WriteString(fmt.Sprintf("Relevant excerpt: %s\n", compactMemoryText(r.ChunkText, 400)))
+		_ = IncrementMemoryChunkHitCount(r.ChunkID)
+		_ = IncrementHitCount(r.ID)
 	}
 
 	savedLimit := 2
