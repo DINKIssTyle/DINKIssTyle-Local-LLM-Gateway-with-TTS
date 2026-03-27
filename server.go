@@ -896,18 +896,43 @@ func handleSavedTurnTitleRefresh() http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 
-		entry, err := mcp.GetNextSavedTurnPendingTitle(userID)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
+		idStr := strings.TrimSpace(r.URL.Query().Get("id"))
+		var entry mcp.SavedTurnEntry
+		var err error
+		if idStr != "" {
+			turnID, parseErr := strconv.ParseInt(idStr, 10, 64)
+			if parseErr != nil || turnID <= 0 {
+				http.Error(w, "Valid id is required", http.StatusBadRequest)
+				return
+			}
+			entry, err = mcp.GetSavedTurn(userID, turnID)
+			if err != nil {
+				log.Printf("[handleSavedTurnTitleRefresh] Failed to load turn %d for %s: %v", turnID, userID, err)
+				http.Error(w, "Failed to load saved turn", http.StatusInternalServerError)
+				return
+			}
+			if strings.TrimSpace(entry.TitleSource) != "fallback" {
 				json.NewEncoder(w).Encode(map[string]interface{}{
-					"status":  "idle",
+					"status":  "noop",
 					"updated": false,
+					"item":    entry,
 				})
 				return
 			}
-			log.Printf("[handleSavedTurnTitleRefresh] Failed to load pending title for %s: %v", userID, err)
-			http.Error(w, "Failed to load pending title", http.StatusInternalServerError)
-			return
+		} else {
+			entry, err = mcp.GetNextSavedTurnPendingTitle(userID)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					json.NewEncoder(w).Encode(map[string]interface{}{
+						"status":  "idle",
+						"updated": false,
+					})
+					return
+				}
+				log.Printf("[handleSavedTurnTitleRefresh] Failed to load pending title for %s: %v", userID, err)
+				http.Error(w, "Failed to load pending title", http.StatusInternalServerError)
+				return
+			}
 		}
 
 		title := buildSavedTurnLLMTitle(entry.PromptText, entry.ResponseText)
@@ -915,6 +940,7 @@ func handleSavedTurnTitleRefresh() http.HandlerFunc {
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"status":  "noop",
 				"updated": false,
+				"item":    entry,
 			})
 			return
 		}

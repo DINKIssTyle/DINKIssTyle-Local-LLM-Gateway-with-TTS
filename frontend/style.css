@@ -271,6 +271,7 @@ body {
 .message.user .message-inner {
   width: auto;
   max-width: min(76%, 46rem);
+  align-items: flex-end;
 }
 
 .assistant-sections {
@@ -349,7 +350,7 @@ body {
 .message.user .message-bubble {
   width: auto;
   min-width: min(20rem, 100%);
-  max-width: min(76%, 46rem);
+  max-width: 100%;
   padding: 10px 14px;
   border-radius: 16px 16px 6px 16px;
   background: linear-gradient(180deg, rgba(34, 88, 161, 0.9), rgba(24, 70, 132, 0.94));
