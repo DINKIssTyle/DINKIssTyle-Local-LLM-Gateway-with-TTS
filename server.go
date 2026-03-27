@@ -847,6 +847,17 @@ func handleSavedTurns() http.HandlerFunc {
 				http.Error(w, "Failed to save turn", http.StatusInternalServerError)
 				return
 			}
+
+			go func(userID string, turnID int64, promptText string, responseText string) {
+				title := buildSavedTurnLLMTitle(promptText, responseText)
+				if title == "" {
+					return
+				}
+				if err := mcp.UpdateSavedTurnTitle(userID, turnID, title, "generated"); err != nil {
+					log.Printf("[handleSavedTurns] Failed to generate async title for %s turn %d: %v", userID, turnID, err)
+				}
+			}(userID, entry.ID, req.PromptText, req.ResponseText)
+
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"status": "ok",
 				"item":   entry,

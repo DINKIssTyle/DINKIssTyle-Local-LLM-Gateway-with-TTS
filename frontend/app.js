@@ -76,6 +76,8 @@ const translations = {
         'library.prompt': '프롬프트',
         'library.response': '응답',
         'library.savedAt': '저장 시각',
+        'clipboard.copied': '클립보드에 복사했습니다.',
+        'clipboard.copyFailed': '복사하지 못했습니다.',
         // Settings - LLM
         'setting.llmEndpoint.label': 'LLM 엔드포인트',
         'setting.model.label': '모델 이름',
@@ -242,6 +244,8 @@ const translations = {
         'library.prompt': 'Prompt',
         'library.response': 'Response',
         'library.savedAt': 'Saved at',
+        'clipboard.copied': 'Copied to clipboard.',
+        'clipboard.copyFailed': 'Failed to copy.',
         // Settings - LLM
         'setting.llmEndpoint.label': 'LLM Endpoint',
         'setting.model.label': 'Model Name',
@@ -723,7 +727,7 @@ async function copySavedTurnResponse() {
     if (!text.trim()) return;
     try {
         await navigator.clipboard.writeText(text);
-        showToast('Copied to clipboard');
+        showToast(t('clipboard.copied'));
     } catch (err) {
         console.warn('Clipboard API failed, trying fallback', err);
         fallbackCopyTextToClipboard(text);
@@ -826,10 +830,15 @@ function getTurnDataFromAssistantButton(btn) {
     const messageEl = btn?.closest('.message.assistant');
     const turnId = messageEl?.dataset.turnId;
     if (!turnId) return null;
+
+    const userMessage = messages.find((entry) => entry?.role === 'user' && entry?.turnId === turnId);
+    const assistantMessage = [...messages].reverse().find((entry) => entry?.role === 'assistant' && entry?.turnId === turnId);
+
     const userEl = document.querySelector(`.message.user[data-turn-id="${turnId}"] .message-bubble`);
     const responseEl = messageEl.querySelector('.markdown-body');
-    const promptText = userEl?.innerText?.trim() || '';
-    const responseText = responseEl?.innerText?.trim() || '';
+
+    const promptText = (userMessage?.content || userEl?.innerText || '').trim();
+    const responseText = (assistantMessage?.content || responseEl?.innerText || '').trim();
     if (!promptText || !responseText) return null;
     return {
         promptText,
@@ -2002,14 +2011,17 @@ async function restoreLastSession() {
     }
 
     clearChat();
+    const turnId = generateTurnId();
 
     const restoredUser = {
         role: 'user',
-        content: lastSessionCache.user_message || ''
+        content: lastSessionCache.user_message || '',
+        turnId
     };
     const restoredAssistant = {
         role: 'assistant',
-        content: lastSessionCache.assistant_message || ''
+        content: lastSessionCache.assistant_message || '',
+        turnId
     };
 
     appendMessage(restoredUser);
@@ -3695,12 +3707,24 @@ function renderToolHistory(card, historyEl, state) {
 // New helper functions
 // New helper functions
 async function saveMessageTurn(btn) {
+    if (btn?.dataset?.saving === 'true') return;
     const turnData = getTurnDataFromAssistantButton(btn);
     if (!turnData) {
         showToast(t('library.saveFailed'), true);
         return;
     }
-    await saveTurn(turnData.promptText, turnData.responseText);
+    if (btn) {
+        btn.dataset.saving = 'true';
+        btn.disabled = true;
+    }
+    try {
+        await saveTurn(turnData.promptText, turnData.responseText);
+    } finally {
+        if (btn) {
+            delete btn.dataset.saving;
+            btn.disabled = false;
+        }
+    }
 }
 
 async function copyMessage(btn) {
@@ -3711,7 +3735,7 @@ async function copyMessage(btn) {
     const text = bubble.innerText;
     try {
         await navigator.clipboard.writeText(text);
-        showToast('Copied to clipboard');
+        showToast(t('clipboard.copied'));
     } catch (err) {
         console.warn('Clipboard API failed, trying fallback', err);
         fallbackCopyTextToClipboard(text);
@@ -3733,15 +3757,14 @@ function fallbackCopyTextToClipboard(text) {
 
     try {
         var successful = document.execCommand('copy');
-        var msg = successful ? 'successful' : 'unsuccessful';
         if (successful) {
-            showToast('Copied to clipboard');
+            showToast(t('clipboard.copied'));
         } else {
-            showToast('Failed to copy', true);
+            showToast(t('clipboard.copyFailed'), true);
         }
     } catch (err) {
         console.error('Fallback: Oops, unable to copy', err);
-        showToast('Failed to copy', true);
+        showToast(t('clipboard.copyFailed'), true);
     }
     document.body.removeChild(textArea);
 }
