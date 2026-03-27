@@ -2444,7 +2444,7 @@ function applyCurrentChatSessionEvent(entry) {
             const prev = serverReplayMessageBuffers.get(assistantId) || '';
             const next = appendStreamChunkDedup(prev, chunk);
             serverReplayMessageBuffers.set(assistantId, next);
-            updateMessageContent(assistantId, next);
+            updateSyncedMessageContent(assistantId, next);
             break;
         }
         case 'reasoning.start':
@@ -2458,12 +2458,15 @@ function applyCurrentChatSessionEvent(entry) {
             if (serverReplayCurrentAssistantId) showReasoningStatus(serverReplayCurrentAssistantId, '...');
             break;
         case 'reasoning.delta':
-            if (isLocalActiveTurn) {
-                if (activeLocalAssistantId) showReasoningStatus(activeLocalAssistantId, payload.content || '...');
+            {
+                const reasoningText = payload.content || payload.reasoning_content || payload.text || payload.delta?.content || '';
+                if (isLocalActiveTurn) {
+                    if (activeLocalAssistantId) showReasoningStatus(activeLocalAssistantId, reasoningText || '...');
+                    break;
+                }
+                if (serverReplayCurrentAssistantId) showReasoningStatus(serverReplayCurrentAssistantId, reasoningText || '...');
                 break;
             }
-            if (serverReplayCurrentAssistantId) showReasoningStatus(serverReplayCurrentAssistantId, payload.content || '...');
-            break;
         case 'reasoning.end':
             if (isLocalActiveTurn) {
                 if (activeLocalAssistantId) {
@@ -4894,6 +4897,18 @@ function renderMarkdownIntoHost(host, markdownText) {
     highlightMarkdownBlocks(host);
 }
 
+function sanitizeAssistantRenderText(text) {
+    let cleanText = String(text || '');
+    cleanText = cleanText.replace(/<\|[\s\S]*?\|>/g, '');
+    cleanText = cleanText.replace(/<commentary[\s\S]*?>/gi, '');
+    cleanText = cleanText.replace(/commentary to=[a-z_]+(\s+(json|code|text))?/gi, '');
+    cleanText = cleanText.replace(/\{"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*([\s\S]*?)\}/g, '');
+    cleanText = cleanText.trim().replace(/^(json|code|text)\s*/gi, '');
+    cleanText = cleanText.replace(/<\|.*?\|>/g, '');
+    cleanText = deduplicateTrailingParagraph(cleanText);
+    return cleanText;
+}
+
 function appendStreamChunkDedup(existingText, nextChunk) {
     const prev = String(existingText || '');
     const chunk = String(nextChunk || '');
@@ -4976,14 +4991,7 @@ function finalizeMessageContent(id, text) {
     const { committedHost, pendingHost } = ensureStreamingMarkdownHosts(bubble);
     if (!committedHost || !pendingHost) return;
 
-    let cleanText = String(text || '');
-    cleanText = cleanText.replace(/<\|[\s\S]*?\|>/g, '');
-    cleanText = cleanText.replace(/<commentary[\s\S]*?>/gi, '');
-    cleanText = cleanText.replace(/commentary to=[a-z_]+(\s+(json|code|text))?/gi, '');
-    cleanText = cleanText.replace(/\{"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*([\s\S]*?)\}/g, '');
-    cleanText = cleanText.trim().replace(/^(json|code|text)\s*/gi, '');
-    cleanText = cleanText.replace(/<\|.*?\|>/g, '');
-    cleanText = deduplicateTrailingParagraph(cleanText);
+    const cleanText = sanitizeAssistantRenderText(text);
 
     renderMarkdownIntoHost(committedHost, cleanText);
     pendingHost.innerHTML = '';
@@ -4997,6 +5005,30 @@ function finalizeMessageContent(id, text) {
     const hasVisibleContent = !!cleanText.trim();
     if (responseCard) responseCard.hidden = !hasVisibleContent;
     if (actionBar) actionBar.hidden = !hasVisibleContent;
+}
+
+function updateSyncedMessageContent(id, text) {
+    const el = ensureAssistantMessageElement(id);
+    if (!el) return;
+    const bubble = el.querySelector('.message-bubble');
+    const { committedHost, pendingHost } = ensureStreamingMarkdownHosts(bubble);
+    if (!committedHost || !pendingHost) return;
+
+    const cleanText = sanitizeAssistantRenderText(text);
+    renderMarkdownIntoHost(committedHost, cleanText);
+    pendingHost.innerHTML = '';
+    el._streamRenderState = {
+        committedText: cleanText,
+        pendingText: ''
+    };
+
+    const responseCard = el.querySelector('.assistant-response-card');
+    const actionBar = el.querySelector('.message-actions');
+    const hasVisibleContent = !!cleanText.trim();
+    if (responseCard) responseCard.hidden = !hasVisibleContent;
+    if (actionBar && actionBar.classList.contains('is-ready')) {
+        actionBar.hidden = !hasVisibleContent;
+    }
 }
 
 function getSpeakableTextFromMarkdownHost(host) {
@@ -5032,26 +5064,7 @@ function updateMessageContent(id, text) {
     const { markdownBody: mdBody, committedHost, pendingHost } = ensureStreamingMarkdownHosts(bubble);
 
     // Filter out common special tokens that might leak during streaming
-    let cleanText = text;
-    // Aggressive cleaning for Command-R / GPT-OSS leakage (Step Id: 4815)
-    // 1. Remove all special tokens like <|...|> (multi-line)
-    cleanText = cleanText.replace(/<\|[\s\S]*?\|>/g, '');
-
-    // 2. Remove <commentary ...> style pseudo-tags
-    cleanText = cleanText.replace(/<commentary[\s\S]*?>/gi, '');
-
-    // 3. Remove "commentary to=..." text artifacts
-    cleanText = cleanText.replace(/commentary to=[a-z_]+(\s+(json|code|text))?/gi, '');
-
-    // 4. Remove standalone leakage of tool call JSON objects
-    cleanText = cleanText.replace(/\{"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*([\s\S]*?)\}/g, '');
-
-    // 5. Clean up remaining standalone markers and trim
-    cleanText = cleanText.trim().replace(/^(json|code|text)\s*/gi, '');
-
-    // Final pass for any partial tag leftovers or repeated markers
-    cleanText = cleanText.replace(/<\|.*?\|>/g, '');
-    cleanText = deduplicateTrailingParagraph(cleanText);
+    let cleanText = sanitizeAssistantRenderText(text);
     const streamState = el._streamRenderState || { committedText: '', pendingText: '' };
     const split = splitStreamingMarkdown(cleanText);
     const { committedText, pendingText } = deduplicateCommittedPending(split.committedText, split.pendingText);
