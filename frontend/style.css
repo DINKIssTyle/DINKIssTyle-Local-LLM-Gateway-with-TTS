@@ -1643,6 +1643,35 @@ body.is-desktop .desktop-only {
   margin-bottom: -2px;
 }
 
+.saved-turn-modal-footer {
+  display: flex;
+  justify-content: center;
+  padding-top: 4px;
+}
+
+.saved-turn-close-btn {
+  min-width: 148px;
+  height: 40px;
+  padding: 0 22px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: rgba(var(--accent-color-rgb), 0.14);
+  color: var(--text-color);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+}
+
+.saved-turn-close-btn:hover {
+  background: rgba(var(--accent-color-rgb), 0.22);
+  border-color: rgba(var(--accent-color-rgb), 0.45);
+}
+
+.saved-turn-close-btn:active {
+  transform: translateY(1px);
+}
+
 .saved-turn-modal .modal-header h2 {
   font-size: calc(var(--chat-font-size) + 2px);
 }
