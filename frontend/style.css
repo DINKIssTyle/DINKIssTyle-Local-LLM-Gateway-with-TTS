@@ -310,7 +310,7 @@ body {
 
 .assistant-response-card.is-stream-updated,
 .assistant-response-card .markdown-body.is-stream-updated {
-  animation: responseChunkFade 0.22s ease;
+  animation: responseChunkFade 0.42s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .startup-response-card .message-bubble {
@@ -468,12 +468,14 @@ body {
 
 @keyframes responseChunkFade {
   0% {
-    opacity: 0.45;
-    transform: translateY(6px);
+    opacity: 0.35;
+    transform: translateY(10px);
+    filter: blur(2px);
   }
   100% {
     opacity: 1;
     transform: translateY(0);
+    filter: blur(0);
   }
 }
 

@@ -2772,12 +2772,27 @@ function hydrateChatSessionEventsSnapshot(items) {
                     args: entry.EventType === 'tool_call.arguments' ? (payload.arguments || null) : null,
                     toolName: payload.tool || ''
                 };
-                const prev = toolStateById.get(currentAssistantId) || {};
+                const prev = toolStateById.get(currentAssistantId) || { history: [] };
+                const previewText = extractToolPreview(nextState.args, nextState.summary, nextState.toolName);
+                const displayTool = formatToolDisplayName(nextState.toolName || prev.toolName || 'Tool');
+                const nextHistory = Array.isArray(prev.history) ? [...prev.history] : [];
+                if (previewText) {
+                    const signature = `${displayTool}::${previewText}`;
+                    const last = nextHistory[nextHistory.length - 1];
+                    if (!last || last.signature !== signature) {
+                        nextHistory.push({
+                            signature,
+                            tool: displayTool,
+                            detail: previewText
+                        });
+                    }
+                }
                 toolStateById.set(currentAssistantId, {
                     state: nextState.state || prev.state || 'running',
                     summary: nextState.summary || prev.summary || '',
                     args: nextState.args != null ? nextState.args : (prev.args || null),
-                    toolName: nextState.toolName || prev.toolName || ''
+                    toolName: nextState.toolName || prev.toolName || '',
+                    history: nextHistory
                 });
                 break;
             }
@@ -2786,18 +2801,31 @@ function hydrateChatSessionEventsSnapshot(items) {
         }
     }
 
+    const fragment = document.createDocumentFragment();
     for (const user of users) {
         if (!document.querySelector(`.message.user[data-turn-id="${user.turnId}"]`)) {
-            appendMessage({ role: 'user', content: user.content, turnId: user.turnId });
+            appendMessage({ role: 'user', content: user.content, turnId: user.turnId }, { parent: fragment, skipScroll: true });
         }
         const assistantId = assistantByTurn.get(user.turnId);
         if (!assistantId) continue;
-        const assistantEl = ensureAssistantMessageElement(assistantId) || appendMessage({
-            role: 'assistant',
-            content: '',
-            id: assistantId,
-            turnId: user.turnId
-        });
+        if (!document.getElementById(assistantId)) {
+            appendMessage({
+                role: 'assistant',
+                content: '',
+                id: assistantId,
+                turnId: user.turnId
+            }, { parent: fragment, skipScroll: true });
+        }
+    }
+
+    if (fragment.childNodes.length > 0) {
+        chatMessages.appendChild(fragment);
+    }
+
+    for (const user of users) {
+        const assistantId = assistantByTurn.get(user.turnId);
+        if (!assistantId) continue;
+        const assistantEl = ensureAssistantMessageElement(assistantId);
         if (!assistantEl) continue;
 
         if (reasoningStartedAtById.has(assistantId)) {
@@ -2813,6 +2841,12 @@ function hydrateChatSessionEventsSnapshot(items) {
         const toolState = toolStateById.get(assistantId);
         if (toolState) {
             setToolCardState(assistantId, toolState.state, toolState.summary, toolState.args, toolState.toolName);
+            const card = getActiveToolCard(assistantId);
+            if (card) {
+                card._history = Array.isArray(toolState.history) ? [...toolState.history] : [];
+                const historyEl = card.querySelector('.tool-card-history');
+                renderToolHistory(card, historyEl, toolState.state);
+            }
         }
 
         const assistantText = assistantTextById.get(assistantId) || '';
@@ -4156,11 +4190,15 @@ function createMessageElement(msg) {
     return div;
 }
 
-function appendMessage(msg) {
+function appendMessage(msg, options = {}) {
     const wasNearBottom = isChatNearBottom();
     const div = createMessageElement(msg);
-    chatMessages.appendChild(div);
-    scrollToBottom(wasNearBottom || msg.role === 'user');
+    const target = options.parent || chatMessages;
+    target.appendChild(div);
+    if (!options.skipScroll) {
+        scrollToBottom(wasNearBottom || msg.role === 'user');
+    }
+    return div;
 }
 
 function dismissStartupCards() {
