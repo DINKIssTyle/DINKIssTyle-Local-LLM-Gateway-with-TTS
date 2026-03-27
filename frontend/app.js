@@ -2427,15 +2427,19 @@ function applyCurrentChatSessionEvent(entry) {
             break;
         }
         case 'message.delta': {
+            let assistantId = '';
             if (isLocalActiveTurn) {
-                break;
+                serverReplayCurrentTurnId = entryTurnId || serverReplayCurrentTurnId;
+                serverReplayCurrentAssistantId = activeLocalAssistantId || '';
+                assistantId = activeLocalAssistantId || '';
+            } else {
+                if (!serverReplayCurrentTurnId) {
+                    serverReplayCurrentTurnId = entryTurnId || `server-turn-${sessionId}-${entry.EventSeq}`;
+                }
+                assistantId = ensureServerReplayAssistant(serverReplayCurrentTurnId, sessionId, entry.EventSeq);
             }
-            if (!serverReplayCurrentTurnId) {
-                serverReplayCurrentTurnId = entryTurnId || `server-turn-${sessionId}-${entry.EventSeq}`;
-            }
-            const assistantId = ensureServerReplayAssistant(serverReplayCurrentTurnId, sessionId, entry.EventSeq);
             if (!assistantId) break;
-            const chunk = String(payload.content || '').trimEnd();
+            const chunk = String(payload.content || '');
             const prev = serverReplayMessageBuffers.get(assistantId) || '';
             const next = prev + chunk;
             serverReplayMessageBuffers.set(assistantId, next);
@@ -2446,7 +2450,10 @@ function applyCurrentChatSessionEvent(entry) {
             if (payload.started_at) {
                 setReasoningCardStartedAt(isLocalActiveTurn ? activeLocalAssistantId : serverReplayCurrentAssistantId, payload.started_at);
             }
-            if (isLocalActiveTurn) break;
+            if (isLocalActiveTurn) {
+                if (activeLocalAssistantId) showReasoningStatus(activeLocalAssistantId, '...');
+                break;
+            }
             if (serverReplayCurrentAssistantId) showReasoningStatus(serverReplayCurrentAssistantId, '...');
             break;
         case 'reasoning.delta':
@@ -2468,35 +2475,59 @@ function applyCurrentChatSessionEvent(entry) {
             }
             break;
         case 'tool_call.start':
-            if (isLocalActiveTurn) break;
+            if (isLocalActiveTurn) {
+                if (activeLocalAssistantId) setToolCardState(activeLocalAssistantId, 'running', '', null, payload.tool || '');
+                break;
+            }
             if (serverReplayCurrentAssistantId) setToolCardState(serverReplayCurrentAssistantId, 'running', '', null, payload.tool || '');
             break;
         case 'tool_call.arguments':
-            if (isLocalActiveTurn) break;
+            if (isLocalActiveTurn) {
+                if (activeLocalAssistantId) setToolCardState(activeLocalAssistantId, 'running', '', payload.arguments || null, payload.tool || '');
+                break;
+            }
             if (serverReplayCurrentAssistantId) setToolCardState(serverReplayCurrentAssistantId, 'running', '', payload.arguments || null, payload.tool || '');
             break;
         case 'tool_call.success':
-            if (isLocalActiveTurn) break;
+            if (isLocalActiveTurn) {
+                if (activeLocalAssistantId) setToolCardState(activeLocalAssistantId, 'success', t('tool.executionFinished'), null, payload.tool || '');
+                break;
+            }
             if (serverReplayCurrentAssistantId) setToolCardState(serverReplayCurrentAssistantId, 'success', t('tool.executionFinished'), null, payload.tool || '');
             break;
         case 'tool_call.failure':
-            if (isLocalActiveTurn) break;
+            if (isLocalActiveTurn) {
+                if (activeLocalAssistantId) setToolCardState(activeLocalAssistantId, 'failure', payload.reason || t('tool.unknownError'), null, payload.tool || '');
+                break;
+            }
             if (serverReplayCurrentAssistantId) setToolCardState(serverReplayCurrentAssistantId, 'failure', payload.reason || t('tool.unknownError'), null, payload.tool || '');
             break;
         case 'prompt_processing.progress':
-            if (isLocalActiveTurn) break;
+            if (isLocalActiveTurn) {
+                renderProgressDock(t('progress.processingPrompt'), (payload.progress || 0) * 100, 'prompt-processing', false);
+                break;
+            }
             renderProgressDock(t('progress.processingPrompt'), (payload.progress || 0) * 100, 'prompt-processing', false);
             break;
         case 'model_load.start':
-            if (isLocalActiveTurn) break;
+            if (isLocalActiveTurn) {
+                renderProgressDock(t('progress.loadingModel'), null, 'model-loading', true);
+                break;
+            }
             renderProgressDock(t('progress.loadingModel'), null, 'model-loading', true);
             break;
         case 'model_load.progress':
-            if (isLocalActiveTurn) break;
+            if (isLocalActiveTurn) {
+                renderProgressDock(t('progress.loadingModel'), (payload.progress || 0) * 100, 'model-loading', false);
+                break;
+            }
             renderProgressDock(t('progress.loadingModel'), (payload.progress || 0) * 100, 'model-loading', false);
             break;
         case 'model_load.end':
-            if (isLocalActiveTurn) break;
+            if (isLocalActiveTurn) {
+                renderProgressDock(`${t('progress.modelLoaded')} (${payload.load_time_seconds?.toFixed?.(1) || '?'}s)`, 100, 'model-loading', false);
+                break;
+            }
             renderProgressDock(`${t('progress.modelLoaded')} (${payload.load_time_seconds?.toFixed?.(1) || '?'}s)`, 100, 'model-loading', false);
             break;
         case 'chat.end':
@@ -2504,6 +2535,12 @@ function applyCurrentChatSessionEvent(entry) {
             if (isLocalActiveTurn) {
                 if (activeLocalAssistantId && Number.isFinite(Number(payload.elapsed_ms))) {
                     finalizeReasoningStatus(activeLocalAssistantId, 'done', '', Number(payload.elapsed_ms));
+                }
+                if (activeLocalAssistantId) {
+                    const finalText = serverReplayMessageBuffers.get(activeLocalAssistantId) || '';
+                    finalizeMessageContent(activeLocalAssistantId, finalText);
+                    finalizeAssistantStatusCards(activeLocalAssistantId, 'done');
+                    setAssistantActionBarReady(activeLocalAssistantId);
                 }
                 activeLocalTurnId = '';
                 activeLocalAssistantId = '';
@@ -2513,6 +2550,8 @@ function applyCurrentChatSessionEvent(entry) {
                 if (Number.isFinite(Number(payload.elapsed_ms))) {
                     finalizeReasoningStatus(serverReplayCurrentAssistantId, 'done', '', Number(payload.elapsed_ms));
                 }
+                const finalText = serverReplayMessageBuffers.get(serverReplayCurrentAssistantId) || '';
+                finalizeMessageContent(serverReplayCurrentAssistantId, finalText);
                 finalizeAssistantStatusCards(serverReplayCurrentAssistantId, 'done');
                 setAssistantActionBarReady(serverReplayCurrentAssistantId);
             }
@@ -3411,6 +3450,7 @@ async function streamResponse(payload, elementId, turnId = '') {
 // Helper to process the stream reader (shared by direct and proxy)
 async function processStream(response, elementId, turnId = '') {
     ensureAssistantMessageElement(elementId, turnId);
+    const deferToServerChatSession = !!turnId && !!currentUser;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -3494,12 +3534,12 @@ async function processStream(response, elementId, turnId = '') {
                                 reasoningBuffer += '<think>';
                                 currentlyReasoning = true;
                                 reasoningSource = 'field';
-                                showReasoningStatus(elementId, '...'); // Start status
+                                if (!deferToServerChatSession) showReasoningStatus(elementId, '...'); // Start status
                             }
                             // Prioritize SSE if both present (LM Studio)
                             if (reasoningSource !== 'sse') {
                                 reasoningBuffer += delta.reasoning_content;
-                                showReasoningStatus(elementId, reasoningBuffer); // Update status with full buffer
+                                if (!deferToServerChatSession) showReasoningStatus(elementId, reasoningBuffer); // Update status with full buffer
                             }
                         }
 
@@ -3511,7 +3551,7 @@ async function processStream(response, elementId, turnId = '') {
                             reasoningBuffer += '</think>\n';
                             currentlyReasoning = false;
                             reasoningSource = null;
-                            showReasoningStatus(elementId, null, true); // Remove status
+                            if (!deferToServerChatSession) showReasoningStatus(elementId, null, true); // Remove status
                         }
 
                         if (!currentlyReasoning) {
@@ -3552,20 +3592,20 @@ async function processStream(response, elementId, turnId = '') {
                             currentlyReasoning = true;
                         }
                         reasoningSource = 'sse';
-                        showReasoningStatus(elementId, '...'); // Start status
+                        if (!deferToServerChatSession) showReasoningStatus(elementId, '...'); // Start status
                     }
                     else if (json.type === 'reasoning.delta' && json.content) {
                         // Add to reasoning buffer, NOT to contentToAdd/fullText
                         reasoningBuffer += json.content;
                         currentlyReasoning = true;
                         reasoningSource = 'sse';
-                        showReasoningStatus(elementId, reasoningBuffer); // Update with full buffer
+                        if (!deferToServerChatSession) showReasoningStatus(elementId, reasoningBuffer); // Update with full buffer
                     }
                     else if (json.type === 'reasoning.end') {
                         reasoningBuffer += '</think>\n';
                         currentlyReasoning = false;
                         reasoningSource = null;
-                        showReasoningStatus(elementId, null, true); // Remove status
+                        if (!deferToServerChatSession) showReasoningStatus(elementId, null, true); // Remove status
                     }
 
 
@@ -3575,20 +3615,20 @@ async function processStream(response, elementId, turnId = '') {
                     else if (json.type === 'tool_call.start') {
                         const toolName = json.tool || 'Tool';
                         lastToolCallHtml = toolName;
-                        setToolCardState(elementId, 'running', '', null, toolName);
+                        if (!deferToServerChatSession) setToolCardState(elementId, 'running', '', null, toolName);
                     }
                     else if (json.type === 'tool_call.arguments' && json.arguments) {
                         const toolName = json.tool || 'Tool';
-                        setToolCardState(elementId, 'running', '', json.arguments, toolName);
+                        if (!deferToServerChatSession) setToolCardState(elementId, 'running', '', json.arguments, toolName);
                     }
                     else if (json.type === 'tool_call.success') {
-                        setToolCardState(elementId, 'success', t('tool.executionFinished'));
+                        if (!deferToServerChatSession) setToolCardState(elementId, 'success', t('tool.executionFinished'));
                     }
                     else if (json.type === 'tool_call.failure') {
-                        setToolCardState(elementId, 'failure', json.reason || t('tool.unknownError'));
+                        if (!deferToServerChatSession) setToolCardState(elementId, 'failure', json.reason || t('tool.unknownError'));
                     }
                     else if (json.type === 'chat.end' && json.result) {
-                        hideProgressDock();
+                        if (!deferToServerChatSession) hideProgressDock();
                         if (json.result.response_id) {
                             lastResponseId = json.result.response_id;
                             console.log(`[Stateful] Captured response_id from chat.end: ${lastResponseId}`);
@@ -3605,25 +3645,27 @@ async function processStream(response, elementId, turnId = '') {
                     }
                     // Handle Prompt Processing Progress
                     else if (json.type === 'prompt_processing.progress') {
-                        renderProgressDock(t('progress.processingPrompt'), json.progress * 100, 'prompt-processing', false);
+                        if (!deferToServerChatSession) renderProgressDock(t('progress.processingPrompt'), json.progress * 100, 'prompt-processing', false);
                     }
                     // Handle Model Loading Progress (LM Studio Mode)
                     else if (json.type === 'model_load.start') {
                         console.log('[Model Load] Start:', json.model_instance_id);
-                        renderProgressDock(t('progress.loadingModel'), null, 'model-loading', true);
+                        if (!deferToServerChatSession) renderProgressDock(t('progress.loadingModel'), null, 'model-loading', true);
                     }
                     else if (json.type === 'model_load.progress') {
-                        renderProgressDock(t('progress.loadingModel'), json.progress * 100, 'model-loading', false);
+                        if (!deferToServerChatSession) renderProgressDock(t('progress.loadingModel'), json.progress * 100, 'model-loading', false);
                     }
                     else if (json.type === 'model_load.end') {
                         console.log('[Model Load] End:', json.model_instance_id, 'Time:', json.load_time_seconds);
-                        renderProgressDock(`${t('progress.modelLoaded')} (${json.load_time_seconds?.toFixed(1) || '?'}s)`, 100, 'model-loading', false);
-                        setTimeout(() => hideProgressDock(), 1200);
+                        if (!deferToServerChatSession) {
+                            renderProgressDock(`${t('progress.modelLoaded')} (${json.load_time_seconds?.toFixed(1) || '?'}s)`, 100, 'model-loading', false);
+                            setTimeout(() => hideProgressDock(), 1200);
+                        }
                     }
                     // Handle Generative Errors (Tool Parsing, etc.)
                     else if (json.type === 'error') {
                         console.error('[SSE Error]', json.error);
-                        hideProgressDock();
+                        if (!deferToServerChatSession) hideProgressDock();
                         let errMsg = t('tool.unknownError');
                         if (json.error && json.error.message) {
                             errMsg = json.error.message;
@@ -3733,7 +3775,7 @@ async function processStream(response, elementId, turnId = '') {
                             displayText = displayText.split('<think>')[0];
                         }
 
-                        updateMessageContent(elementId, displayText);
+                        if (!deferToServerChatSession) updateMessageContent(elementId, displayText);
 
                     }
 
@@ -3770,13 +3812,13 @@ async function processStream(response, elementId, turnId = '') {
             throw err; // Re-throw other errors
         }
     } finally {
-        hideProgressDock();
+        if (!deferToServerChatSession) hideProgressDock();
         if (!streamAborted) {
             if (currentlyReasoning) {
-                finalizeReasoningStatus(elementId, 'failed', t('status.unexpectedStop'));
+                if (!deferToServerChatSession) finalizeReasoningStatus(elementId, 'failed', t('status.unexpectedStop'));
             }
             if (getRunningToolCards(elementId).length > 0) {
-                finalizeAssistantStatusCards(elementId, 'failed', t('status.failed'));
+                if (!deferToServerChatSession) finalizeAssistantStatusCards(elementId, 'failed', t('status.failed'));
             }
         }
         // Finalize (Save to history even if aborted)
@@ -3795,7 +3837,7 @@ async function processStream(response, elementId, turnId = '') {
         if (useStreamingTTS) {
             finalizeStreamingTTS(speechBuffer); // Pass final speech buffer
         }
-        if (historyContent) {
+        if (historyContent && !deferToServerChatSession) {
             setAssistantActionBarReady(elementId);
         }
         releaseWakeLock(); // Release screen lock after generation and TTS streaming is done
@@ -4846,6 +4888,35 @@ function renderMarkdownIntoHost(host, markdownText) {
         link.setAttribute('rel', 'noopener noreferrer');
     });
     highlightMarkdownBlocks(host);
+}
+
+function finalizeMessageContent(id, text) {
+    const el = ensureAssistantMessageElement(id);
+    if (!el) return;
+    const bubble = el.querySelector('.message-bubble');
+    const { committedHost, pendingHost } = ensureStreamingMarkdownHosts(bubble);
+    if (!committedHost || !pendingHost) return;
+
+    let cleanText = String(text || '');
+    cleanText = cleanText.replace(/<\|[\s\S]*?\|>/g, '');
+    cleanText = cleanText.replace(/<commentary[\s\S]*?>/gi, '');
+    cleanText = cleanText.replace(/commentary to=[a-z_]+(\s+(json|code|text))?/gi, '');
+    cleanText = cleanText.replace(/\{"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*([\s\S]*?)\}/g, '');
+    cleanText = cleanText.trim().replace(/^(json|code|text)\s*/gi, '');
+    cleanText = cleanText.replace(/<\|.*?\|>/g, '');
+
+    renderMarkdownIntoHost(committedHost, cleanText);
+    pendingHost.innerHTML = '';
+    el._streamRenderState = {
+        committedText: cleanText,
+        pendingText: ''
+    };
+
+    const responseCard = el.querySelector('.assistant-response-card');
+    const actionBar = el.querySelector('.message-actions');
+    const hasVisibleContent = !!cleanText.trim();
+    if (responseCard) responseCard.hidden = !hasVisibleContent;
+    if (actionBar) actionBar.hidden = !hasVisibleContent;
 }
 
 function getSpeakableTextFromMarkdownHost(host) {
