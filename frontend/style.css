@@ -1616,6 +1616,14 @@ body.is-desktop .desktop-only {
   border-radius: 18px;
 }
 
+.modal.settings-modal {
+  width: min(calc(100vw - 40px), 1500px);
+  height: min(calc(100vh - 40px), 1180px);
+  max-width: none;
+  max-height: calc(100vh - 40px);
+  border-radius: 18px;
+}
+
 .saved-turn-modal-body {
   display: flex;
   flex-direction: column;
@@ -1723,6 +1731,44 @@ body.is-desktop .desktop-only {
 
 .saved-turn-modal .modal-header h2 {
   font-size: calc(var(--chat-font-size) + 2px);
+}
+
+.settings-modal .modal-header {
+  padding: 16px 22px;
+}
+
+.settings-modal .modal-body {
+  padding: 18px 24px 20px;
+}
+
+.settings-modal .modal-footer {
+  padding: 12px 20px 14px;
+  gap: 8px;
+}
+
+.settings-modal .modal-footer-buttons {
+  gap: 10px;
+}
+
+.settings-modal .btn-lg {
+  min-height: 42px;
+  padding: 10px 16px !important;
+  font-size: 14px !important;
+  gap: 6px;
+}
+
+.settings-modal .btn-lg .material-icons-round {
+  font-size: 18px;
+}
+
+.settings-modal .btn-logout {
+  padding: 10px 14px;
+  min-height: 42px;
+  margin-top: 2px !important;
+}
+
+.settings-modal .modal-footer-info {
+  padding-top: 8px;
 }
 
 /* ============================================
@@ -1918,6 +1964,13 @@ body.is-desktop .desktop-only {
   }
 
   .modal.saved-turn-modal {
+    width: calc(100vw - 16px);
+    height: calc(100vh - 16px);
+    max-width: none;
+    max-height: calc(100vh - 16px);
+  }
+
+  .modal.settings-modal {
     width: calc(100vw - 16px);
     height: calc(100vh - 16px);
     max-width: none;

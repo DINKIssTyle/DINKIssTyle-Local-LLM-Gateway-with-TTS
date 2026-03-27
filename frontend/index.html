@@ -43,6 +43,17 @@
             height: 100vh;
             overflow: hidden;
             padding: 24px;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        input,
+        textarea,
+        select,
+        .trace-payload-box,
+        .license-box {
+            user-select: text;
+            -webkit-user-select: text;
         }
 
         .controller {
@@ -55,7 +66,7 @@
 
         .main-layout {
             display: grid;
-            grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr);
+            grid-template-columns: minmax(280px, 0.9fr) minmax(280px, 0.9fr);
             gap: 16px;
             flex: 1;
             min-height: 0;
@@ -65,7 +76,7 @@
         }
 
         body.debug-enabled .main-layout {
-            grid-template-columns: minmax(280px, 1fr) minmax(280px, 1fr) minmax(340px, 1.1fr);
+            grid-template-columns: minmax(250px, 0.78fr) minmax(250px, 0.78fr) minmax(360px, 1.28fr);
         }
 
         .col {
