@@ -322,7 +322,7 @@
     <div id="saved-turn-modal" class="modal-overlay" onclick="if(event.target===this)closeSavedTurnModal()">
         <div class="modal saved-turn-modal">
             <div class="modal-header">
-                <h2 id="saved-turn-modal-title">Saved Turn</h2>
+                <h2 id="saved-turn-modal-title"></h2>
                 <button class="modal-close" onclick="closeSavedTurnModal()">
                     <span class="material-icons-round">close</span>
                 </button>
@@ -340,6 +340,36 @@
                         <span class="material-icons-round">volume_up</span>
                     </button>
                 </div>
+                <section class="saved-turn-modal-section">
+                    <div class="saved-turn-modal-label" data-i18n="library.titleLabel">Title</div>
+                    <div id="saved-turn-inline-title-view" class="saved-turn-inline-title-view" onclick="startEditSavedTurnTitle()"></div>
+                    <div id="saved-turn-inline-title-edit" class="saved-turn-inline-title-edit" hidden>
+                        <input
+                            id="saved-turn-inline-title-input"
+                            class="saved-turn-inline-title-input"
+                            type="text"
+                            maxlength="80"
+                            data-i18n-placeholder="library.titlePlaceholder"
+                            placeholder="Enter a title"
+                        />
+                        <div class="saved-turn-inline-title-actions">
+                            <button
+                                id="saved-turn-inline-title-cancel"
+                                class="saved-turn-inline-title-btn secondary"
+                                type="button"
+                                onclick="cancelEditSavedTurnTitle()"
+                                data-i18n="action.cancel"
+                            >Cancel</button>
+                            <button
+                                id="saved-turn-inline-title-save"
+                                class="saved-turn-inline-title-btn primary"
+                                type="button"
+                                onclick="saveEditedSavedTurnTitle()"
+                                data-i18n="action.save"
+                            >Save</button>
+                        </div>
+                    </div>
+                </section>
                 <section class="saved-turn-modal-section">
                     <div class="saved-turn-modal-label" data-i18n="library.response">Response</div>
                     <div id="saved-turn-modal-response" class="saved-turn-modal-content markdown-body"></div>

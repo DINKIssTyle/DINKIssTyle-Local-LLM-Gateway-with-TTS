@@ -65,6 +65,99 @@ func compactText(input string, limit int) string {
 	return strings.TrimSpace(string(runes[:limit])) + "... (truncated)"
 }
 
+type savedTurnTitleOptions struct {
+	ModelID     string
+	APIToken    string
+	Temperature float64
+}
+
+func cleanSavedTurnTitleContext(input string, limit int) string {
+	input = strings.ReplaceAll(input, "\r\n", "\n")
+	input = strings.ReplaceAll(input, "\r", "\n")
+	input = regexp.MustCompile("```[\\s\\S]*?```").ReplaceAllString(input, " ")
+	input = regexp.MustCompile("<think>[\\s\\S]*?</think>").ReplaceAllString(input, " ")
+	input = regexp.MustCompile(`\s+`).ReplaceAllString(strings.TrimSpace(input), " ")
+	return compactText(input, limit)
+}
+
+func normalizeSavedTurnTemperature(temp float64) float64 {
+	if temp < 0 {
+		return 0
+	}
+	if temp > 2 {
+		return 2
+	}
+	return temp
+}
+
+func parseSavedTurnTitleOptionsFromBody(r *http.Request) (savedTurnTitleOptions, error) {
+	var opts savedTurnTitleOptions
+	if r == nil || r.Body == nil {
+		return opts, nil
+	}
+
+	rawBody, err := io.ReadAll(r.Body)
+	if err != nil {
+		return opts, err
+	}
+	r.Body.Close()
+	r.Body = io.NopCloser(bytes.NewReader(rawBody))
+
+	if len(bytes.TrimSpace(rawBody)) == 0 {
+		return opts, nil
+	}
+
+	var payload struct {
+		ModelID     string   `json:"model_id"`
+		APIToken    string   `json:"api_token"`
+		Temperature *float64 `json:"temperature"`
+	}
+	if err := json.Unmarshal(rawBody, &payload); err != nil {
+		return opts, nil
+	}
+
+	opts.ModelID = strings.TrimSpace(payload.ModelID)
+	opts.APIToken = strings.TrimSpace(payload.APIToken)
+	if payload.Temperature != nil {
+		opts.Temperature = normalizeSavedTurnTemperature(*payload.Temperature)
+	}
+	return opts, nil
+}
+
+func parseSavedTurnTitleFromJSON(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	candidates := []string{raw}
+	if strings.HasPrefix(raw, "```") {
+		raw = strings.TrimPrefix(raw, "```json")
+		raw = strings.TrimPrefix(raw, "```JSON")
+		raw = strings.TrimPrefix(raw, "```")
+		raw = strings.TrimSuffix(raw, "```")
+		raw = strings.TrimSpace(raw)
+		candidates = append([]string{raw}, candidates...)
+	}
+	if match := regexp.MustCompile(`(?s)\{.*\}`).FindString(raw); match != "" && match != raw {
+		candidates = append([]string{match}, candidates...)
+	}
+
+	for _, candidate := range candidates {
+		var payload struct {
+			Title string `json:"title"`
+		}
+		if err := json.Unmarshal([]byte(candidate), &payload); err == nil {
+			title := strings.TrimSpace(payload.Title)
+			if title != "" {
+				return title
+			}
+		}
+	}
+
+	return ""
+}
+
 func compactToolResult(toolName, result string) string {
 	result = strings.TrimSpace(result)
 	if result == "" {
@@ -224,8 +317,9 @@ func ensureSelfSignedCert(appDataDir string, certDomain string) (string, string,
 // System context is now managed exclusively through the new SQLite Agentic RAG system and tools.
 
 // callLLMInternal makes a background request to the LLM for summary/validation
-func callLLMInternal(prompt string, modelID string) string {
+func callLLMInternal(prompt string, opts savedTurnTitleOptions) string {
 	if globalApp == nil || globalApp.llmEndpoint == "" {
+		AddDebugTrace("saved-turn-title", "llm.skipped", "Skipped title generation request because LLM endpoint is empty", nil)
 		return ""
 	}
 
@@ -233,23 +327,45 @@ func callLLMInternal(prompt string, modelID string) string {
 	endpoint = strings.TrimSuffix(endpoint, "/v1")
 	reqURL := fmt.Sprintf("%s/v1/chat/completions", endpoint)
 
+	modelID := strings.TrimSpace(opts.ModelID)
+	if modelID == "" {
+		modelID = "local-model"
+	}
+
 	payload := map[string]interface{}{
-		"model": modelID,
+		"model":       modelID,
+		"temperature": normalizeSavedTurnTemperature(opts.Temperature),
+		"max_tokens":  120,
 		"messages": []map[string]interface{}{
+			{"role": "system", "content": "Return only valid JSON. Do not include markdown fences, explanations, or reasoning."},
 			{"role": "user", "content": prompt},
 		},
 		"stream": false,
 	}
 
+	AddDebugTrace("saved-turn-title", "llm.request", "Prepared saved turn title LLM request", map[string]interface{}{
+		"model":       modelID,
+		"temperature": normalizeSavedTurnTemperature(opts.Temperature),
+		"endpoint":    reqURL,
+		"has_api_key": strings.TrimSpace(opts.APIToken) != "" || strings.TrimSpace(globalApp.llmApiToken) != "",
+		"__payload":   payload,
+	})
+
 	jsonPayload, _ := json.Marshal(payload)
 	req, err := http.NewRequest("POST", reqURL, bytes.NewBuffer(jsonPayload))
 	if err != nil {
+		AddDebugTrace("saved-turn-title", "llm.error", "Failed to build title request", map[string]interface{}{
+			"error": err,
+		})
 		return ""
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	if globalApp.llmApiToken != "" {
-		token := strings.TrimSpace(globalApp.llmApiToken)
+	if opts.APIToken != "" || globalApp.llmApiToken != "" {
+		token := strings.TrimSpace(opts.APIToken)
+		if token == "" {
+			token = strings.TrimSpace(globalApp.llmApiToken)
+		}
 		if strings.HasPrefix(strings.ToLower(token), "bearer ") {
 			token = token[7:]
 		}
@@ -261,18 +377,34 @@ func callLLMInternal(prompt string, modelID string) string {
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
+		AddDebugTrace("saved-turn-title", "llm.error", "Title request failed", map[string]interface{}{
+			"error": err,
+		})
 		return ""
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		AddDebugTrace("saved-turn-title", "llm.error", "Title request returned non-OK status", map[string]interface{}{
+			"status_code": resp.StatusCode,
+			"__payload":   string(bodyBytes),
+		})
 		return ""
 	}
 
 	var resMap map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&resMap); err != nil {
+		AddDebugTrace("saved-turn-title", "llm.error", "Failed to decode title response JSON", map[string]interface{}{
+			"error": err,
+		})
 		return ""
 	}
+
+	AddDebugTrace("saved-turn-title", "llm.response", "Received saved turn title LLM response", map[string]interface{}{
+		"model":     modelID,
+		"__payload": resMap,
+	})
 
 	if choices, ok := resMap["choices"].([]interface{}); ok && len(choices) > 0 {
 		if choice, ok := choices[0].(map[string]interface{}); ok {
@@ -284,6 +416,9 @@ func callLLMInternal(prompt string, modelID string) string {
 		}
 	}
 
+	AddDebugTrace("saved-turn-title", "llm.empty", "Title response did not contain assistant content", map[string]interface{}{
+		"model": modelID,
+	})
 	return ""
 }
 
@@ -776,31 +911,48 @@ func handleLastSession() http.HandlerFunc {
 	}
 }
 
-func buildSavedTurnLLMTitle(promptText, responseText string) string {
+func buildSavedTurnLLMTitle(promptText, responseText string, opts savedTurnTitleOptions) string {
 	request := fmt.Sprintf(`Create a short title for this saved chat turn.
 
 Rules:
-- Use the main language of the assistant response.
-- Keep it under 18 characters if possible.
+- Use the main language of the saved content.
+- Aim for about 20 characters.
 - Make it specific and readable.
-- Output only the title text.
+- Respond as JSON only in this exact shape: {"title":"..."}
 
-User prompt:
+Saved user prompt:
 %s
 
-Assistant response:
-%s`, compactText(promptText, 600), compactText(responseText, 1200))
+Saved assistant response:
+%s`, cleanSavedTurnTitleContext(promptText, 320), cleanSavedTurnTitleContext(responseText, 1200))
 
-	title := strings.TrimSpace(callLLMInternal(request, "local-model"))
+	AddDebugTrace("saved-turn-title", "parse.start", "Starting saved turn title generation", map[string]interface{}{
+		"model":           strings.TrimSpace(opts.ModelID),
+		"temperature":     normalizeSavedTurnTemperature(opts.Temperature),
+		"prompt_chars":    len([]rune(strings.TrimSpace(promptText))),
+		"response_chars":  len([]rune(strings.TrimSpace(responseText))),
+		"request_preview": compactText(request, 220),
+	})
+
+	rawResponse := callLLMInternal(request, opts)
+	title := parseSavedTurnTitleFromJSON(rawResponse)
 	title = strings.Trim(title, "\"'`")
 	title = strings.Join(strings.Fields(title), " ")
 	if title == "" {
+		AddDebugTrace("saved-turn-title", "parse.failed", "Failed to parse title JSON response", map[string]interface{}{
+			"raw_response": compactText(rawResponse, 220),
+			"__payload":    rawResponse,
+		})
 		return ""
 	}
 	runes := []rune(title)
-	if len(runes) > 42 {
-		title = strings.TrimSpace(string(runes[:42])) + "..."
+	if len(runes) > 24 {
+		title = strings.TrimSpace(string(runes[:24]))
 	}
+	AddDebugTrace("saved-turn-title", "parse.success", "Parsed saved turn title JSON", map[string]interface{}{
+		"title":        title,
+		"title_length": len([]rune(title)),
+	})
 	return title
 }
 
@@ -834,8 +986,11 @@ func handleSavedTurns() http.HandlerFunc {
 			json.NewEncoder(w).Encode(map[string]interface{}{"items": entries})
 		case http.MethodPost:
 			var req struct {
-				PromptText   string `json:"prompt_text"`
-				ResponseText string `json:"response_text"`
+				PromptText   string   `json:"prompt_text"`
+				ResponseText string   `json:"response_text"`
+				ModelID      string   `json:"model_id"`
+				APIToken     string   `json:"api_token"`
+				Temperature  *float64 `json:"temperature"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				http.Error(w, "Invalid request", http.StatusBadRequest)
@@ -848,16 +1003,76 @@ func handleSavedTurns() http.HandlerFunc {
 				return
 			}
 
-			go func(userID string, turnID int64, promptText string, responseText string) {
-				title := buildSavedTurnLLMTitle(promptText, responseText)
+			titleOpts := savedTurnTitleOptions{
+				ModelID:  strings.TrimSpace(req.ModelID),
+				APIToken: strings.TrimSpace(req.APIToken),
+			}
+			if req.Temperature != nil {
+				titleOpts.Temperature = normalizeSavedTurnTemperature(*req.Temperature)
+			}
+
+			go func(userID string, turnID int64, promptText string, responseText string, opts savedTurnTitleOptions) {
+				title := buildSavedTurnLLMTitle(promptText, responseText, opts)
 				if title == "" {
+					AddDebugTrace("saved-turn-title", "db.skipped", "Skipped DB update because no title was generated", map[string]interface{}{
+						"user_id": userID,
+						"turn_id": turnID,
+					})
 					return
 				}
 				if err := mcp.UpdateSavedTurnTitle(userID, turnID, title, "generated"); err != nil {
 					log.Printf("[handleSavedTurns] Failed to generate async title for %s turn %d: %v", userID, turnID, err)
+					AddDebugTrace("saved-turn-title", "db.error", "Failed to update saved turn title in DB", map[string]interface{}{
+						"user_id": userID,
+						"turn_id": turnID,
+						"title":   title,
+						"error":   err,
+					})
+					return
 				}
-			}(userID, entry.ID, req.PromptText, req.ResponseText)
+				AddDebugTrace("saved-turn-title", "db.updated", "Updated saved turn title in DB", map[string]interface{}{
+					"user_id":      userID,
+					"turn_id":      turnID,
+					"title":        title,
+					"title_source": "generated",
+				})
+			}(userID, entry.ID, req.PromptText, req.ResponseText, titleOpts)
 
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"status": "ok",
+				"item":   entry,
+			})
+		case http.MethodPatch:
+			var req struct {
+				ID    int64  `json:"id"`
+				Title string `json:"title"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "Invalid request", http.StatusBadRequest)
+				return
+			}
+			req.Title = strings.TrimSpace(req.Title)
+			if req.ID <= 0 || req.Title == "" {
+				http.Error(w, "Valid id and title are required", http.StatusBadRequest)
+				return
+			}
+			if err := mcp.UpdateSavedTurnTitle(userID, req.ID, req.Title, "manual"); err != nil {
+				log.Printf("[handleSavedTurns] Failed to update manual title for %s turn %d: %v", userID, req.ID, err)
+				http.Error(w, "Failed to update title", http.StatusInternalServerError)
+				return
+			}
+			entry, err := mcp.GetSavedTurn(userID, req.ID)
+			if err != nil {
+				log.Printf("[handleSavedTurns] Failed to load updated turn %d for %s: %v", req.ID, userID, err)
+				http.Error(w, "Failed to load updated turn", http.StatusInternalServerError)
+				return
+			}
+			AddDebugTrace("saved-turn-title", "db.updated", "Updated saved turn title manually", map[string]interface{}{
+				"user_id":      userID,
+				"turn_id":      req.ID,
+				"title":        req.Title,
+				"title_source": "manual",
+			})
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"status": "ok",
 				"item":   entry,
@@ -894,11 +1109,16 @@ func handleSavedTurnTitleRefresh() http.HandlerFunc {
 			return
 		}
 
+		titleOpts, err := parseSavedTurnTitleOptionsFromBody(r)
+		if err != nil {
+			http.Error(w, "Invalid request", http.StatusBadRequest)
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 
 		idStr := strings.TrimSpace(r.URL.Query().Get("id"))
 		var entry mcp.SavedTurnEntry
-		var err error
 		if idStr != "" {
 			turnID, parseErr := strconv.ParseInt(idStr, 10, 64)
 			if parseErr != nil || turnID <= 0 {
@@ -935,8 +1155,12 @@ func handleSavedTurnTitleRefresh() http.HandlerFunc {
 			}
 		}
 
-		title := buildSavedTurnLLMTitle(entry.PromptText, entry.ResponseText)
+		title := buildSavedTurnLLMTitle(entry.PromptText, entry.ResponseText, titleOpts)
 		if title == "" {
+			AddDebugTrace("saved-turn-title", "db.skipped", "Manual title refresh produced no title", map[string]interface{}{
+				"user_id": userID,
+				"turn_id": entry.ID,
+			})
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"status":  "noop",
 				"updated": false,
@@ -947,9 +1171,21 @@ func handleSavedTurnTitleRefresh() http.HandlerFunc {
 
 		if err := mcp.UpdateSavedTurnTitle(userID, entry.ID, title, "generated"); err != nil {
 			log.Printf("[handleSavedTurnTitleRefresh] Failed to update title for %s turn %d: %v", userID, entry.ID, err)
+			AddDebugTrace("saved-turn-title", "db.error", "Failed to update title during manual refresh", map[string]interface{}{
+				"user_id": userID,
+				"turn_id": entry.ID,
+				"title":   title,
+				"error":   err,
+			})
 			http.Error(w, "Failed to update title", http.StatusInternalServerError)
 			return
 		}
+		AddDebugTrace("saved-turn-title", "db.updated", "Updated saved turn title during manual refresh", map[string]interface{}{
+			"user_id":      userID,
+			"turn_id":      entry.ID,
+			"title":        title,
+			"title_source": "generated",
+		})
 
 		updatedEntry, err := mcp.GetSavedTurn(userID, entry.ID)
 		if err != nil {

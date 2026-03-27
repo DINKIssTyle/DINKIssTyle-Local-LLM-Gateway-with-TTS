@@ -73,6 +73,10 @@ const translations = {
         'library.titleRefresh': '제목 생성',
         'library.titleRefreshed': '제목을 생성했습니다.',
         'library.titleRefreshFailed': '제목을 생성하지 못했습니다.',
+        'library.titleLabel': '제목',
+        'library.titlePlaceholder': '제목을 입력하세요',
+        'library.titleUpdated': '제목을 저장했습니다.',
+        'library.titleUpdateFailed': '제목을 저장하지 못했습니다.',
         'library.deleteConfirm': '이 저장된 대화를 삭제할까요?',
         'library.deleteFailed': '저장된 대화를 삭제하지 못했습니다.',
         'library.modalTitle': '저장된 대화',
@@ -244,6 +248,10 @@ const translations = {
         'library.titleRefresh': 'Generate title',
         'library.titleRefreshed': 'Generated the title.',
         'library.titleRefreshFailed': 'Failed to generate the title.',
+        'library.titleLabel': 'Title',
+        'library.titlePlaceholder': 'Enter a title',
+        'library.titleUpdated': 'Saved the title.',
+        'library.titleUpdateFailed': 'Failed to save the title.',
         'library.deleteConfirm': 'Delete this saved turn?',
         'library.deleteFailed': 'Failed to delete saved turn.',
         'library.modalTitle': 'Saved Turn',
@@ -750,18 +758,28 @@ function openSavedTurnModal(id) {
     const item = savedTurns.find((entry) => entry.id === id);
     if (!item || !savedTurnModal) return;
 
+    savedTurnModal.dataset.turnId = String(item.id);
+    savedTurnModal.dataset.title = item.title || '';
+    savedTurnModal.dataset.titleSource = item.title_source || '';
     savedTurnModal.dataset.responseText = item.response_text || '';
-    document.getElementById('saved-turn-modal-title').textContent = item.title || t('library.modalTitle');
+    document.getElementById('saved-turn-modal-title').textContent = '';
     document.getElementById('saved-turn-modal-prompt').textContent = item.prompt_text || '';
     const responseHost = document.getElementById('saved-turn-modal-response');
     responseHost.innerHTML = renderInitialAssistantMarkdown(item.response_text || '');
+    setSavedTurnTitleEditMode(false);
+    renderSavedTurnInlineTitle(item.title || '');
     savedTurnModal.classList.add('active');
 }
 
 function closeSavedTurnModal() {
     if (savedTurnModal) {
+        delete savedTurnModal.dataset.turnId;
+        delete savedTurnModal.dataset.title;
+        delete savedTurnModal.dataset.titleSource;
         delete savedTurnModal.dataset.responseText;
+        delete savedTurnModal.dataset.titleSaving;
     }
+    setSavedTurnTitleEditMode(false);
     savedTurnModal?.classList.remove('active');
 }
 
@@ -783,16 +801,109 @@ function speakSavedTurnResponse(btn) {
     speakMessage(text, btn);
 }
 
+function renderSavedTurnInlineTitle(title) {
+    if (!savedTurnModalTitleView) return;
+    const trimmedTitle = (title || '').trim();
+    savedTurnModalTitleView.textContent = trimmedTitle || t('library.modalTitle');
+    savedTurnModalTitleView.classList.toggle('is-placeholder', !trimmedTitle);
+}
+
+function setSavedTurnTitleEditMode(isEditing) {
+    if (!savedTurnModalTitleView || !savedTurnModalTitleEdit || !savedTurnModalTitleInput) return;
+    savedTurnModalTitleView.hidden = !!isEditing;
+    savedTurnModalTitleEdit.hidden = !isEditing;
+    if (isEditing) {
+        savedTurnModalTitleInput.value = savedTurnModal?.dataset?.title || '';
+        requestAnimationFrame(() => {
+            savedTurnModalTitleInput.focus();
+            savedTurnModalTitleInput.select();
+        });
+    }
+}
+
+function startEditSavedTurnTitle() {
+    if (!savedTurnModal?.dataset?.turnId) return;
+    if (savedTurnModal.dataset.titleSaving === 'true') return;
+    setSavedTurnTitleEditMode(true);
+}
+
+function cancelEditSavedTurnTitle() {
+    if (savedTurnModal?.dataset?.titleSaving === 'true') return;
+    setSavedTurnTitleEditMode(false);
+}
+
+function updateSavedTurnEntry(updatedItem) {
+    if (!updatedItem) return;
+    savedTurns = savedTurns.map((item) => item.id === updatedItem.id ? updatedItem : item);
+    renderSavedLibraryList();
+
+    if (savedTurnModal?.classList.contains('active') && String(updatedItem.id) === savedTurnModal.dataset.turnId) {
+        savedTurnModal.dataset.title = updatedItem.title || '';
+        savedTurnModal.dataset.titleSource = updatedItem.title_source || '';
+        renderSavedTurnInlineTitle(updatedItem.title || '');
+    }
+}
+
+async function saveEditedSavedTurnTitle() {
+    const turnId = parseInt(savedTurnModal?.dataset?.turnId || '', 10);
+    const nextTitle = (savedTurnModalTitleInput?.value || '').trim();
+    if (!turnId || !nextTitle) {
+        showToast(t('library.titleUpdateFailed'), true);
+        return;
+    }
+    if (savedTurnModal?.dataset?.titleSaving === 'true') return;
+
+    savedTurnModal.dataset.titleSaving = 'true';
+    if (savedTurnModalTitleSaveBtn) savedTurnModalTitleSaveBtn.disabled = true;
+    if (savedTurnModalTitleCancelBtn) savedTurnModalTitleCancelBtn.disabled = true;
+    if (savedTurnModalTitleInput) savedTurnModalTitleInput.disabled = true;
+
+    try {
+        const response = await fetch('/api/saved-turns', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+                id: turnId,
+                title: nextTitle
+            })
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        if (!data.item) throw new Error('Missing item');
+        updateSavedTurnEntry(data.item);
+        setSavedTurnTitleEditMode(false);
+        showToast(t('library.titleUpdated'));
+    } catch (err) {
+        console.warn('Failed to update saved turn title:', err);
+        showToast(t('library.titleUpdateFailed'), true);
+    } finally {
+        delete savedTurnModal.dataset.titleSaving;
+        if (savedTurnModalTitleSaveBtn) savedTurnModalTitleSaveBtn.disabled = false;
+        if (savedTurnModalTitleCancelBtn) savedTurnModalTitleCancelBtn.disabled = false;
+        if (savedTurnModalTitleInput) savedTurnModalTitleInput.disabled = false;
+    }
+}
+
+function buildSavedTurnTitleRequestPayload(extra = {}) {
+    return {
+        model_id: config.model || '',
+        api_token: config.apiToken || '',
+        temperature: typeof config.temperature === 'number' ? config.temperature : parseFloat(config.temperature) || 0.7,
+        ...extra
+    };
+}
+
 async function saveTurn(promptText, responseText) {
     try {
         const response = await fetch('/api/saved-turns', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include',
-            body: JSON.stringify({
+            body: JSON.stringify(buildSavedTurnTitleRequestPayload({
                 prompt_text: promptText,
                 response_text: responseText
-            })
+            }))
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
@@ -853,13 +964,14 @@ async function refreshSavedTurnTitle() {
     try {
         const response = await fetch('/api/saved-turns/title-refresh', {
             method: 'POST',
-            credentials: 'include'
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify(buildSavedTurnTitleRequestPayload())
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
         if (data.updated && data.item) {
-            savedTurns = savedTurns.map((item) => item.id === data.item.id ? data.item : item);
-            renderSavedLibraryList();
+            updateSavedTurnEntry(data.item);
             scheduleSavedTitleRefresh(5000);
         }
     } catch (e) {
@@ -878,13 +990,15 @@ async function refreshSavedTurnTitleById(id) {
     try {
         const response = await fetch(`/api/saved-turns/title-refresh?id=${encodeURIComponent(String(id))}`, {
             method: 'POST',
-            credentials: 'include'
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify(buildSavedTurnTitleRequestPayload())
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
 
         if (data.item) {
-            savedTurns = savedTurns.map((item) => item.id === data.item.id ? data.item : item);
+            updateSavedTurnEntry(data.item);
         }
 
         if (data.updated && data.item) {
@@ -1025,6 +1139,21 @@ const savedLibraryView = document.getElementById('saved-library-view');
 const savedLibraryList = document.getElementById('saved-library-list');
 const savedLibrarySearchInput = document.getElementById('saved-library-search');
 const savedTurnModal = document.getElementById('saved-turn-modal');
+const savedTurnModalTitleView = document.getElementById('saved-turn-inline-title-view');
+const savedTurnModalTitleEdit = document.getElementById('saved-turn-inline-title-edit');
+const savedTurnModalTitleInput = document.getElementById('saved-turn-inline-title-input');
+const savedTurnModalTitleSaveBtn = document.getElementById('saved-turn-inline-title-save');
+const savedTurnModalTitleCancelBtn = document.getElementById('saved-turn-inline-title-cancel');
+
+savedTurnModalTitleInput?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        saveEditedSavedTurnTitle();
+    } else if (event.key === 'Escape') {
+        event.preventDefault();
+        cancelEditSavedTurnTitle();
+    }
+});
 
 function updateViewportMetrics() {
     const root = document.documentElement;
