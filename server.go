@@ -2073,6 +2073,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	needsCorrection := false
 	var badContentCapture string
 	var lastResponseID string // Captured from chat.end for stateful chaining
+	reasoningActive := false
+	reasoningStartedAt := time.Time{}
 	toolUsageCounts := make(map[string]int)
 	toolSignatureCounts := make(map[string]int)
 
@@ -2482,7 +2484,35 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 					if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
 						if choice, ok := choices[0].(map[string]interface{}); ok {
 							if delta, ok := choice["delta"].(map[string]interface{}); ok {
+								reasoningText := ""
+								if rc, ok := delta["reasoning_content"].(string); ok {
+									reasoningText = rc
+								} else if r, ok := delta["reasoning"].(string); ok {
+									reasoningText = r
+								}
+								if reasoningText != "" {
+									if !reasoningActive {
+										reasoningActive = true
+										reasoningStartedAt = time.Now()
+										appendChatEvent("assistant", "reasoning.start", map[string]interface{}{
+											"type":       "reasoning.start",
+											"started_at": reasoningStartedAt.Format(time.RFC3339Nano),
+										})
+									}
+									appendChatEvent("assistant", "reasoning.delta", map[string]interface{}{
+										"type":    "reasoning.delta",
+										"content": reasoningText,
+									})
+								}
 								if c, ok := delta["content"].(string); ok {
+									if reasoningActive {
+										appendChatEvent("assistant", "reasoning.end", map[string]interface{}{
+											"type":       "reasoning.end",
+											"elapsed_ms": time.Since(reasoningStartedAt).Milliseconds(),
+										})
+										reasoningActive = false
+										reasoningStartedAt = time.Time{}
+									}
 									fullResponse += c
 								}
 							}
@@ -2700,6 +2730,14 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		}
 
 		log.Printf("[handleChat-DEBUG] turn %d processing complete. Total response len: %d", turn, len(fullResponse))
+		if reasoningActive {
+			appendChatEvent("assistant", "reasoning.end", map[string]interface{}{
+				"type":       "reasoning.end",
+				"elapsed_ms": time.Since(reasoningStartedAt).Milliseconds(),
+			})
+			reasoningActive = false
+			reasoningStartedAt = time.Time{}
+		}
 
 		// 🛡️ TOOL EXECUTION & LOOP LOGIC
 		if toolExecutedThisTurn {
