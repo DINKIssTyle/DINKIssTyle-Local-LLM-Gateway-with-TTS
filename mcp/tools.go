@@ -462,6 +462,10 @@ func SearchMemoryDB(userID, query string) (string, error) {
 	log.Printf("[MCP] SearchMemoryDB: User=%s, Query=%s", userID, query)
 	rewrittenQuery := rewriteMemoryQuery(query)
 	searchQueries := buildSearchQueries(query, rewrittenQuery)
+	chunkResults, err := SearchMemoryChunkMatchesMultiQuery(userID, searchQueries, 10)
+	if err != nil {
+		return "", fmt.Errorf("chunk search failed: %v", err)
+	}
 	results, err := SearchMemoriesMultiQuery(userID, searchQueries)
 	if err != nil {
 		return "", fmt.Errorf("db search failed: %v", err)
@@ -471,7 +475,7 @@ func SearchMemoryDB(userID, query string) (string, error) {
 		return "", fmt.Errorf("saved turn search failed: %v", err)
 	}
 
-	if len(results) == 0 && len(savedTurns) == 0 {
+	if len(chunkResults) == 0 && len(results) == 0 && len(savedTurns) == 0 {
 		return "No relevant memories found.", nil
 	}
 
@@ -483,13 +487,26 @@ func SearchMemoryDB(userID, query string) (string, error) {
 	if len(searchQueries) > 0 {
 		sb.WriteString(fmt.Sprintf("(search terms: %s)\n", strings.Join(searchQueries, ", ")))
 	}
+	if len(chunkResults) > 0 {
+		for _, r := range chunkResults {
+			memoryType := strings.TrimSpace(r.MemoryType)
+			if memoryType == "" {
+				memoryType = "raw_interaction"
+			}
+			sb.WriteString(fmt.Sprintf("\n--- MEMORY ID: %d | DATE: %s | TYPE: %s | CHUNK: %d ---\n", r.ID, r.CreatedAt.Format("2006-01-02"), memoryType, r.ChunkIndex+1))
+			sb.WriteString(fmt.Sprintf("RELEVANT EXCERPT:\n%s\n", r.ChunkText))
+		}
+	}
+	if len(results) > 0 {
+		sb.WriteString("\n(Full memory matches)\n")
+	}
 	for _, r := range results {
 		memoryType := strings.TrimSpace(r.MemoryType)
 		if memoryType == "" {
 			memoryType = "raw_interaction"
 		}
 		sb.WriteString(fmt.Sprintf("\n--- MEMORY ID: %d | DATE: %s | TYPE: %s ---\n", r.ID, r.CreatedAt.Format("2006-01-02"), memoryType))
-		sb.WriteString(fmt.Sprintf("FULL TEXT:\n%s\n", r.FullText))
+		sb.WriteString(fmt.Sprintf("FULL TEXT:\n%s\n", compactMemoryText(r.FullText, 500)))
 	}
 	for _, turn := range savedTurns {
 		sb.WriteString(fmt.Sprintf("\n--- SAVED TURN ID: %d | DATE: %s | TITLE: %s ---\n", turn.ID, turn.CreatedAt.Format("2006-01-02"), turn.Title))

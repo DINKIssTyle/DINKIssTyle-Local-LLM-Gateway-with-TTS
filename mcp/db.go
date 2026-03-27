@@ -1266,6 +1266,13 @@ type MemoryEntry struct {
 	MemoryType string    `json:"memory_type"`
 }
 
+type MemoryChunkMatch struct {
+	MemoryEntry
+	ChunkID    int64  `json:"chunk_id"`
+	ChunkIndex int    `json:"chunk_index"`
+	ChunkText  string `json:"chunk_text"`
+}
+
 // SearchMemories searches full_text memories belonging to the user.
 func SearchMemories(userID, queryStr string) ([]MemoryEntry, error) {
 	if db == nil {
@@ -1326,6 +1333,94 @@ func SearchMemoriesMultiQuery(userID string, queryStrs []string) ([]MemoryEntry,
 			seen[result.ID] = true
 			merged = append(merged, result)
 			if len(merged) >= 10 {
+				return merged, nil
+			}
+		}
+	}
+
+	return merged, nil
+}
+
+func SearchMemoryChunkMatches(userID, queryStr string, limit int) ([]MemoryChunkMatch, error) {
+	if db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+
+	trimmed := strings.TrimSpace(queryStr)
+	if trimmed == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+
+	searchPattern := "%" + trimmed + "%"
+	rows, err := db.Query(`
+		SELECT
+			m.id, m.user_id, m.full_text, m.hit_count, m.created_at, m.memory_type,
+			mc.id, mc.chunk_index, mc.chunk_text
+		FROM memory_chunks mc
+		INNER JOIN memories m ON m.id = mc.memory_id
+		WHERE mc.user_id = ? AND mc.chunk_text LIKE ?
+		ORDER BY m.created_at DESC, mc.chunk_index ASC
+		LIMIT ?`, userID, searchPattern, limit)
+	if err != nil {
+		return nil, fmt.Errorf("memory chunk search failed: %w", err)
+	}
+	defer rows.Close()
+
+	var results []MemoryChunkMatch
+	for rows.Next() {
+		var match MemoryChunkMatch
+		if err := rows.Scan(
+			&match.ID,
+			&match.UserID,
+			&match.FullText,
+			&match.HitCount,
+			&match.CreatedAt,
+			&match.MemoryType,
+			&match.ChunkID,
+			&match.ChunkIndex,
+			&match.ChunkText,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan memory chunk match: %w", err)
+		}
+		results = append(results, match)
+	}
+
+	return results, nil
+}
+
+func SearchMemoryChunkMatchesMultiQuery(userID string, queryStrs []string, limit int) ([]MemoryChunkMatch, error) {
+	if db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+
+	seen := make(map[string]bool)
+	var merged []MemoryChunkMatch
+
+	for _, queryStr := range queryStrs {
+		trimmed := strings.TrimSpace(queryStr)
+		if trimmed == "" {
+			continue
+		}
+
+		results, err := SearchMemoryChunkMatches(userID, trimmed, limit)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, result := range results {
+			key := fmt.Sprintf("%d:%d", result.ID, result.ChunkIndex)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			merged = append(merged, result)
+			if len(merged) >= limit {
 				return merged, nil
 			}
 		}
