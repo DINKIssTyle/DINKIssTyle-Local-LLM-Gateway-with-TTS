@@ -109,6 +109,23 @@ type savedTurnTitleOptions struct {
 	LLMMode     string
 }
 
+type chatSessionToolHistorySnapshot struct {
+	Tool   string `json:"tool"`
+	Detail string `json:"detail"`
+}
+
+type chatSessionToolCardSnapshot struct {
+	State    string                           `json:"state"`
+	Summary  string                           `json:"summary"`
+	Args     interface{}                      `json:"args,omitempty"`
+	ToolName string                           `json:"tool_name"`
+	History  []chatSessionToolHistorySnapshot `json:"history,omitempty"`
+}
+
+type chatSessionUISnapshot struct {
+	ToolCards map[string]chatSessionToolCardSnapshot `json:"tool_cards"`
+}
+
 func cleanSavedTurnTitleContext(input string, limit int) string {
 	input = strings.ReplaceAll(input, "\r\n", "\n")
 	input = strings.ReplaceAll(input, "\r", "\n")
@@ -131,6 +148,109 @@ func cleanSavedTurnTitleContext(input string, limit int) string {
 	).Replace(input)
 	input = regexp.MustCompile(`\s+`).ReplaceAllString(strings.TrimSpace(input), " ")
 	return compactText(input, limit)
+}
+
+func parseChatSessionUISnapshot(raw string) chatSessionUISnapshot {
+	snapshot := chatSessionUISnapshot{
+		ToolCards: map[string]chatSessionToolCardSnapshot{},
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "{}" {
+		return snapshot
+	}
+	if err := json.Unmarshal([]byte(raw), &snapshot); err != nil {
+		return chatSessionUISnapshot{ToolCards: map[string]chatSessionToolCardSnapshot{}}
+	}
+	if snapshot.ToolCards == nil {
+		snapshot.ToolCards = map[string]chatSessionToolCardSnapshot{}
+	}
+	return snapshot
+}
+
+func encodeChatSessionUISnapshot(snapshot chatSessionUISnapshot) string {
+	if snapshot.ToolCards == nil {
+		snapshot.ToolCards = map[string]chatSessionToolCardSnapshot{}
+	}
+	bytes, err := json.Marshal(snapshot)
+	if err != nil {
+		return "{}"
+	}
+	return string(bytes)
+}
+
+func compactToolSnapshotDetail(args interface{}, summary string) string {
+	if s, ok := args.(string); ok && strings.TrimSpace(s) != "" {
+		return compactText(strings.TrimSpace(s), 220)
+	}
+	if args != nil {
+		if bytes, err := json.Marshal(args); err == nil {
+			return compactText(strings.TrimSpace(string(bytes)), 220)
+		}
+	}
+	return compactText(strings.TrimSpace(summary), 220)
+}
+
+func updateChatSessionToolSnapshot(snapshot *chatSessionUISnapshot, turnID, eventType string, payload interface{}) {
+	if snapshot == nil || strings.TrimSpace(turnID) == "" {
+		return
+	}
+	if snapshot.ToolCards == nil {
+		snapshot.ToolCards = map[string]chatSessionToolCardSnapshot{}
+	}
+
+	card := snapshot.ToolCards[turnID]
+	payloadMap, _ := payload.(map[string]interface{})
+	if payloadMap == nil {
+		payloadMap = map[string]interface{}{}
+	}
+
+	toolName, _ := payloadMap["tool"].(string)
+	summary, _ := payloadMap["reason"].(string)
+	args := payloadMap["arguments"]
+
+	switch eventType {
+	case "tool_call.start":
+		card.State = "running"
+		card.ToolName = strings.TrimSpace(toolName)
+		card.Summary = ""
+	case "tool_call.arguments":
+		card.State = "running"
+		if strings.TrimSpace(toolName) != "" {
+			card.ToolName = strings.TrimSpace(toolName)
+		}
+		card.Args = args
+		detail := compactToolSnapshotDetail(args, summary)
+		if detail != "" {
+			entry := chatSessionToolHistorySnapshot{
+				Tool:   strings.TrimSpace(card.ToolName),
+				Detail: detail,
+			}
+			if entry.Tool == "" {
+				entry.Tool = "Tool"
+			}
+			last := chatSessionToolHistorySnapshot{}
+			if len(card.History) > 0 {
+				last = card.History[len(card.History)-1]
+			}
+			if last.Tool != entry.Tool || last.Detail != entry.Detail {
+				card.History = append(card.History, entry)
+			}
+		}
+	case "tool_call.success":
+		card.State = "success"
+		if strings.TrimSpace(toolName) != "" {
+			card.ToolName = strings.TrimSpace(toolName)
+		}
+		card.Summary = ""
+	case "tool_call.failure":
+		card.State = "failure"
+		if strings.TrimSpace(toolName) != "" {
+			card.ToolName = strings.TrimSpace(toolName)
+		}
+		card.Summary = strings.TrimSpace(summary)
+	}
+
+	snapshot.ToolCards[turnID] = card
 }
 
 func normalizeSavedTurnTemperature(temp float64) float64 {
@@ -1123,6 +1243,7 @@ func handleClearCurrentChat() http.HandlerFunc {
 		sessionEntry.RiskScore = 0
 		sessionEntry.RiskLevel = ""
 		sessionEntry.LastResetReason = "manual_clear_chat"
+		sessionEntry.UIStateJSON = "{}"
 		sessionEntry.ClearedAt = sql.NullTime{Time: now, Valid: true}
 
 		entry, err := mcp.UpsertChatSession(sessionEntry)
@@ -1962,8 +2083,14 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		chatSessionOK         bool
 		sessionStatus         = "failed"
 		sessionLastResponseID string
+		sessionUIStateJSON    = "{}"
+		sessionUISnapshot     = chatSessionUISnapshot{ToolCards: map[string]chatSessionToolCardSnapshot{}}
 	)
 	if strings.TrimSpace(userID) != "" {
+		if existingSession, existingErr := mcp.GetCurrentChatSession(userID); existingErr == nil {
+			sessionUIStateJSON = existingSession.UIStateJSON
+			sessionUISnapshot = parseChatSessionUISnapshot(existingSession.UIStateJSON)
+		}
 		chatSession, err = mcp.UpsertChatSession(mcp.ChatSessionEntry{
 			UserID:           userID,
 			SessionKey:       "default",
@@ -1981,6 +2108,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			RiskScore:        parseFloatHeader(statefulRiskScore),
 			RiskLevel:        strings.TrimSpace(statefulRiskLevel),
 			LastResetReason:  statefulResetReason,
+			UIStateJSON:      sessionUIStateJSON,
 		})
 		if err != nil {
 			log.Printf("[chat-session] failed to initialize current session for %s: %v", userID, err)
@@ -2001,6 +2129,32 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		}
 		if _, err := mcp.AppendChatEvent(userID, chatSession.ID, role, eventType, "", clientTurnID, jsonPayload); err != nil {
 			log.Printf("[chat-session] failed to append %s event for %s: %v", eventType, userID, err)
+		}
+		if strings.HasPrefix(eventType, "tool_call.") {
+			updateChatSessionToolSnapshot(&sessionUISnapshot, clientTurnID, eventType, payload)
+			sessionUIStateJSON = encodeChatSessionUISnapshot(sessionUISnapshot)
+			chatSession.UIStateJSON = sessionUIStateJSON
+			if _, err := mcp.UpsertChatSession(mcp.ChatSessionEntry{
+				UserID:           userID,
+				SessionKey:       "default",
+				Status:           "running",
+				LLMMode:          llmMode,
+				ModelID:          modelID,
+				LastResponseID:   sessionLastResponseID,
+				SummaryText:      "",
+				TurnCount:        parseIntHeader(statefulTurnCount),
+				EstimatedChars:   parseIntHeader(statefulEstChars),
+				LastInputTokens:  parseIntHeader(statefulInputTokens),
+				LastOutputTokens: 0,
+				PeakInputTokens:  parseIntHeader(statefulPeakInputTokens),
+				TokenBudget:      parseIntHeader(statefulTokenBudget),
+				RiskScore:        parseFloatHeader(statefulRiskScore),
+				RiskLevel:        strings.TrimSpace(statefulRiskLevel),
+				LastResetReason:  statefulResetReason,
+				UIStateJSON:      sessionUIStateJSON,
+			}); err != nil {
+				log.Printf("[chat-session] failed to persist ui state for %s: %v", userID, err)
+			}
 		}
 	}
 
@@ -2028,6 +2182,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			RiskScore:        parseFloatHeader(statefulRiskScore),
 			RiskLevel:        strings.TrimSpace(statefulRiskLevel),
 			LastResetReason:  statefulResetReason,
+			UIStateJSON:      sessionUIStateJSON,
 		}); err != nil {
 			log.Printf("[chat-session] failed to finalize current session for %s: %v", userID, err)
 		}

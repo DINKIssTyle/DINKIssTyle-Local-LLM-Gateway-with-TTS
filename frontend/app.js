@@ -2343,6 +2343,19 @@ function extractSessionClearedAt(session) {
     return '';
 }
 
+function getCurrentChatSessionUISnapshot() {
+    const raw = String(currentChatSessionCache?.UIStateJSON || '').trim();
+    if (!raw) return { tool_cards: {} };
+    try {
+        const parsed = JSON.parse(raw);
+        return {
+            tool_cards: parsed?.tool_cards && typeof parsed.tool_cards === 'object' ? parsed.tool_cards : {}
+        };
+    } catch (_) {
+        return { tool_cards: {} };
+    }
+}
+
 function isActiveLocalTurn(turnId = '') {
     return !!turnId && !!activeLocalTurnId && turnId === activeLocalTurnId;
 }
@@ -2694,6 +2707,7 @@ function hydrateChatSessionEventsSnapshot(items) {
     const reasoningDurationById = new Map();
     const toolStateById = new Map();
     const assistantOrder = [];
+    const sessionUISnapshot = getCurrentChatSessionUISnapshot();
 
     let currentTurnId = '';
     let currentAssistantId = '';
@@ -2866,13 +2880,15 @@ function hydrateChatSessionEventsSnapshot(items) {
         }
 
         const toolState = toolStateById.get(assistantId);
-        if (toolState) {
-            setToolCardState(assistantId, toolState.state, toolState.summary, toolState.args, toolState.toolName);
+        const snapshotToolState = sessionUISnapshot.tool_cards?.[user.turnId] || null;
+        const mergedToolState = toolState || snapshotToolState;
+        if (mergedToolState) {
+            setToolCardState(assistantId, mergedToolState.state, mergedToolState.summary, mergedToolState.args, mergedToolState.toolName);
             const card = getActiveToolCard(assistantId);
             if (card) {
-                card._history = Array.isArray(toolState.history) ? [...toolState.history] : [];
+                card._history = Array.isArray(mergedToolState.history) ? [...mergedToolState.history] : [];
                 const historyEl = card.querySelector('.tool-card-history');
-                renderToolHistory(card, historyEl, toolState.state);
+                renderToolHistory(card, historyEl, mergedToolState.state);
             }
         }
 
@@ -3264,6 +3280,10 @@ function finishChatSessionRestore() {
     hideProgressDock();
     requestAnimationFrame(() => {
         chatMessages?.classList.remove('is-session-hydrating');
+        scrollToBottom(true);
+        requestAnimationFrame(() => {
+            scrollToBottom(true);
+        });
     });
     updateMessageInputPlaceholder();
 }
@@ -6320,18 +6340,21 @@ async function checkSystemHealth() {
             }
         }
 
-        const healthMsg = {
-            role: 'assistant',
-            startup: {
-                title: issues.length === 0 ? t('chat.startup.welcomeTitle') : t('health.checkRequired'),
-                body: issues.length === 0 ? t('chat.startup.welcomeBody') : t('chat.startup.issueBody'),
-                issues,
-                showRestoreButton: !!lastSessionCache,
-                restoreLabel: t('chat.startup.restore')
-            }
-        };
+        const shouldShowStartupCard = issues.length > 0 || !lastSessionCache;
+        if (shouldShowStartupCard) {
+            const healthMsg = {
+                role: 'assistant',
+                startup: {
+                    title: issues.length === 0 ? t('chat.startup.welcomeTitle') : t('health.checkRequired'),
+                    body: issues.length === 0 ? t('chat.startup.welcomeBody') : t('chat.startup.issueBody'),
+                    issues,
+                    showRestoreButton: false,
+                    restoreLabel: t('chat.startup.restore')
+                }
+            };
 
-        appendMessage(healthMsg);
+            appendMessage(healthMsg);
+        }
 
     } catch (e) {
         console.error("Health check rendering failed:", e);

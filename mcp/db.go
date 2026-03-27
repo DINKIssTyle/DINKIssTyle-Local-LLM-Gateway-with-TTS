@@ -132,6 +132,7 @@ func createSchema() error {
 		risk_score REAL NOT NULL DEFAULT 0,
 		risk_level TEXT NOT NULL DEFAULT 'low',
 		last_reset_reason TEXT NOT NULL DEFAULT '',
+		ui_state_json TEXT NOT NULL DEFAULT '{}',
 		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		cleared_at DATETIME
@@ -271,8 +272,51 @@ func createSchema() error {
 	if err := migrateMemoriesSchema(); err != nil {
 		return err
 	}
+	if err := migrateChatSessionsSchema(); err != nil {
+		return err
+	}
 
 	log.Println("[DB] Schema initialized successfully.")
+	return nil
+}
+
+func migrateChatSessionsSchema() error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	rows, err := db.Query(`PRAGMA table_info(chat_sessions)`)
+	if err != nil {
+		return fmt.Errorf("failed to inspect chat_sessions schema: %w", err)
+	}
+	defer rows.Close()
+
+	hasUIStateJSON := false
+	for rows.Next() {
+		var cid int
+		var name string
+		var colType string
+		var notNull int
+		var dflt sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			return fmt.Errorf("failed to scan chat_sessions schema: %w", err)
+		}
+		if name == "ui_state_json" {
+			hasUIStateJSON = true
+		}
+	}
+
+	if hasUIStateJSON {
+		return nil
+	}
+
+	if _, err := db.Exec(`ALTER TABLE chat_sessions ADD COLUMN ui_state_json TEXT NOT NULL DEFAULT '{}'`); err != nil {
+		return fmt.Errorf("failed to add ui_state_json to chat_sessions: %w", err)
+	}
+	if _, err := db.Exec(`UPDATE chat_sessions SET ui_state_json = '{}' WHERE TRIM(COALESCE(ui_state_json, '')) = ''`); err != nil {
+		return fmt.Errorf("failed to backfill ui_state_json: %w", err)
+	}
 	return nil
 }
 
@@ -410,6 +454,7 @@ type ChatSessionEntry struct {
 	RiskScore        float64
 	RiskLevel        string
 	LastResetReason  string
+	UIStateJSON      string
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 	ClearedAt        sql.NullTime
@@ -655,6 +700,7 @@ func UpsertChatSession(entry ChatSessionEntry) (ChatSessionEntry, error) {
 	entry.LastResponseID = strings.TrimSpace(entry.LastResponseID)
 	entry.RiskLevel = strings.TrimSpace(entry.RiskLevel)
 	entry.LastResetReason = strings.TrimSpace(entry.LastResetReason)
+	entry.UIStateJSON = strings.TrimSpace(entry.UIStateJSON)
 	if entry.UserID == "" {
 		return saved, fmt.Errorf("user id is required")
 	}
@@ -670,14 +716,17 @@ func UpsertChatSession(entry ChatSessionEntry) (ChatSessionEntry, error) {
 	if entry.RiskLevel == "" {
 		entry.RiskLevel = "low"
 	}
+	if entry.UIStateJSON == "" {
+		entry.UIStateJSON = "{}"
+	}
 
 	query := `
 	INSERT INTO chat_sessions (
 		user_id, session_key, status, llm_mode, model_id, current_job_id,
 		last_response_id, summary_text, turn_count, estimated_chars,
 		last_input_tokens, last_output_tokens, peak_input_tokens, token_budget,
-		risk_score, risk_level, last_reset_reason, updated_at, cleared_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		risk_score, risk_level, last_reset_reason, ui_state_json, updated_at, cleared_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(user_id, session_key) DO UPDATE SET
 		status = excluded.status,
 		llm_mode = excluded.llm_mode,
@@ -694,6 +743,7 @@ func UpsertChatSession(entry ChatSessionEntry) (ChatSessionEntry, error) {
 		risk_score = excluded.risk_score,
 		risk_level = excluded.risk_level,
 		last_reset_reason = excluded.last_reset_reason,
+		ui_state_json = excluded.ui_state_json,
 		updated_at = excluded.updated_at,
 		cleared_at = excluded.cleared_at`
 
@@ -717,6 +767,7 @@ func UpsertChatSession(entry ChatSessionEntry) (ChatSessionEntry, error) {
 		entry.RiskScore,
 		entry.RiskLevel,
 		entry.LastResetReason,
+		entry.UIStateJSON,
 		updatedAt,
 		nullTimeValue(entry.ClearedAt),
 	)
@@ -742,7 +793,7 @@ func GetChatSession(userID, sessionKey string) (ChatSessionEntry, error) {
 	SELECT id, user_id, session_key, status, llm_mode, model_id, current_job_id,
 		last_response_id, summary_text, turn_count, estimated_chars,
 		last_input_tokens, last_output_tokens, peak_input_tokens, token_budget,
-		risk_score, risk_level, last_reset_reason, created_at, updated_at, cleared_at
+		risk_score, risk_level, last_reset_reason, ui_state_json, created_at, updated_at, cleared_at
 	FROM chat_sessions
 	WHERE user_id = ? AND session_key = ?`
 
@@ -765,6 +816,7 @@ func GetChatSession(userID, sessionKey string) (ChatSessionEntry, error) {
 		&entry.RiskScore,
 		&entry.RiskLevel,
 		&entry.LastResetReason,
+		&entry.UIStateJSON,
 		&entry.CreatedAt,
 		&entry.UpdatedAt,
 		&entry.ClearedAt,
