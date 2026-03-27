@@ -942,6 +942,27 @@ func ListChatEvents(userID string, sessionID int64, afterSeq, limit int) ([]Chat
 	return entries, nil
 }
 
+func CountChatEvents(userID string, sessionID int64) (int, error) {
+	if db == nil {
+		return 0, fmt.Errorf("database not initialized")
+	}
+
+	var count int
+	err := db.QueryRow(`
+		SELECT COUNT(*)
+		FROM chat_events
+		WHERE user_id = ? AND session_id = ?
+		  AND created_at >= COALESCE((SELECT cleared_at FROM chat_sessions WHERE id = ?), '0001-01-01 00:00:00')`,
+		strings.TrimSpace(userID),
+		sessionID,
+		sessionID,
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count chat events: %w", err)
+	}
+	return count, nil
+}
+
 func UpsertRequestPattern(userID, intentKey, sampleQuery, queryFingerprint string) (int64, error) {
 	if db == nil {
 		return 0, fmt.Errorf("database not initialized")

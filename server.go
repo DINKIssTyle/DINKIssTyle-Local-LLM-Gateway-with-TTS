@@ -1041,12 +1041,18 @@ func handleChatSessionEvents() http.HandlerFunc {
 			http.Error(w, "Failed to load chat events", http.StatusInternalServerError)
 			return
 		}
+		totalCount, err := mcp.CountChatEvents(userID, session.ID)
+		if err != nil {
+			http.Error(w, "Failed to count chat events", http.StatusInternalServerError)
+			return
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"has_session": true,
 			"session":     session,
 			"items":       events,
+			"total_count": totalCount,
 		})
 	}
 }

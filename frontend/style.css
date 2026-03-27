@@ -204,6 +204,67 @@ body {
   pointer-events: none;
 }
 
+.session-restore-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 4px 2px 12px;
+}
+
+.session-restore-heading {
+  font-size: 15px;
+  font-weight: 700;
+  color: #d7deea;
+}
+
+.session-restore-subheading {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.session-restore-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.session-restore-card {
+  padding: 16px 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.session-restore-line {
+  height: 12px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.12) 50%, rgba(255,255,255,0.06) 100%);
+  background-size: 200% 100%;
+  animation: sessionSkeletonShimmer 1.25s linear infinite;
+}
+
+.session-restore-line.is-title {
+  height: 16px;
+  margin-bottom: 12px;
+}
+
+.session-restore-line.is-body + .session-restore-line.is-body {
+  margin-top: 8px;
+}
+
+.session-restore-line.is-wide {
+  width: 92%;
+}
+
+.session-restore-line.is-medium {
+  width: 68%;
+}
+
+.session-restore-line.is-short {
+  width: 44%;
+}
+
 #chat-messages,
 #chat-messages * {
   user-select: text;
@@ -481,6 +542,15 @@ body {
     opacity: 1;
     transform: translateY(0);
     filter: blur(0);
+  }
+}
+
+@keyframes sessionSkeletonShimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
   }
 }
 

@@ -194,6 +194,10 @@ const translations = {
         'input.placeholder': '메시지를 입력하세요...',
         'input.placeholder.sttA': '지금 말하세요...',
         'input.placeholder.sttB': '듣는 중...',
+        'input.placeholder.restoring': '이전 대화 복원 중...',
+        'progress.restoringHistory': '이전 대화 복원 중',
+        'restore.skeletonTitle': '이전 대화를 불러오는 중입니다.',
+        'restore.skeletonBody': '서버에 저장된 대화와 상태를 복원하고 있습니다.',
         // Health Check
         'health.systemReady': '시스템 준비 완료',
         'health.checkRequired': '시스템 점검 필요',
@@ -370,6 +374,10 @@ const translations = {
         'input.placeholder': 'Type a message...',
         'input.placeholder.sttA': 'Speak now...',
         'input.placeholder.sttB': 'Listening...',
+        'input.placeholder.restoring': 'Restoring previous conversation...',
+        'progress.restoringHistory': 'Restoring previous conversation',
+        'restore.skeletonTitle': 'Restoring previous conversation.',
+        'restore.skeletonBody': 'Loading chat history and state from the server.',
         // Health Check
         'health.systemReady': 'System Ready',
         'health.checkRequired': 'System Check Required',
@@ -1580,6 +1588,7 @@ let serverReplayMessageBuffers = new Map();
 let serverReplayReasoningBuffers = new Map();
 let activeLocalTurnId = '';
 let activeLocalAssistantId = '';
+let isRestoringChatSession = false;
 let savedTurns = [];
 let savedLibraryQuery = '';
 let savedLibraryLoaded = false;
@@ -2284,15 +2293,16 @@ async function fetchCurrentChatSession() {
 async function fetchCurrentChatSessionEvents(afterSeq = 0, limit = 400) {
     try {
         const response = await fetch(`/api/chat-session/events?after_seq=${afterSeq}&limit=${limit}`, { credentials: 'include' });
-        if (!response.ok) return { session: null, items: [] };
+        if (!response.ok) return { session: null, items: [], totalCount: 0 };
         const data = await response.json();
         return {
             session: data?.has_session ? data.session : null,
-            items: Array.isArray(data?.items) ? data.items : []
+            items: Array.isArray(data?.items) ? data.items : [],
+            totalCount: Number(data?.total_count || 0)
         };
     } catch (e) {
         console.warn('Failed to fetch current chat session events:', e);
-        return { session: null, items: [] };
+        return { session: null, items: [], totalCount: 0 };
     }
 }
 
@@ -2625,24 +2635,40 @@ async function syncCurrentChatSessionFromServer() {
         return;
     }
 
-    const result = await fetchCurrentChatSessionEvents(currentChatSessionEventSeq, 400);
+    const result = await fetchCurrentChatSessionEvents(currentChatSessionEventSeq, 200);
     if (result.session) {
         applyCurrentChatSessionSnapshot(result.session);
     }
 
-    if (Array.isArray(result.items) && result.items.length > 0) {
+    const shouldRestoreSnapshot = currentChatSessionEventSeq === 0 && result.totalCount > 0;
+    if (shouldRestoreSnapshot) {
+        beginChatSessionRestore(result.totalCount);
+        try {
+            let allItems = Array.isArray(result.items) ? [...result.items] : [];
+            updateChatSessionRestoreProgress(allItems.length, result.totalCount);
+            let afterSeq = allItems.length > 0 ? Number(allItems[allItems.length - 1].EventSeq || 0) : 0;
+
+            while (allItems.length < result.totalCount) {
+                const page = await fetchCurrentChatSessionEvents(afterSeq, 200);
+                const pageItems = Array.isArray(page.items) ? page.items : [];
+                if (pageItems.length === 0) break;
+                allItems = allItems.concat(pageItems);
+                afterSeq = Number(pageItems[pageItems.length - 1].EventSeq || afterSeq);
+                updateChatSessionRestoreProgress(allItems.length, result.totalCount);
+            }
+
+            hydrateChatSessionEventsSnapshot(allItems);
+            for (const entry of allItems) {
+                currentChatSessionEventSeq = Math.max(currentChatSessionEventSeq, Number(entry.EventSeq || 0));
+            }
+        } finally {
+            finishChatSessionRestore();
+        }
+    } else if (Array.isArray(result.items) && result.items.length > 0) {
         dismissStartupCards();
-        const shouldHydrateSnapshot = currentChatSessionEventSeq === 0 && result.items.length > 12;
-        if (shouldHydrateSnapshot) {
-            hydrateChatSessionEventsSnapshot(result.items);
-            for (const entry of result.items) {
-                currentChatSessionEventSeq = Math.max(currentChatSessionEventSeq, Number(entry.EventSeq || 0));
-            }
-        } else {
-            for (const entry of result.items) {
-                applyCurrentChatSessionEvent(entry);
-                currentChatSessionEventSeq = Math.max(currentChatSessionEventSeq, Number(entry.EventSeq || 0));
-            }
+        for (const entry of result.items) {
+            applyCurrentChatSessionEvent(entry);
+            currentChatSessionEventSeq = Math.max(currentChatSessionEventSeq, Number(entry.EventSeq || 0));
         }
     }
 
@@ -3193,6 +3219,53 @@ function resetChatViewState() {
     hideProgressDock();
     updateSendButtonState();
     updateStatefulBudgetIndicator();
+}
+
+function renderSessionRestoreSkeleton(cardCount = 5) {
+    if (!chatMessages) return;
+    const total = Math.max(3, Math.min(8, Number(cardCount) || 5));
+    const cards = Array.from({ length: total }, (_, index) => {
+        const widthClass = index % 3 === 0 ? 'is-wide' : index % 3 === 1 ? 'is-medium' : 'is-short';
+        return `
+            <div class="session-restore-card">
+                <div class="session-restore-line is-title ${widthClass}"></div>
+                <div class="session-restore-line is-body is-wide"></div>
+                <div class="session-restore-line is-body is-medium"></div>
+            </div>`;
+    }).join('');
+
+    chatMessages.innerHTML = `
+        <div class="session-restore-skeleton">
+            <div class="session-restore-heading">${escapeHtml(t('restore.skeletonTitle'))}</div>
+            <div class="session-restore-subheading">${escapeHtml(t('restore.skeletonBody'))}</div>
+            <div class="session-restore-list">${cards}</div>
+        </div>`;
+}
+
+function beginChatSessionRestore(totalCount = 0) {
+    isRestoringChatSession = true;
+    resetChatViewState();
+    renderSessionRestoreSkeleton(Math.ceil(Math.max(1, totalCount) / 12));
+    chatMessages?.classList.add('is-session-hydrating');
+    renderProgressDock(t('progress.restoringHistory'), 0, 'prompt-processing', false);
+    updateMessageInputPlaceholder();
+}
+
+function updateChatSessionRestoreProgress(loadedCount, totalCount) {
+    if (!isRestoringChatSession) return;
+    const total = Math.max(1, Number(totalCount) || 1);
+    const loaded = Math.max(0, Math.min(total, Number(loadedCount) || 0));
+    renderProgressDock(t('progress.restoringHistory'), (loaded / total) * 100, 'prompt-processing', false);
+    updateMessageInputPlaceholder();
+}
+
+function finishChatSessionRestore() {
+    isRestoringChatSession = false;
+    hideProgressDock();
+    requestAnimationFrame(() => {
+        chatMessages?.classList.remove('is-session-hydrating');
+    });
+    updateMessageInputPlaceholder();
 }
 
 async function clearChat() {
@@ -6409,6 +6482,8 @@ function updateMessageInputPlaceholder() {
     const backgroundTask = getActiveComposerBackgroundTask();
     const nextPlaceholder = isSTTActive
         ? listeningPhrases[sttPlaceholderIndex % listeningPhrases.length]
+        : isRestoringChatSession
+            ? t('input.placeholder.restoring')
         : (composerProgressActive
             ? [composerProgressLabel, composerProgressPercent].filter(Boolean).join(' - ')
             : (backgroundTask?.label || t('input.placeholder')));
