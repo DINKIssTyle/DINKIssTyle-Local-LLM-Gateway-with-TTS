@@ -3149,6 +3149,9 @@ async function sendMessage() {
     };
 
     appendMessage(userMsg);
+    lockScrollToLatest = true;
+    shouldAutoScroll = true;
+    holdAutoScrollAtBottom(600);
     messages.push(userMsg);
     if (config.llmMode === 'stateful') {
         statefulEstimatedChars += text.length;
@@ -5010,8 +5013,9 @@ function finalizeMessageContent(id, text) {
 function updateSyncedMessageContent(id, text) {
     const el = ensureAssistantMessageElement(id);
     if (!el) return;
+    const wasNearBottom = isChatNearBottom();
     const bubble = el.querySelector('.message-bubble');
-    const { committedHost, pendingHost } = ensureStreamingMarkdownHosts(bubble);
+    const { markdownBody: mdBody, committedHost, pendingHost } = ensureStreamingMarkdownHosts(bubble);
     if (!committedHost || !pendingHost) return;
 
     const cleanText = sanitizeAssistantRenderText(text);
@@ -5028,6 +5032,13 @@ function updateSyncedMessageContent(id, text) {
     if (responseCard) responseCard.hidden = !hasVisibleContent;
     if (actionBar && actionBar.classList.contains('is-ready')) {
         actionBar.hidden = !hasVisibleContent;
+    }
+
+    scrollToBottom(wasNearBottom);
+    const codeBlocks = mdBody.querySelectorAll('pre code');
+    if (wasNearBottom && codeBlocks.length > 0) {
+        holdAutoScrollAtBottom(900);
+        observeAutoScrollResizes([el, bubble, mdBody, ...mdBody.querySelectorAll('pre')]);
     }
 }
 
