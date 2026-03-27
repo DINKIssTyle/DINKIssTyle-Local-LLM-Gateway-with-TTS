@@ -434,7 +434,6 @@ function normalizeMarkdownForRender(text) {
             .replace(/([^\n])([ \t]*\$\$)/g, '$1\n\n$2')
             .replace(/([^\n])\n(#{1,6}\s)/g, '$1\n\n$2')
             .replace(/([^\n])\n((?:[-*+]\s|\d+\.\s))/g, '$1\n\n$2')
-            .replace(/([^\n])\n(\|.+\|)/g, '$1\n\n$2')
             .replace(/(\|[^\n]+\|)\n(?=\|[-:\s|]+\|)/g, '$1\n')
             // Streaming sometimes inserts blank lines between markdown table rows.
             // Collapse those gaps so GFM parsers can recognize the table again.
@@ -445,6 +444,42 @@ function normalizeMarkdownForRender(text) {
     );
 
     return normalized;
+}
+
+function formatMathText(content, { inline = false } = {}) {
+    let formatted = String(content || '')
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/\n[ \t]+/g, '\n')
+        .trim();
+
+    if (inline) {
+        formatted = formatted.replace(/\s+/g, ' ');
+    } else {
+        formatted = formatted.replace(/\n{3,}/g, '\n\n');
+    }
+
+    return escapeHtml(formatted);
+}
+
+function renderMathDelimiters(markdownText) {
+    const placeholders = [];
+    let index = 0;
+    const register = (html) => {
+        const token = `@@MATH_${index++}@@`;
+        placeholders.push({ token, html });
+        return token;
+    };
+
+    const text = normalizeMarkdownOutsideCode(markdownText, (segment) =>
+        segment
+            .replace(/\\\[\s*([\s\S]*?)\s*\\\]/g, (_, expr) => `\n${register(`<div class="math-block">${formatMathText(expr)}</div>`)}\n`)
+            .replace(/\$\$\s*([\s\S]*?)\s*\$\$/g, (_, expr) => `\n${register(`<div class="math-block">${formatMathText(expr)}</div>`)}\n`)
+            .replace(/\\\(([\s\S]*?)\\\)/g, (_, expr) => register(`<span class="math-inline">${formatMathText(expr, { inline: true })}</span>`))
+    );
+
+    return { text, placeholders };
 }
 
 function applyTranslations() {
@@ -997,6 +1032,7 @@ const chatProgressDock = document.getElementById('chat-progress-dock');
 const inputArea = document.getElementById('input-area');
 const inputContainer = document.querySelector('#input-area .input-container');
 const inlineMicBtn = document.getElementById('inline-mic-btn');
+const statefulBudgetIndicator = document.getElementById('stateful-budget-indicator');
 const savedLibraryView = document.getElementById('saved-library-view');
 const savedLibraryList = document.getElementById('saved-library-list');
 const savedLibrarySearchInput = document.getElementById('saved-library-search');
@@ -2088,6 +2124,7 @@ async function restoreLastSession() {
         statefulLastInputTokens = estimateTokensFromText(statefulSummary);
         statefulLastOutputTokens = estimateTokensFromText(restoredAssistant.content);
         statefulPeakInputTokens = Math.max(statefulPeakInputTokens, statefulLastInputTokens);
+        updateStatefulBudgetIndicator();
     }
 
     showToast(t('chat.startup.restoreLoaded'));
@@ -2327,6 +2364,7 @@ function clearChat() {
     messages = [];
     pendingScrollToBottom = false;
     chatMessages.innerHTML = '';
+    updateStatefulBudgetIndicator();
 }
 
 function clearContext() {
@@ -2338,6 +2376,7 @@ function clearContext() {
     statefulLastOutputTokens = 0;
     showAlert(t('setting.memory.reset.success') + ' (Context/Session ID Cleared)');
     console.log('[Context] Manual context reset trigger.');
+    updateStatefulBudgetIndicator();
 }
 
 function buildStatefulSystemPrompt() {
@@ -2414,6 +2453,37 @@ function getStatefulRiskMetrics(nextUserText = '') {
     };
 }
 
+function updateStatefulBudgetIndicator(nextUserText = '') {
+    if (!statefulBudgetIndicator) {
+        return;
+    }
+
+    const shouldShow = config.llmMode === 'stateful' && !config.disableStateful;
+    if (!shouldShow) {
+        statefulBudgetIndicator.hidden = true;
+        return;
+    }
+
+    const risk = getStatefulRiskMetrics(nextUserText);
+    const charBudget = Math.max(risk.charBudget || 0, 1);
+    const fillRatio = Math.max(0, Math.min(1, risk.projectedChars / charBudget));
+    const coreOpacity = Math.max(0, Math.min(1, (fillRatio - 0.55) / 0.45));
+
+    let ringColor = 'rgba(113, 153, 133, 0.92)';
+    if (fillRatio >= 0.9) {
+        ringColor = 'rgba(248, 81, 73, 0.96)';
+    } else if (fillRatio >= 0.72) {
+        ringColor = 'rgba(210, 153, 34, 0.96)';
+    } else if (fillRatio >= 0.45) {
+        ringColor = 'rgba(88, 166, 255, 0.94)';
+    }
+
+    statefulBudgetIndicator.hidden = false;
+    statefulBudgetIndicator.style.setProperty('--stateful-budget-progress', `${Math.round(fillRatio * 360)}deg`);
+    statefulBudgetIndicator.style.setProperty('--stateful-budget-color', ringColor);
+    statefulBudgetIndicator.style.setProperty('--stateful-budget-core-opacity', coreOpacity.toFixed(3));
+}
+
 function shouldResetStatefulContext(nextUserText = '') {
     if (config.llmMode !== 'stateful' || config.disableStateful) {
         return false;
@@ -2438,6 +2508,7 @@ async function ensureStatefulContextBudget(nextUserText = '') {
     pendingStatefulResetReason = 'auto_summary_reset';
     statefulLastInputTokens = estimateTokensFromText(statefulSummary);
     statefulLastOutputTokens = 0;
+    updateStatefulBudgetIndicator(nextUserText);
     appendMessage({
         role: 'system',
         content: `Stateful context compacted ${statefulPeakInputTokens || 0} -> ~${statefulLastInputTokens}`
@@ -2482,6 +2553,7 @@ async function sendMessage() {
     messages.push(userMsg);
     if (config.llmMode === 'stateful') {
         statefulEstimatedChars += text.length;
+        updateStatefulBudgetIndicator();
     }
 
     // Reset Input
@@ -2656,6 +2728,9 @@ function setComposerPrimaryButtons({ showSend, showInlineMic }) {
 
 function updateInlineComposerActionVisibility() {
     if (!sendBtn || !inlineMicBtn) return;
+
+    const nextUserText = messageInput?.value?.trim() || '';
+    updateStatefulBudgetIndicator(nextUserText);
 
     const inlineMicAvailable = inlineMicBtn.classList.contains('is-visible');
     if (!inlineMicAvailable) {
@@ -3855,7 +3930,7 @@ function showToast(message, isError = false) {
 function speakMessageFromBtn(btn) {
     const bubble = btn.closest('.message-inner').querySelector('.markdown-body');
     if (bubble) {
-        speakMessage(bubble.innerText, btn);
+        speakMessage(getSpeakableTextFromMarkdownHost(bubble), btn);
     }
 }
 
@@ -4143,12 +4218,24 @@ function highlightMarkdownBlocks(container) {
 function renderMarkdownIntoHost(host, markdownText) {
     if (!host) return;
     const normalized = normalizeMarkdownForRender(markdownText || '');
-    host.innerHTML = normalized.trim() ? marked.parse(normalized) : '';
+    const mathRender = renderMathDelimiters(normalized);
+    let html = mathRender.text.trim() ? marked.parse(mathRender.text) : '';
+    mathRender.placeholders.forEach(({ token, html: mathHtml }) => {
+        html = html.replaceAll(token, mathHtml);
+    });
+    host.innerHTML = html;
     host.querySelectorAll('a').forEach((link) => {
         link.setAttribute('target', '_blank');
         link.setAttribute('rel', 'noopener noreferrer');
     });
     highlightMarkdownBlocks(host);
+}
+
+function getSpeakableTextFromMarkdownHost(host) {
+    if (!host) return '';
+    const clone = host.cloneNode(true);
+    clone.querySelectorAll('pre, code').forEach((node) => node.remove());
+    return clone.innerText || clone.textContent || '';
 }
 
 function schedulePendingMarkdownRender(el, pendingHost, pendingText) {
