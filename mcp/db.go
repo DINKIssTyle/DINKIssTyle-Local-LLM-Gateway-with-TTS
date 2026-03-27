@@ -391,6 +391,43 @@ type LastSessionEntry struct {
 	UpdatedAt            time.Time
 }
 
+type ChatSessionEntry struct {
+	ID               int64
+	UserID           string
+	SessionKey       string
+	Status           string
+	LLMMode          string
+	ModelID          string
+	CurrentJobID     sql.NullInt64
+	LastResponseID   string
+	SummaryText      string
+	TurnCount        int
+	EstimatedChars   int
+	LastInputTokens  int
+	LastOutputTokens int
+	PeakInputTokens  int
+	TokenBudget      int
+	RiskScore        float64
+	RiskLevel        string
+	LastResetReason  string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	ClearedAt        sql.NullTime
+}
+
+type ChatEventEntry struct {
+	ID          int64
+	SessionID   int64
+	UserID      string
+	EventSeq    int
+	Role        string
+	EventType   string
+	MessageID   string
+	TurnID      string
+	PayloadJSON string
+	CreatedAt   time.Time
+}
+
 type SavedTurnEntry struct {
 	ID           int64     `json:"id"`
 	UserID       string    `json:"user_id"`
@@ -602,6 +639,287 @@ func DeleteLastSession(userID string) error {
 		return fmt.Errorf("failed to delete last session: %w", err)
 	}
 	return nil
+}
+
+func UpsertChatSession(entry ChatSessionEntry) (ChatSessionEntry, error) {
+	var saved ChatSessionEntry
+	if db == nil {
+		return saved, fmt.Errorf("database not initialized")
+	}
+
+	entry.UserID = strings.TrimSpace(entry.UserID)
+	entry.SessionKey = strings.TrimSpace(entry.SessionKey)
+	entry.Status = strings.TrimSpace(entry.Status)
+	entry.LLMMode = strings.TrimSpace(entry.LLMMode)
+	entry.ModelID = strings.TrimSpace(entry.ModelID)
+	entry.LastResponseID = strings.TrimSpace(entry.LastResponseID)
+	entry.RiskLevel = strings.TrimSpace(entry.RiskLevel)
+	entry.LastResetReason = strings.TrimSpace(entry.LastResetReason)
+	if entry.UserID == "" {
+		return saved, fmt.Errorf("user id is required")
+	}
+	if entry.SessionKey == "" {
+		entry.SessionKey = "default"
+	}
+	if entry.Status == "" {
+		entry.Status = "idle"
+	}
+	if entry.LLMMode == "" {
+		entry.LLMMode = "standard"
+	}
+	if entry.RiskLevel == "" {
+		entry.RiskLevel = "low"
+	}
+
+	query := `
+	INSERT INTO chat_sessions (
+		user_id, session_key, status, llm_mode, model_id, current_job_id,
+		last_response_id, summary_text, turn_count, estimated_chars,
+		last_input_tokens, last_output_tokens, peak_input_tokens, token_budget,
+		risk_score, risk_level, last_reset_reason, updated_at, cleared_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(user_id, session_key) DO UPDATE SET
+		status = excluded.status,
+		llm_mode = excluded.llm_mode,
+		model_id = excluded.model_id,
+		current_job_id = excluded.current_job_id,
+		last_response_id = excluded.last_response_id,
+		summary_text = excluded.summary_text,
+		turn_count = excluded.turn_count,
+		estimated_chars = excluded.estimated_chars,
+		last_input_tokens = excluded.last_input_tokens,
+		last_output_tokens = excluded.last_output_tokens,
+		peak_input_tokens = excluded.peak_input_tokens,
+		token_budget = excluded.token_budget,
+		risk_score = excluded.risk_score,
+		risk_level = excluded.risk_level,
+		last_reset_reason = excluded.last_reset_reason,
+		updated_at = excluded.updated_at,
+		cleared_at = excluded.cleared_at`
+
+	updatedAt := time.Now().UTC()
+	_, err := db.Exec(
+		query,
+		entry.UserID,
+		entry.SessionKey,
+		entry.Status,
+		entry.LLMMode,
+		entry.ModelID,
+		nullInt64Value(entry.CurrentJobID),
+		entry.LastResponseID,
+		entry.SummaryText,
+		entry.TurnCount,
+		entry.EstimatedChars,
+		entry.LastInputTokens,
+		entry.LastOutputTokens,
+		entry.PeakInputTokens,
+		entry.TokenBudget,
+		entry.RiskScore,
+		entry.RiskLevel,
+		entry.LastResetReason,
+		updatedAt,
+		nullTimeValue(entry.ClearedAt),
+	)
+	if err != nil {
+		return saved, fmt.Errorf("failed to upsert chat session: %w", err)
+	}
+	return GetChatSession(entry.UserID, entry.SessionKey)
+}
+
+func GetChatSession(userID, sessionKey string) (ChatSessionEntry, error) {
+	var entry ChatSessionEntry
+	if db == nil {
+		return entry, fmt.Errorf("database not initialized")
+	}
+
+	userID = strings.TrimSpace(userID)
+	sessionKey = strings.TrimSpace(sessionKey)
+	if sessionKey == "" {
+		sessionKey = "default"
+	}
+
+	query := `
+	SELECT id, user_id, session_key, status, llm_mode, model_id, current_job_id,
+		last_response_id, summary_text, turn_count, estimated_chars,
+		last_input_tokens, last_output_tokens, peak_input_tokens, token_budget,
+		risk_score, risk_level, last_reset_reason, created_at, updated_at, cleared_at
+	FROM chat_sessions
+	WHERE user_id = ? AND session_key = ?`
+
+	err := db.QueryRow(query, userID, sessionKey).Scan(
+		&entry.ID,
+		&entry.UserID,
+		&entry.SessionKey,
+		&entry.Status,
+		&entry.LLMMode,
+		&entry.ModelID,
+		&entry.CurrentJobID,
+		&entry.LastResponseID,
+		&entry.SummaryText,
+		&entry.TurnCount,
+		&entry.EstimatedChars,
+		&entry.LastInputTokens,
+		&entry.LastOutputTokens,
+		&entry.PeakInputTokens,
+		&entry.TokenBudget,
+		&entry.RiskScore,
+		&entry.RiskLevel,
+		&entry.LastResetReason,
+		&entry.CreatedAt,
+		&entry.UpdatedAt,
+		&entry.ClearedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return entry, err
+		}
+		return entry, fmt.Errorf("failed to fetch chat session: %w", err)
+	}
+	return entry, nil
+}
+
+func GetCurrentChatSession(userID string) (ChatSessionEntry, error) {
+	return GetChatSession(userID, "default")
+}
+
+func AppendChatEvent(userID string, sessionID int64, role, eventType, messageID, turnID, payloadJSON string) (ChatEventEntry, error) {
+	var entry ChatEventEntry
+	if db == nil {
+		return entry, fmt.Errorf("database not initialized")
+	}
+	userID = strings.TrimSpace(userID)
+	eventType = strings.TrimSpace(eventType)
+	if userID == "" {
+		return entry, fmt.Errorf("user id is required")
+	}
+	if sessionID <= 0 {
+		return entry, fmt.Errorf("session id is required")
+	}
+	if eventType == "" {
+		return entry, fmt.Errorf("event type is required")
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return entry, fmt.Errorf("failed to begin chat event transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	var nextSeq int
+	if err := tx.QueryRow(`SELECT COALESCE(MAX(event_seq), 0) + 1 FROM chat_events WHERE session_id = ?`, sessionID).Scan(&nextSeq); err != nil {
+		return entry, fmt.Errorf("failed to compute chat event sequence: %w", err)
+	}
+
+	res, err := tx.Exec(`
+		INSERT INTO chat_events (session_id, user_id, event_seq, role, event_type, message_id, turn_id, payload_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		sessionID,
+		userID,
+		nextSeq,
+		strings.TrimSpace(role),
+		eventType,
+		strings.TrimSpace(messageID),
+		strings.TrimSpace(turnID),
+		defaultJSONValue(payloadJSON),
+	)
+	if err != nil {
+		return entry, fmt.Errorf("failed to insert chat event: %w", err)
+	}
+
+	id, err := res.LastInsertId()
+	if err != nil {
+		return entry, fmt.Errorf("failed to fetch chat event id: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return entry, fmt.Errorf("failed to commit chat event transaction: %w", err)
+	}
+
+	return GetChatEvent(userID, id)
+}
+
+func GetChatEvent(userID string, eventID int64) (ChatEventEntry, error) {
+	var entry ChatEventEntry
+	if db == nil {
+		return entry, fmt.Errorf("database not initialized")
+	}
+
+	err := db.QueryRow(`
+		SELECT id, session_id, user_id, event_seq, role, event_type, message_id, turn_id, payload_json, created_at
+		FROM chat_events
+		WHERE user_id = ? AND id = ?`,
+		strings.TrimSpace(userID),
+		eventID,
+	).Scan(
+		&entry.ID,
+		&entry.SessionID,
+		&entry.UserID,
+		&entry.EventSeq,
+		&entry.Role,
+		&entry.EventType,
+		&entry.MessageID,
+		&entry.TurnID,
+		&entry.PayloadJSON,
+		&entry.CreatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return entry, err
+		}
+		return entry, fmt.Errorf("failed to fetch chat event: %w", err)
+	}
+	return entry, nil
+}
+
+func ListChatEvents(userID string, sessionID int64, afterSeq, limit int) ([]ChatEventEntry, error) {
+	if db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	if afterSeq < 0 {
+		afterSeq = 0
+	}
+
+	rows, err := db.Query(`
+		SELECT id, session_id, user_id, event_seq, role, event_type, message_id, turn_id, payload_json, created_at
+		FROM chat_events
+		WHERE user_id = ? AND session_id = ? AND event_seq > ?
+		ORDER BY event_seq ASC
+		LIMIT ?`,
+		strings.TrimSpace(userID),
+		sessionID,
+		afterSeq,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list chat events: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []ChatEventEntry
+	for rows.Next() {
+		var entry ChatEventEntry
+		if err := rows.Scan(
+			&entry.ID,
+			&entry.SessionID,
+			&entry.UserID,
+			&entry.EventSeq,
+			&entry.Role,
+			&entry.EventType,
+			&entry.MessageID,
+			&entry.TurnID,
+			&entry.PayloadJSON,
+			&entry.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan chat event: %w", err)
+		}
+		entries = append(entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate chat events: %w", err)
+	}
+	return entries, nil
 }
 
 func UpsertRequestPattern(userID, intentKey, sampleQuery, queryFingerprint string) (int64, error) {
@@ -995,6 +1313,28 @@ func boolToInt(v bool) int {
 		return 1
 	}
 	return 0
+}
+
+func nullTimeValue(value sql.NullTime) interface{} {
+	if value.Valid {
+		return value.Time.UTC()
+	}
+	return nil
+}
+
+func nullInt64Value(value sql.NullInt64) interface{} {
+	if value.Valid {
+		return value.Int64
+	}
+	return nil
+}
+
+func defaultJSONValue(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "{}"
+	}
+	return trimmed
 }
 
 func buildSavedTurnFallbackTitle(responseText string) string {

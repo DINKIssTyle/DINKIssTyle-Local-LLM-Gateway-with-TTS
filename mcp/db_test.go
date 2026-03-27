@@ -312,6 +312,78 @@ func TestChatSessionTablesExist(t *testing.T) {
 	}
 }
 
+func TestChatSessionHelpers(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "chat_session_helpers_*.db")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	dbPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(dbPath)
+
+	if err := InitDB(dbPath); err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer CloseDB()
+
+	saved, err := UpsertChatSession(ChatSessionEntry{
+		UserID:           "chat_user",
+		SessionKey:       "default",
+		Status:           "running",
+		LLMMode:          "stateful",
+		ModelID:          "test-model",
+		LastResponseID:   "resp_123",
+		SummaryText:      "summary text",
+		TurnCount:        2,
+		EstimatedChars:   120,
+		LastInputTokens:  55,
+		LastOutputTokens: 34,
+		PeakInputTokens:  60,
+		TokenBudget:      1000,
+		RiskScore:        0.42,
+		RiskLevel:        "medium",
+		LastResetReason:  "manual",
+	})
+	if err != nil {
+		t.Fatalf("UpsertChatSession failed: %v", err)
+	}
+	if saved.ID == 0 {
+		t.Fatalf("expected saved chat session to have id")
+	}
+
+	current, err := GetCurrentChatSession("chat_user")
+	if err != nil {
+		t.Fatalf("GetCurrentChatSession failed: %v", err)
+	}
+	if current.ModelID != "test-model" || current.Status != "running" {
+		t.Fatalf("unexpected chat session state: %+v", current)
+	}
+
+	event1, err := AppendChatEvent("chat_user", current.ID, "user", "message.created", "msg-user-1", "turn-1", `{"content":"hello"}`)
+	if err != nil {
+		t.Fatalf("AppendChatEvent user failed: %v", err)
+	}
+	event2, err := AppendChatEvent("chat_user", current.ID, "assistant", "message.delta", "msg-ai-1", "turn-1", `{"content":"hi"}`)
+	if err != nil {
+		t.Fatalf("AppendChatEvent assistant failed: %v", err)
+	}
+
+	if event1.EventSeq != 1 || event2.EventSeq != 2 {
+		t.Fatalf("expected sequential event ids, got %d and %d", event1.EventSeq, event2.EventSeq)
+	}
+
+	events, err := ListChatEvents("chat_user", current.ID, 0, 10)
+	if err != nil {
+		t.Fatalf("ListChatEvents failed: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("expected 2 chat events, got %d", len(events))
+	}
+	if events[0].EventType != "message.created" || events[1].EventType != "message.delta" {
+		t.Fatalf("unexpected chat events: %+v", events)
+	}
+}
+
 func nowForTest() time.Time {
 	return time.Now().UTC()
 }
