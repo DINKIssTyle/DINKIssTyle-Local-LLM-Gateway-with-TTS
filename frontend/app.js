@@ -422,17 +422,27 @@ function normalizeMarkdownForRender(text) {
     // Normalize markdown headings/lists/tables when streamed without enough spacing.
     normalized = normalized
         .replace(/\r\n/g, '\n')
-        .replace(/\r/g, '\n')
-        .replace(/([^\n])\n(#{1,6}\s)/g, '$1\n\n$2')
-        .replace(/([^\n])\n((?:[-*+]\s|\d+\.\s))/g, '$1\n\n$2')
-        .replace(/([^\n])\n(\|.+\|)/g, '$1\n\n$2')
-        .replace(/(\|[^\n]+\|)\n(?=\|[-:\s|]+\|)/g, '$1\n')
-        // Streaming sometimes inserts blank lines between markdown table rows.
-        // Collapse those gaps so GFM parsers can recognize the table again.
-        .replace(/(\|[^\n]+\|)\n\s*\n(?=\|[-:\s|]+\|)/g, '$1\n')
-        .replace(/(\|[-:\s|]+\|)\n\s*\n(?=\|)/g, '$1\n')
-        .replace(/(\|[^\n]+\|)\n\s*\n(?=\|[^\n]+\|)/g, '$1\n')
-        .replace(/\n{3,}/g, '\n\n');
+        .replace(/\r/g, '\n');
+
+    normalized = normalizeMarkdownOutsideCode(normalized, (segment) =>
+        segment
+            // Restore missing line breaks before markdown headers that get glued to
+            // the previous sentence during streaming, e.g. "answer### Title".
+            .replace(/([^\n])([ \t]*#{1,6}\s)/g, '$1\n\n$2')
+            // Restore missing line breaks before list items and block math.
+            .replace(/([^\n])([ \t]*(?:[-*+]\s|\d+\.\s))/g, '$1\n\n$2')
+            .replace(/([^\n])([ \t]*\$\$)/g, '$1\n\n$2')
+            .replace(/([^\n])\n(#{1,6}\s)/g, '$1\n\n$2')
+            .replace(/([^\n])\n((?:[-*+]\s|\d+\.\s))/g, '$1\n\n$2')
+            .replace(/([^\n])\n(\|.+\|)/g, '$1\n\n$2')
+            .replace(/(\|[^\n]+\|)\n(?=\|[-:\s|]+\|)/g, '$1\n')
+            // Streaming sometimes inserts blank lines between markdown table rows.
+            // Collapse those gaps so GFM parsers can recognize the table again.
+            .replace(/(\|[^\n]+\|)\n\s*\n(?=\|[-:\s|]+\|)/g, '$1\n')
+            .replace(/(\|[-:\s|]+\|)\n\s*\n(?=\|)/g, '$1\n')
+            .replace(/(\|[^\n]+\|)\n\s*\n(?=\|[^\n]+\|)/g, '$1\n')
+            .replace(/\n{3,}/g, '\n\n')
+    );
 
     return normalized;
 }
