@@ -2343,8 +2343,8 @@ function extractSessionClearedAt(session) {
     return '';
 }
 
-function getCurrentChatSessionUISnapshot() {
-    const raw = String(currentChatSessionCache?.UIStateJSON || '').trim();
+function getCurrentChatSessionUISnapshot(session = null) {
+    const raw = String((session?.UIStateJSON ?? currentChatSessionCache?.UIStateJSON ?? '')).trim();
     if (!raw) return { tool_cards: {} };
     try {
         const parsed = JSON.parse(raw);
@@ -2670,7 +2670,7 @@ async function syncCurrentChatSessionFromServer() {
                 updateChatSessionRestoreProgress(allItems.length, result.totalCount);
             }
 
-            hydrateChatSessionEventsSnapshot(allItems);
+            hydrateChatSessionEventsSnapshot(allItems, result.session || session);
             for (const entry of allItems) {
                 currentChatSessionEventSeq = Math.max(currentChatSessionEventSeq, Number(entry.EventSeq || 0));
             }
@@ -2692,9 +2692,10 @@ async function syncCurrentChatSessionFromServer() {
     }
 }
 
-function hydrateChatSessionEventsSnapshot(items) {
+function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
     if (!Array.isArray(items) || items.length === 0) return;
 
+    const sessionUISnapshot = getCurrentChatSessionUISnapshot(sessionSnapshot);
     chatMessages?.classList.add('is-session-hydrating');
     resetChatViewState();
     dismissStartupCards();
@@ -2707,7 +2708,6 @@ function hydrateChatSessionEventsSnapshot(items) {
     const reasoningDurationById = new Map();
     const toolStateById = new Map();
     const assistantOrder = [];
-    const sessionUISnapshot = getCurrentChatSessionUISnapshot();
 
     let currentTurnId = '';
     let currentAssistantId = '';
