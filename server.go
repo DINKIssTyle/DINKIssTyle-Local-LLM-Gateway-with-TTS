@@ -1057,6 +1057,7 @@ func handleSavedTurns() http.HandlerFunc {
 				ResponseText string   `json:"response_text"`
 				ModelID      string   `json:"model_id"`
 				APIToken     string   `json:"api_token"`
+				LLMMode      string   `json:"llm_mode"`
 				Temperature  *float64 `json:"temperature"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1073,6 +1074,7 @@ func handleSavedTurns() http.HandlerFunc {
 			titleOpts := savedTurnTitleOptions{
 				ModelID:  strings.TrimSpace(req.ModelID),
 				APIToken: strings.TrimSpace(req.APIToken),
+				LLMMode:  strings.TrimSpace(req.LLMMode),
 			}
 			if req.Temperature != nil {
 				titleOpts.Temperature = normalizeSavedTurnTemperature(*req.Temperature)

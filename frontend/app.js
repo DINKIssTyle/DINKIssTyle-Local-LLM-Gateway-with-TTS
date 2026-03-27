@@ -156,6 +156,7 @@ const translations = {
         'progress.processingPrompt': '프롬프트 처리 중',
         'progress.loadingModel': '모델 로딩 중',
         'progress.modelLoaded': '모델 로딩 완료',
+        'background.savedTurnTitle': '저장된 대화 제목 생성 중...',
         // Settings - TTS
         'setting.enableTTS.label': 'TTS 활성화',
         'setting.enableTTS.desc': '응답을 음성으로 재생합니다.',
@@ -331,6 +332,7 @@ const translations = {
         'progress.processingPrompt': 'Processing Prompt',
         'progress.loadingModel': 'Loading Model',
         'progress.modelLoaded': 'Model Loaded',
+        'background.savedTurnTitle': 'Generating saved turn titles...',
         // Settings - TTS
         'setting.enableTTS.label': 'Enable TTS',
         'setting.enableTTS.desc': 'Play responses as audio.',
@@ -801,6 +803,55 @@ function speakSavedTurnResponse(btn) {
     speakMessage(text, btn);
 }
 
+function getActiveComposerBackgroundTask() {
+    for (const task of composerBackgroundTasks.values()) {
+        if (task?.active) return task;
+    }
+    return null;
+}
+
+function updateComposerBackgroundTaskUI() {
+    const hasBackgroundTask = !!getActiveComposerBackgroundTask();
+    inputContainer?.classList.toggle('has-background-task', hasBackgroundTask && !isGenerating && !composerProgressActive);
+    updateMessageInputPlaceholder();
+}
+
+function setComposerBackgroundTask(id, task = {}) {
+    if (!id) return;
+    composerBackgroundTasks.set(id, {
+        id,
+        active: true,
+        label: task.label || '',
+        abortController: task.abortController || null
+    });
+    updateComposerBackgroundTaskUI();
+}
+
+function clearComposerBackgroundTask(id, { abort = false } = {}) {
+    if (!id) return;
+    const existing = composerBackgroundTasks.get(id);
+    if (abort) {
+        existing?.abortController?.abort?.();
+    }
+    composerBackgroundTasks.delete(id);
+    updateComposerBackgroundTaskUI();
+}
+
+function cancelComposerBackgroundTasks(reason = 'user-interrupt') {
+    if (savedTitleRefreshTimer) {
+        clearTimeout(savedTitleRefreshTimer);
+        savedTitleRefreshTimer = null;
+    }
+    if (savedTitleRefreshInFlight && savedTitleRefreshAbortController) {
+        savedTitleRefreshAbortController.abort();
+    }
+    for (const [id, task] of composerBackgroundTasks.entries()) {
+        task?.abortController?.abort?.(reason);
+        composerBackgroundTasks.delete(id);
+    }
+    updateComposerBackgroundTaskUI();
+}
+
 function renderSavedTurnInlineTitle(title) {
     if (!savedTurnModalTitleView) return;
     const trimmedTitle = (title || '').trim();
@@ -945,7 +996,14 @@ function scheduleSavedTitleRefresh(delay = 1200) {
         clearTimeout(savedTitleRefreshTimer);
     }
     const hasPending = savedTurns.some((item) => item.title_source === 'fallback');
-    if (!hasPending) return;
+    if (!hasPending) {
+        clearComposerBackgroundTask('saved-turn-title-refresh');
+        return;
+    }
+
+    setComposerBackgroundTask('saved-turn-title-refresh', {
+        label: t('background.savedTurnTitle')
+    });
 
     savedTitleRefreshTimer = setTimeout(() => {
         const runner = () => refreshSavedTurnTitle();
@@ -959,26 +1017,46 @@ function scheduleSavedTitleRefresh(delay = 1200) {
 
 async function refreshSavedTurnTitle() {
     if (savedTitleRefreshInFlight || !currentUser || document.hidden) return;
-    if (!savedTurns.some((item) => item.title_source === 'fallback')) return;
+    if (!savedTurns.some((item) => item.title_source === 'fallback')) {
+        clearComposerBackgroundTask('saved-turn-title-refresh');
+        return;
+    }
 
     savedTitleRefreshInFlight = true;
+    savedTitleRefreshAbortController = new AbortController();
+    setComposerBackgroundTask('saved-turn-title-refresh', {
+        label: t('background.savedTurnTitle'),
+        abortController: savedTitleRefreshAbortController
+    });
     try {
         const response = await fetch('/api/saved-turns/title-refresh', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include',
-            body: JSON.stringify(buildSavedTurnTitleRequestPayload())
+            body: JSON.stringify(buildSavedTurnTitleRequestPayload()),
+            signal: savedTitleRefreshAbortController.signal
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
         if (data.updated && data.item) {
             updateSavedTurnEntry(data.item);
             scheduleSavedTitleRefresh(5000);
+        } else if (!savedTurns.some((item) => item.title_source === 'fallback')) {
+            clearComposerBackgroundTask('saved-turn-title-refresh');
         }
     } catch (e) {
+        if (e.name === 'AbortError') {
+            return;
+        }
         console.warn('Failed to refresh saved turn title:', e);
     } finally {
         savedTitleRefreshInFlight = false;
+        savedTitleRefreshAbortController = null;
+        if (!savedTurns.some((item) => item.title_source === 'fallback')) {
+            clearComposerBackgroundTask('saved-turn-title-refresh');
+        } else {
+            updateComposerBackgroundTaskUI();
+        }
     }
 }
 
@@ -1106,6 +1184,7 @@ let progressDockHideTimer = null;
 let composerProgressLabel = '';
 let composerProgressActive = false;
 let composerProgressPercent = null;
+const composerBackgroundTasks = new Map();
 
 if (chatMessages) {
     chatMessages.addEventListener('scroll', () => {
@@ -1468,7 +1547,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     document.addEventListener('visibilitychange', () => {
-        if (!document.hidden) {
+        if (document.hidden) {
+            cancelComposerBackgroundTasks('document-hidden');
+        } else {
             scheduleSavedTitleRefresh(800);
         }
     });
@@ -1483,6 +1564,7 @@ let savedLibraryQuery = '';
 let savedLibraryLoaded = false;
 let savedTitleRefreshInFlight = false;
 let savedTitleRefreshTimer = null;
+let savedTitleRefreshAbortController = null;
 let isSavedLibraryOpen = false;
 
 // Location Tracking
@@ -2640,6 +2722,7 @@ async function sendMessage() {
     if (isSavedLibraryOpen) {
         closeSavedLibrary();
     }
+    cancelComposerBackgroundTasks('user-message');
     // Unlock audio context on user interaction
     unlockAudioContext();
 
@@ -2821,6 +2904,7 @@ function updateSendButtonState() {
     }
 
     inputContainer?.classList.toggle('is-generating', isGenerating);
+    updateComposerBackgroundTaskUI();
 
     // Also update giant mic icon if layout is active
     updateMicUIForGeneration(isGenerating);
@@ -3750,7 +3834,7 @@ function setToolCardState(elementId, state, summary = '', args = null, toolName 
         card.dataset.lastPreviewText = previewText;
     }
 
-        if (summaryEl) {
+    if (summaryEl) {
         let statusLabel = t('status.done');
         if (state === 'running') statusLabel = previewText || lastPreviewText || t('status.running');
         else if (state === 'failure') statusLabel = summary || t('status.failed');
@@ -5414,6 +5498,7 @@ function toggleSTT() {
 }
 
 function startSTT() {
+    cancelComposerBackgroundTasks('user-stt');
     if (!('webkitSpeechRecognition' in window)) {
         alert("Speech Recognition is not supported by this browser.");
         return;
@@ -5490,11 +5575,12 @@ function updateMessageInputPlaceholder() {
         t('input.placeholder.sttA'),
         t('input.placeholder.sttB')
     ];
+    const backgroundTask = getActiveComposerBackgroundTask();
     const nextPlaceholder = isSTTActive
         ? listeningPhrases[sttPlaceholderIndex % listeningPhrases.length]
         : (composerProgressActive
             ? [composerProgressLabel, composerProgressPercent].filter(Boolean).join(' - ')
-            : t('input.placeholder'));
+            : (backgroundTask?.label || t('input.placeholder')));
 
     messageInput.placeholder = nextPlaceholder;
     messageInput.classList.toggle('stt-listening', isSTTActive);
