@@ -2883,6 +2883,7 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
         const snapshotToolState = sessionUISnapshot.tool_cards?.[user.turnId] || null;
         const mergedToolState = toolState || snapshotToolState;
         if (mergedToolState) {
+            ensureToolCard(assistantId, mergedToolState.toolName || 'Tool');
             setToolCardState(assistantId, mergedToolState.state, mergedToolState.summary, mergedToolState.args, mergedToolState.toolName);
             const card = getActiveToolCard(assistantId);
             if (card) {
