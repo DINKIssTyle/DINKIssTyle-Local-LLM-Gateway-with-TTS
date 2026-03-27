@@ -1554,6 +1554,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             cancelComposerBackgroundTasks('document-hidden');
         } else {
             scheduleSavedTitleRefresh(800);
+            syncCurrentChatSessionFromServer().catch(console.warn);
         }
     });
 });
@@ -2330,7 +2331,23 @@ function applyCurrentChatSessionSnapshot(session) {
         resetServerChatReplayState();
     }
     currentChatSessionCache = session || null;
-    if (!session) return;
+    if (!session) {
+        if (!abortController && isGenerating) {
+            isGenerating = false;
+            updateSendButtonState();
+            hideProgressDock();
+        }
+        return;
+    }
+
+    const serverGenerating = session.Status === 'running';
+    if (!abortController && isGenerating !== serverGenerating) {
+        isGenerating = serverGenerating;
+        updateSendButtonState();
+        if (!serverGenerating) {
+            hideProgressDock();
+        }
+    }
 
     if (config.llmMode === 'stateful') {
         lastResponseId = session.LastResponseID || null;
