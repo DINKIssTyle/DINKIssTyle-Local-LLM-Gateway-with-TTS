@@ -552,8 +552,9 @@ body {
   z-index: 20;
   padding: 10px 14px 12px;
   padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px) + var(--viewport-bottom-offset));
-  background:
-    linear-gradient(180deg, rgba(13, 17, 23, 1), rgba(13, 17, 23, 0.92) 72%, rgba(13, 17, 23, 0));
+  background: transparent;
+  background-color: transparent !important;
+  background-image: none !important;
   margin-bottom: 0;
 }
 
