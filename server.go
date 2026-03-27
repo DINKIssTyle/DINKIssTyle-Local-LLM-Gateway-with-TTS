@@ -178,6 +178,61 @@ func encodeChatSessionUISnapshot(snapshot chatSessionUISnapshot) string {
 	return string(bytes)
 }
 
+func estimateStatefulTokens(text string) int {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return 0
+	}
+	runeCount := len([]rune(trimmed))
+	return (runeCount + 3) / 4
+}
+
+func extractChatInputText(reqMap map[string]interface{}) string {
+	if reqMap == nil {
+		return ""
+	}
+	if input, ok := reqMap["input"].(string); ok {
+		return strings.TrimSpace(input)
+	}
+	if items, ok := reqMap["input"].([]interface{}); ok {
+		var parts []string
+		for _, item := range items {
+			obj, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			itemType, _ := obj["type"].(string)
+			switch itemType {
+			case "text":
+				if content, ok := obj["content"].(string); ok && strings.TrimSpace(content) != "" {
+					parts = append(parts, strings.TrimSpace(content))
+				}
+			case "input_text":
+				if text, ok := obj["text"].(string); ok && strings.TrimSpace(text) != "" {
+					parts = append(parts, strings.TrimSpace(text))
+				}
+			}
+		}
+		return strings.TrimSpace(strings.Join(parts, "\n"))
+	}
+	if messages, ok := reqMap["messages"].([]interface{}); ok {
+		for i := len(messages) - 1; i >= 0; i-- {
+			msg, ok := messages[i].(map[string]interface{})
+			if !ok {
+				continue
+			}
+			role, _ := msg["role"].(string)
+			if role != "user" {
+				continue
+			}
+			if content, ok := msg["content"].(string); ok {
+				return strings.TrimSpace(content)
+			}
+		}
+	}
+	return ""
+}
+
 func compactToolSnapshotDetail(args interface{}, summary string) string {
 	if s, ok := args.(string); ok && strings.TrimSpace(s) != "" {
 		return compactText(strings.TrimSpace(s), 220)
@@ -1831,6 +1886,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	var reqMap map[string]interface{}
 	// Always unmarshal body into reqMap to prevent nil panics later in the turn loop
 	json.Unmarshal(body, &reqMap)
+	initialUserInputText := extractChatInputText(reqMap)
 	AddDebugTrace("chat", "request.received", "Incoming chat request", map[string]interface{}{
 		"user":       userID,
 		"body_bytes": len(body),
@@ -2078,6 +2134,24 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		return parsed
 	}
 
+	statefulTurnCountValue := parseIntHeader(statefulTurnCount)
+	statefulEstimatedCharsValue := parseIntHeader(statefulEstChars)
+	statefulSummaryCharsValue := parseIntHeader(statefulSummaryChars)
+	statefulResetCountValue := parseIntHeader(statefulResetCount)
+	statefulLastInputTokensValue := parseIntHeader(statefulInputTokens)
+	statefulPeakInputTokensValue := parseIntHeader(statefulPeakInputTokens)
+	statefulTokenBudgetValue := parseIntHeader(statefulTokenBudget)
+	if statefulTokenBudgetValue <= 0 {
+		statefulTokenBudgetValue = 10000
+	}
+	statefulRiskScoreValue := parseFloatHeader(statefulRiskScore)
+	statefulRiskLevelValue := strings.TrimSpace(statefulRiskLevel)
+	if statefulRiskLevelValue == "" {
+		statefulRiskLevelValue = "low"
+	}
+	statefulLastOutputTokensValue := 0
+	statefulSummaryText := ""
+
 	var (
 		chatSession           mcp.ChatSessionEntry
 		chatSessionOK         bool
@@ -2090,6 +2164,45 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		if existingSession, existingErr := mcp.GetCurrentChatSession(userID); existingErr == nil {
 			sessionUIStateJSON = existingSession.UIStateJSON
 			sessionUISnapshot = parseChatSessionUISnapshot(existingSession.UIStateJSON)
+			statefulSummaryText = existingSession.SummaryText
+			if llmMode == "stateful" && statefulResetReason == "" {
+				statefulTurnCountValue = existingSession.TurnCount
+				statefulEstimatedCharsValue = existingSession.EstimatedChars
+				statefulLastInputTokensValue = existingSession.LastInputTokens
+				statefulLastOutputTokensValue = existingSession.LastOutputTokens
+				statefulPeakInputTokensValue = existingSession.PeakInputTokens
+				if existingSession.TokenBudget > 0 {
+					statefulTokenBudgetValue = existingSession.TokenBudget
+				}
+				if existingSession.RiskScore > 0 {
+					statefulRiskScoreValue = existingSession.RiskScore
+				}
+				if strings.TrimSpace(existingSession.RiskLevel) != "" {
+					statefulRiskLevelValue = existingSession.RiskLevel
+				}
+				if strings.TrimSpace(existingSession.LastResponseID) != "" {
+					sessionLastResponseID = existingSession.LastResponseID
+					if reqMap != nil {
+						reqMap["previous_response_id"] = existingSession.LastResponseID
+					}
+				}
+			}
+		}
+		if llmMode == "stateful" && statefulResetReason != "" && reqMap != nil {
+			delete(reqMap, "previous_response_id")
+			sessionLastResponseID = ""
+		}
+		statefulTurnCount = strconv.Itoa(statefulTurnCountValue)
+		statefulEstChars = strconv.Itoa(statefulEstimatedCharsValue)
+		statefulSummaryChars = strconv.Itoa(statefulSummaryCharsValue)
+		statefulResetCount = strconv.Itoa(statefulResetCountValue)
+		statefulInputTokens = strconv.Itoa(statefulLastInputTokensValue)
+		statefulPeakInputTokens = strconv.Itoa(statefulPeakInputTokensValue)
+		statefulTokenBudget = strconv.Itoa(statefulTokenBudgetValue)
+		statefulRiskScore = strconv.FormatFloat(statefulRiskScoreValue, 'f', -1, 64)
+		statefulRiskLevel = statefulRiskLevelValue
+		if newBody, marshalErr := json.Marshal(reqMap); marshalErr == nil {
+			body = newBody
 		}
 		chatSession, err = mcp.UpsertChatSession(mcp.ChatSessionEntry{
 			UserID:           userID,
@@ -2097,16 +2210,16 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			Status:           "running",
 			LLMMode:          llmMode,
 			ModelID:          modelID,
-			LastResponseID:   "",
-			SummaryText:      "",
-			TurnCount:        parseIntHeader(statefulTurnCount),
-			EstimatedChars:   parseIntHeader(statefulEstChars),
-			LastInputTokens:  parseIntHeader(statefulInputTokens),
-			LastOutputTokens: 0,
-			PeakInputTokens:  parseIntHeader(statefulPeakInputTokens),
-			TokenBudget:      parseIntHeader(statefulTokenBudget),
-			RiskScore:        parseFloatHeader(statefulRiskScore),
-			RiskLevel:        strings.TrimSpace(statefulRiskLevel),
+			LastResponseID:   sessionLastResponseID,
+			SummaryText:      statefulSummaryText,
+			TurnCount:        statefulTurnCountValue,
+			EstimatedChars:   statefulEstimatedCharsValue,
+			LastInputTokens:  statefulLastInputTokensValue,
+			LastOutputTokens: statefulLastOutputTokensValue,
+			PeakInputTokens:  statefulPeakInputTokensValue,
+			TokenBudget:      statefulTokenBudgetValue,
+			RiskScore:        statefulRiskScoreValue,
+			RiskLevel:        statefulRiskLevelValue,
 			LastResetReason:  statefulResetReason,
 			UIStateJSON:      sessionUIStateJSON,
 		})
@@ -2141,15 +2254,15 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				LLMMode:          llmMode,
 				ModelID:          modelID,
 				LastResponseID:   sessionLastResponseID,
-				SummaryText:      "",
-				TurnCount:        parseIntHeader(statefulTurnCount),
-				EstimatedChars:   parseIntHeader(statefulEstChars),
-				LastInputTokens:  parseIntHeader(statefulInputTokens),
-				LastOutputTokens: 0,
-				PeakInputTokens:  parseIntHeader(statefulPeakInputTokens),
-				TokenBudget:      parseIntHeader(statefulTokenBudget),
-				RiskScore:        parseFloatHeader(statefulRiskScore),
-				RiskLevel:        strings.TrimSpace(statefulRiskLevel),
+				SummaryText:      statefulSummaryText,
+				TurnCount:        statefulTurnCountValue,
+				EstimatedChars:   statefulEstimatedCharsValue,
+				LastInputTokens:  statefulLastInputTokensValue,
+				LastOutputTokens: statefulLastOutputTokensValue,
+				PeakInputTokens:  statefulPeakInputTokensValue,
+				TokenBudget:      statefulTokenBudgetValue,
+				RiskScore:        statefulRiskScoreValue,
+				RiskLevel:        statefulRiskLevelValue,
 				LastResetReason:  statefulResetReason,
 				UIStateJSON:      sessionUIStateJSON,
 			}); err != nil {
@@ -2172,15 +2285,15 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			LLMMode:          llmMode,
 			ModelID:          modelID,
 			LastResponseID:   sessionLastResponseID,
-			SummaryText:      "",
-			TurnCount:        parseIntHeader(statefulTurnCount),
-			EstimatedChars:   parseIntHeader(statefulEstChars),
-			LastInputTokens:  parseIntHeader(statefulInputTokens),
-			LastOutputTokens: 0,
-			PeakInputTokens:  parseIntHeader(statefulPeakInputTokens),
-			TokenBudget:      parseIntHeader(statefulTokenBudget),
-			RiskScore:        parseFloatHeader(statefulRiskScore),
-			RiskLevel:        strings.TrimSpace(statefulRiskLevel),
+			SummaryText:      statefulSummaryText,
+			TurnCount:        statefulTurnCountValue,
+			EstimatedChars:   statefulEstimatedCharsValue,
+			LastInputTokens:  statefulLastInputTokensValue,
+			LastOutputTokens: statefulLastOutputTokensValue,
+			PeakInputTokens:  statefulPeakInputTokensValue,
+			TokenBudget:      statefulTokenBudgetValue,
+			RiskScore:        statefulRiskScoreValue,
+			RiskLevel:        statefulRiskLevelValue,
 			LastResetReason:  statefulResetReason,
 			UIStateJSON:      sessionUIStateJSON,
 		}); err != nil {
@@ -2494,6 +2607,17 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 											lastResponseID = rid
 											sessionLastResponseID = rid
 											log.Printf("[handleChat] Captured response_id for chaining: %s", lastResponseID)
+										}
+										if stats, ok := res["stats"].(map[string]interface{}); ok {
+											if inputTokens, ok := stats["input_tokens"].(float64); ok && inputTokens > 0 {
+												statefulLastInputTokensValue = int(inputTokens)
+												if statefulPeakInputTokensValue < statefulLastInputTokensValue {
+													statefulPeakInputTokensValue = statefulLastInputTokensValue
+												}
+											}
+											if outputTokens, ok := stats["total_output_tokens"].(float64); ok && outputTokens > 0 {
+												statefulLastOutputTokensValue = int(outputTokens)
+											}
 										}
 									}
 								}
@@ -3197,6 +3321,28 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	if procCtx != nil {
 		procCtx.Success = strings.TrimSpace(fullResponse) != ""
 		persistRequestExecution(procCtx)
+	}
+	if llmMode == "stateful" {
+		if strings.TrimSpace(fullResponse) != "" || strings.TrimSpace(sessionLastResponseID) != "" {
+			statefulTurnCountValue += 1
+			statefulEstimatedCharsValue += len([]rune(strings.TrimSpace(initialUserInputText))) + len([]rune(strings.TrimSpace(fullResponse)))
+		}
+		if statefulLastInputTokensValue <= 0 {
+			statefulLastInputTokensValue = estimateStatefulTokens(initialUserInputText) + estimateStatefulTokens(statefulSummaryText)
+		}
+		if statefulLastOutputTokensValue <= 0 {
+			statefulLastOutputTokensValue = estimateStatefulTokens(fullResponse)
+		}
+		if statefulPeakInputTokensValue < statefulLastInputTokensValue {
+			statefulPeakInputTokensValue = statefulLastInputTokensValue
+		}
+		statefulTurnCount = strconv.Itoa(statefulTurnCountValue)
+		statefulEstChars = strconv.Itoa(statefulEstimatedCharsValue)
+		statefulInputTokens = strconv.Itoa(statefulLastInputTokensValue)
+		statefulPeakInputTokens = strconv.Itoa(statefulPeakInputTokensValue)
+		statefulTokenBudget = strconv.Itoa(statefulTokenBudgetValue)
+		statefulRiskScore = strconv.FormatFloat(statefulRiskScoreValue, 'f', -1, 64)
+		statefulRiskLevel = statefulRiskLevelValue
 	}
 	sessionStatus = "idle"
 	appendChatEvent("assistant", "request.complete", map[string]interface{}{
