@@ -97,6 +97,29 @@ func TestSearchMemoriesMultiQueryFindsTokenizedRewrite(t *testing.T) {
 	}
 }
 
+func TestMemoryChunkTableExists(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "memory_chunk_schema_*.db")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	dbPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(dbPath)
+
+	if err := InitDB(dbPath); err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer CloseDB()
+
+	var tableName string
+	if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_chunks'`).Scan(&tableName); err != nil {
+		t.Fatalf("failed to find memory_chunks table: %v", err)
+	}
+	if tableName != "memory_chunks" {
+		t.Fatalf("expected memory_chunks table, got %q", tableName)
+	}
+}
+
 func TestLastSessionUpsertAndFetch(t *testing.T) {
 	tmpFile, err := os.CreateTemp("", "last_session_test_*.db")
 	if err != nil {
