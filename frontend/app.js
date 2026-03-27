@@ -1569,6 +1569,8 @@ let chatSessionPollTimer = null;
 let serverReplayCurrentTurnId = '';
 let serverReplayCurrentAssistantId = '';
 let serverReplayMessageBuffers = new Map();
+let activeLocalTurnId = '';
+let activeLocalAssistantId = '';
 let savedTurns = [];
 let savedLibraryQuery = '';
 let savedLibraryLoaded = false;
@@ -2309,6 +2311,10 @@ function resetServerChatReplayState() {
     serverReplayMessageBuffers = new Map();
 }
 
+function isActiveLocalTurn(turnId = '') {
+    return !!turnId && !!activeLocalTurnId && turnId === activeLocalTurnId;
+}
+
 function ensureServerReplayAssistant(turnId, sessionId, seq) {
     if (!turnId) return null;
     if (!serverReplayCurrentAssistantId) {
@@ -2375,12 +2381,19 @@ function applyCurrentChatSessionEvent(entry) {
     }
 
     const sessionId = entry.SessionID || 'default';
+    const entryTurnId = entry.TurnID || payload.turn_id || '';
+    const isLocalActiveTurn = isActiveLocalTurn(entryTurnId);
     switch (entry.EventType) {
         case 'message.created': {
             if (entry.Role === 'user') {
                 const userContent = payload.content || '';
                 if (!userContent) break;
-                const turnId = `server-turn-${sessionId}-${entry.EventSeq}`;
+                const turnId = entryTurnId || `server-turn-${sessionId}-${entry.EventSeq}`;
+                if (isLocalActiveTurn) {
+                    serverReplayCurrentTurnId = turnId;
+                    serverReplayCurrentAssistantId = activeLocalAssistantId || '';
+                    break;
+                }
                 serverReplayCurrentTurnId = turnId;
                 serverReplayCurrentAssistantId = '';
                 if (!document.querySelector(`.message.user[data-turn-id="${turnId}"]`)) {
@@ -2390,8 +2403,11 @@ function applyCurrentChatSessionEvent(entry) {
             break;
         }
         case 'message.delta': {
+            if (isLocalActiveTurn) {
+                break;
+            }
             if (!serverReplayCurrentTurnId) {
-                serverReplayCurrentTurnId = `server-turn-${sessionId}-${entry.EventSeq}`;
+                serverReplayCurrentTurnId = entryTurnId || `server-turn-${sessionId}-${entry.EventSeq}`;
             }
             const assistantId = ensureServerReplayAssistant(serverReplayCurrentTurnId, sessionId, entry.EventSeq);
             if (!assistantId) break;
@@ -2403,47 +2419,77 @@ function applyCurrentChatSessionEvent(entry) {
             break;
         }
         case 'reasoning.start':
+            if (isLocalActiveTurn) break;
             if (serverReplayCurrentAssistantId) showReasoningStatus(serverReplayCurrentAssistantId, '...');
             break;
         case 'reasoning.delta':
+            if (isLocalActiveTurn) break;
             if (serverReplayCurrentAssistantId) showReasoningStatus(serverReplayCurrentAssistantId, payload.content || '...');
             break;
         case 'reasoning.end':
+            if (isLocalActiveTurn) break;
             if (serverReplayCurrentAssistantId) showReasoningStatus(serverReplayCurrentAssistantId, null, true);
             break;
         case 'tool_call.start':
+            if (isLocalActiveTurn) break;
             if (serverReplayCurrentAssistantId) setToolCardState(serverReplayCurrentAssistantId, 'running', '', null, payload.tool || '');
             break;
         case 'tool_call.arguments':
+            if (isLocalActiveTurn) break;
             if (serverReplayCurrentAssistantId) setToolCardState(serverReplayCurrentAssistantId, 'running', '', payload.arguments || null, payload.tool || '');
             break;
         case 'tool_call.success':
+            if (isLocalActiveTurn) break;
             if (serverReplayCurrentAssistantId) setToolCardState(serverReplayCurrentAssistantId, 'success', t('tool.executionFinished'), null, payload.tool || '');
             break;
         case 'tool_call.failure':
+            if (isLocalActiveTurn) break;
             if (serverReplayCurrentAssistantId) setToolCardState(serverReplayCurrentAssistantId, 'failure', payload.reason || t('tool.unknownError'), null, payload.tool || '');
             break;
         case 'prompt_processing.progress':
+            if (isLocalActiveTurn) break;
             renderProgressDock(t('progress.processingPrompt'), (payload.progress || 0) * 100, 'prompt-processing', false);
             break;
         case 'model_load.start':
+            if (isLocalActiveTurn) break;
             renderProgressDock(t('progress.loadingModel'), null, 'model-loading', true);
             break;
         case 'model_load.progress':
+            if (isLocalActiveTurn) break;
             renderProgressDock(t('progress.loadingModel'), (payload.progress || 0) * 100, 'model-loading', false);
             break;
         case 'model_load.end':
+            if (isLocalActiveTurn) break;
             renderProgressDock(`${t('progress.modelLoaded')} (${payload.load_time_seconds?.toFixed?.(1) || '?'}s)`, 100, 'model-loading', false);
             break;
         case 'chat.end':
         case 'request.complete':
+            if (isLocalActiveTurn) {
+                if (activeLocalAssistantId && Number.isFinite(Number(payload.elapsed_ms))) {
+                    finalizeReasoningStatus(activeLocalAssistantId, 'done', '', Number(payload.elapsed_ms));
+                }
+                activeLocalTurnId = '';
+                activeLocalAssistantId = '';
+                break;
+            }
             if (serverReplayCurrentAssistantId) {
+                if (Number.isFinite(Number(payload.elapsed_ms))) {
+                    finalizeReasoningStatus(serverReplayCurrentAssistantId, 'done', '', Number(payload.elapsed_ms));
+                }
                 finalizeAssistantStatusCards(serverReplayCurrentAssistantId, 'done');
                 setAssistantActionBarReady(serverReplayCurrentAssistantId);
             }
             hideProgressDock();
             break;
         case 'request.cancelled':
+            if (isLocalActiveTurn) {
+                if (activeLocalAssistantId) {
+                    finalizeAssistantStatusCards(activeLocalAssistantId, 'stopped', t('status.stopped'));
+                }
+                activeLocalTurnId = '';
+                activeLocalAssistantId = '';
+                break;
+            }
             if (serverReplayCurrentAssistantId) {
                 finalizeAssistantStatusCards(serverReplayCurrentAssistantId, 'stopped', t('status.stopped'));
             }
@@ -3016,6 +3062,8 @@ async function sendMessage() {
 
     const assistantId = 'msg-' + Date.now();
     activeStreamingMessageId = assistantId;
+    activeLocalTurnId = turnId;
+    activeLocalAssistantId = assistantId;
     startStreamingMessageAutoScroll(assistantId);
 
     // Build API Payload
@@ -3115,6 +3163,12 @@ async function sendMessage() {
         lockScrollToLatest = false;
         stopStreamingMessageAutoScroll();
         activeStreamingMessageId = null;
+        if (activeLocalTurnId === turnId) {
+            activeLocalTurnId = '';
+        }
+        if (activeLocalAssistantId === assistantId) {
+            activeLocalAssistantId = '';
+        }
         abortController = null;
         updateSendButtonState();
     }
@@ -3204,6 +3258,9 @@ function updateInlineComposerActionVisibility() {
 
 async function streamResponse(payload, elementId, turnId = '') {
     const headers = { 'Content-Type': 'application/json' };
+    if (turnId) {
+        headers['X-Client-Turn-Id'] = turnId;
+    }
     if (currentUserLocation) {
         headers['X-User-Location'] = currentUserLocation;
     }
@@ -4492,7 +4549,7 @@ function showReasoningStatus(elementId, text, isFinal = false) {
     bodyEl.textContent = cleanText;
 }
 
-function finalizeReasoningStatus(elementId, outcome = 'done', detail = '') {
+function finalizeReasoningStatus(elementId, outcome = 'done', detail = '', durationOverrideMs = null) {
     if (config.hideThink) return;
 
     const card = ensureReasoningCard(elementId);
@@ -4502,7 +4559,9 @@ function finalizeReasoningStatus(elementId, outcome = 'done', detail = '') {
     const titleEl = card.querySelector('.reasoning-title');
     const bodyEl = card.querySelector('.reasoning-body');
     const startedAt = Number(card.dataset.startedAt || Date.now());
-    const durationMs = Math.max(0, Date.now() - startedAt);
+    const durationMs = Number.isFinite(Number(durationOverrideMs))
+        ? Math.max(0, Number(durationOverrideMs))
+        : Math.max(0, Date.now() - startedAt);
     const shouldKeepExpanded = card.dataset.userExpanded === 'true';
 
     card.classList.remove('completed', 'failed');

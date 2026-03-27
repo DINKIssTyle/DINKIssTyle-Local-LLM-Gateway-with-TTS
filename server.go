@@ -1545,6 +1545,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	userID := r.Header.Get("X-User-ID")
 	// Extract Client Location
 	locationInfo = r.Header.Get("X-User-Location")
+	clientTurnID := strings.TrimSpace(r.Header.Get("X-Client-Turn-Id"))
 	statefulTurnCount := strings.TrimSpace(r.Header.Get("X-Stateful-Turn-Count"))
 	statefulEstChars := strings.TrimSpace(r.Header.Get("X-Stateful-Est-Chars"))
 	statefulSummaryChars := strings.TrimSpace(r.Header.Get("X-Stateful-Summary-Chars"))
@@ -1929,7 +1930,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				jsonPayload = string(bytes)
 			}
 		}
-		if _, err := mcp.AppendChatEvent(userID, chatSession.ID, role, eventType, "", "", jsonPayload); err != nil {
+		if _, err := mcp.AppendChatEvent(userID, chatSession.ID, role, eventType, "", clientTurnID, jsonPayload); err != nil {
 			log.Printf("[chat-session] failed to append %s event for %s: %v", eventType, userID, err)
 		}
 	}
@@ -2940,6 +2941,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		"response_chars": len(fullResponse),
 		"response_id":    sessionLastResponseID,
 		"mode":           llmMode,
+		"elapsed_ms":     time.Since(requestStart).Milliseconds(),
+		"turn_id":        clientTurnID,
 	})
 	AddDebugTrace("chat", "request.complete", "Chat request finished", map[string]interface{}{
 		"user":           userID,
