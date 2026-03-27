@@ -280,6 +280,15 @@ body {
   width: min(100%, 52rem);
 }
 
+.message.has-startup-card .assistant-sections {
+  width: 100%;
+}
+
+.message.has-startup-card .startup-response-card {
+  display: flex;
+  justify-content: center;
+}
+
 .assistant-tools,
 .assistant-reasoning {
   display: flex;
@@ -363,7 +372,8 @@ body {
 }
 
 .startup-card {
-  width: min(100%, 40rem);
+  width: min(92vw, 44rem);
+  min-width: min(30rem, 100%);
   margin: 6px auto 0;
   padding: 26px 22px;
   border: 1px solid rgba(95, 140, 255, 0.16);
@@ -371,6 +381,12 @@ body {
   background: linear-gradient(180deg, rgba(20, 27, 36, 0.92), rgba(14, 20, 29, 0.96));
   text-align: center;
   box-shadow: 0 20px 44px rgba(0, 0, 0, 0.22);
+}
+
+.startup-response-card .message-bubble {
+  width: 100%;
+  display: flex;
+  justify-content: center;
 }
 
 .startup-title {
@@ -1628,6 +1644,38 @@ body.is-desktop .desktop-only {
   word-break: break-word;
   font-size: var(--chat-font-size);
   line-height: var(--chat-line-height);
+}
+
+.saved-turn-modal-response,
+#saved-turn-modal-response {
+  white-space: normal;
+  line-height: var(--chat-line-height);
+}
+
+#saved-turn-modal-response.markdown-body p {
+  margin-bottom: 10px;
+}
+
+#saved-turn-modal-response.markdown-body ul,
+#saved-turn-modal-response.markdown-body ol,
+#saved-turn-modal-response.markdown-body pre,
+#saved-turn-modal-response.markdown-body blockquote,
+#saved-turn-modal-response.markdown-body table {
+  margin-bottom: 12px;
+}
+
+#saved-turn-modal-response.markdown-body li + li {
+  margin-top: 4px;
+}
+
+#saved-turn-modal-response.markdown-body h1,
+#saved-turn-modal-response.markdown-body h2,
+#saved-turn-modal-response.markdown-body h3,
+#saved-turn-modal-response.markdown-body h4,
+#saved-turn-modal-response.markdown-body h5,
+#saved-turn-modal-response.markdown-body h6 {
+  margin-top: 18px;
+  margin-bottom: 8px;
 }
 
 .saved-turn-modal .modal-body {
