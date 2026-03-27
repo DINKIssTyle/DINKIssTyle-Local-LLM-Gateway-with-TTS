@@ -889,6 +889,7 @@ function buildSavedTurnTitleRequestPayload(extra = {}) {
     return {
         model_id: config.model || '',
         api_token: config.apiToken || '',
+        llm_mode: config.llmMode || 'standard',
         temperature: typeof config.temperature === 'number' ? config.temperature : parseFloat(config.temperature) || 0.7,
         ...extra
     };

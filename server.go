@@ -69,6 +69,7 @@ type savedTurnTitleOptions struct {
 	ModelID     string
 	APIToken    string
 	Temperature float64
+	LLMMode     string
 }
 
 func cleanSavedTurnTitleContext(input string, limit int) string {
@@ -111,6 +112,7 @@ func parseSavedTurnTitleOptionsFromBody(r *http.Request) (savedTurnTitleOptions,
 		ModelID     string   `json:"model_id"`
 		APIToken    string   `json:"api_token"`
 		Temperature *float64 `json:"temperature"`
+		LLMMode     string   `json:"llm_mode"`
 	}
 	if err := json.Unmarshal(rawBody, &payload); err != nil {
 		return opts, nil
@@ -118,6 +120,7 @@ func parseSavedTurnTitleOptionsFromBody(r *http.Request) (savedTurnTitleOptions,
 
 	opts.ModelID = strings.TrimSpace(payload.ModelID)
 	opts.APIToken = strings.TrimSpace(payload.APIToken)
+	opts.LLMMode = strings.TrimSpace(payload.LLMMode)
 	if payload.Temperature != nil {
 		opts.Temperature = normalizeSavedTurnTemperature(*payload.Temperature)
 	}
@@ -325,26 +328,51 @@ func callLLMInternal(prompt string, opts savedTurnTitleOptions) string {
 
 	endpoint := strings.TrimRight(globalApp.llmEndpoint, "/")
 	endpoint = strings.TrimSuffix(endpoint, "/v1")
-	reqURL := fmt.Sprintf("%s/v1/chat/completions", endpoint)
 
 	modelID := strings.TrimSpace(opts.ModelID)
 	if modelID == "" {
 		modelID = "local-model"
 	}
 
-	payload := map[string]interface{}{
-		"model":       modelID,
-		"temperature": normalizeSavedTurnTemperature(opts.Temperature),
-		"max_tokens":  120,
-		"messages": []map[string]interface{}{
-			{"role": "system", "content": "Return only valid JSON. Do not include markdown fences, explanations, or reasoning."},
-			{"role": "user", "content": prompt},
-		},
-		"stream": false,
+	llmMode := strings.TrimSpace(opts.LLMMode)
+	if llmMode == "" {
+		llmMode = strings.TrimSpace(globalApp.llmMode)
+	}
+	if llmMode == "" {
+		llmMode = "standard"
+	}
+
+	systemPrompt := "You are a master at writing concise saved-chat titles. Return only valid JSON in the form {\"title\":\"...\"}. No markdown fences. No explanations."
+	var (
+		reqURL  string
+		payload map[string]interface{}
+	)
+	if llmMode == "stateful" {
+		reqURL = fmt.Sprintf("%s/api/v1/chat", endpoint)
+		payload = map[string]interface{}{
+			"model":         modelID,
+			"temperature":   normalizeSavedTurnTemperature(opts.Temperature),
+			"stream":        true,
+			"system_prompt": systemPrompt,
+			"input":         prompt,
+		}
+	} else {
+		reqURL = fmt.Sprintf("%s/v1/chat/completions", endpoint)
+		payload = map[string]interface{}{
+			"model":       modelID,
+			"temperature": normalizeSavedTurnTemperature(opts.Temperature),
+			"max_tokens":  120,
+			"messages": []map[string]interface{}{
+				{"role": "system", "content": systemPrompt},
+				{"role": "user", "content": prompt},
+			},
+			"stream": true,
+		}
 	}
 
 	AddDebugTrace("saved-turn-title", "llm.request", "Prepared saved turn title LLM request", map[string]interface{}{
 		"model":       modelID,
+		"mode":        llmMode,
 		"temperature": normalizeSavedTurnTemperature(opts.Temperature),
 		"endpoint":    reqURL,
 		"has_api_key": strings.TrimSpace(opts.APIToken) != "" || strings.TrimSpace(globalApp.llmApiToken) != "",
@@ -374,7 +402,7 @@ func callLLMInternal(prompt string, opts savedTurnTitleOptions) string {
 		req.Header.Set("Authorization", "Bearer lm-studio")
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: 2 * time.Minute}
 	resp, err := client.Do(req)
 	if err != nil {
 		AddDebugTrace("saved-turn-title", "llm.error", "Title request failed", map[string]interface{}{
@@ -393,31 +421,70 @@ func callLLMInternal(prompt string, opts savedTurnTitleOptions) string {
 		return ""
 	}
 
-	var resMap map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&resMap); err != nil {
-		AddDebugTrace("saved-turn-title", "llm.error", "Failed to decode title response JSON", map[string]interface{}{
+	var (
+		contentBuilder strings.Builder
+		lastChunk      map[string]interface{}
+	)
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		dataStr := strings.TrimPrefix(line, "data: ")
+		if dataStr == "[DONE]" {
+			break
+		}
+
+		var chunk map[string]interface{}
+		if err := json.Unmarshal([]byte(dataStr), &chunk); err != nil {
+			continue
+		}
+		lastChunk = chunk
+
+		if msgType, ok := chunk["type"].(string); ok && msgType == "message.delta" {
+			if content, ok := chunk["content"].(string); ok && content != "" {
+				contentBuilder.WriteString(content)
+			}
+			continue
+		}
+
+		if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
+			if choice, ok := choices[0].(map[string]interface{}); ok {
+				if delta, ok := choice["delta"].(map[string]interface{}); ok {
+					if content, ok := delta["content"].(string); ok && content != "" {
+						contentBuilder.WriteString(content)
+					}
+				} else if msg, ok := choice["message"].(map[string]interface{}); ok {
+					if content, ok := msg["content"].(string); ok && content != "" {
+						contentBuilder.WriteString(content)
+					}
+				}
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		AddDebugTrace("saved-turn-title", "llm.error", "Failed while reading title stream", map[string]interface{}{
 			"error": err,
 		})
 		return ""
 	}
 
+	rawContent := strings.TrimSpace(contentBuilder.String())
 	AddDebugTrace("saved-turn-title", "llm.response", "Received saved turn title LLM response", map[string]interface{}{
-		"model":     modelID,
-		"__payload": resMap,
+		"model":       modelID,
+		"mode":        llmMode,
+		"content":     compactText(rawContent, 220),
+		"content_len": len([]rune(rawContent)),
+		"__payload":   lastChunk,
 	})
-
-	if choices, ok := resMap["choices"].([]interface{}); ok && len(choices) > 0 {
-		if choice, ok := choices[0].(map[string]interface{}); ok {
-			if msg, ok := choice["message"].(map[string]interface{}); ok {
-				if content, ok := msg["content"].(string); ok {
-					return strings.TrimSpace(content)
-				}
-			}
-		}
+	if rawContent != "" {
+		return rawContent
 	}
 
 	AddDebugTrace("saved-turn-title", "llm.empty", "Title response did not contain assistant content", map[string]interface{}{
 		"model": modelID,
+		"mode":  llmMode,
 	})
 	return ""
 }
