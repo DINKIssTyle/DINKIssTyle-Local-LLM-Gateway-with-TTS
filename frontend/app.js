@@ -2442,7 +2442,7 @@ function applyCurrentChatSessionEvent(entry) {
             hideProgressDock();
             const chunk = String(payload.content || '');
             const prev = serverReplayMessageBuffers.get(assistantId) || '';
-            const next = prev + chunk;
+            const next = appendStreamChunkDedup(prev, chunk);
             serverReplayMessageBuffers.set(assistantId, next);
             updateMessageContent(assistantId, next);
             break;
@@ -3687,7 +3687,7 @@ async function processStream(response, elementId, turnId = '') {
                     if (contentToAdd) {
                         hideProgressDock();
 
-                        fullText += contentToAdd;
+                        fullText = appendStreamChunkDedup(fullText, contentToAdd);
 
                         // --- LOOP DETECTION (Regex-based) ---
                         // --- LOOP DETECTION (Regex-based) ---
@@ -4892,6 +4892,22 @@ function renderMarkdownIntoHost(host, markdownText) {
         link.setAttribute('rel', 'noopener noreferrer');
     });
     highlightMarkdownBlocks(host);
+}
+
+function appendStreamChunkDedup(existingText, nextChunk) {
+    const prev = String(existingText || '');
+    const chunk = String(nextChunk || '');
+    if (!chunk) return prev;
+    if (!prev) return chunk;
+    if (prev.endsWith(chunk)) return prev;
+
+    const maxOverlap = Math.min(prev.length, chunk.length);
+    for (let overlap = maxOverlap; overlap > 0; overlap--) {
+        if (prev.slice(-overlap) === chunk.slice(0, overlap)) {
+            return prev + chunk.slice(overlap);
+        }
+    }
+    return prev + chunk;
 }
 
 function finalizeMessageContent(id, text) {
