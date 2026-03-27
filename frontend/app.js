@@ -539,6 +539,13 @@ const unlockAudio = () => {
 };
 document.addEventListener('touchstart', unlockAudio);
 document.addEventListener('click', unlockAudio);
+document.addEventListener('pointerup', (event) => {
+    if (event.pointerType !== 'touch') return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.matches('button, .icon-btn')) {
+        active.blur();
+    }
+});
 
 async function requestWakeLock() {
     if ('wakeLock' in navigator) {
@@ -1570,6 +1577,7 @@ let currentChatSessionClearedAt = '';
 let serverReplayCurrentTurnId = '';
 let serverReplayCurrentAssistantId = '';
 let serverReplayMessageBuffers = new Map();
+let serverReplayReasoningBuffers = new Map();
 let activeLocalTurnId = '';
 let activeLocalAssistantId = '';
 let savedTurns = [];
@@ -2311,6 +2319,7 @@ function resetServerChatReplayState() {
     serverReplayCurrentTurnId = '';
     serverReplayCurrentAssistantId = '';
     serverReplayMessageBuffers = new Map();
+    serverReplayReasoningBuffers = new Map();
 }
 
 function extractSessionClearedAt(session) {
@@ -2448,6 +2457,12 @@ function applyCurrentChatSessionEvent(entry) {
             break;
         }
         case 'reasoning.start':
+            {
+                const reasoningAssistantId = isLocalActiveTurn ? activeLocalAssistantId : serverReplayCurrentAssistantId;
+                if (reasoningAssistantId) {
+                    serverReplayReasoningBuffers.set(reasoningAssistantId, '');
+                }
+            }
             if (payload.started_at) {
                 setReasoningCardStartedAt(isLocalActiveTurn ? activeLocalAssistantId : serverReplayCurrentAssistantId, payload.started_at);
             }
@@ -2459,7 +2474,19 @@ function applyCurrentChatSessionEvent(entry) {
             break;
         case 'reasoning.delta':
             {
+                const reasoningAssistantId = isLocalActiveTurn ? activeLocalAssistantId : serverReplayCurrentAssistantId;
                 const reasoningText = payload.content || payload.reasoning_content || payload.text || payload.delta?.content || '';
+                if (reasoningAssistantId) {
+                    const prevReasoning = serverReplayReasoningBuffers.get(reasoningAssistantId) || '';
+                    const nextReasoning = appendStreamChunkDedup(prevReasoning, reasoningText);
+                    serverReplayReasoningBuffers.set(reasoningAssistantId, nextReasoning);
+                    if (isLocalActiveTurn) {
+                        showReasoningStatus(reasoningAssistantId, nextReasoning || '...');
+                        break;
+                    }
+                    showReasoningStatus(reasoningAssistantId, nextReasoning || '...');
+                    break;
+                }
                 if (isLocalActiveTurn) {
                     if (activeLocalAssistantId) showReasoningStatus(activeLocalAssistantId, reasoningText || '...');
                     break;
@@ -4900,6 +4927,13 @@ function renderMarkdownIntoHost(host, markdownText) {
     highlightMarkdownBlocks(host);
 }
 
+function pulseMessageRender(el) {
+    if (!el) return;
+    el.classList.remove('is-stream-updated');
+    void el.offsetWidth;
+    el.classList.add('is-stream-updated');
+}
+
 function sanitizeAssistantRenderText(text) {
     let cleanText = String(text || '');
     cleanText = cleanText.replace(/<\|[\s\S]*?\|>/g, '');
@@ -5034,6 +5068,8 @@ function updateSyncedMessageContent(id, text) {
         actionBar.hidden = !hasVisibleContent;
     }
 
+    pulseMessageRender(el.querySelector('.assistant-response-card'));
+
     scrollToBottom(wasNearBottom);
     const codeBlocks = mdBody.querySelectorAll('pre code');
     if (wasNearBottom && codeBlocks.length > 0) {
@@ -5102,6 +5138,8 @@ function updateMessageContent(id, text) {
             actionBar.hidden = !hasVisibleContent;
         }
     }
+
+    pulseMessageRender(el.querySelector('.assistant-response-card'));
 
     scrollToBottom(wasNearBottom);
     const codeBlocks = mdBody.querySelectorAll('pre code');

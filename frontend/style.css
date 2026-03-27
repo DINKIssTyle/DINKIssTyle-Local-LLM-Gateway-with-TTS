@@ -308,6 +308,10 @@ body {
   width: 100%;
 }
 
+.assistant-response-card.is-stream-updated {
+  animation: responseChunkFade 0.22s ease;
+}
+
 .startup-response-card .message-bubble {
   padding-top: 0;
 }
@@ -458,6 +462,17 @@ body {
     transform: translateY(-18px);
     max-height: 0;
     margin-bottom: 0;
+  }
+}
+
+@keyframes responseChunkFade {
+  0% {
+    opacity: 0.68;
+    transform: translateY(2px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
@@ -823,9 +838,21 @@ body {
   padding: 0;
   border-radius: 4px;
   transition: color 0.2s;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .icon-btn:hover {
+  color: var(--text-color);
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.icon-btn:focus:not(:focus-visible) {
+  background: transparent;
+  box-shadow: none;
+}
+
+.icon-btn:focus-visible {
   color: var(--text-color);
   background-color: rgba(255, 255, 255, 0.1);
 }
