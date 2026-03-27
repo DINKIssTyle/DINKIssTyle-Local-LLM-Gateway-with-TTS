@@ -399,10 +399,32 @@ function normalizeMarkdownOutsideCode(text, transform) {
     }).join('');
 }
 
+function protectMathSegments(text) {
+    const placeholders = [];
+    let index = 0;
+    const register = (match) => {
+        const token = `@@PROTECTED_MATH_${index++}@@`;
+        placeholders.push({ token, value: match });
+        return token;
+    };
+
+    const protectedText = normalizeMarkdownOutsideCode(text, (segment) =>
+        segment.replace(/(\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|(?<!\$)\$[^$\n]+\$(?!\$))/g, register)
+    );
+
+    return { protectedText, placeholders };
+}
+
+function restoreProtectedMathSegments(text, placeholders) {
+    return (placeholders || []).reduce((result, entry) => result.replaceAll(entry.token, entry.value), text);
+}
+
 function normalizeMarkdownForRender(text) {
     if (!text) return '';
 
     let normalized = String(text);
+    const protectedMath = protectMathSegments(normalized);
+    normalized = protectedMath.protectedText;
 
     // Remove invisible characters that can break markdown emphasis or list parsing.
     normalized = normalized.replace(/[\u200B-\u200D\u2060\uFEFF]/g, '');
@@ -445,43 +467,7 @@ function normalizeMarkdownForRender(text) {
             .replace(/\n{3,}/g, '\n\n')
     );
 
-    return normalized;
-}
-
-function formatMathText(content, { inline = false } = {}) {
-    let formatted = String(content || '')
-        .replace(/\r\n/g, '\n')
-        .replace(/\r/g, '\n')
-        .replace(/[ \t]+\n/g, '\n')
-        .replace(/\n[ \t]+/g, '\n')
-        .trim();
-
-    if (inline) {
-        formatted = formatted.replace(/\s+/g, ' ');
-    } else {
-        formatted = formatted.replace(/\n{3,}/g, '\n\n');
-    }
-
-    return escapeHtml(formatted);
-}
-
-function renderMathDelimiters(markdownText) {
-    const placeholders = [];
-    let index = 0;
-    const register = (html) => {
-        const token = `@@MATH_${index++}@@`;
-        placeholders.push({ token, html });
-        return token;
-    };
-
-    const text = normalizeMarkdownOutsideCode(markdownText, (segment) =>
-        segment
-            .replace(/\\\[\s*([\s\S]*?)\s*\\\]/g, (_, expr) => `\n${register(`<div class="math-block">${formatMathText(expr)}</div>`)}\n`)
-            .replace(/\$\$\s*([\s\S]*?)\s*\$\$/g, (_, expr) => `\n${register(`<div class="math-block">${formatMathText(expr)}</div>`)}\n`)
-            .replace(/\\\(([\s\S]*?)\\\)/g, (_, expr) => register(`<span class="math-inline">${formatMathText(expr, { inline: true })}</span>`))
-    );
-
-    return { text, placeholders };
+    return restoreProtectedMathSegments(normalized, protectedMath.placeholders);
 }
 
 function applyTranslations() {
@@ -4217,15 +4203,51 @@ function highlightMarkdownBlocks(container) {
     });
 }
 
+function renderMathInHost(host) {
+    if (!host) return;
+
+    const mathJax = window.MathJax;
+    if (mathJax?.typesetPromise) {
+        try {
+            if (typeof mathJax.typesetClear === 'function') {
+                mathJax.typesetClear([host]);
+            }
+            mathJax.typesetPromise([host]).catch((error) => {
+                console.warn('[Math] MathJax typeset failed, falling back to KaTeX', error);
+                renderMathWithKatex(host);
+            });
+            return;
+        } catch (error) {
+            console.warn('[Math] MathJax render failed, falling back to KaTeX', error);
+        }
+    }
+
+    renderMathWithKatex(host);
+}
+
+function renderMathWithKatex(host) {
+    if (!host || typeof window.renderMathInElement !== 'function') return;
+    try {
+        window.renderMathInElement(host, {
+            throwOnError: false,
+            strict: 'ignore',
+            delimiters: [
+                { left: '$$', right: '$$', display: true },
+                { left: '\\[', right: '\\]', display: true },
+                { left: '$', right: '$', display: false },
+                { left: '\\(', right: '\\)', display: false }
+            ]
+        });
+    } catch (error) {
+        console.warn('[Math] KaTeX fallback failed', error);
+    }
+}
+
 function renderMarkdownIntoHost(host, markdownText) {
     if (!host) return;
     const normalized = normalizeMarkdownForRender(markdownText || '');
-    const mathRender = renderMathDelimiters(normalized);
-    let html = mathRender.text.trim() ? marked.parse(mathRender.text) : '';
-    mathRender.placeholders.forEach(({ token, html: mathHtml }) => {
-        html = html.replaceAll(token, mathHtml);
-    });
-    host.innerHTML = html;
+    host.innerHTML = normalized.trim() ? marked.parse(normalized) : '';
+    renderMathInHost(host);
     host.querySelectorAll('a').forEach((link) => {
         link.setAttribute('target', '_blank');
         link.setAttribute('rel', 'noopener noreferrer');
