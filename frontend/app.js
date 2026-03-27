@@ -4910,6 +4910,31 @@ function appendStreamChunkDedup(existingText, nextChunk) {
     return prev + chunk;
 }
 
+function deduplicateTrailingParagraph(text) {
+    const source = String(text || '');
+    if (!source) return source;
+
+    const blocks = source.split(/\n{2,}/);
+    if (blocks.length >= 2) {
+        const last = blocks[blocks.length - 1].trim();
+        const prev = blocks[blocks.length - 2].trim();
+        if (last && prev && last === prev) {
+            return blocks.slice(0, -1).join('\n\n');
+        }
+    }
+
+    const lines = source.split('\n');
+    if (lines.length >= 2) {
+        const lastLine = lines[lines.length - 1].trim();
+        const prevLine = lines[lines.length - 2].trim();
+        if (lastLine && prevLine && lastLine === prevLine) {
+            return lines.slice(0, -1).join('\n');
+        }
+    }
+
+    return source;
+}
+
 function finalizeMessageContent(id, text) {
     const el = ensureAssistantMessageElement(id);
     if (!el) return;
@@ -4924,6 +4949,7 @@ function finalizeMessageContent(id, text) {
     cleanText = cleanText.replace(/\{"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*([\s\S]*?)\}/g, '');
     cleanText = cleanText.trim().replace(/^(json|code|text)\s*/gi, '');
     cleanText = cleanText.replace(/<\|.*?\|>/g, '');
+    cleanText = deduplicateTrailingParagraph(cleanText);
 
     renderMarkdownIntoHost(committedHost, cleanText);
     pendingHost.innerHTML = '';
@@ -4991,6 +5017,7 @@ function updateMessageContent(id, text) {
 
     // Final pass for any partial tag leftovers or repeated markers
     cleanText = cleanText.replace(/<\|.*?\|>/g, '');
+    cleanText = deduplicateTrailingParagraph(cleanText);
     const streamState = el._streamRenderState || { committedText: '', pendingText: '' };
     const { committedText, pendingText } = splitStreamingMarkdown(cleanText);
 
