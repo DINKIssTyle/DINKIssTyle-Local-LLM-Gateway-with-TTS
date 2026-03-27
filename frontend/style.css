@@ -1003,29 +1003,32 @@ body {
   margin-bottom: 12px;
 }
 
-.markdown-body .math-block {
+.markdown-body .katex-display {
   margin: 0 0 12px;
   padding: 10px 12px;
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.06);
-  font-family: "SF Mono", "JetBrains Mono", ui-monospace, monospace;
-  font-size: calc(var(--chat-font-size) * 0.96);
-  line-height: 1.55;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
-.markdown-body .math-inline {
-  display: inline-block;
-  padding: 0.08em 0.42em;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.05);
+.markdown-body .katex {
+  font-size: 1.02em;
+}
+
+.markdown-body mjx-container[display="true"] {
+  margin: 0 0 12px !important;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.06);
-  font-family: "SF Mono", "JetBrains Mono", ui-monospace, monospace;
-  font-size: 0.96em;
-  line-height: 1.35;
-  white-space: pre-wrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.markdown-body mjx-container {
+  color: inherit !important;
 }
 
 .reasoning-status {
