@@ -131,6 +131,15 @@ const translations = {
         'status.thoughtForMinutes': '{minutes}분 동안 생각함',
         'status.thoughtForMinutesSeconds': '{minutes}분 {seconds}초 동안 생각함',
         'tool.currentTimeChecked': '현재 시간을 확인했습니다.',
+        'tool.currentLocationChecked': '사용자 위치를 확인했습니다.',
+        'tool.fallbackName': '도구',
+        'tool.executeCommand': '명령어 실행: {value}',
+        'tool.searchQuery': '검색어: {value}',
+        'tool.openUrl': '페이지 읽기: {value}',
+        'tool.readBufferedSource': '버퍼 문서 읽기: {value}',
+        'tool.searchMemory': '메모리 검색: {value}',
+        'tool.readMemory': '메모리 읽기: ID {value}',
+        'tool.deleteMemory': '메모리 삭제: ID {value}',
         'tool.executionFinished': '도구 실행이 완료되었습니다.',
         'tool.noQueryDetails': '세부 질의 정보 없음',
         'tool.unknownError': '알 수 없는 오류',
@@ -287,6 +296,15 @@ const translations = {
         'status.thoughtForMinutes': 'Thought for {minutes}m',
         'status.thoughtForMinutesSeconds': 'Thought for {minutes}m {seconds}s',
         'tool.currentTimeChecked': 'Checked the current time.',
+        'tool.currentLocationChecked': 'Checked the user location.',
+        'tool.fallbackName': 'Tool',
+        'tool.executeCommand': 'Command: {value}',
+        'tool.searchQuery': 'Query: {value}',
+        'tool.openUrl': 'Open page: {value}',
+        'tool.readBufferedSource': 'Read buffered source: {value}',
+        'tool.searchMemory': 'Search memory: {value}',
+        'tool.readMemory': 'Read memory: ID {value}',
+        'tool.deleteMemory': 'Delete memory: ID {value}',
         'tool.executionFinished': 'Tool execution finished.',
         'tool.noQueryDetails': 'No query details',
         'tool.unknownError': 'Unknown error',
@@ -3503,30 +3521,21 @@ function extractToolPreview(args, summary = '', toolName = '') {
     if (normalizedTool === 'get_current_time') {
         return t('tool.currentTimeChecked');
     }
+    if (normalizedTool === 'get_current_location') {
+        return t('tool.currentLocationChecked');
+    }
 
     if (args && typeof args === 'object') {
-        if (normalizedTool === 'namu_wiki') {
-            const keyword = extractToolObjectValue(args, ['keyword', 'query', 'title', 'input']);
-            if (keyword) return keyword;
-        }
-
-        const candidateKeys = ['query', 'url', 'text', 'prompt', 'input', 'title'];
-        for (const key of candidateKeys) {
-            const value = args[key];
-            if (typeof value === 'string' && value.trim()) {
-                return value.trim();
-            }
-        }
-
-        const compactJson = stringifyToolArgs(args);
-        if (compactJson) {
-            return compactJson;
-        }
+        const detail = formatToolPreviewFromObject(args, normalizedTool);
+        if (detail) return detail;
     }
 
     if (typeof args === 'string' && args.trim()) {
         if (normalizedTool === 'get_current_time' && args.trim() === '{}') {
             return t('tool.currentTimeChecked');
+        }
+        if (normalizedTool === 'get_current_location' && args.trim() === '{}') {
+            return t('tool.currentLocationChecked');
         }
         return args.trim();
     }
@@ -3538,11 +3547,67 @@ function extractToolPreview(args, summary = '', toolName = '') {
     return '';
 }
 
+function formatToolPreviewFromObject(args, normalizedTool) {
+    const queryLike = extractToolObjectValue(args, ['query', 'keyword', 'title', 'input', 'prompt', 'text']);
+    const url = extractToolObjectValue(args, ['url']);
+    const sourceID = extractToolObjectValue(args, ['source_id']);
+    const command = extractToolObjectValue(args, ['command']);
+    const memoryID = extractToolObjectValue(args, ['memory_id']);
+
+    switch (normalizedTool) {
+        case 'search_web':
+        case 'namu_wiki':
+        case 'naver_search':
+            if (queryLike) return t('tool.searchQuery').replace('{value}', queryLike);
+            break;
+        case 'read_web_page':
+            if (url) return t('tool.openUrl').replace('{value}', url);
+            break;
+        case 'read_buffered_source':
+            if (queryLike) return t('tool.readBufferedSource').replace('{value}', queryLike);
+            if (sourceID) return t('tool.readBufferedSource').replace('{value}', sourceID);
+            break;
+        case 'search_memory':
+            if (queryLike) return t('tool.searchMemory').replace('{value}', queryLike);
+            break;
+        case 'read_memory':
+            if (memoryID) return t('tool.readMemory').replace('{value}', memoryID);
+            break;
+        case 'delete_memory':
+            if (memoryID) return t('tool.deleteMemory').replace('{value}', memoryID);
+            break;
+        case 'execute_command':
+            if (command) return t('tool.executeCommand').replace('{value}', command);
+            break;
+        case 'get_current_location':
+            return t('tool.currentLocationChecked');
+        case 'get_current_time':
+            return t('tool.currentTimeChecked');
+    }
+
+    const candidateKeys = ['query', 'url', 'text', 'prompt', 'input', 'title'];
+    for (const key of candidateKeys) {
+        const value = args[key];
+        if (typeof value === 'string' && value.trim()) {
+            return value.trim();
+        }
+    }
+
+    const compactJson = stringifyToolArgs(args);
+    if (compactJson && compactJson !== '{}') {
+        return compactJson;
+    }
+    return '';
+}
+
 function extractToolObjectValue(args, keys) {
     for (const key of keys) {
         const value = args?.[key];
         if (typeof value === 'string' && value.trim()) {
             return value.trim();
+        }
+        if (typeof value === 'number' && Number.isFinite(value)) {
+            return String(value);
         }
     }
     return '';
@@ -3561,7 +3626,7 @@ function stringifyToolArgs(args) {
 
 function formatToolDisplayName(toolName = '') {
     const cleaned = String(toolName || '').trim();
-    if (!cleaned) return 'Tool';
+    if (!cleaned) return t('tool.fallbackName');
 
     return cleaned
         .replace(/[_-]+/g, ' ')
