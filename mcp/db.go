@@ -71,6 +71,20 @@ func createSchema() error {
 	CREATE INDEX IF NOT EXISTS idx_memories_user_id ON memories(user_id);
 	CREATE INDEX IF NOT EXISTS idx_memories_user_type ON memories(user_id, memory_type);
 
+	CREATE TABLE IF NOT EXISTS memory_chunks (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		memory_id INTEGER NOT NULL,
+		user_id TEXT NOT NULL,
+		chunk_index INTEGER NOT NULL,
+		chunk_text TEXT NOT NULL,
+		hit_count INTEGER NOT NULL DEFAULT 0,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY(memory_id) REFERENCES memories(id)
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_memory_chunks_memory_id ON memory_chunks(memory_id, chunk_index);
+	CREATE INDEX IF NOT EXISTS idx_memory_chunks_user_id ON memory_chunks(user_id, created_at DESC);
+
 	CREATE TABLE IF NOT EXISTS auth_sessions (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		user_id TEXT NOT NULL,
