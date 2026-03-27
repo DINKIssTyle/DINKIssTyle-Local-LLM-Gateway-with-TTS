@@ -20,6 +20,11 @@ var (
 	db *sql.DB
 )
 
+const (
+	memoryChunkSize    = 800
+	memoryChunkOverlap = 120
+)
+
 // InitDB initializes the SQLite database connection and creates necessary tables.
 func InitDB(dbPath string) error {
 	var err error
@@ -1185,16 +1190,60 @@ func InsertMemory(userID, fullText string) (int64, error) {
 		return 0, fmt.Errorf("database not initialized")
 	}
 
-	query := `
-	INSERT INTO memories (user_id, full_text, hit_count, memory_type)
-	VALUES (?, ?, 0, 'raw_interaction')`
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("failed to start memory insert: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
 
-	result, err := db.Exec(query, userID, fullText)
+	result, err := tx.Exec(`
+		INSERT INTO memories (user_id, full_text, hit_count, memory_type)
+		VALUES (?, ?, 0, 'raw_interaction')`, userID, fullText)
 	if err != nil {
 		return 0, fmt.Errorf("failed to insert memory: %w", err)
 	}
 
-	return result.LastInsertId()
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get inserted memory id: %w", err)
+	}
+
+	if err = insertMemoryChunksTx(tx, id, userID, fullText, time.Now().UTC()); err != nil {
+		return 0, err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return 0, fmt.Errorf("failed to commit memory insert: %w", err)
+	}
+
+	return id, nil
+}
+
+func insertMemoryChunksTx(tx *sql.Tx, memoryID int64, userID, fullText string, createdAt time.Time) error {
+	chunks := chunkBufferedContent(fullText, memoryChunkSize, memoryChunkOverlap)
+	if len(chunks) == 0 {
+		return nil
+	}
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO memory_chunks (memory_id, user_id, chunk_index, chunk_text, hit_count, created_at)
+		VALUES (?, ?, ?, ?, 0, ?)`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare memory chunk insert: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, chunk := range chunks {
+		if _, err := stmt.Exec(memoryID, userID, chunk.Index, chunk.Text, createdAt); err != nil {
+			return fmt.Errorf("failed to insert memory chunk %d: %w", chunk.Index, err)
+		}
+	}
+
+	return nil
 }
 
 // IncrementHitCount increases the hit counter for a specific memory entry.
