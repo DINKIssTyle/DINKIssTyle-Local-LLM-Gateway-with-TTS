@@ -113,6 +113,62 @@ func createSchema() error {
 		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
 
+	CREATE TABLE IF NOT EXISTS chat_sessions (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id TEXT NOT NULL,
+		session_key TEXT NOT NULL DEFAULT 'default',
+		status TEXT NOT NULL DEFAULT 'idle',
+		llm_mode TEXT NOT NULL DEFAULT 'standard',
+		model_id TEXT NOT NULL DEFAULT '',
+		current_job_id INTEGER,
+		last_response_id TEXT NOT NULL DEFAULT '',
+		summary_text TEXT NOT NULL DEFAULT '',
+		turn_count INTEGER NOT NULL DEFAULT 0,
+		estimated_chars INTEGER NOT NULL DEFAULT 0,
+		last_input_tokens INTEGER NOT NULL DEFAULT 0,
+		last_output_tokens INTEGER NOT NULL DEFAULT 0,
+		peak_input_tokens INTEGER NOT NULL DEFAULT 0,
+		token_budget INTEGER NOT NULL DEFAULT 0,
+		risk_score REAL NOT NULL DEFAULT 0,
+		risk_level TEXT NOT NULL DEFAULT 'low',
+		last_reset_reason TEXT NOT NULL DEFAULT '',
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		cleared_at DATETIME
+	);
+
+	CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_sessions_user_key
+	ON chat_sessions(user_id, session_key);
+
+	CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_updated
+	ON chat_sessions(user_id, updated_at DESC);
+
+	CREATE INDEX IF NOT EXISTS idx_chat_sessions_current_job
+	ON chat_sessions(current_job_id);
+
+	CREATE TABLE IF NOT EXISTS chat_events (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		session_id INTEGER NOT NULL,
+		user_id TEXT NOT NULL,
+		event_seq INTEGER NOT NULL,
+		role TEXT NOT NULL DEFAULT '',
+		event_type TEXT NOT NULL,
+		message_id TEXT NOT NULL DEFAULT '',
+		turn_id TEXT NOT NULL DEFAULT '',
+		payload_json TEXT NOT NULL DEFAULT '{}',
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY(session_id) REFERENCES chat_sessions(id)
+	);
+
+	CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_events_session_seq
+	ON chat_events(session_id, event_seq);
+
+	CREATE INDEX IF NOT EXISTS idx_chat_events_user_created
+	ON chat_events(user_id, created_at DESC);
+
+	CREATE INDEX IF NOT EXISTS idx_chat_events_session_created
+	ON chat_events(session_id, created_at ASC);
+
 	CREATE TABLE IF NOT EXISTS saved_turns (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		user_id TEXT NOT NULL,

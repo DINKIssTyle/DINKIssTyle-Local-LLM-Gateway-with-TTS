@@ -281,6 +281,37 @@ func TestLastSessionUpsertAndFetch(t *testing.T) {
 	}
 }
 
+func TestChatSessionTablesExist(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "chat_session_schema_*.db")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	dbPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(dbPath)
+
+	if err := InitDB(dbPath); err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer CloseDB()
+
+	var chatSessionsTable string
+	if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chat_sessions'`).Scan(&chatSessionsTable); err != nil {
+		t.Fatalf("failed to find chat_sessions table: %v", err)
+	}
+	if chatSessionsTable != "chat_sessions" {
+		t.Fatalf("expected chat_sessions table, got %q", chatSessionsTable)
+	}
+
+	var chatEventsTable string
+	if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chat_events'`).Scan(&chatEventsTable); err != nil {
+		t.Fatalf("failed to find chat_events table: %v", err)
+	}
+	if chatEventsTable != "chat_events" {
+		t.Fatalf("expected chat_events table, got %q", chatEventsTable)
+	}
+}
+
 func nowForTest() time.Time {
 	return time.Now().UTC()
 }
