@@ -782,6 +782,24 @@ func GetCurrentChatSession(userID string) (ChatSessionEntry, error) {
 	return GetChatSession(userID, "default")
 }
 
+func ClearChatSessionEvents(userID string, sessionID int64) error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return fmt.Errorf("user id is required")
+	}
+	if sessionID <= 0 {
+		return fmt.Errorf("session id is required")
+	}
+
+	if _, err := db.Exec(`DELETE FROM chat_events WHERE user_id = ? AND session_id = ?`, userID, sessionID); err != nil {
+		return fmt.Errorf("failed to clear chat session events: %w", err)
+	}
+	return nil
+}
+
 func AppendChatEvent(userID string, sessionID int64, role, eventType, messageID, turnID, payloadJSON string) (ChatEventEntry, error) {
 	var entry ChatEventEntry
 	if db == nil {
