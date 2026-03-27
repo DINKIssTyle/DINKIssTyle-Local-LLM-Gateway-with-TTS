@@ -120,6 +120,40 @@ func TestMemoryChunkTableExists(t *testing.T) {
 	}
 }
 
+func TestInsertMemoryCreatesChunks(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "memory_chunk_insert_*.db")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	dbPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(dbPath)
+
+	if err := InitDB(dbPath); err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer CloseDB()
+
+	userID := "chunk_user"
+	longText := ""
+	for i := 0; i < 40; i++ {
+		longText += "This is a long memory sentence that should be chunked for retrieval. "
+	}
+
+	id, err := InsertMemory(userID, longText)
+	if err != nil {
+		t.Fatalf("InsertMemory failed: %v", err)
+	}
+
+	var chunkCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM memory_chunks WHERE memory_id = ?`, id).Scan(&chunkCount); err != nil {
+		t.Fatalf("failed to count chunks: %v", err)
+	}
+	if chunkCount < 2 {
+		t.Fatalf("expected multiple chunks, got %d", chunkCount)
+	}
+}
+
 func TestLastSessionUpsertAndFetch(t *testing.T) {
 	tmpFile, err := os.CreateTemp("", "last_session_test_*.db")
 	if err != nil {
