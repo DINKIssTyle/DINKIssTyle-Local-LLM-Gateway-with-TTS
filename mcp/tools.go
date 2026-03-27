@@ -484,8 +484,11 @@ func SearchMemoryDB(userID, query string) (string, error) {
 		sb.WriteString(fmt.Sprintf("(search terms: %s)\n", strings.Join(searchQueries, ", ")))
 	}
 	for _, r := range results {
-		sb.WriteString(fmt.Sprintf("\n--- MEMORY ID: %d | DATE: %s | KWs: %s ---\n", r.ID, r.CreatedAt.Format("2006-01-02"), r.Keywords))
-		sb.WriteString(fmt.Sprintf("SUMMARY: %s\n", r.Summary))
+		memoryType := strings.TrimSpace(r.MemoryType)
+		if memoryType == "" {
+			memoryType = "raw_interaction"
+		}
+		sb.WriteString(fmt.Sprintf("\n--- MEMORY ID: %d | DATE: %s | TYPE: %s ---\n", r.ID, r.CreatedAt.Format("2006-01-02"), memoryType))
 		sb.WriteString(fmt.Sprintf("FULL TEXT:\n%s\n", r.FullText))
 	}
 	for _, turn := range savedTurns {
@@ -530,7 +533,7 @@ func rewriteMemoryQuery(input string) string {
 
 	lower := strings.ToLower(trimmed)
 	if strings.Contains(trimmed, "내 이름") || strings.Contains(trimmed, "제 이름") || strings.Contains(lower, "my name") || strings.Contains(lower, "who am i") {
-		return "user name 이름 불러줘 call me my name"
+		return "내 이름은 제 이름은 사용자 이름 이름은 user name my name call me"
 	}
 
 	if len([]rune(trimmed)) < 12 {
@@ -625,6 +628,14 @@ func buildSearchQueries(originalQuery, rewrittenQuery string) []string {
 	for _, keyword := range ExtractKeywords(originalQuery) {
 		add(keyword)
 	}
+	if strings.Contains(originalQuery, "이름") || strings.Contains(rewrittenQuery, "이름") {
+		add("내 이름은")
+		add("제 이름은")
+		add("사용자 이름")
+		add("이름은")
+		add("user name")
+		add("my name")
+	}
 
 	return queries
 }
@@ -646,16 +657,7 @@ func GetMemorySnapshot(userID string) string {
 
 	var sb strings.Builder
 	for _, r := range results {
-		summary := strings.TrimSpace(r.Summary)
-		if summary == "" {
-			summary = "[Raw Interaction Record]"
-		}
-		keywords := strings.TrimSpace(r.Keywords)
-		if keywords != "" {
-			sb.WriteString(fmt.Sprintf("- [%s] %s | %s\n", r.CreatedAt.Format("2006-01-02"), compactMemoryText(summary, 120), compactMemoryText(keywords, 60)))
-			continue
-		}
-		sb.WriteString(fmt.Sprintf("- [%s] %s\n", r.CreatedAt.Format("2006-01-02"), compactMemoryText(summary, 120)))
+		sb.WriteString(fmt.Sprintf("- [%s] %s\n", r.CreatedAt.Format("2006-01-02"), compactMemoryText(r.FullText, 120)))
 	}
 	for _, turn := range savedTurns {
 		sb.WriteString(fmt.Sprintf("- [%s] Saved turn: %s\n", turn.CreatedAt.Format("2006-01-02"), compactMemoryText(turn.Title, 120)))
@@ -780,13 +782,12 @@ func AutoSearchMemory(userID, input string) string {
 						continue
 					}
 					allResults = append(allResults, MemoryEntry{
-						ID:        turn.ID + 1_000_000_000,
-						UserID:    turn.UserID,
-						Summary:   "Saved turn: " + turn.Title,
-						Keywords:  "",
-						FullText:  fmt.Sprintf("User Prompt:\n%s\n\nAssistant Response:\n%s", turn.PromptText, turn.ResponseText),
-						HitCount:  0,
-						CreatedAt: turn.CreatedAt,
+						ID:         turn.ID + 1_000_000_000,
+						UserID:     turn.UserID,
+						FullText:   fmt.Sprintf("User Prompt:\n%s\n\nAssistant Response:\n%s", turn.PromptText, turn.ResponseText),
+						HitCount:   0,
+						CreatedAt:  turn.CreatedAt,
+						MemoryType: "saved_turn",
 					})
 					seenIDs[turn.ID+1_000_000_000] = true
 				}
@@ -819,19 +820,11 @@ func AutoSearchMemory(userID, input string) string {
 	var rawContextSb strings.Builder
 	for i := 0; i < limit; i++ {
 		r := allResults[i]
-
-		// Metadata formatting: Handle empty summary/keywords gracefully
-		displaySummary := r.Summary
-		if displaySummary == "" {
-			displaySummary = "[Raw Interaction Record]"
+		memoryType := strings.TrimSpace(r.MemoryType)
+		if memoryType == "" {
+			memoryType = "raw_interaction"
 		}
-		displayKeywords := r.Keywords
-		if displayKeywords == "" {
-			displayKeywords = "[No Tags]"
-		}
-
-		rawContextSb.WriteString(fmt.Sprintf("\n--- MEMORY ID: %d | DATE: %s | KEYWORDS: %s ---\n", r.ID, r.CreatedAt.Format("2006-01-02"), displayKeywords))
-		rawContextSb.WriteString(fmt.Sprintf("Summary: %s\n", displaySummary))
+		rawContextSb.WriteString(fmt.Sprintf("\n--- MEMORY ID: %d | DATE: %s | TYPE: %s ---\n", r.ID, r.CreatedAt.Format("2006-01-02"), memoryType))
 		rawContextSb.WriteString(fmt.Sprintf("Content: %s\n", compactMemoryText(r.FullText, 400)))
 
 		// Increment hit count only for actual memory records.
@@ -934,18 +927,8 @@ func ReadMemoryDB(userID string, memoryID int64) (string, error) {
 		return "", fmt.Errorf("db read failed: %v", err)
 	}
 
-	return fmt.Sprintf("Memory ID: %d\nDate: %s\nSummary: %s\nKeywords: %s\n\n--- Full Context ---\n%s",
-		mem.ID, mem.CreatedAt.Format("2006-01-02 15:04"), mem.Summary, mem.Keywords, mem.FullText), nil
-}
-
-// UpdateMemoryDB modifications a specific memory entry.
-func UpdateMemoryDB(userID string, memoryID int64, summary string, keywords string) (string, error) {
-	log.Printf("[MCP] UpdateMemoryDB: User=%s, ID=%d", userID, memoryID)
-	err := UpdateMemory(userID, memoryID, summary, keywords)
-	if err != nil {
-		return "", fmt.Errorf("db update failed: %v", err)
-	}
-	return fmt.Sprintf("Successfully updated Memory ID: %d", memoryID), nil
+	return fmt.Sprintf("Memory ID: %d\nDate: %s\nType: %s\n\n--- Full Context ---\n%s",
+		mem.ID, mem.CreatedAt.Format("2006-01-02 15:04"), mem.MemoryType, mem.FullText), nil
 }
 
 // DeleteMemoryDB removes a specific memory entry.

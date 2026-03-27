@@ -118,7 +118,7 @@ func GetToolList() []Tool {
 		},
 		{
 			Name:        "search_memory",
-			Description: "Search the user's long-term SQLite memory using keywords. Returns ONLY short summaries. CRITICAL: You MUST use 'read_memory' with the returned ID to read the full context before answering the user.",
+			Description: "Search the user's long-term SQLite memory using full-text matching. Results may include raw chat memories and saved turns. Use this whenever the user asks about their personal info, prior chats, preferences, or past facts.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -142,28 +142,6 @@ func GetToolList() []Tool {
 					},
 				},
 				"required": []string{"memory_id"},
-			},
-		},
-		{
-			Name:        "update_memory",
-			Description: "Update an existing memory entry if facts have changed or need correction. You MUST use search_memory first to find the correct memory_id.",
-			InputSchema: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"memory_id": map[string]interface{}{
-						"type":        "integer",
-						"description": "The ID of the memory to update.",
-					},
-					"summary": map[string]interface{}{
-						"type":        "string",
-						"description": "The new summary/fact string to replace the old one.",
-					},
-					"keywords": map[string]interface{}{
-						"type":        "string",
-						"description": "Comma-separated keywords for the updated memory.",
-					},
-				},
-				"required": []string{"memory_id", "summary", "keywords"},
 			},
 		},
 		{
@@ -540,22 +518,6 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 		emitToolResultTrace(toolName, start, result, err)
 		return result, err
 
-	case "update_memory":
-		if !enableMemory {
-			return "", fmt.Errorf("memory feature is disabled by user settings")
-		}
-		var args struct {
-			MemoryID int64  `json:"memory_id"`
-			Summary  string `json:"summary"`
-			Keywords string `json:"keywords"`
-		}
-		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
-			return "", fmt.Errorf("invalid arguments for update_memory: %v", err)
-		}
-		result, err := UpdateMemoryDB(userID, args.MemoryID, args.Summary, args.Keywords)
-		emitToolResultTrace(toolName, start, result, err)
-		return result, err
-
 	case "delete_memory":
 		if !enableMemory {
 			return "", fmt.Errorf("memory feature is disabled by user settings")
@@ -806,37 +768,6 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 				},
 			}
 			Broadcast(`{"type": "tool_call.success", "tool": "read_memory"}`)
-		}
-
-	} else if params.Name == "update_memory" {
-		if !enableMemory {
-			res.Error = &JSONRPCError{Code: -32601, Message: "Memory feature is disabled by user settings."}
-			Broadcast(`{"type": "tool_call.failure", "tool": "update_memory", "reason": "Memory disabled"}`)
-			return
-		}
-		var args struct {
-			MemoryID int64  `json:"memory_id"`
-			Summary  string `json:"summary"`
-			Keywords string `json:"keywords"`
-		}
-		json.Unmarshal(params.Arguments, &args)
-
-		content, err := UpdateMemoryDB(userID, args.MemoryID, args.Summary, args.Keywords)
-		if err != nil {
-			res.Result = map[string]interface{}{
-				"content": []map[string]interface{}{
-					{"type": "text", "text": fmt.Sprintf("Error: %v", err)},
-				},
-				"isError": true,
-			}
-			Broadcast(fmt.Sprintf(`{"type": "tool_call.failure", "tool": "update_memory", "reason": "%v"}`, err))
-		} else {
-			res.Result = map[string]interface{}{
-				"content": []map[string]interface{}{
-					{"type": "text", "text": content},
-				},
-			}
-			Broadcast(`{"type": "tool_call.success", "tool": "update_memory"}`)
 		}
 
 	} else if params.Name == "delete_memory" {

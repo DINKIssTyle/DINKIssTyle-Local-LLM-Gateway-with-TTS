@@ -25,12 +25,12 @@ func TestDBCreationAndSearch(t *testing.T) {
 	userID := "test_user_123"
 
 	// 3. Insert Memories
-	id1, err := InsertMemory(userID, "Used golang and sqlite for db.", "golang,sqlite,db", "Full text of conversation about golang and sqlite.")
+	id1, err := InsertMemory(userID, "Full text of conversation about golang and sqlite.")
 	if err != nil {
 		t.Fatalf("InsertMemory 1 failed: %v", err)
 	}
 
-	id2, err := InsertMemory(userID, "Talked about wails desktop.", "wails,desktop,gui", "Full text about wails.")
+	id2, err := InsertMemory(userID, "Full text about wails.")
 	if err != nil {
 		t.Fatalf("InsertMemory 2 failed: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestSearchMemoriesMultiQueryFindsTokenizedRewrite(t *testing.T) {
 	defer CloseDB()
 
 	userID := "test_user_multi"
-	id, err := InsertMemory(userID, "User's name is Park Nomin.", "name,이름,박노민,user name", "사용자 이름, user name 은 박노민 입니다.")
+	id, err := InsertMemory(userID, "사용자 이름, user name 은 박노민 입니다.")
 	if err != nil {
 		t.Fatalf("InsertMemory failed: %v", err)
 	}

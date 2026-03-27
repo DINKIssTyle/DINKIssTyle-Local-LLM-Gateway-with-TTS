@@ -2093,6 +2093,15 @@ function toggleSwitch(id) {
     }
 }
 
+function insertPlainTextAtCursor(text) {
+    if (!messageInput) return;
+    const normalized = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const start = messageInput.selectionStart ?? messageInput.value.length;
+    const end = messageInput.selectionEnd ?? messageInput.value.length;
+    messageInput.setRangeText(normalized, start, end, 'end');
+    messageInput.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 function setupEventListeners() {
     document.getElementById('save-cfg-btn').addEventListener('click', saveConfig);
 
@@ -2150,6 +2159,13 @@ function setupEventListeners() {
         // If an image was found, prevent default to avoid pasting source URLs or other metadata
         if (hasImage) {
             e.preventDefault();
+            return;
+        }
+
+        const plainText = (e.clipboardData || e.originalEvent.clipboardData).getData('text/plain');
+        if (typeof plainText === 'string') {
+            e.preventDefault();
+            insertPlainTextAtCursor(plainText);
         }
     });
 
