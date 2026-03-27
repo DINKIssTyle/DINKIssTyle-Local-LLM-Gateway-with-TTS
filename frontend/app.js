@@ -433,8 +433,30 @@ function protectMathSegments(text) {
     return { protectedText, placeholders };
 }
 
-function restoreProtectedMathSegments(text, placeholders) {
+function protectTableSegments(text) {
+    const placeholders = [];
+    let index = 0;
+    const register = (match) => {
+        const token = `@@PROTECTED_TABLE_${index++}@@`;
+        placeholders.push({ token, value: match });
+        return token;
+    };
+
+    const protectedText = normalizeMarkdownOutsideCode(text, (segment) =>
+        segment.replace(/(^|\n)(\|[^\n]+\|\n\|[-:\s|]+\|(?:\n\s*\n|\n\|[^\n]+\|)+)/g, (match, prefix, tableBlock) => {
+            return `${prefix}${register(tableBlock)}`;
+        })
+    );
+
+    return { protectedText, placeholders };
+}
+
+function restoreProtectedSegments(text, placeholders) {
     return (placeholders || []).reduce((result, entry) => result.replaceAll(entry.token, entry.value), text);
+}
+
+function restoreProtectedMathSegments(text, placeholders) {
+    return restoreProtectedSegments(text, placeholders);
 }
 
 function normalizeMarkdownForRender(text) {
@@ -443,6 +465,8 @@ function normalizeMarkdownForRender(text) {
     let normalized = String(text);
     const protectedMath = protectMathSegments(normalized);
     normalized = protectedMath.protectedText;
+    const protectedTables = protectTableSegments(normalized);
+    normalized = protectedTables.protectedText;
 
     // Remove invisible characters that can break markdown emphasis or list parsing.
     normalized = normalized.replace(/[\u200B-\u200D\u2060\uFEFF]/g, '');
@@ -485,6 +509,7 @@ function normalizeMarkdownForRender(text) {
             .replace(/\n{3,}/g, '\n\n')
     );
 
+    normalized = restoreProtectedSegments(normalized, protectedTables.placeholders);
     return restoreProtectedMathSegments(normalized, protectedMath.placeholders);
 }
 
@@ -5443,20 +5468,13 @@ function updateMessageContent(id, text) {
 
     // Filter out common special tokens that might leak during streaming
     let cleanText = sanitizeAssistantRenderText(text);
-    const streamState = el._streamRenderState || { committedText: '', pendingText: '' };
-    const split = splitStreamingMarkdown(cleanText);
-    const { committedText, pendingText } = deduplicateCommittedPending(split.committedText, split.pendingText);
-
-    if (committedText !== streamState.committedText) {
-        renderMarkdownIntoHost(committedHost, committedText);
-        streamState.committedText = committedText;
-    }
-
-    if (pendingText !== streamState.pendingText) {
-        schedulePendingMarkdownRender(el, pendingHost, pendingText);
-        streamState.pendingText = pendingText;
-    }
-    el._streamRenderState = streamState;
+    const previousCommittedText = String(el._streamRenderState?.committedText || '');
+    renderMarkdownIntoHost(committedHost, cleanText);
+    pendingHost.innerHTML = '';
+    el._streamRenderState = {
+        committedText: cleanText,
+        pendingText: ''
+    };
 
     const responseCard = el.querySelector('.assistant-response-card');
     const actionBar = el.querySelector('.message-actions');
@@ -5470,7 +5488,9 @@ function updateMessageContent(id, text) {
         }
     }
 
-    pulseMessageRender(el.querySelector('.assistant-response-card'));
+    if (!previousCommittedText.trim() && hasVisibleContent) {
+        pulseMessageRender(el.querySelector('.assistant-response-card'));
+    }
 
     scrollToBottom(wasNearBottom);
     const codeBlocks = mdBody.querySelectorAll('pre code');
