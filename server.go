@@ -77,6 +77,21 @@ func cleanSavedTurnTitleContext(input string, limit int) string {
 	input = strings.ReplaceAll(input, "\r", "\n")
 	input = regexp.MustCompile("```[\\s\\S]*?```").ReplaceAllString(input, " ")
 	input = regexp.MustCompile("<think>[\\s\\S]*?</think>").ReplaceAllString(input, " ")
+	input = regexp.MustCompile(`!\[([^\]]*)\]\([^)]+\)`).ReplaceAllString(input, "$1")
+	input = regexp.MustCompile(`\[([^\]]+)\]\([^)]+\)`).ReplaceAllString(input, "$1")
+	input = regexp.MustCompile(`(?m)^\s*#{1,6}\s*`).ReplaceAllString(input, "")
+	input = regexp.MustCompile(`(?m)^\s*[-*+]\s+`).ReplaceAllString(input, "")
+	input = regexp.MustCompile(`(?m)^\s*\d+[.)]\s+`).ReplaceAllString(input, "")
+	input = regexp.MustCompile(`(?m)^\s*>+\s*`).ReplaceAllString(input, "")
+	input = strings.NewReplacer(
+		"|", " ",
+		"`", "",
+		"**", "",
+		"__", "",
+		"~~", "",
+		"---", " ",
+		"***", " ",
+	).Replace(input)
 	input = regexp.MustCompile(`\s+`).ReplaceAllString(strings.TrimSpace(input), " ")
 	return compactText(input, limit)
 }
