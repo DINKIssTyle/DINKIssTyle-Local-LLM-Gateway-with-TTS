@@ -1802,12 +1802,15 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	statefulRiskLevel := strings.TrimSpace(r.Header.Get("X-Stateful-Risk-Level"))
 	statefulResetReason := strings.TrimSpace(r.Header.Get("X-Stateful-Reset-Reason"))
 
-	chatCtx, chatCancel := context.WithCancel(r.Context())
+	chatCtx, chatCancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer chatCancel()
 	if strings.TrimSpace(userID) != "" {
 		registerCurrentChatCancel(userID, chatCancel)
 		defer unregisterCurrentChatCancel(userID)
 	}
+
+	clientStreaming := true
+	var emitStreamChunk func(string)
 
 	if userID != "" {
 		authMgr.mu.RLock()
@@ -2340,6 +2343,17 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
 		return
 	}
+	emitStreamChunk = func(payload string) {
+		if !clientStreaming {
+			return
+		}
+		if _, writeErr := fmt.Fprintf(w, "%s\n\n", payload); writeErr != nil {
+			clientStreaming = false
+			log.Printf("[handleChat] Client stream detached for %s: %v", userID, writeErr)
+			return
+		}
+		flusher.Flush()
+	}
 
 	// Shared turn-state variables
 	fullResponse := ""
@@ -2550,14 +2564,13 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 							},
 						}
 						jsonBytes, _ := json.Marshal(payload)
-						fmt.Fprintf(w, "data: %s\n\n", string(jsonBytes))
+						emitStreamChunk(fmt.Sprintf("data: %s", string(jsonBytes)))
 						fullResponse += buffer
 						buffer = ""
 					}
 
 					// Just forward the DONE
-					fmt.Fprintf(w, "%s\n\n", line)
-					flusher.Flush()
+					emitStreamChunk(line)
 					continue
 				}
 
@@ -2587,8 +2600,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 								// Forward to client identical to source
 								appendChatEvent("assistant", "message.delta", chunk)
-								fmt.Fprintf(w, "%s\n\n", line)
-								flusher.Flush()
+								emitStreamChunk(line)
 								continue
 							}
 						} else if msgType == "chat.end" || msgType == "message.end" {
@@ -2625,14 +2637,12 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 							appendChatEvent("assistant", msgType, chunk)
 							// Forward
-							fmt.Fprintf(w, "%s\n\n", line)
-							flusher.Flush()
+							emitStreamChunk(line)
 							continue
 						} else {
 							appendChatEvent("system", msgType, chunk)
 							// Forward other events (start, progress, etc)
-							fmt.Fprintf(w, "%s\n\n", line)
-							flusher.Flush()
+							emitStreamChunk(line)
 							continue
 						}
 					}
@@ -2707,7 +2717,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 							}
 							startBytes, _ := json.Marshal(startEvt)
 							appendChatEvent("assistant", "tool_call.start", startEvt)
-							fmt.Fprintf(w, "data: %s\n\n", string(startBytes))
+							emitStreamChunk(fmt.Sprintf("data: %s", string(startBytes)))
 
 							// 2. Emit arguments event
 							if isWrapper {
@@ -2718,20 +2728,19 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 								}
 								argsBytes, _ := json.Marshal(argsEvt)
 								appendChatEvent("assistant", "tool_call.arguments", argsEvt)
-								fmt.Fprintf(w, "data: %s\n\n", string(argsBytes))
+								emitStreamChunk(fmt.Sprintf("data: %s", string(argsBytes)))
 							} else {
 								appendChatEvent("assistant", "tool_call.arguments", map[string]interface{}{
 									"type":      "tool_call.arguments",
 									"tool":      toolName,
 									"arguments": toolArgsStr,
 								})
-								fmt.Fprintf(w, "data: {\"type\": \"tool_call.arguments\", \"tool\": \"%s\", \"arguments\": %s}\n\n", toolName, toolArgsStr)
+								emitStreamChunk(fmt.Sprintf("data: {\"type\": \"tool_call.arguments\", \"tool\": \"%s\", \"arguments\": %s}", toolName, toolArgsStr))
 							}
 
 							// 3. Clear Buffer & Stop Buffering
 							buffer = ""
 							isBuffering = false
-							flusher.Flush()
 							continue // Tool call handled, move to next line
 						}
 
@@ -2757,10 +2766,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 								},
 							}
 							jsonBytes, _ := json.Marshal(payload)
-							fmt.Fprintf(w, "data: %s\n\n", string(jsonBytes))
+							emitStreamChunk(fmt.Sprintf("data: %s", string(jsonBytes)))
 							fullResponse += buffer // Add to full response
 							buffer = ""
-							flusher.Flush()
 						}
 						continue // Buffering logic handled, move to next line
 					}
@@ -2903,8 +2911,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				}
 
 				// Forward the line (if not already continued by custom format or tool logic)
-				fmt.Fprintf(w, "%s\n\n", line)
-				flusher.Flush()
+				emitStreamChunk(line)
 
 			} else {
 				// Check for raw error JSON (not prefixed with data:)
@@ -2914,15 +2921,13 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 					if strings.Contains(line, "Context size has been exceeded") || strings.Contains(line, "context_length_exceeded") {
 						// Send explicit known error event
 						// We use a custom event type or just an error field that app.js will pick up
-						fmt.Fprintf(w, "data: {\"error\": \"LM_STUDIO_CONTEXT_ERROR: Context size exceeded.\"}\n\n")
-						flusher.Flush()
+						emitStreamChunk("data: {\"error\": \"LM_STUDIO_CONTEXT_ERROR: Context size exceeded.\"}")
 						return // Stop processing
 					}
 				}
 
 				// Forward non-data lines (e.g. event: ...)
-				fmt.Fprintf(w, "%s\n\n", line)
-				flusher.Flush()
+				emitStreamChunk(line)
 			}
 		}
 
@@ -2959,7 +2964,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 						"tool": toolName,
 					}
 					startBytes, _ := json.Marshal(startEvt)
-					fmt.Fprintf(w, "data: %s\n\n", string(startBytes))
+					emitStreamChunk(fmt.Sprintf("data: %s", string(startBytes)))
 
 					argsEvt := map[string]interface{}{
 						"type":      "tool_call.arguments",
@@ -2967,12 +2972,11 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 						"arguments": structTool.ToolArguments,
 					}
 					argsBytes, _ := json.Marshal(argsEvt)
-					fmt.Fprintf(w, "data: %s\n\n", string(argsBytes))
+					emitStreamChunk(fmt.Sprintf("data: %s", string(argsBytes)))
 
 					// Clear buffer and stop any further buffering
 					buffer = ""
 					isBuffering = false
-					flusher.Flush()
 					continue
 				}
 			}
@@ -2991,11 +2995,10 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				},
 			}
 			jsonBytes, _ := json.Marshal(payload)
-			fmt.Fprintf(w, "data: %s\n\n", string(jsonBytes))
+			emitStreamChunk(fmt.Sprintf("data: %s", string(jsonBytes)))
 			fullResponse += buffer
 			lastSavedBufferForTurn = buffer // Save for history before clearing
 			buffer = ""
-			flusher.Flush()
 		} else if len(partialTagBuffer) > 0 {
 			// Flush partial tag buffer if stream ends
 			payload := map[string]interface{}{
@@ -3008,10 +3011,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				},
 			}
 			jsonBytes, _ := json.Marshal(payload)
-			fmt.Fprintf(w, "data: %s\n\n", string(jsonBytes))
+			emitStreamChunk(fmt.Sprintf("data: %s", string(jsonBytes)))
 			fullResponse += partialTagBuffer
 			partialTagBuffer = ""
-			flusher.Flush()
 		}
 
 		log.Printf("[handleChat-DEBUG] turn %d processing complete. Total response len: %d", turn, len(fullResponse))
@@ -3119,8 +3121,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			// Emit Result Event to Frontend
 			resBytes, _ := json.Marshal(toolResultEvt)
 			appendChatEvent("assistant", fmt.Sprintf("%v", toolResultEvt["type"]), toolResultEvt)
-			fmt.Fprintf(w, "data: %s\n\n", string(resBytes))
-			flusher.Flush()
+			emitStreamChunk(fmt.Sprintf("data: %s", string(resBytes)))
 
 			// 2. Prepare Follow-up Request
 			// We feed the result back as a hidden user message or a tool response if the model supports it.
