@@ -768,8 +768,10 @@ func AutoSearchMemory(userID, input string) string {
 		return ""
 	}
 
-	var allResults []MemoryEntry
-	seenIDs := make(map[int64]bool)
+	var chunkResults []MemoryChunkMatch
+	seenChunkKeys := make(map[string]bool)
+	var savedTurnResults []MemoryEntry
+	seenSavedTurnIDs := make(map[int64]bool)
 
 	// Step 1: Search with top 3 keywords (Priority)
 	searchWords := keywords
@@ -779,15 +781,16 @@ func AutoSearchMemory(userID, input string) string {
 
 	runSearch := func(words []string) {
 		for _, kw := range words {
-			results, err := SearchMemories(userID, kw)
+			results, err := SearchMemoryChunkMatches(userID, kw, 5)
 			if err == nil {
 				if len(results) > 0 {
-					log.Printf("[MCP] AutoSearchMemory: Keyword %q found %d results", kw, len(results))
+					log.Printf("[MCP] AutoSearchMemory: Keyword %q found %d chunk results", kw, len(results))
 				}
 				for _, r := range results {
-					if !seenIDs[r.ID] {
-						allResults = append(allResults, r)
-						seenIDs[r.ID] = true
+					key := fmt.Sprintf("%d:%d", r.ID, r.ChunkIndex)
+					if !seenChunkKeys[key] {
+						chunkResults = append(chunkResults, r)
+						seenChunkKeys[key] = true
 					}
 				}
 			}
@@ -795,18 +798,19 @@ func AutoSearchMemory(userID, input string) string {
 			savedTurns, err := SearchSavedTurns(userID, kw, 5)
 			if err == nil {
 				for _, turn := range savedTurns {
-					if seenIDs[turn.ID+1_000_000_000] {
+					savedID := turn.ID + 1_000_000_000
+					if seenSavedTurnIDs[savedID] {
 						continue
 					}
-					allResults = append(allResults, MemoryEntry{
-						ID:         turn.ID + 1_000_000_000,
+					savedTurnResults = append(savedTurnResults, MemoryEntry{
+						ID:         savedID,
 						UserID:     turn.UserID,
 						FullText:   fmt.Sprintf("User Prompt:\n%s\n\nAssistant Response:\n%s", turn.PromptText, turn.ResponseText),
 						HitCount:   0,
 						CreatedAt:  turn.CreatedAt,
 						MemoryType: "saved_turn",
 					})
-					seenIDs[turn.ID+1_000_000_000] = true
+					seenSavedTurnIDs[savedID] = true
 				}
 			}
 		}
@@ -815,7 +819,7 @@ func AutoSearchMemory(userID, input string) string {
 	runSearch(searchWords)
 
 	// Step 2: Retry with remaining keywords if no results found
-	if len(allResults) == 0 && len(keywords) > 3 {
+	if len(chunkResults) == 0 && len(savedTurnResults) == 0 && len(keywords) > 3 {
 		log.Printf("[MCP] AutoSearchMemory: No results in Step 1. Retrying with next keywords.")
 		nextWords := keywords[3:]
 		if len(nextWords) > 5 {
@@ -824,30 +828,33 @@ func AutoSearchMemory(userID, input string) string {
 		runSearch(nextWords)
 	}
 
-	if len(allResults) == 0 {
+	if len(chunkResults) == 0 && len(savedTurnResults) == 0 {
 		return ""
 	}
 
-	// Limit to top 3 for synthesis to keep the prompt compact.
-	limit := 3
-	if len(allResults) < limit {
-		limit = len(allResults)
-	}
-
 	var rawContextSb strings.Builder
-	for i := 0; i < limit; i++ {
-		r := allResults[i]
+	chunkLimit := 3
+	if len(chunkResults) < chunkLimit {
+		chunkLimit = len(chunkResults)
+	}
+	for i := 0; i < chunkLimit; i++ {
+		r := chunkResults[i]
 		memoryType := strings.TrimSpace(r.MemoryType)
 		if memoryType == "" {
 			memoryType = "raw_interaction"
 		}
-		rawContextSb.WriteString(fmt.Sprintf("\n--- MEMORY ID: %d | DATE: %s | TYPE: %s ---\n", r.ID, r.CreatedAt.Format("2006-01-02"), memoryType))
-		rawContextSb.WriteString(fmt.Sprintf("Content: %s\n", compactMemoryText(r.FullText, 400)))
+		rawContextSb.WriteString(fmt.Sprintf("\n--- MEMORY ID: %d | DATE: %s | TYPE: %s | CHUNK: %d ---\n", r.ID, r.CreatedAt.Format("2006-01-02"), memoryType, r.ChunkIndex+1))
+		rawContextSb.WriteString(fmt.Sprintf("Relevant excerpt: %s\n", compactMemoryText(r.ChunkText, 400)))
+	}
 
-		// Increment hit count only for actual memory records.
-		if r.ID < 1_000_000_000 {
-			_ = IncrementHitCount(r.ID)
-		}
+	savedLimit := 2
+	if len(savedTurnResults) < savedLimit {
+		savedLimit = len(savedTurnResults)
+	}
+	for i := 0; i < savedLimit; i++ {
+		r := savedTurnResults[i]
+		rawContextSb.WriteString(fmt.Sprintf("\n--- SAVED TURN ID: %d | DATE: %s | TYPE: %s ---\n", r.ID-1_000_000_000, r.CreatedAt.Format("2006-01-02"), r.MemoryType))
+		rawContextSb.WriteString(fmt.Sprintf("Content: %s\n", compactMemoryText(r.FullText, 400)))
 	}
 
 	rawContext := rawContextSb.String()
