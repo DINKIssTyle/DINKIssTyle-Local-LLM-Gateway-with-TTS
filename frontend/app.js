@@ -4935,6 +4935,40 @@ function deduplicateTrailingParagraph(text) {
     return source;
 }
 
+function normalizeComparableTail(text) {
+    return String(text || '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function deduplicateCommittedPending(committedText, pendingText) {
+    const committed = String(committedText || '');
+    const pending = String(pendingText || '');
+    if (!pending) {
+        return { committedText: committed, pendingText: '' };
+    }
+
+    const normalizedCommitted = normalizeComparableTail(committed);
+    const normalizedPending = normalizeComparableTail(pending);
+    if (!normalizedPending) {
+        return { committedText: committed, pendingText: '' };
+    }
+
+    if (normalizedCommitted.endsWith(normalizedPending)) {
+        return { committedText: committed, pendingText: '' };
+    }
+
+    const committedBlocks = committed.split(/\n{2,}/).map(normalizeComparableTail).filter(Boolean);
+    const pendingBlocks = pending.split(/\n{2,}/).map(normalizeComparableTail).filter(Boolean);
+    const lastCommittedBlock = committedBlocks[committedBlocks.length - 1] || '';
+    const firstPendingBlock = pendingBlocks[0] || '';
+    if (lastCommittedBlock && firstPendingBlock && lastCommittedBlock === firstPendingBlock) {
+        return { committedText: committed, pendingText: '' };
+    }
+
+    return { committedText: committed, pendingText: pending };
+}
+
 function finalizeMessageContent(id, text) {
     const el = ensureAssistantMessageElement(id);
     if (!el) return;
@@ -5019,7 +5053,8 @@ function updateMessageContent(id, text) {
     cleanText = cleanText.replace(/<\|.*?\|>/g, '');
     cleanText = deduplicateTrailingParagraph(cleanText);
     const streamState = el._streamRenderState || { committedText: '', pendingText: '' };
-    const { committedText, pendingText } = splitStreamingMarkdown(cleanText);
+    const split = splitStreamingMarkdown(cleanText);
+    const { committedText, pendingText } = deduplicateCommittedPending(split.committedText, split.pendingText);
 
     if (committedText !== streamState.committedText) {
         renderMarkdownIntoHost(committedHost, committedText);
