@@ -1566,6 +1566,7 @@ let lastSessionCache = null;
 let currentChatSessionCache = null;
 let currentChatSessionEventSeq = 0;
 let chatSessionPollTimer = null;
+let currentChatSessionClearedAt = '';
 let serverReplayCurrentTurnId = '';
 let serverReplayCurrentAssistantId = '';
 let serverReplayMessageBuffers = new Map();
@@ -2306,9 +2307,21 @@ function scheduleChatSessionPolling(delay = 1000) {
 
 function resetServerChatReplayState() {
     currentChatSessionEventSeq = 0;
+    currentChatSessionClearedAt = '';
     serverReplayCurrentTurnId = '';
     serverReplayCurrentAssistantId = '';
     serverReplayMessageBuffers = new Map();
+}
+
+function extractSessionClearedAt(session) {
+    if (!session || !session.ClearedAt) return '';
+    const raw = session.ClearedAt;
+    if (typeof raw === 'string') return raw;
+    if (typeof raw === 'object') {
+        if (raw.Valid === true && raw.Time) return String(raw.Time);
+        if (raw.time) return String(raw.time);
+    }
+    return '';
 }
 
 function isActiveLocalTurn(turnId = '') {
@@ -2336,8 +2349,8 @@ function applyCurrentChatSessionSnapshot(session) {
     if (session && currentChatSessionCache && currentChatSessionCache.ID !== session.ID) {
         resetServerChatReplayState();
     }
-    currentChatSessionCache = session || null;
     if (!session) {
+        currentChatSessionCache = null;
         if (!abortController && isGenerating) {
             isGenerating = false;
             updateSendButtonState();
@@ -2345,6 +2358,17 @@ function applyCurrentChatSessionSnapshot(session) {
         }
         return;
     }
+
+    const nextClearedAt = extractSessionClearedAt(session);
+    if (nextClearedAt && nextClearedAt !== currentChatSessionClearedAt) {
+        resetChatViewState();
+        currentChatSessionEventSeq = 0;
+        currentChatSessionClearedAt = nextClearedAt;
+    } else if (!nextClearedAt && currentChatSessionClearedAt) {
+        currentChatSessionClearedAt = '';
+    }
+
+    currentChatSessionCache = session;
 
     const serverGenerating = session.Status === 'running';
     if (!abortController && isGenerating !== serverGenerating) {
@@ -2498,7 +2522,8 @@ function applyCurrentChatSessionEvent(entry) {
         case 'session.cleared':
             resetChatViewState();
             pendingStatefulResetReason = 'manual_clear_chat';
-            currentChatSessionEventSeq = Math.max(currentChatSessionEventSeq, Number(entry.EventSeq || 0));
+            currentChatSessionClearedAt = payload.cleared_at || currentChatSessionClearedAt;
+            currentChatSessionEventSeq = 0;
             scheduleChatSessionPolling(1200);
             break;
     }

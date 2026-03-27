@@ -1125,6 +1125,9 @@ func handleClearCurrentChat() http.HandlerFunc {
 			http.Error(w, "Failed to clear current chat session", http.StatusInternalServerError)
 			return
 		}
+		if err := mcp.ClearChatSessionEvents(userID, entry.ID); err != nil {
+			log.Printf("[handleClearCurrentChat] Failed to clear chat events for %s: %v", userID, err)
+		}
 
 		clearPayload := map[string]interface{}{
 			"source":     "remote_clear",
