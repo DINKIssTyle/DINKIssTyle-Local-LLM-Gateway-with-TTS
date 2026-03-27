@@ -429,8 +429,10 @@ function normalizeMarkdownForRender(text) {
             // Restore missing line breaks before markdown headers that get glued to
             // the previous sentence during streaming, e.g. "answer### Title".
             .replace(/([^\n])([ \t]*#{1,6}\s)/g, '$1\n\n$2')
-            // Restore missing line breaks before list items and block math.
-            .replace(/([^\n])([ \t]*(?:[-*+]\s|\d+\.\s))/g, '$1\n\n$2')
+            // Restore missing line breaks before list items only when they appear
+            // after sentence-like punctuation. A broader rule breaks table cells
+            // that contain bold markers such as "| **제목** |".
+            .replace(/([.!?;:)\]。！？])([ \t]*(?:[-*+]\s|\d+\.\s))/g, '$1\n\n$2')
             .replace(/([^\n])([ \t]*\$\$)/g, '$1\n\n$2')
             .replace(/([^\n])\n(#{1,6}\s)/g, '$1\n\n$2')
             .replace(/([^\n])\n((?:[-*+]\s|\d+\.\s))/g, '$1\n\n$2')

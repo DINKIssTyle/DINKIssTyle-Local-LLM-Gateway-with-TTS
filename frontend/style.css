@@ -765,6 +765,8 @@ body {
   --stateful-budget-color: rgba(113, 153, 133, 0.92);
   --stateful-budget-core-opacity: 0;
   position: relative;
+  margin-top: 3px;
+  margin-right: 4px;
   width: 30px;
   height: 30px;
   flex: 0 0 30px;
