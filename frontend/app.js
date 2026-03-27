@@ -2656,6 +2656,7 @@ async function syncCurrentChatSessionFromServer() {
 function hydrateChatSessionEventsSnapshot(items) {
     if (!Array.isArray(items) || items.length === 0) return;
 
+    chatMessages?.classList.add('is-session-hydrating');
     resetChatViewState();
     dismissStartupCards();
 
@@ -2862,6 +2863,9 @@ function hydrateChatSessionEventsSnapshot(items) {
         serverReplayCurrentAssistantId = assistantByTurn.get(serverReplayCurrentTurnId) || '';
     }
     scrollToBottom(true);
+    requestAnimationFrame(() => {
+        chatMessages?.classList.remove('is-session-hydrating');
+    });
 }
 
 function buildRestoredStatefulSummary(session) {
@@ -5281,6 +5285,7 @@ function updateSyncedMessageContent(id, text, options = {}) {
     const { markdownBody: mdBody, committedHost, pendingHost } = ensureStreamingMarkdownHosts(bubble);
     if (!committedHost || !pendingHost) return;
 
+    const previousCommittedText = String(el._streamRenderState?.committedText || '');
     const cleanText = sanitizeAssistantRenderText(text);
     renderMarkdownIntoHost(committedHost, cleanText);
     pendingHost.innerHTML = '';
@@ -5297,7 +5302,8 @@ function updateSyncedMessageContent(id, text, options = {}) {
         actionBar.hidden = !hasVisibleContent;
     }
 
-    if (animate) {
+    const shouldPulse = animate && !previousCommittedText.trim() && !!cleanText.trim();
+    if (shouldPulse) {
         pulseMessageRender(el.querySelector('.assistant-response-card'));
     }
 

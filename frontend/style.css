@@ -199,6 +199,11 @@ body {
   min-width: 0;
 }
 
+#chat-messages.is-session-hydrating {
+  opacity: 0;
+  pointer-events: none;
+}
+
 #chat-messages,
 #chat-messages * {
   user-select: text;
