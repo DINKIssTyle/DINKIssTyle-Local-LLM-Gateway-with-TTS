@@ -2460,7 +2460,9 @@ function applyCurrentChatSessionEvent(entry) {
             {
                 const reasoningAssistantId = isLocalActiveTurn ? activeLocalAssistantId : serverReplayCurrentAssistantId;
                 if (reasoningAssistantId) {
-                    serverReplayReasoningBuffers.set(reasoningAssistantId, '');
+                    if (!serverReplayReasoningBuffers.has(reasoningAssistantId)) {
+                        serverReplayReasoningBuffers.set(reasoningAssistantId, '');
+                    }
                 }
             }
             if (payload.started_at) {
@@ -2630,9 +2632,17 @@ async function syncCurrentChatSessionFromServer() {
 
     if (Array.isArray(result.items) && result.items.length > 0) {
         dismissStartupCards();
-        for (const entry of result.items) {
-            applyCurrentChatSessionEvent(entry);
-            currentChatSessionEventSeq = Math.max(currentChatSessionEventSeq, Number(entry.EventSeq || 0));
+        const shouldHydrateSnapshot = currentChatSessionEventSeq === 0 && result.items.length > 12;
+        if (shouldHydrateSnapshot) {
+            hydrateChatSessionEventsSnapshot(result.items);
+            for (const entry of result.items) {
+                currentChatSessionEventSeq = Math.max(currentChatSessionEventSeq, Number(entry.EventSeq || 0));
+            }
+        } else {
+            for (const entry of result.items) {
+                applyCurrentChatSessionEvent(entry);
+                currentChatSessionEventSeq = Math.max(currentChatSessionEventSeq, Number(entry.EventSeq || 0));
+            }
         }
     }
 
@@ -2641,6 +2651,183 @@ async function syncCurrentChatSessionFromServer() {
     } else {
         scheduleChatSessionPolling(1600);
     }
+}
+
+function hydrateChatSessionEventsSnapshot(items) {
+    if (!Array.isArray(items) || items.length === 0) return;
+
+    resetChatViewState();
+    dismissStartupCards();
+
+    const users = [];
+    const assistantByTurn = new Map();
+    const assistantTextById = new Map();
+    const reasoningTextById = new Map();
+    const reasoningStartedAtById = new Map();
+    const reasoningDurationById = new Map();
+    const toolStateById = new Map();
+    const assistantOrder = [];
+
+    let currentTurnId = '';
+    let currentAssistantId = '';
+    let currentSessionId = 'default';
+
+    const ensureAssistantId = (turnId, eventSeq) => {
+        const key = turnId || `server-turn-default-${eventSeq}`;
+        if (!assistantByTurn.has(key)) {
+            const assistantId = `server-assistant-${currentSessionId}-${key}`;
+            assistantByTurn.set(key, assistantId);
+            assistantOrder.push({ turnId: key, assistantId });
+        }
+        return assistantByTurn.get(key);
+    };
+
+    for (const entry of items) {
+        let payload = {};
+        try {
+            payload = JSON.parse(entry?.PayloadJSON || '{}');
+        } catch (_) {
+            payload = {};
+        }
+
+        currentSessionId = entry?.SessionID || currentSessionId;
+        const entryTurnId = entry?.TurnID || payload.turn_id || '';
+
+        switch (entry?.EventType) {
+            case 'message.created': {
+                if (entry.Role !== 'user') break;
+                const userContent = String(payload.content || '');
+                if (!userContent) break;
+                currentTurnId = entryTurnId || `server-turn-${currentSessionId}-${entry.EventSeq}`;
+                currentAssistantId = ensureAssistantId(currentTurnId, entry.EventSeq);
+                users.push({ turnId: currentTurnId, content: userContent });
+                break;
+            }
+            case 'message.delta': {
+                if (!currentTurnId) {
+                    currentTurnId = entryTurnId || `server-turn-${currentSessionId}-${entry.EventSeq}`;
+                }
+                currentAssistantId = ensureAssistantId(currentTurnId, entry.EventSeq);
+                const prev = assistantTextById.get(currentAssistantId) || '';
+                const next = appendStreamChunkDedup(prev, String(payload.content || ''));
+                assistantTextById.set(currentAssistantId, next);
+                break;
+            }
+            case 'reasoning.start': {
+                if (!currentAssistantId && currentTurnId) {
+                    currentAssistantId = ensureAssistantId(currentTurnId, entry.EventSeq);
+                }
+                if (currentAssistantId) {
+                    if (!reasoningTextById.has(currentAssistantId)) {
+                        reasoningTextById.set(currentAssistantId, '');
+                    }
+                    if (payload.started_at) {
+                        reasoningStartedAtById.set(currentAssistantId, payload.started_at);
+                    }
+                }
+                break;
+            }
+            case 'reasoning.delta': {
+                if (!currentAssistantId && currentTurnId) {
+                    currentAssistantId = ensureAssistantId(currentTurnId, entry.EventSeq);
+                }
+                if (currentAssistantId) {
+                    const prev = reasoningTextById.get(currentAssistantId) || '';
+                    const delta = String(payload.content || payload.reasoning_content || payload.text || payload.delta?.content || '');
+                    const next = appendStreamChunkDedup(prev, delta);
+                    reasoningTextById.set(currentAssistantId, next);
+                }
+                break;
+            }
+            case 'reasoning.end':
+            case 'request.complete':
+            case 'chat.end': {
+                if (!currentAssistantId && currentTurnId) {
+                    currentAssistantId = ensureAssistantId(currentTurnId, entry.EventSeq);
+                }
+                if (currentAssistantId && Number.isFinite(Number(payload.elapsed_ms))) {
+                    reasoningDurationById.set(currentAssistantId, Number(payload.elapsed_ms));
+                }
+                break;
+            }
+            case 'tool_call.start':
+            case 'tool_call.arguments':
+            case 'tool_call.success':
+            case 'tool_call.failure': {
+                if (!currentAssistantId && currentTurnId) {
+                    currentAssistantId = ensureAssistantId(currentTurnId, entry.EventSeq);
+                }
+                if (!currentAssistantId) break;
+                const nextState = {
+                    state: entry.EventType === 'tool_call.failure'
+                        ? 'failure'
+                        : entry.EventType === 'tool_call.success'
+                            ? 'success'
+                            : 'running',
+                    summary: entry.EventType === 'tool_call.failure'
+                        ? (payload.reason || t('tool.unknownError'))
+                        : entry.EventType === 'tool_call.success'
+                            ? t('tool.executionFinished')
+                            : '',
+                    args: entry.EventType === 'tool_call.arguments' ? (payload.arguments || null) : null,
+                    toolName: payload.tool || ''
+                };
+                const prev = toolStateById.get(currentAssistantId) || {};
+                toolStateById.set(currentAssistantId, {
+                    state: nextState.state || prev.state || 'running',
+                    summary: nextState.summary || prev.summary || '',
+                    args: nextState.args != null ? nextState.args : (prev.args || null),
+                    toolName: nextState.toolName || prev.toolName || ''
+                });
+                break;
+            }
+            default:
+                break;
+        }
+    }
+
+    for (const user of users) {
+        if (!document.querySelector(`.message.user[data-turn-id="${user.turnId}"]`)) {
+            appendMessage({ role: 'user', content: user.content, turnId: user.turnId });
+        }
+        const assistantId = assistantByTurn.get(user.turnId);
+        if (!assistantId) continue;
+        const assistantEl = ensureAssistantMessageElement(assistantId) || appendMessage({
+            role: 'assistant',
+            content: '',
+            id: assistantId,
+            turnId: user.turnId
+        });
+        if (!assistantEl) continue;
+
+        if (reasoningStartedAtById.has(assistantId)) {
+            setReasoningCardStartedAt(assistantId, reasoningStartedAtById.get(assistantId));
+        }
+        const reasoningText = reasoningTextById.get(assistantId) || '';
+        if (reasoningText) {
+            serverReplayReasoningBuffers.set(assistantId, reasoningText);
+            showReasoningStatus(assistantId, reasoningText);
+            finalizeReasoningStatus(assistantId, 'done', '', reasoningDurationById.get(assistantId) || null);
+        }
+
+        const toolState = toolStateById.get(assistantId);
+        if (toolState) {
+            setToolCardState(assistantId, toolState.state, toolState.summary, toolState.args, toolState.toolName);
+        }
+
+        const assistantText = assistantTextById.get(assistantId) || '';
+        serverReplayMessageBuffers.set(assistantId, assistantText);
+        updateSyncedMessageContent(assistantId, assistantText, { animate: false });
+        finalizeMessageContent(assistantId, assistantText);
+        finalizeAssistantStatusCards(assistantId, 'done');
+        setAssistantActionBarReady(assistantId);
+    }
+
+    if (users.length > 0) {
+        serverReplayCurrentTurnId = users[users.length - 1].turnId;
+        serverReplayCurrentAssistantId = assistantByTurn.get(serverReplayCurrentTurnId) || '';
+    }
+    scrollToBottom(true);
 }
 
 function buildRestoredStatefulSummary(session) {
@@ -4929,9 +5116,12 @@ function renderMarkdownIntoHost(host, markdownText) {
 
 function pulseMessageRender(el) {
     if (!el) return;
-    el.classList.remove('is-stream-updated');
-    void el.offsetWidth;
-    el.classList.add('is-stream-updated');
+    const targets = [el, el.querySelector('.markdown-body')].filter(Boolean);
+    targets.forEach((target) => {
+        target.classList.remove('is-stream-updated');
+        void target.offsetWidth;
+        target.classList.add('is-stream-updated');
+    });
 }
 
 function sanitizeAssistantRenderText(text) {
@@ -5044,9 +5234,10 @@ function finalizeMessageContent(id, text) {
     if (actionBar) actionBar.hidden = !hasVisibleContent;
 }
 
-function updateSyncedMessageContent(id, text) {
+function updateSyncedMessageContent(id, text, options = {}) {
     const el = ensureAssistantMessageElement(id);
     if (!el) return;
+    const animate = options.animate !== false;
     const wasNearBottom = isChatNearBottom();
     const bubble = el.querySelector('.message-bubble');
     const { markdownBody: mdBody, committedHost, pendingHost } = ensureStreamingMarkdownHosts(bubble);
@@ -5068,7 +5259,9 @@ function updateSyncedMessageContent(id, text) {
         actionBar.hidden = !hasVisibleContent;
     }
 
-    pulseMessageRender(el.querySelector('.assistant-response-card'));
+    if (animate) {
+        pulseMessageRender(el.querySelector('.assistant-response-card'));
+    }
 
     scrollToBottom(wasNearBottom);
     const codeBlocks = mdBody.querySelectorAll('pre code');
