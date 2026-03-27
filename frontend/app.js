@@ -2495,6 +2495,12 @@ function applyCurrentChatSessionEvent(entry) {
             }
             hideProgressDock();
             break;
+        case 'session.cleared':
+            resetChatViewState();
+            pendingStatefulResetReason = 'manual_clear_chat';
+            currentChatSessionEventSeq = Math.max(currentChatSessionEventSeq, Number(entry.EventSeq || 0));
+            scheduleChatSessionPolling(1200);
+            break;
     }
 }
 
@@ -2831,20 +2837,13 @@ function removeImage() {
     updateInlineComposerActionVisibility();
 }
 
-async function clearChat() {
-    // Stop any TTS playback and generation
+function resetChatViewState() {
     stopAllAudio();
-
-    if (isGenerating) {
-        await stopGeneration();
-    }
-
-    lastResponseId = null; // Clear session ID for Stateful Chat
+    statefulSummary = '';
+    lastResponseId = null;
     statefulTurnCount = 0;
     statefulEstimatedChars = 0;
-    statefulSummary = '';
     statefulResetCount = 0;
-    pendingStatefulResetReason = 'manual_clear_chat';
     statefulLastInputTokens = 0;
     statefulLastOutputTokens = 0;
     statefulPeakInputTokens = 0;
@@ -2854,7 +2853,35 @@ async function clearChat() {
     resetServerChatReplayState();
     currentChatSessionCache = null;
     stopChatSessionPolling();
+    activeLocalTurnId = '';
+    activeLocalAssistantId = '';
+    isGenerating = false;
+    abortController = null;
+    hideProgressDock();
+    updateSendButtonState();
     updateStatefulBudgetIndicator();
+}
+
+async function clearChat() {
+    // Stop any TTS playback and generation
+    stopAllAudio();
+
+    if (isGenerating) {
+        await stopGeneration();
+    }
+
+    pendingStatefulResetReason = 'manual_clear_chat';
+
+    try {
+        await fetch('/api/chat-session/clear', {
+            method: 'POST',
+            credentials: 'include'
+        });
+    } catch (e) {
+        console.warn('Failed to clear current chat session on server:', e);
+    }
+
+    resetChatViewState();
 }
 
 function clearContext() {

@@ -885,11 +885,13 @@ func ListChatEvents(userID string, sessionID int64, afterSeq, limit int) ([]Chat
 		SELECT id, session_id, user_id, event_seq, role, event_type, message_id, turn_id, payload_json, created_at
 		FROM chat_events
 		WHERE user_id = ? AND session_id = ? AND event_seq > ?
+		  AND created_at >= COALESCE((SELECT cleared_at FROM chat_sessions WHERE id = ?), '0001-01-01 00:00:00')
 		ORDER BY event_seq ASC
 		LIMIT ?`,
 		strings.TrimSpace(userID),
 		sessionID,
 		afterSeq,
+		sessionID,
 		limit,
 	)
 	if err != nil {

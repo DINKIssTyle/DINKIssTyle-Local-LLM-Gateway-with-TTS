@@ -568,6 +568,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	mux.HandleFunc("/api/chat-session/current", AuthMiddleware(authMgr, handleCurrentChatSession()))
 	mux.HandleFunc("/api/chat-session/events", AuthMiddleware(authMgr, handleChatSessionEvents()))
 	mux.HandleFunc("/api/chat-session/stop", AuthMiddleware(authMgr, handleStopCurrentChat()))
+	mux.HandleFunc("/api/chat-session/clear", AuthMiddleware(authMgr, handleClearCurrentChat()))
 	mux.HandleFunc("/api/tts", AuthMiddleware(authMgr, handleTTS))
 	mux.HandleFunc("/api/last-session", AuthMiddleware(authMgr, handleLastSession()))
 	mux.HandleFunc("/api/saved-turns", AuthMiddleware(authMgr, handleSavedTurns()))
@@ -1079,6 +1080,65 @@ func handleStopCurrentChat() http.HandlerFunc {
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"status":    "ok",
 			"cancelled": cancelled,
+		})
+	}
+}
+
+func handleClearCurrentChat() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		cancelCurrentChat(userID)
+
+		sessionEntry, err := mcp.GetCurrentChatSession(userID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			log.Printf("[handleClearCurrentChat] Failed to load current session for %s: %v", userID, err)
+		}
+
+		now := time.Now()
+		sessionEntry.UserID = userID
+		sessionEntry.SessionKey = "default"
+		sessionEntry.Status = "idle"
+		sessionEntry.LastResponseID = ""
+		sessionEntry.SummaryText = ""
+		sessionEntry.TurnCount = 0
+		sessionEntry.EstimatedChars = 0
+		sessionEntry.LastInputTokens = 0
+		sessionEntry.LastOutputTokens = 0
+		sessionEntry.PeakInputTokens = 0
+		sessionEntry.RiskScore = 0
+		sessionEntry.RiskLevel = ""
+		sessionEntry.LastResetReason = "manual_clear_chat"
+		sessionEntry.ClearedAt = sql.NullTime{Time: now, Valid: true}
+
+		entry, err := mcp.UpsertChatSession(sessionEntry)
+		if err != nil {
+			log.Printf("[handleClearCurrentChat] Failed to upsert current session for %s: %v", userID, err)
+			http.Error(w, "Failed to clear current chat session", http.StatusInternalServerError)
+			return
+		}
+
+		clearPayload := map[string]interface{}{
+			"source":     "remote_clear",
+			"cleared_at": now.Format(time.RFC3339Nano),
+		}
+		if clearJSON, marshalErr := json.Marshal(clearPayload); marshalErr != nil {
+			log.Printf("[handleClearCurrentChat] Failed to encode clear event for %s: %v", userID, marshalErr)
+		} else if _, err := mcp.AppendChatEvent(userID, entry.ID, "system", "session.cleared", "", "", string(clearJSON)); err != nil {
+			log.Printf("[handleClearCurrentChat] Failed to append clear event for %s: %v", userID, err)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "ok",
 		})
 	}
 }
