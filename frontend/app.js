@@ -2443,16 +2443,29 @@ function applyCurrentChatSessionEvent(entry) {
             break;
         }
         case 'reasoning.start':
+            if (payload.started_at) {
+                setReasoningCardStartedAt(isLocalActiveTurn ? activeLocalAssistantId : serverReplayCurrentAssistantId, payload.started_at);
+            }
             if (isLocalActiveTurn) break;
             if (serverReplayCurrentAssistantId) showReasoningStatus(serverReplayCurrentAssistantId, '...');
             break;
         case 'reasoning.delta':
-            if (isLocalActiveTurn) break;
+            if (isLocalActiveTurn) {
+                if (activeLocalAssistantId) showReasoningStatus(activeLocalAssistantId, payload.content || '...');
+                break;
+            }
             if (serverReplayCurrentAssistantId) showReasoningStatus(serverReplayCurrentAssistantId, payload.content || '...');
             break;
         case 'reasoning.end':
-            if (isLocalActiveTurn) break;
-            if (serverReplayCurrentAssistantId) showReasoningStatus(serverReplayCurrentAssistantId, null, true);
+            if (isLocalActiveTurn) {
+                if (activeLocalAssistantId) {
+                    finalizeReasoningStatus(activeLocalAssistantId, 'done', '', Number(payload.elapsed_ms || 0));
+                }
+                break;
+            }
+            if (serverReplayCurrentAssistantId) {
+                finalizeReasoningStatus(serverReplayCurrentAssistantId, 'done', '', Number(payload.elapsed_ms || 0));
+            }
             break;
         case 'tool_call.start':
             if (isLocalActiveTurn) break;
@@ -3215,12 +3228,6 @@ async function sendMessage() {
         lockScrollToLatest = false;
         stopStreamingMessageAutoScroll();
         activeStreamingMessageId = null;
-        if (activeLocalTurnId === turnId) {
-            activeLocalTurnId = '';
-        }
-        if (activeLocalAssistantId === assistantId) {
-            activeLocalAssistantId = '';
-        }
         abortController = null;
         updateSendButtonState();
     }
@@ -4083,6 +4090,15 @@ function ensureReasoningCard(elementId) {
     }
 
     return card;
+}
+
+function setReasoningCardStartedAt(elementId, startedAtValue) {
+    const card = ensureReasoningCard(elementId);
+    if (!card || !startedAtValue) return;
+    const timestamp = new Date(startedAtValue).getTime();
+    if (Number.isFinite(timestamp) && timestamp > 0) {
+        card.dataset.startedAt = String(timestamp);
+    }
 }
 
 function toggleReasoningCard(btn) {
