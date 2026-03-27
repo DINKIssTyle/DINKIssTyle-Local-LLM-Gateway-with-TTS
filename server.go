@@ -1715,6 +1715,116 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		"risk_level":     statefulRiskLevel,
 	})
 
+	parseIntHeader := func(value string) int {
+		parsed, _ := strconv.Atoi(strings.TrimSpace(value))
+		return parsed
+	}
+	parseFloatHeader := func(value string) float64 {
+		parsed, _ := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		return parsed
+	}
+
+	var (
+		chatSession           mcp.ChatSessionEntry
+		chatSessionOK         bool
+		sessionStatus         = "failed"
+		sessionLastResponseID string
+	)
+	if strings.TrimSpace(userID) != "" {
+		chatSession, err = mcp.UpsertChatSession(mcp.ChatSessionEntry{
+			UserID:           userID,
+			SessionKey:       "default",
+			Status:           "running",
+			LLMMode:          llmMode,
+			ModelID:          modelID,
+			LastResponseID:   "",
+			SummaryText:      "",
+			TurnCount:        parseIntHeader(statefulTurnCount),
+			EstimatedChars:   parseIntHeader(statefulEstChars),
+			LastInputTokens:  parseIntHeader(statefulInputTokens),
+			LastOutputTokens: 0,
+			PeakInputTokens:  parseIntHeader(statefulPeakInputTokens),
+			TokenBudget:      parseIntHeader(statefulTokenBudget),
+			RiskScore:        parseFloatHeader(statefulRiskScore),
+			RiskLevel:        strings.TrimSpace(statefulRiskLevel),
+			LastResetReason:  statefulResetReason,
+		})
+		if err != nil {
+			log.Printf("[chat-session] failed to initialize current session for %s: %v", userID, err)
+		} else {
+			chatSessionOK = true
+		}
+	}
+
+	appendChatEvent := func(role, eventType string, payload interface{}) {
+		if !chatSessionOK {
+			return
+		}
+		jsonPayload := "{}"
+		if payload != nil {
+			if bytes, err := json.Marshal(payload); err == nil {
+				jsonPayload = string(bytes)
+			}
+		}
+		if _, err := mcp.AppendChatEvent(userID, chatSession.ID, role, eventType, "", "", jsonPayload); err != nil {
+			log.Printf("[chat-session] failed to append %s event for %s: %v", eventType, userID, err)
+		}
+	}
+
+	defer func() {
+		if !chatSessionOK {
+			return
+		}
+		if _, err := mcp.UpsertChatSession(mcp.ChatSessionEntry{
+			UserID:           userID,
+			SessionKey:       "default",
+			Status:           sessionStatus,
+			LLMMode:          llmMode,
+			ModelID:          modelID,
+			LastResponseID:   sessionLastResponseID,
+			SummaryText:      "",
+			TurnCount:        parseIntHeader(statefulTurnCount),
+			EstimatedChars:   parseIntHeader(statefulEstChars),
+			LastInputTokens:  parseIntHeader(statefulInputTokens),
+			LastOutputTokens: 0,
+			PeakInputTokens:  parseIntHeader(statefulPeakInputTokens),
+			TokenBudget:      parseIntHeader(statefulTokenBudget),
+			RiskScore:        parseFloatHeader(statefulRiskScore),
+			RiskLevel:        strings.TrimSpace(statefulRiskLevel),
+			LastResetReason:  statefulResetReason,
+		}); err != nil {
+			log.Printf("[chat-session] failed to finalize current session for %s: %v", userID, err)
+		}
+	}()
+
+	appendChatEvent("system", "request.prepared", map[string]interface{}{
+		"mode":       llmMode,
+		"model":      modelID,
+		"url":        llmURL,
+		"body_bytes": len(body),
+	})
+	if statefulResetReason != "" {
+		appendChatEvent("system", "stateful.reset", map[string]interface{}{
+			"reason":         statefulResetReason,
+			"turn_count":     parseIntHeader(statefulTurnCount),
+			"estimatedChars": parseIntHeader(statefulEstChars),
+		})
+	}
+	if messages, ok := reqMap["messages"].([]interface{}); ok {
+		for i := len(messages) - 1; i >= 0; i-- {
+			msg, ok := messages[i].(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if role, _ := msg["role"].(string); role == "user" {
+				appendChatEvent("user", "message.created", msg)
+				break
+			}
+		}
+	} else if inputStr, ok := reqMap["input"].(string); ok && strings.TrimSpace(inputStr) != "" {
+		appendChatEvent("user", "message.created", map[string]interface{}{"content": inputStr})
+	}
+
 	// Set SSE headers ONCE before turn loop
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -1970,6 +2080,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 								}
 
 								// Forward to client identical to source
+								appendChatEvent("assistant", "message.delta", chunk)
 								fmt.Fprintf(w, "%s\n\n", line)
 								flusher.Flush()
 								continue
@@ -1988,17 +2099,20 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 									if res, ok := endPayload["result"].(map[string]interface{}); ok {
 										if rid, ok := res["response_id"].(string); ok {
 											lastResponseID = rid
+											sessionLastResponseID = rid
 											log.Printf("[handleChat] Captured response_id for chaining: %s", lastResponseID)
 										}
 									}
 								}
 							}
 
+							appendChatEvent("assistant", msgType, chunk)
 							// Forward
 							fmt.Fprintf(w, "%s\n\n", line)
 							flusher.Flush()
 							continue
 						} else {
+							appendChatEvent("system", msgType, chunk)
 							// Forward other events (start, progress, etc)
 							fmt.Fprintf(w, "%s\n\n", line)
 							flusher.Flush()
@@ -2075,6 +2189,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 								"tool": toolName,
 							}
 							startBytes, _ := json.Marshal(startEvt)
+							appendChatEvent("assistant", "tool_call.start", startEvt)
 							fmt.Fprintf(w, "data: %s\n\n", string(startBytes))
 
 							// 2. Emit arguments event
@@ -2085,8 +2200,14 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 									"arguments": wrapper.Arguments,
 								}
 								argsBytes, _ := json.Marshal(argsEvt)
+								appendChatEvent("assistant", "tool_call.arguments", argsEvt)
 								fmt.Fprintf(w, "data: %s\n\n", string(argsBytes))
 							} else {
+								appendChatEvent("assistant", "tool_call.arguments", map[string]interface{}{
+									"type":      "tool_call.arguments",
+									"tool":      toolName,
+									"arguments": toolArgsStr,
+								})
 								fmt.Fprintf(w, "data: {\"type\": \"tool_call.arguments\", \"tool\": \"%s\", \"arguments\": %s}\n\n", toolName, toolArgsStr)
 							}
 
@@ -2444,6 +2565,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 			// Emit Result Event to Frontend
 			resBytes, _ := json.Marshal(toolResultEvt)
+			appendChatEvent("assistant", fmt.Sprintf("%v", toolResultEvt["type"]), toolResultEvt)
 			fmt.Fprintf(w, "data: %s\n\n", string(resBytes))
 			flusher.Flush()
 
@@ -2647,6 +2769,12 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		procCtx.Success = strings.TrimSpace(fullResponse) != ""
 		persistRequestExecution(procCtx)
 	}
+	sessionStatus = "idle"
+	appendChatEvent("assistant", "request.complete", map[string]interface{}{
+		"response_chars": len(fullResponse),
+		"response_id":    sessionLastResponseID,
+		"mode":           llmMode,
+	})
 	AddDebugTrace("chat", "request.complete", "Chat request finished", map[string]interface{}{
 		"user":           userID,
 		"elapsed_ms":     time.Since(requestStart).Milliseconds(),
