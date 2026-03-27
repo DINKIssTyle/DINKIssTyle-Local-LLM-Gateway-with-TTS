@@ -8,6 +8,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -47,6 +48,8 @@ var (
 
 	// Global App Instance (for handlers to access app methods)
 	globalApp *App
+
+	currentChatCancels sync.Map
 )
 
 // Structured Tool Call Support
@@ -63,6 +66,40 @@ func compactText(input string, limit int) string {
 	}
 	runes := []rune(input)
 	return strings.TrimSpace(string(runes[:limit])) + "... (truncated)"
+}
+
+func currentChatCancelKey(userID string) string {
+	return strings.TrimSpace(userID) + ":default"
+}
+
+func registerCurrentChatCancel(userID string, cancel context.CancelFunc) {
+	if cancel == nil || strings.TrimSpace(userID) == "" {
+		return
+	}
+	currentChatCancels.Store(currentChatCancelKey(userID), cancel)
+}
+
+func unregisterCurrentChatCancel(userID string) {
+	if strings.TrimSpace(userID) == "" {
+		return
+	}
+	currentChatCancels.Delete(currentChatCancelKey(userID))
+}
+
+func cancelCurrentChat(userID string) bool {
+	if strings.TrimSpace(userID) == "" {
+		return false
+	}
+	value, ok := currentChatCancels.Load(currentChatCancelKey(userID))
+	if !ok {
+		return false
+	}
+	cancel, ok := value.(context.CancelFunc)
+	if !ok || cancel == nil {
+		return false
+	}
+	cancel()
+	return true
 }
 
 type savedTurnTitleOptions struct {
@@ -528,6 +565,9 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	mux.HandleFunc("/api/chat", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
 		handleChat(w, r, app, authMgr)
 	}))
+	mux.HandleFunc("/api/chat-session/current", AuthMiddleware(authMgr, handleCurrentChatSession()))
+	mux.HandleFunc("/api/chat-session/events", AuthMiddleware(authMgr, handleChatSessionEvents()))
+	mux.HandleFunc("/api/chat-session/stop", AuthMiddleware(authMgr, handleStopCurrentChat()))
 	mux.HandleFunc("/api/tts", AuthMiddleware(authMgr, handleTTS))
 	mux.HandleFunc("/api/last-session", AuthMiddleware(authMgr, handleLastSession()))
 	mux.HandleFunc("/api/saved-turns", AuthMiddleware(authMgr, handleSavedTurns()))
@@ -924,6 +964,122 @@ func handleDeleteUser(am *AuthManager) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}
+}
+
+func handleCurrentChatSession() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		entry, err := mcp.GetCurrentChatSession(userID)
+		if err != nil {
+			if !errors.Is(err, sql.ErrNoRows) {
+				log.Printf("[handleCurrentChatSession] Failed to load chat session for %s: %v", userID, err)
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{"has_session": false})
+			return
+		}
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"has_session": true,
+			"item":        entry,
+		})
+	}
+}
+
+func handleChatSessionEvents() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		session, err := mcp.GetCurrentChatSession(userID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"has_session": false,
+					"items":       []mcp.ChatEventEntry{},
+				})
+				return
+			}
+			http.Error(w, "Failed to load chat session", http.StatusInternalServerError)
+			return
+		}
+
+		afterSeq := 0
+		if raw := strings.TrimSpace(r.URL.Query().Get("after_seq")); raw != "" {
+			if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 0 {
+				afterSeq = parsed
+			}
+		}
+		limit := 200
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+				limit = parsed
+			}
+		}
+
+		events, err := mcp.ListChatEvents(userID, session.ID, afterSeq, limit)
+		if err != nil {
+			http.Error(w, "Failed to load chat events", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"has_session": true,
+			"session":     session,
+			"items":       events,
+		})
+	}
+}
+
+func handleStopCurrentChat() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		cancelled := cancelCurrentChat(userID)
+		sessionEntry, err := mcp.GetCurrentChatSession(userID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			log.Printf("[handleStopCurrentChat] Failed to load current session for %s: %v", userID, err)
+		}
+		sessionEntry.UserID = userID
+		sessionEntry.SessionKey = "default"
+		sessionEntry.Status = "cancelled"
+		entry, err := mcp.UpsertChatSession(sessionEntry)
+		if err == nil && entry.ID != 0 {
+			_, _ = mcp.AppendChatEvent(userID, entry.ID, "system", "request.cancelled", "", "", `{"source":"remote_stop"}`)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":    "ok",
+			"cancelled": cancelled,
+		})
 	}
 }
 
@@ -1400,6 +1556,13 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	statefulRiskLevel := strings.TrimSpace(r.Header.Get("X-Stateful-Risk-Level"))
 	statefulResetReason := strings.TrimSpace(r.Header.Get("X-Stateful-Reset-Reason"))
 
+	chatCtx, chatCancel := context.WithCancel(r.Context())
+	defer chatCancel()
+	if strings.TrimSpace(userID) != "" {
+		registerCurrentChatCancel(userID, chatCancel)
+		defer unregisterCurrentChatCancel(userID)
+	}
+
 	if userID != "" {
 		authMgr.mu.RLock()
 		user := authMgr.users[userID]
@@ -1775,6 +1938,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		if !chatSessionOK {
 			return
 		}
+		if chatCtx.Err() == context.Canceled && sessionStatus != "idle" {
+			sessionStatus = "cancelled"
+		}
 		if _, err := mcp.UpsertChatSession(mcp.ChatSessionEntry{
 			UserID:           userID,
 			SessionKey:       "default",
@@ -1861,7 +2027,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 		// Use r.Context() to propagate cancellation from frontend
 		// Note: 'body' must be updated if we loop
-		req, err := http.NewRequestWithContext(r.Context(), "POST", llmURL, bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(chatCtx, "POST", llmURL, bytes.NewReader(body))
 		if err != nil {
 			http.Error(w, "Failed to create request", http.StatusInternalServerError)
 			return
