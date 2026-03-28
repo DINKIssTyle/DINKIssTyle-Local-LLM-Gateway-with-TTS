@@ -560,14 +560,15 @@ body {
   padding: 2px 4px 0 2px;
   align-items: center;
   justify-content: flex-start;
-  opacity: 1;
-  transform: translateY(0);
-  transition: opacity 0.24s ease, transform 0.28s ease;
+  opacity: 0;
+  transform: translateY(10px);
+  pointer-events: none;
+  transition: opacity 0.28s ease, transform 0.34s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .message-actions.is-pending {
   opacity: 0;
-  transform: translateY(8px);
+  transform: translateY(10px);
   pointer-events: none;
 }
 
@@ -589,8 +590,10 @@ body {
   font-size: 0.8rem;
   color: var(--text-muted);
   opacity: 0;
-  transform: translateY(6px);
-  transition: opacity 0.24s ease, transform 0.3s ease;
+  transform: translateY(10px) scale(0.95);
+  transition:
+    opacity 0.26s ease,
+    transform 0.34s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .message-actions .icon-btn:hover {
@@ -600,19 +603,19 @@ body {
 
 .message-actions.is-ready .icon-btn {
   opacity: 1;
-  transform: translateY(0);
+  transform: translateY(0) scale(1);
 }
 
 .message-actions.is-ready .icon-btn:nth-child(1) {
-  transition-delay: 0.02s;
+  transition-delay: 0.03s;
 }
 
 .message-actions.is-ready .icon-btn:nth-child(2) {
-  transition-delay: 0.12s;
+  transition-delay: 0.13s;
 }
 
 .message-actions.is-ready .icon-btn:nth-child(3) {
-  transition-delay: 0.2s;
+  transition-delay: 0.23s;
 }
 
 .message-actions .material-icons-round {
@@ -700,27 +703,46 @@ body {
   height: 2px;
   border-radius: 999px;
   overflow: hidden;
+  clip-path: inset(0 round 999px);
+  -webkit-clip-path: inset(0 round 999px);
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 12px,
+    #000 calc(100% - 12px),
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 12px,
+    #000 calc(100% - 12px),
+    transparent 100%
+  );
   pointer-events: none;
   z-index: 2;
   opacity: 0;
   transition: opacity 0.18s ease;
+  contain: paint;
+  transform: translateZ(0);
 }
 
 .composer-progress-shimmer__beam {
   position: absolute;
   top: 0;
-  left: -32%;
-  width: 42%;
+  left: 0;
+  width: 34%;
   height: 100%;
   background: linear-gradient(
-    168deg,
+    90deg,
     rgba(255, 255, 255, 0) 0%,
-    rgba(255, 255, 255, 0.04) 34%,
+    rgba(255, 255, 255, 0.06) 34%,
     rgba(255, 255, 255, 0.98) 50%,
-    rgba(255, 255, 255, 0.08) 62%,
+    rgba(255, 255, 255, 0.06) 66%,
     rgba(255, 255, 255, 0) 100%
   );
-  filter: blur(0.15px);
+  transform: translateX(-135%);
+  will-change: transform;
   animation: composerSweepX 2.2s ease-in-out infinite;
 }
 
@@ -1368,10 +1390,10 @@ body {
 
 @keyframes composerSweepX {
   0% {
-    left: -38%;
+    transform: translateX(-135%);
   }
   100% {
-    left: 102%;
+    transform: translateX(395%);
   }
 }
 

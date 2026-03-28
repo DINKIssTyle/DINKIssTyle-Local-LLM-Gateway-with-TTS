@@ -2355,6 +2355,9 @@ function saveConfig(closeModal = true) {
         enable_tts: config.enableTTS,
         enable_mcp: config.enableMCP,
         enable_memory: config.enableMemory,
+        stateful_turn_limit: config.statefulTurnLimit,
+        stateful_char_budget: config.statefulCharBudget,
+        stateful_token_budget: config.statefulTokenBudget,
         tts_threads: config.ttsThreads
     };
 
@@ -3287,6 +3290,21 @@ async function syncServerConfig() {
                 if (memEl) memEl.checked = config.enableMemory;
                 const memControls = document.getElementById('memory-controls');
                 if (memControls) memControls.style.display = config.enableMemory ? 'block' : 'none';
+            }
+            if (serverCfg.stateful_turn_limit !== undefined) {
+                config.statefulTurnLimit = Math.max(1, Number(serverCfg.stateful_turn_limit) || 8);
+                const el = document.getElementById('cfg-stateful-turn-limit');
+                if (el) el.value = String(config.statefulTurnLimit);
+            }
+            if (serverCfg.stateful_char_budget !== undefined) {
+                config.statefulCharBudget = Math.max(1000, Number(serverCfg.stateful_char_budget) || 12000);
+                const el = document.getElementById('cfg-stateful-char-budget');
+                if (el) el.value = String(config.statefulCharBudget);
+            }
+            if (serverCfg.stateful_token_budget !== undefined) {
+                config.statefulTokenBudget = Math.max(1000, Number(serverCfg.stateful_token_budget) || 10000);
+                const el = document.getElementById('cfg-stateful-token-budget');
+                if (el) el.value = String(config.statefulTokenBudget);
             }
 
             // Save to localStorage so next reload uses these
@@ -4297,7 +4315,7 @@ async function processStream(response, elementId, turnId = '') {
                     if (contentToAdd) {
                         hideProgressDock();
 
-                        fullText = appendStreamChunkDedup(fullText, contentToAdd);
+                        fullText += contentToAdd;
 
                         // --- LOOP DETECTION (Regex-based) ---
                         // --- LOOP DETECTION (Regex-based) ---
@@ -4777,6 +4795,7 @@ function ensureReasoningCard(elementId) {
         card.className = 'reasoning-status';
         card.dataset.collapsed = 'true';
         card.dataset.startedAt = String(Date.now());
+        card.dataset.accumulatedDurationMs = '0';
         card.innerHTML = `
             <button type="button" class="reasoning-header" onclick="toggleReasoningCard(this)">
                 <span class="reasoning-chevron material-icons-round">play_arrow</span>
@@ -5278,9 +5297,11 @@ function showReasoningStatus(elementId, text, isFinal = false, elapsedOverrideMs
     if (!bodyEl) return;
 
     const startedAt = Number(card.dataset.startedAt || Date.now());
-    const durationMs = Number.isFinite(Number(elapsedOverrideMs))
+    const accumulatedMs = Math.max(0, Number(card.dataset.accumulatedDurationMs || 0));
+    const segmentDurationMs = Number.isFinite(Number(elapsedOverrideMs))
         ? Math.max(0, Number(elapsedOverrideMs))
         : Math.max(0, Date.now() - startedAt);
+    const durationMs = accumulatedMs + segmentDurationMs;
 
     if (isFinal) {
         finalizeReasoningStatus(elementId, 'done');
@@ -5328,9 +5349,11 @@ function finalizeReasoningStatus(elementId, outcome = 'done', detail = '', durat
     const titleEl = card.querySelector('.reasoning-title');
     const bodyEl = card.querySelector('.reasoning-body');
     const startedAt = Number(card.dataset.startedAt || Date.now());
-    const durationMs = Number.isFinite(Number(durationOverrideMs))
+    const accumulatedMs = Math.max(0, Number(card.dataset.accumulatedDurationMs || 0));
+    const segmentDurationMs = Number.isFinite(Number(durationOverrideMs))
         ? Math.max(0, Number(durationOverrideMs))
         : Math.max(0, Date.now() - startedAt);
+    const durationMs = accumulatedMs + segmentDurationMs;
     const shouldKeepExpanded = card.dataset.userExpanded === 'true';
 
     card.classList.remove('completed', 'failed');
@@ -5343,6 +5366,8 @@ function finalizeReasoningStatus(elementId, outcome = 'done', detail = '', durat
         card.classList.add('collapsed');
     }
     card.dataset.durationMs = String(durationMs);
+    card.dataset.accumulatedDurationMs = String(durationMs);
+    card.dataset.startedAt = String(Date.now());
 
     if (metaEl) {
         if (outcome === 'failed') metaEl.textContent = t('status.failed');

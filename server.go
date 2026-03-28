@@ -770,13 +770,16 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	mux.HandleFunc("/api/config", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			var newCfg struct {
-				TTSThreads   int     `json:"tts_threads"`
-				ApiEndpoint  string  `json:"api_endpoint"`
-				ApiToken     *string `json:"api_token"`
-				LLMMode      string  `json:"llm_mode"`
-				EnableTTS    *bool   `json:"enable_tts"`
-				EnableMCP    *bool   `json:"enable_mcp"`
-				EnableMemory *bool   `json:"enable_memory"`
+				TTSThreads          int     `json:"tts_threads"`
+				ApiEndpoint         string  `json:"api_endpoint"`
+				ApiToken            *string `json:"api_token"`
+				LLMMode             string  `json:"llm_mode"`
+				EnableTTS           *bool   `json:"enable_tts"`
+				EnableMCP           *bool   `json:"enable_mcp"`
+				EnableMemory        *bool   `json:"enable_memory"`
+				StatefulTurnLimit   *int    `json:"stateful_turn_limit"`
+				StatefulCharBudget  *int    `json:"stateful_char_budget"`
+				StatefulTokenBudget *int    `json:"stateful_token_budget"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&newCfg); err == nil {
 				// Check for authenticated user
@@ -824,6 +827,30 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 						// We need disallowed lists here too, but handleConfig is partial update.
 						// Let's retrieve full user settings to be safe.
 						mcp.SetContext(user.ID, *newCfg.EnableMemory, user.Settings.DisabledTools, "", user.Settings.DisallowedCommands, user.Settings.DisallowedDirectories)
+					}
+					if newCfg.StatefulTurnLimit != nil {
+						value := *newCfg.StatefulTurnLimit
+						if value < 1 {
+							value = 1
+						}
+						user.Settings.StatefulTurnLimit = &value
+						updated = true
+					}
+					if newCfg.StatefulCharBudget != nil {
+						value := *newCfg.StatefulCharBudget
+						if value < 1000 {
+							value = 1000
+						}
+						user.Settings.StatefulCharBudget = &value
+						updated = true
+					}
+					if newCfg.StatefulTokenBudget != nil {
+						value := *newCfg.StatefulTokenBudget
+						if value < 1000 {
+							value = 1000
+						}
+						user.Settings.StatefulTokenBudget = &value
+						updated = true
 					}
 					// Handle TTS Config partial updates if needed, for now simplistic
 					if newCfg.TTSThreads > 0 {
@@ -884,13 +911,16 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 
 		// Prepare response (Merge global + user)
 		resp := map[string]interface{}{
-			"llm_endpoint":  app.llmEndpoint,
-			"llm_mode":      app.llmMode,
-			"enable_tts":    app.enableTTS,
-			"enable_mcp":    app.enableMCP,
-			"enable_memory": false, // Global default is false, overridden by user settings below
-			"tts_config":    ttsConfig,
-			"has_token":     app.llmApiToken != "",
+			"llm_endpoint":          app.llmEndpoint,
+			"llm_mode":              app.llmMode,
+			"enable_tts":            app.enableTTS,
+			"enable_mcp":            app.enableMCP,
+			"enable_memory":         false, // Global default is false, overridden by user settings below
+			"stateful_turn_limit":   8,
+			"stateful_char_budget":  12000,
+			"stateful_token_budget": 10000,
+			"tts_config":            ttsConfig,
+			"has_token":             app.llmApiToken != "",
 		}
 
 		// Overlay User Settings
@@ -915,6 +945,15 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 				}
 				if user.Settings.EnableMemory != nil {
 					resp["enable_memory"] = *user.Settings.EnableMemory
+				}
+				if user.Settings.StatefulTurnLimit != nil {
+					resp["stateful_turn_limit"] = *user.Settings.StatefulTurnLimit
+				}
+				if user.Settings.StatefulCharBudget != nil {
+					resp["stateful_char_budget"] = *user.Settings.StatefulCharBudget
+				}
+				if user.Settings.StatefulTokenBudget != nil {
+					resp["stateful_token_budget"] = *user.Settings.StatefulTokenBudget
 				}
 				if user.Settings.ApiToken != nil && *user.Settings.ApiToken != "" {
 					resp["has_token"] = true
@@ -2625,8 +2664,14 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 									}
 								}
 
+								eventPayload := map[string]interface{}{}
+								for key, value := range chunk {
+									eventPayload[key] = value
+								}
+								eventPayload["full_content"] = fullResponse
+
 								// Forward to client identical to source
-								appendChatEvent("assistant", "message.delta", chunk)
+								appendChatEvent("assistant", "message.delta", eventPayload)
 								emitStreamChunk(line)
 								continue
 							}
@@ -2842,8 +2887,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 										})
 									}
 									appendChatEvent("assistant", "reasoning.delta", map[string]interface{}{
-										"type":    "reasoning.delta",
-										"content": reasoningText,
+										"type":       "reasoning.delta",
+										"content":    reasoningText,
+										"elapsed_ms": time.Since(reasoningStartedAt).Milliseconds(),
 									})
 								}
 								if c, ok := delta["content"].(string); ok {
@@ -2856,6 +2902,11 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 										reasoningStartedAt = time.Time{}
 									}
 									fullResponse += c
+									appendChatEvent("assistant", "message.delta", map[string]interface{}{
+										"type":         "message.delta",
+										"content":      c,
+										"full_content": fullResponse,
+									})
 								}
 							}
 						}

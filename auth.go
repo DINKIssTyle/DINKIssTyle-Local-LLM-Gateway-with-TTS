@@ -32,6 +32,9 @@ type UserSettings struct {
 	EnableTTS             *bool            `json:"enable_tts,omitempty"`
 	EnableMCP             *bool            `json:"enable_mcp,omitempty"`
 	EnableMemory          *bool            `json:"enable_memory,omitempty"`
+	StatefulTurnLimit     *int             `json:"stateful_turn_limit,omitempty"`
+	StatefulCharBudget    *int             `json:"stateful_char_budget,omitempty"`
+	StatefulTokenBudget   *int             `json:"stateful_token_budget,omitempty"`
 	TTSConfig             *ServerTTSConfig `json:"tts_config,omitempty"`
 	DisabledTools         []string         `json:"disabled_tools,omitempty"`
 	DisallowedCommands    []string         `json:"disallowed_commands,omitempty"`
