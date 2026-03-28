@@ -2365,6 +2365,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	reasoningStartedAt := time.Time{}
 	toolUsageCounts := make(map[string]int)
 	toolSignatureCounts := make(map[string]int)
+	previousResponseRetryUsed := false
+	discardStatefulResponseIDForTurn := false
 
 	// --- TURN LOOP START ---
 	// We allow up to 10 turns (tool call cycles) per request
@@ -2433,6 +2435,31 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				"elapsed_ms":  time.Since(turnStart).Milliseconds(),
 				"error":       compactText(errorMsg, 180),
 			})
+			if llmMode == "stateful" &&
+				!previousResponseRetryUsed &&
+				strings.Contains(errorMsg, "Could not find stored response for previous_response_id") {
+				previousResponseRetryUsed = true
+				lastResponseID = ""
+				sessionLastResponseID = ""
+				discardStatefulResponseIDForTurn = false
+				statefulResetReason = "invalid_previous_response_id"
+				appendChatEvent("system", "stateful.reset", map[string]interface{}{
+					"reason": "invalid_previous_response_id",
+				})
+				if reqMap != nil {
+					delete(reqMap, "previous_response_id")
+					if newBody, marshalErr := json.Marshal(reqMap); marshalErr == nil {
+						body = newBody
+					}
+				}
+				chatSession.LastResponseID = ""
+				AddDebugTrace("stateful", "reset", "Retrying request without invalid previous_response_id", map[string]interface{}{
+					"user": userID,
+					"turn": turn,
+				})
+				resp.Body.Close()
+				continue
+			}
 
 			// Check for specific LM Studio auth error
 			// We return a text starting with "LM_STUDIO_AUTH_ERROR:" so frontend can localize it.
@@ -2615,7 +2642,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 								var endPayload map[string]interface{}
 								if err := json.Unmarshal([]byte(jsonPart), &endPayload); err == nil {
 									if res, ok := endPayload["result"].(map[string]interface{}); ok {
-										if rid, ok := res["response_id"].(string); ok {
+										if rid, ok := res["response_id"].(string); ok && !discardStatefulResponseIDForTurn {
 											lastResponseID = rid
 											sessionLastResponseID = rid
 											log.Printf("[handleChat] Captured response_id for chaining: %s", lastResponseID)
@@ -2637,6 +2664,28 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 							appendChatEvent("assistant", msgType, chunk)
 							// Forward
+							emitStreamChunk(line)
+							continue
+						} else if msgType == "error" {
+							appendChatEvent("system", msgType, chunk)
+							if errPayload, ok := chunk["error"].(map[string]interface{}); ok {
+								errType, _ := errPayload["type"].(string)
+								errMessage, _ := errPayload["message"].(string)
+								if errType == "tool_format_generation_error" {
+									discardStatefulResponseIDForTurn = true
+									lastResponseID = ""
+									sessionLastResponseID = ""
+									appendChatEvent("assistant", "tool_call.failure", map[string]interface{}{
+										"type":   "tool_call.failure",
+										"tool":   "Tool",
+										"reason": errMessage,
+									})
+									AddDebugTrace("chat", "tool.error", "Tool format generation error invalidated current stateful response chain", map[string]interface{}{
+										"turn":  turn,
+										"error": compactText(errMessage, 180),
+									})
+								}
+							}
 							emitStreamChunk(line)
 							continue
 						} else {
