@@ -35,7 +35,51 @@ let config = {
     statefulCharBudget: 12000,
     statefulTokenBudget: 10000,
     micLayout: 'none', // 'none', 'left', 'right', 'bottom', 'inline'
-    chatFontSize: 16
+    chatFontSize: 16,
+    userBubbleTheme: 'ocean'
+};
+
+const USER_BUBBLE_THEMES = {
+    ocean: {
+        id: 'ocean',
+        gradient: 'linear-gradient(180deg, rgba(34, 88, 161, 0.9), rgba(24, 70, 132, 0.94))',
+        border: 'rgba(110, 173, 255, 0.26)',
+        shadow: '0 10px 28px rgba(18, 57, 109, 0.28)',
+        text: '#ffffff',
+        icon: '#78a1ff'
+    },
+    lime: {
+        id: 'lime',
+        gradient: 'linear-gradient(180deg, #7cff35, #28c800)',
+        border: 'rgba(188, 255, 136, 0.32)',
+        shadow: '0 10px 28px rgba(48, 136, 0, 0.26)',
+        text: '#091305',
+        icon: '#7cff35'
+    },
+    sunset: {
+        id: 'sunset',
+        gradient: 'linear-gradient(180deg, #ff624b, #c81800)',
+        border: 'rgba(255, 156, 138, 0.3)',
+        shadow: '0 10px 28px rgba(145, 28, 6, 0.28)',
+        text: '#ffffff',
+        icon: '#ff624b'
+    },
+    amber: {
+        id: 'amber',
+        gradient: 'linear-gradient(180deg, #ffe96a, #ffb300)',
+        border: 'rgba(255, 229, 121, 0.34)',
+        shadow: '0 10px 28px rgba(171, 114, 0, 0.24)',
+        text: '#171204',
+        icon: '#ffc533'
+    },
+    magenta: {
+        id: 'magenta',
+        gradient: 'linear-gradient(180deg, #ff43b2, #d5167f)',
+        border: 'rgba(255, 140, 203, 0.32)',
+        shadow: '0 10px 28px rgba(146, 15, 90, 0.28)',
+        text: '#ffffff',
+        icon: '#ff43b2'
+    }
 };
 
 function buildSessionFetchOptions(extra = {}) {
@@ -211,6 +255,7 @@ const translations = {
         'modal.settings.title': '설정',
         // Sections
         'section.llm': 'LLM 설정',
+        'section.appearance': '채팅 외형',
         'section.voiceInput': '음성 입력',
         'section.tts': 'TTS 엔진',
         // Server
@@ -287,6 +332,8 @@ const translations = {
         'setting.memory.reset': '메모리 초기화',
         'setting.memory.reset.confirm': '개인 메모리를 초기화하시겠습니까? 이 작업은 되돌릴 수 없습니다.',
         'setting.memory.reset.success': '메모리가 초기화되었습니다.',
+        'setting.userBubbleTheme.label': '사용자 버블 스타일',
+        'setting.userBubbleTheme.desc': '내 메시지 버블의 그라데이션 색상을 선택합니다.',
         'setting.micLayout.label': '마이크 레이아웃',
         'setting.micLayout.desc': '화면에 마이크를 배치합니다.',
         'setting.micLayout.option.none': '사용 안 함',
@@ -390,6 +437,7 @@ const translations = {
         'modal.settings.title': 'Settings',
         // Sections
         'section.llm': 'LLM Settings',
+        'section.appearance': 'Chat Appearance',
         'section.voiceInput': 'Voice Input',
         'section.tts': 'TTS Engine',
         // Server
@@ -468,6 +516,8 @@ const translations = {
         'setting.memory.reset': 'Reset Memory',
         'setting.memory.reset.confirm': 'Are you sure you want to reset your personal memory? This cannot be undone.',
         'setting.memory.reset.success': 'Memory reset successfully.',
+        'setting.userBubbleTheme.label': 'User Bubble Style',
+        'setting.userBubbleTheme.desc': 'Choose the gradient preset for your message bubbles.',
         'setting.micLayout.label': 'Mic Layout',
         'setting.micLayout.desc': 'Place a microphone on the screen.',
         'setting.micLayout.option.none': 'None',
@@ -874,6 +924,7 @@ function setLanguage(lang) {
 // Screen Wake Lock API
 // ============================================================================
 let wakeLock = null;
+let lastKeyboardViewportSignalAt = 0;
 
 // Audio Context Recovery for iOS/PWA
 document.addEventListener('visibilitychange', async () => {
@@ -906,6 +957,41 @@ document.addEventListener('pointerup', (event) => {
         active.blur();
     }
 });
+
+function scheduleHeaderIconButtonBlur(target) {
+    if (!(target instanceof HTMLElement)) return;
+    if (!target.matches('#chat-header .icon-btn, #chat-header .header-library-btn')) return;
+
+    window.setTimeout(() => {
+        if (document.activeElement === target) {
+            target.blur();
+        }
+    }, 180);
+
+    window.setTimeout(() => {
+        if (document.activeElement === target) {
+            target.blur();
+        }
+    }, 1200);
+}
+
+document.addEventListener('click', (event) => {
+    const button = event.target instanceof Element
+        ? event.target.closest('#chat-header .icon-btn, #chat-header .header-library-btn')
+        : null;
+    if (button instanceof HTMLElement) {
+        scheduleHeaderIconButtonBlur(button);
+    }
+}, true);
+
+document.addEventListener('touchend', (event) => {
+    const touch = event.target instanceof Element
+        ? event.target.closest('#chat-header .icon-btn, #chat-header .header-library-btn')
+        : null;
+    if (touch instanceof HTMLElement) {
+        scheduleHeaderIconButtonBlur(touch);
+    }
+}, { passive: true, capture: true });
 
 async function requestWakeLock() {
     if ('wakeLock' in navigator) {
@@ -1118,8 +1204,16 @@ async function loadSavedTurns() {
 
 function openSavedLibrary() {
     if (!savedLibraryView) return;
+    if (savedLibraryCloseTimer) {
+        clearTimeout(savedLibraryCloseTimer);
+        savedLibraryCloseTimer = null;
+    }
     isSavedLibraryOpen = true;
     savedLibraryView.hidden = false;
+    savedLibraryView.classList.remove('is-closing');
+    requestAnimationFrame(() => {
+        savedLibraryView.classList.add('is-open');
+    });
     renderSavedLibraryList();
     loadSavedTurns();
     if (savedLibrarySearchInput) {
@@ -1138,8 +1232,136 @@ function toggleSavedLibrary() {
 
 function closeSavedLibrary() {
     if (!savedLibraryView) return;
+    if (savedLibraryCloseTimer) {
+        clearTimeout(savedLibraryCloseTimer);
+    }
     isSavedLibraryOpen = false;
-    savedLibraryView.hidden = true;
+    savedLibraryView.classList.remove('is-open');
+    savedLibraryView.classList.add('is-closing');
+    savedLibraryCloseTimer = window.setTimeout(() => {
+        savedLibraryCloseTimer = null;
+        if (!savedLibraryView || isSavedLibraryOpen) return;
+        savedLibraryView.hidden = true;
+        savedLibraryView.classList.remove('is-closing');
+    }, 500);
+}
+
+function getUserBubbleTheme(themeId) {
+    return USER_BUBBLE_THEMES[themeId] || USER_BUBBLE_THEMES.ocean;
+}
+
+function applyUserBubbleTheme() {
+    const theme = getUserBubbleTheme(config.userBubbleTheme);
+    const root = document.documentElement;
+    root.style.setProperty('--user-bubble-gradient', theme.gradient);
+    root.style.setProperty('--user-bubble-border', theme.border);
+    root.style.setProperty('--user-bubble-shadow', theme.shadow);
+    root.style.setProperty('--user-text-color', theme.text);
+    root.style.setProperty('--send-btn-gradient', theme.gradient);
+    root.style.setProperty('--send-btn-border', theme.border);
+    root.style.setProperty('--send-btn-shadow', theme.shadow);
+    root.style.setProperty('--send-btn-text-color', theme.icon || theme.text);
+}
+
+function renderUserBubbleThemeOptions() {
+    const host = document.getElementById('user-bubble-theme-options');
+    if (!host) return;
+
+    host.innerHTML = Object.values(USER_BUBBLE_THEMES).map((theme, index) => {
+        const selected = theme.id === (config.userBubbleTheme || 'ocean');
+        const textColor = escapeAttr(theme.text);
+        const gradient = escapeAttr(theme.gradient);
+        return `
+            <button
+                type="button"
+                class="theme-swatch-btn ${selected ? 'is-selected' : ''}"
+                role="radio"
+                aria-checked="${selected ? 'true' : 'false'}"
+                aria-label="Bubble theme ${index + 1}"
+                data-theme-id="${theme.id}"
+                onclick="selectUserBubbleTheme('${theme.id}')"
+            >
+                <div class="theme-swatch-preview" style="background: ${gradient}; color: ${textColor};">Aa</div>
+            </button>
+        `;
+    }).join('');
+}
+
+function selectUserBubbleTheme(themeId) {
+    if (!USER_BUBBLE_THEMES[themeId]) return;
+    config.userBubbleTheme = themeId;
+    applyUserBubbleTheme();
+    renderUserBubbleThemeOptions();
+    saveConfig(false);
+}
+
+function shouldIgnoreSavedLibrarySwipeTarget(target) {
+    if (!(target instanceof Element)) return false;
+    return !!target.closest(
+        '#input-area, .input-container, #message-input, input, textarea, select, button, a, label, pre, code, .saved-turn-modal, .modal, .message-actions'
+    );
+}
+
+function setupSavedLibrarySwipeGestures() {
+    return;
+
+    document.addEventListener('touchstart', (event) => {
+        if (!event.touches || event.touches.length !== 1) {
+            savedLibrarySwipeState = null;
+            return;
+        }
+
+        const target = event.target;
+        if (shouldIgnoreSavedLibrarySwipeTarget(target)) {
+            savedLibrarySwipeState = null;
+            return;
+        }
+
+        const touch = event.touches[0];
+        const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+        const startX = touch.clientX;
+        const startY = touch.clientY;
+        const canOpen = !isSavedLibraryOpen && startX <= 28;
+        const canClose = isSavedLibraryOpen && startX >= viewportWidth * 0.2;
+
+        if (!canOpen && !canClose) {
+            savedLibrarySwipeState = null;
+            return;
+        }
+
+        savedLibrarySwipeState = {
+            mode: canOpen ? 'open' : 'close',
+            startX,
+            startY,
+            width: Math.max(1, viewportWidth)
+        };
+    }, { passive: true });
+
+    document.addEventListener('touchend', (event) => {
+        if (!savedLibrarySwipeState || !event.changedTouches || event.changedTouches.length !== 1) {
+            savedLibrarySwipeState = null;
+            return;
+        }
+
+        const touch = event.changedTouches[0];
+        const dx = touch.clientX - savedLibrarySwipeState.startX;
+        const dy = touch.clientY - savedLibrarySwipeState.startY;
+        const ratio = Math.abs(dx) / savedLibrarySwipeState.width;
+
+        if (Math.abs(dy) <= 64) {
+            if (savedLibrarySwipeState.mode === 'open' && (dx >= 72 || ratio >= 0.18)) {
+                openSavedLibrary();
+            } else if (savedLibrarySwipeState.mode === 'close' && (dx <= -72 || ratio >= 0.18)) {
+                closeSavedLibrary();
+            }
+        }
+
+        savedLibrarySwipeState = null;
+    }, { passive: true });
+
+    document.addEventListener('touchcancel', () => {
+        savedLibrarySwipeState = null;
+    }, { passive: true });
 }
 
 function handleSavedLibrarySearch(value) {
@@ -1633,6 +1855,7 @@ let lockScrollToLatest = false;
 let suppressNextScrollEvent = false;
 let activeStreamingMessageId = null;
 let pendingScrollToBottom = false;
+let lastObservedChatScrollHeight = 0;
 let progressDockHideTimer = null;
 let composerProgressLabel = '';
 let composerProgressActive = false;
@@ -1640,6 +1863,7 @@ let composerProgressPercent = null;
 const composerBackgroundTasks = new Map();
 
 if (chatMessages) {
+    lastObservedChatScrollHeight = chatMessages.scrollHeight;
     chatMessages.addEventListener('scroll', () => {
         if (suppressNextScrollEvent) {
             suppressNextScrollEvent = false;
@@ -1647,6 +1871,15 @@ if (chatMessages) {
         }
 
         shouldAutoScroll = isChatNearBottom();
+        if (!shouldAutoScroll) {
+            if (autoScrollHoldTimeout) {
+                clearTimeout(autoScrollHoldTimeout);
+                autoScrollHoldTimeout = null;
+            }
+            lockScrollToLatest = false;
+        }
+
+        lastObservedChatScrollHeight = chatMessages.scrollHeight;
         if (isGenerating) {
             if (shouldAutoScroll) {
                 lockScrollToLatest = true;
@@ -1694,9 +1927,50 @@ function updateViewportMetrics() {
     const visibleHeight = vv ? vv.height : window.innerHeight;
     const offsetTop = vv ? vv.offsetTop : 0;
     const occupiedBottom = vv ? Math.max(0, window.innerHeight - (vv.height + vv.offsetTop)) : 0;
+    const active = document.activeElement;
+    const isEditable = active instanceof HTMLElement
+        && (active.matches('textarea, input, [contenteditable="true"]') || active.isContentEditable);
+    const now = Date.now();
+    const keyboardSignalDetected = occupiedBottom > 120;
+    const wasKeyboardOpen = document.body.classList.contains('keyboard-open');
+
+    if (keyboardSignalDetected) {
+        lastKeyboardViewportSignalAt = now;
+    }
+
+    const keyboardLikelyOpen = keyboardSignalDetected
+        || (wasKeyboardOpen && occupiedBottom > 56)
+        || (isEditable && now - lastKeyboardViewportSignalAt < 420);
 
     root.style.setProperty('--app-height', `${Math.round(visibleHeight + offsetTop)}px`);
     root.style.setProperty('--viewport-bottom-offset', `${Math.round(occupiedBottom)}px`);
+    document.body.classList.toggle('keyboard-open', keyboardLikelyOpen);
+}
+
+function maintainInputFocusAfterTouch() {
+    if (!messageInput) return;
+    if (document.activeElement === messageInput) return;
+
+    requestAnimationFrame(() => {
+        if (document.activeElement !== messageInput) {
+            messageInput.focus();
+        }
+    });
+}
+
+function ensureChatRestoredToLatest() {
+    let attempts = 0;
+
+    const settleScroll = () => {
+        attempts += 1;
+        scrollToBottom(true);
+        if (attempts >= 4) return;
+        window.setTimeout(() => {
+            requestAnimationFrame(settleScroll);
+        }, 90);
+    };
+
+    requestAnimationFrame(settleScroll);
 }
 
 if (window.visualViewport) {
@@ -1954,6 +2228,8 @@ async function combinePlayableChunks(primaryUrl, queuedTexts) {
 document.addEventListener('DOMContentLoaded', async () => {
     updateViewportMetrics();
     closeSavedLibrary();
+    setupSavedLibrarySwipeGestures();
+    updateMessageInputPlaceholder();
     // Check authentication first
     await checkAuth();
 
@@ -2018,16 +2294,16 @@ document.addEventListener('DOMContentLoaded', async () => {
             cancelComposerBackgroundTasks('document-hidden');
         } else {
             scheduleSavedTitleRefresh(800);
-            refreshSessionStateFromServer({ allowRestore: true }).catch(console.warn);
+            refreshSessionStateFromServer().catch(console.warn);
         }
     });
 
     window.addEventListener('pageshow', () => {
-        refreshSessionStateFromServer({ allowRestore: true }).catch(console.warn);
+        refreshSessionStateFromServer().catch(console.warn);
     });
 
     window.addEventListener('focus', () => {
-        refreshSessionStateFromServer({ allowRestore: false }).catch(console.warn);
+        refreshSessionStateFromServer().catch(console.warn);
     });
 });
 
@@ -2049,6 +2325,7 @@ let locallyRenderedTurnIds = new Set();
 let isRestoringChatSession = false;
 let didInitialChatBootstrap = false;
 let lastSessionRetryTimer = null;
+let lastSessionFetchPromise = null;
 let savedTurns = [];
 let savedLibraryQuery = '';
 let savedLibraryLoaded = false;
@@ -2056,6 +2333,8 @@ let savedTitleRefreshInFlight = false;
 let savedTitleRefreshTimer = null;
 let savedTitleRefreshAbortController = null;
 let isSavedLibraryOpen = false;
+let savedLibrarySwipeState = null;
+let savedLibraryCloseTimer = null;
 const savedTurnsSyncChannel = typeof BroadcastChannel !== 'undefined'
     ? new BroadcastChannel('dkst-saved-turns-sync')
     : null;
@@ -2119,7 +2398,8 @@ function restoreLastSessionIntoChatView() {
     appendMessage(restoredUser, { skipScroll: true });
     appendMessage(restoredAssistant, { skipScroll: true });
     messages.push(restoredUser, restoredAssistant);
-    scrollToBottom(true);
+    holdAutoScrollAtBottom(1200);
+    ensureChatRestoredToLatest();
     return true;
 }
 
@@ -2129,25 +2409,28 @@ function clearLastSessionRetryTimer() {
     lastSessionRetryTimer = null;
 }
 
-function scheduleLastSessionRefreshRetry(delay = 1800) {
-    clearLastSessionRetryTimer();
-    lastSessionRetryTimer = window.setTimeout(async () => {
-        lastSessionRetryTimer = null;
-        try {
-            if (!currentUser) {
-                await checkAuth();
-            }
-            if (!currentUser || hasSubstantiveChatMessages()) return;
-            lastSessionCache = await fetchLastSession();
-            restoreLastSessionIntoChatView();
-        } catch (error) {
-            console.warn('Deferred last session restore failed:', error);
-        }
-    }, Math.max(300, delay));
+async function ensureLastSessionCacheLoaded(force = false) {
+    if (force) {
+        lastSessionFetchPromise = null;
+    } else if (lastSessionCache) {
+        return lastSessionCache;
+    }
+
+    if (!lastSessionFetchPromise) {
+        lastSessionFetchPromise = fetchLastSession()
+            .then((data) => {
+                lastSessionCache = data;
+                return data;
+            })
+            .finally(() => {
+                lastSessionFetchPromise = null;
+            });
+    }
+
+    return lastSessionFetchPromise;
 }
 
-async function refreshSessionStateFromServer(options = {}) {
-    const allowRestore = options.allowRestore !== false;
+async function refreshSessionStateFromServer() {
     try {
         if (!currentUser) {
             await checkAuth();
@@ -2155,12 +2438,6 @@ async function refreshSessionStateFromServer(options = {}) {
         if (!currentUser) return;
 
         await syncCurrentChatSessionFromServer();
-        if (!hasSubstantiveChatMessages()) {
-            lastSessionCache = await fetchLastSession();
-            if (allowRestore) {
-                restoreLastSessionIntoChatView();
-            }
-        }
     } catch (error) {
         console.warn('Session refresh failed:', error);
     }
@@ -2179,13 +2456,6 @@ async function bootstrapInitialChatView() {
     }
 
     await checkSystemHealth();
-
-    if (!restoredFromSession && !hasSubstantiveChatMessages()) {
-        restoreLastSessionIntoChatView();
-        if (!hasSubstantiveChatMessages()) {
-            scheduleLastSessionRefreshRetry();
-        }
-    }
 }
 
 // Location Tracking
@@ -2334,7 +2604,10 @@ async function initServerControl() {
     // Check if Wails runtime is available
     if (typeof window.go === 'undefined') {
         console.log('Wails runtime not detected. Running in web mode.');
-        document.querySelector('.server-control').style.display = 'none';
+        const serverControl = document.querySelector('.server-control');
+        if (serverControl) {
+            serverControl.style.display = 'none';
+        }
         // Web mode: do not add is-desktop class
         return;
     }
@@ -2460,6 +2733,10 @@ function loadConfig() {
     // Mic Layout
     document.getElementById('cfg-mic-layout').value = config.micLayout || 'none';
     updateMicLayout();
+
+    config.userBubbleTheme = USER_BUBBLE_THEMES[config.userBubbleTheme] ? config.userBubbleTheme : 'ocean';
+    applyUserBubbleTheme();
+    renderUserBubbleThemeOptions();
 
     // Language selector
     document.getElementById('cfg-lang').value = config.language || 'ko';
@@ -2746,11 +3023,13 @@ function saveConfig(closeModal = true) {
     config.statefulCharBudget = Math.max(1000, parseInt(document.getElementById('cfg-stateful-char-budget')?.value, 10) || 12000);
     config.statefulTokenBudget = Math.max(1000, parseInt(document.getElementById('cfg-stateful-token-budget')?.value, 10) || 10000);
     config.micLayout = document.getElementById('cfg-mic-layout').value;
+    config.userBubbleTheme = USER_BUBBLE_THEMES[config.userBubbleTheme] ? config.userBubbleTheme : 'ocean';
     config.chatFontSize = Math.max(12, Math.min(24, parseInt(config.chatFontSize, 10) || 16));
 
     // Update visibility immediately
     updateSettingsVisibility();
     updateMicLayout();
+    applyUserBubbleTheme();
     applyChatFontSize();
 
     // Reload dictionary since language changes
@@ -3817,6 +4096,7 @@ async function restoreLastSession() {
         return;
     }
 
+    await ensureLastSessionCacheLoaded();
     if (!lastSessionCache) {
         showToast(t('chat.startup.restoreMissing'), true);
         return;
@@ -3839,6 +4119,8 @@ async function restoreLastSession() {
     appendMessage(restoredUser);
     appendMessage(restoredAssistant);
     messages.push(restoredUser, restoredAssistant);
+    holdAutoScrollAtBottom(1200);
+    ensureChatRestoredToLatest();
 
     if (config.llmMode === 'stateful') {
         statefulSummary = buildRestoredStatefulSummary(lastSessionCache);
@@ -3972,18 +4254,41 @@ function setupEventListeners() {
 
     if (inputContainer) {
         inputContainer.addEventListener('pointerdown', (e) => {
+            if (e.pointerType === 'touch') return;
             if (e.target.closest('.input-actions')) return;
             if (document.activeElement === messageInput) return;
             requestAnimationFrame(() => messageInput.focus());
         });
 
         inputContainer.addEventListener('click', (e) => {
+            if (e.target === messageInput) return;
             if (e.target.closest('.input-actions')) return;
             if (document.activeElement === messageInput) return;
 
             messageInput.focus();
         });
+
+        inputContainer.addEventListener('touchend', (e) => {
+            if (e.target instanceof Element && e.target.closest('.input-actions')) return;
+            if (e.target === messageInput) return;
+            maintainInputFocusAfterTouch();
+        }, { passive: true });
     }
+
+    messageInput.addEventListener('touchstart', () => {
+        savedLibrarySwipeState = null;
+    }, { passive: true });
+
+    messageInput.addEventListener('focus', () => {
+        document.body.classList.add('keyboard-open');
+        updateViewportMetrics();
+    });
+
+    messageInput.addEventListener('blur', () => {
+        window.setTimeout(() => {
+            updateViewportMetrics();
+        }, 120);
+    });
 
     messageInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -4186,6 +4491,7 @@ async function clearChat() {
     }
 
     lastSessionCache = null;
+    lastSessionFetchPromise = null;
     resetChatViewState();
 }
 
@@ -6511,6 +6817,7 @@ function scheduleChatScrollToBottom() {
         if (!chatMessages) return;
         suppressNextScrollEvent = true;
         chatMessages.scrollTop = chatMessages.scrollHeight;
+        lastObservedChatScrollHeight = chatMessages.scrollHeight;
         scrollActiveMessageIntoView();
     });
 }
@@ -6524,10 +6831,21 @@ function observeAutoScrollResizes(elements) {
 
     const targets = (elements || []).filter(Boolean);
     if (targets.length === 0) return;
+    lastObservedChatScrollHeight = chatMessages.scrollHeight;
 
     autoScrollResizeObserver = new ResizeObserver(() => {
-        if (!shouldAutoScroll && !lockScrollToLatest) return;
-        scheduleChatScrollToBottom();
+        if (!chatMessages) return;
+        const currentScrollHeight = chatMessages.scrollHeight;
+        const delta = currentScrollHeight - lastObservedChatScrollHeight;
+
+        if (shouldAutoScroll || lockScrollToLatest) {
+            scheduleChatScrollToBottom();
+        } else if (Math.abs(delta) > 1) {
+            suppressNextScrollEvent = true;
+            chatMessages.scrollTop += delta;
+        }
+
+        lastObservedChatScrollHeight = currentScrollHeight;
     });
 
     targets.forEach((target) => autoScrollResizeObserver.observe(target));
@@ -7316,7 +7634,7 @@ async function checkSystemHealth() {
     }
 
     try {
-        lastSessionCache = await fetchLastSession();
+        await ensureLastSessionCacheLoaded(true);
         const issues = [];
 
         if (health.llmStatus !== 'ok') {
@@ -7335,7 +7653,7 @@ async function checkSystemHealth() {
             }
         }
 
-        const shouldShowStartupCard = !hasSubstantiveChatMessages() && (issues.length > 0 || !lastSessionCache);
+        const shouldShowStartupCard = !hasSubstantiveChatMessages();
         if (shouldShowStartupCard) {
             const healthMsg = {
                 role: 'assistant',
@@ -7343,7 +7661,7 @@ async function checkSystemHealth() {
                     title: issues.length === 0 ? t('chat.startup.welcomeTitle') : t('health.checkRequired'),
                     body: issues.length === 0 ? t('chat.startup.welcomeBody') : t('chat.startup.issueBody'),
                     issues,
-                    showRestoreButton: false,
+                    showRestoreButton: !!lastSessionCache,
                     restoreLabel: t('chat.startup.restore')
                 }
             };
