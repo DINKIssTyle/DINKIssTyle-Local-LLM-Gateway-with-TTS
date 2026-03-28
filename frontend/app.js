@@ -433,6 +433,100 @@ function protectMathSegments(text) {
     return { protectedText, placeholders };
 }
 
+function countTablePipes(line) {
+    return (String(line).match(/\|/g) || []).length;
+}
+
+function isLikelyTableRow(line) {
+    const trimmed = String(line || '').trim();
+    if (!trimmed) return false;
+    return countTablePipes(trimmed) >= 2;
+}
+
+function isTableSeparatorRow(line) {
+    const trimmed = String(line || '').trim();
+    if (!trimmed) return false;
+    const normalized = trimmed.replace(/\|/g, '').replace(/:/g, '').replace(/-/g, '').trim();
+    return normalized === '' && /-/.test(trimmed);
+}
+
+function normalizeTableRow(line) {
+    let trimmed = String(line || '').trim();
+    trimmed = trimmed.replace(/^[-*+]\s+/, '').trim();
+    trimmed = trimmed.replace(/^\|\s*/, '').replace(/\s*\|$/, '');
+    const cells = trimmed.split('|').map(cell => cell.trim());
+    if (cells.length < 2) {
+        return String(line || '');
+    }
+    return `| ${cells.join(' | ')} |`;
+}
+
+function normalizeTableBlock(block) {
+    const rawLines = String(block || '').split('\n').map(line => line.trim()).filter(Boolean);
+    if (rawLines.length < 2) {
+        return block;
+    }
+
+    const normalizedRows = rawLines.map(normalizeTableRow);
+    const headerCells = normalizedRows[0]
+        .replace(/^\|\s*/, '')
+        .replace(/\s*\|$/, '')
+        .split('|')
+        .map(cell => cell.trim())
+        .filter(Boolean);
+
+    if (headerCells.length < 2) {
+        return block;
+    }
+
+    if (!isTableSeparatorRow(rawLines[1])) {
+        const separator = `| ${headerCells.map(() => '---').join(' | ')} |`;
+        normalizedRows.splice(1, 0, separator);
+    } else {
+        normalizedRows[1] = `| ${headerCells.map(() => '---').join(' | ')} |`;
+    }
+
+    return normalizedRows.join('\n');
+}
+
+function canonicalizeTableLikeBlocks(text) {
+    const lines = String(text || '').split('\n');
+    const result = [];
+
+    for (let i = 0; i < lines.length;) {
+        if (!isLikelyTableRow(lines[i])) {
+            result.push(lines[i]);
+            i += 1;
+            continue;
+        }
+
+        const block = [];
+        let j = i;
+        while (j < lines.length && isLikelyTableRow(lines[j])) {
+            block.push(lines[j]);
+            j += 1;
+        }
+
+        if (block.length >= 2) {
+            result.push(normalizeTableBlock(block.join('\n')));
+        } else {
+            result.push(...block);
+        }
+        i = j;
+    }
+
+    return result.join('\n');
+}
+
+function closeUnbalancedCodeFences(text) {
+    const source = String(text || '');
+    const fenceMatches = source.match(/(^|\n)```/g);
+    if (!fenceMatches || fenceMatches.length % 2 === 0) {
+        return source;
+    }
+    return `${source}\n\`\`\``;
+}
+
 function protectTableSegments(text) {
     const placeholders = [];
     let index = 0;
@@ -463,10 +557,9 @@ function normalizeMarkdownForRender(text) {
     if (!text) return '';
 
     let normalized = String(text);
+    normalized = closeUnbalancedCodeFences(normalized);
     const protectedMath = protectMathSegments(normalized);
     normalized = protectedMath.protectedText;
-    const protectedTables = protectTableSegments(normalized);
-    normalized = protectedTables.protectedText;
 
     // Remove invisible characters that can break markdown emphasis or list parsing.
     normalized = normalized.replace(/[\u200B-\u200D\u2060\uFEFF]/g, '');
@@ -487,6 +580,13 @@ function normalizeMarkdownForRender(text) {
     normalized = normalized
         .replace(/\r\n/g, '\n')
         .replace(/\r/g, '\n');
+
+    normalized = normalizeMarkdownOutsideCode(normalized, (segment) =>
+        canonicalizeTableLikeBlocks(segment)
+    );
+
+    const protectedTables = protectTableSegments(normalized);
+    normalized = protectedTables.protectedText;
 
     normalized = normalizeMarkdownOutsideCode(normalized, (segment) =>
         segment
@@ -1558,11 +1658,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupEventListeners();
     initServerControl();
 
-    // Initial System Check
-    setTimeout(checkSystemHealth, 500);
-    setTimeout(() => {
-        syncCurrentChatSessionFromServer().catch(console.warn);
-    }, 700);
+    // Initial chat restore first, then startup/health UI only if needed.
+    try {
+        await bootstrapInitialChatView();
+    } catch (e) {
+        console.warn('Initial chat bootstrap failed:', e);
+    }
 
     // Start Location Tracking
     updateUserLocation();
@@ -1613,7 +1714,9 @@ let serverReplayMessageBuffers = new Map();
 let serverReplayReasoningBuffers = new Map();
 let activeLocalTurnId = '';
 let activeLocalAssistantId = '';
+let locallyRenderedTurnIds = new Set();
 let isRestoringChatSession = false;
+let didInitialChatBootstrap = false;
 let savedTurns = [];
 let savedLibraryQuery = '';
 let savedLibraryLoaded = false;
@@ -1621,6 +1724,41 @@ let savedTitleRefreshInFlight = false;
 let savedTitleRefreshTimer = null;
 let savedTitleRefreshAbortController = null;
 let isSavedLibraryOpen = false;
+
+function restoreLastSessionIntoChatView() {
+    if (!lastSessionCache || hasSubstantiveChatMessages()) return false;
+    const userText = String(lastSessionCache.user_message || '').trim();
+    const assistantText = String(lastSessionCache.assistant_message || '').trim();
+    if (!userText || !assistantText) return false;
+
+    const turnId = generateTurnId();
+    const restoredUser = { role: 'user', content: userText, turnId };
+    const restoredAssistant = { role: 'assistant', content: assistantText, turnId };
+    appendMessage(restoredUser, { skipScroll: true });
+    appendMessage(restoredAssistant, { skipScroll: true });
+    messages.push(restoredUser, restoredAssistant);
+    scrollToBottom(true);
+    return true;
+}
+
+async function bootstrapInitialChatView() {
+    if (didInitialChatBootstrap) return;
+    didInitialChatBootstrap = true;
+
+    let restoredFromSession = false;
+    try {
+        await syncCurrentChatSessionFromServer();
+        restoredFromSession = hasSubstantiveChatMessages();
+    } catch (e) {
+        console.warn('Initial chat session sync failed:', e);
+    }
+
+    await checkSystemHealth();
+
+    if (!restoredFromSession && !hasSubstantiveChatMessages()) {
+        restoreLastSessionIntoChatView();
+    }
+}
 
 // Location Tracking
 function updateUserLocation() {
@@ -2331,6 +2469,40 @@ async function fetchCurrentChatSessionEvents(afterSeq = 0, limit = 400) {
     }
 }
 
+async function fastForwardChatSessionEvents(limit = 400) {
+    if (!currentUser) return;
+
+    const result = await fetchCurrentChatSessionEvents(currentChatSessionEventSeq, limit);
+    if (result.session) {
+        applyCurrentChatSessionSnapshot(result.session);
+    }
+    if (Array.isArray(result.items)) {
+        for (const entry of result.items) {
+            currentChatSessionEventSeq = Math.max(currentChatSessionEventSeq, Number(entry.EventSeq || 0));
+        }
+    }
+
+    const totalCount = Number(result.totalCount || 0);
+    let loadedCount = Array.isArray(result.items) ? result.items.length : 0;
+    let afterSeq = loadedCount > 0
+        ? Number(result.items[result.items.length - 1].EventSeq || currentChatSessionEventSeq)
+        : currentChatSessionEventSeq;
+
+    while (loadedCount < totalCount) {
+        const page = await fetchCurrentChatSessionEvents(afterSeq, limit);
+        if (page.session) {
+            applyCurrentChatSessionSnapshot(page.session);
+        }
+        const pageItems = Array.isArray(page.items) ? page.items : [];
+        if (pageItems.length === 0) break;
+        for (const entry of pageItems) {
+            currentChatSessionEventSeq = Math.max(currentChatSessionEventSeq, Number(entry.EventSeq || 0));
+        }
+        loadedCount += pageItems.length;
+        afterSeq = Number(pageItems[pageItems.length - 1].EventSeq || afterSeq);
+    }
+}
+
 function stopChatSessionPolling() {
     if (chatSessionPollTimer) {
         clearTimeout(chatSessionPollTimer);
@@ -2383,6 +2555,13 @@ function getCurrentChatSessionUISnapshot(session = null) {
 
 function isActiveLocalTurn(turnId = '') {
     return !!turnId && !!activeLocalTurnId && turnId === activeLocalTurnId;
+}
+
+function hasSubstantiveChatMessages() {
+    if (!chatMessages) return false;
+    return !!chatMessages.querySelector(
+        '.message.user, .message.assistant:not(.has-startup-card), .message.system'
+    );
 }
 
 function ensureServerReplayAssistant(turnId, sessionId, seq) {
@@ -2464,6 +2643,31 @@ function applyCurrentChatSessionEvent(entry) {
     const sessionId = entry.SessionID || 'default';
     const entryTurnId = entry.TurnID || payload.turn_id || '';
     const isLocalActiveTurn = isActiveLocalTurn(entryTurnId);
+    const isLocallyRenderedTurn = !!entryTurnId && locallyRenderedTurnIds.has(entryTurnId);
+
+    if (isLocalActiveTurn || isLocallyRenderedTurn) {
+        switch (entry.EventType) {
+            case 'message.created':
+            case 'message.delta':
+            case 'reasoning.start':
+            case 'reasoning.delta':
+            case 'reasoning.end':
+            case 'tool_call.start':
+            case 'tool_call.arguments':
+            case 'tool_call.success':
+            case 'tool_call.failure':
+            case 'prompt_processing.progress':
+            case 'model_load.start':
+            case 'model_load.progress':
+            case 'model_load.end':
+            case 'chat.end':
+            case 'request.complete':
+                return;
+            default:
+                break;
+        }
+    }
+
     switch (entry.EventType) {
         case 'message.created': {
             if (entry.Role === 'user') {
@@ -2497,9 +2701,9 @@ function applyCurrentChatSessionEvent(entry) {
             }
             if (!assistantId) break;
             hideProgressDock();
-            const chunk = String(payload.content || '');
-            const prev = serverReplayMessageBuffers.get(assistantId) || '';
-            const next = appendStreamChunkDedup(prev, chunk);
+            const next = typeof payload.full_content === 'string'
+                ? payload.full_content
+                : appendStreamChunkDedup(serverReplayMessageBuffers.get(assistantId) || '', String(payload.content || ''));
             serverReplayMessageBuffers.set(assistantId, next);
             updateSyncedMessageContent(assistantId, next);
             break;
@@ -2526,22 +2730,23 @@ function applyCurrentChatSessionEvent(entry) {
             {
                 const reasoningAssistantId = isLocalActiveTurn ? activeLocalAssistantId : serverReplayCurrentAssistantId;
                 const reasoningText = payload.content || payload.reasoning_content || payload.text || payload.delta?.content || '';
+                const elapsedMs = Number.isFinite(Number(payload.elapsed_ms)) ? Number(payload.elapsed_ms) : null;
                 if (reasoningAssistantId) {
                     const prevReasoning = serverReplayReasoningBuffers.get(reasoningAssistantId) || '';
                     const nextReasoning = appendStreamChunkDedup(prevReasoning, reasoningText);
                     serverReplayReasoningBuffers.set(reasoningAssistantId, nextReasoning);
                     if (isLocalActiveTurn) {
-                        showReasoningStatus(reasoningAssistantId, nextReasoning || '...');
+                        showReasoningStatus(reasoningAssistantId, nextReasoning || '...', false, elapsedMs);
                         break;
                     }
-                    showReasoningStatus(reasoningAssistantId, nextReasoning || '...');
+                    showReasoningStatus(reasoningAssistantId, nextReasoning || '...', false, elapsedMs);
                     break;
                 }
                 if (isLocalActiveTurn) {
-                    if (activeLocalAssistantId) showReasoningStatus(activeLocalAssistantId, reasoningText || '...');
+                    if (activeLocalAssistantId) showReasoningStatus(activeLocalAssistantId, reasoningText || '...', false, elapsedMs);
                     break;
                 }
-                if (serverReplayCurrentAssistantId) showReasoningStatus(serverReplayCurrentAssistantId, reasoningText || '...');
+                if (serverReplayCurrentAssistantId) showReasoningStatus(serverReplayCurrentAssistantId, reasoningText || '...', false, elapsedMs);
                 break;
             }
         case 'reasoning.end':
@@ -2625,6 +2830,8 @@ function applyCurrentChatSessionEvent(entry) {
                 }
                 activeLocalTurnId = '';
                 activeLocalAssistantId = '';
+                hideProgressDock();
+                cleanupTrailingEmptyAssistantMessages();
                 break;
             }
             if (serverReplayCurrentAssistantId) {
@@ -2637,6 +2844,7 @@ function applyCurrentChatSessionEvent(entry) {
                 setAssistantActionBarReady(serverReplayCurrentAssistantId);
             }
             hideProgressDock();
+            cleanupTrailingEmptyAssistantMessages();
             break;
         case 'request.cancelled':
             if (isLocalActiveTurn) {
@@ -2645,12 +2853,14 @@ function applyCurrentChatSessionEvent(entry) {
                 }
                 activeLocalTurnId = '';
                 activeLocalAssistantId = '';
+                cleanupTrailingEmptyAssistantMessages();
                 break;
             }
             if (serverReplayCurrentAssistantId) {
                 finalizeAssistantStatusCards(serverReplayCurrentAssistantId, 'stopped', t('status.stopped'));
             }
             hideProgressDock();
+            cleanupTrailingEmptyAssistantMessages();
             break;
         case 'session.cleared':
             resetChatViewState();
@@ -2678,7 +2888,9 @@ async function syncCurrentChatSessionFromServer() {
         applyCurrentChatSessionSnapshot(result.session);
     }
 
-    const shouldRestoreSnapshot = currentChatSessionEventSeq === 0 && result.totalCount > 0;
+    const hasRenderedMessages = hasSubstantiveChatMessages();
+    const shouldRestoreSnapshot = currentChatSessionEventSeq === 0 && result.totalCount > 0 && !hasRenderedMessages;
+    const shouldFastForwardSeqOnly = currentChatSessionEventSeq === 0 && result.totalCount > 0 && hasRenderedMessages;
     if (shouldRestoreSnapshot) {
         beginChatSessionRestore(result.totalCount);
         try {
@@ -2701,6 +2913,10 @@ async function syncCurrentChatSessionFromServer() {
             }
         } finally {
             finishChatSessionRestore();
+        }
+    } else if (shouldFastForwardSeqOnly) {
+        for (const entry of result.items) {
+            currentChatSessionEventSeq = Math.max(currentChatSessionEventSeq, Number(entry.EventSeq || 0));
         }
     } else if (Array.isArray(result.items) && result.items.length > 0) {
         dismissStartupCards();
@@ -2774,8 +2990,9 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
                     currentTurnId = entryTurnId || `server-turn-${currentSessionId}-${entry.EventSeq}`;
                 }
                 currentAssistantId = ensureAssistantId(currentTurnId, entry.EventSeq);
-                const prev = assistantTextById.get(currentAssistantId) || '';
-                const next = appendStreamChunkDedup(prev, String(payload.content || ''));
+                const next = typeof payload.full_content === 'string'
+                    ? payload.full_content
+                    : appendStreamChunkDedup(assistantTextById.get(currentAssistantId) || '', String(payload.content || ''));
                 assistantTextById.set(currentAssistantId, next);
                 break;
             }
@@ -3256,6 +3473,7 @@ function resetChatViewState() {
     stopChatSessionPolling();
     activeLocalTurnId = '';
     activeLocalAssistantId = '';
+    locallyRenderedTurnIds = new Set();
     isGenerating = false;
     abortController = null;
     hideProgressDock();
@@ -3546,10 +3764,10 @@ async function sendMessage() {
     activeStreamingMessageId = assistantId;
     activeLocalTurnId = turnId;
     activeLocalAssistantId = assistantId;
+    locallyRenderedTurnIds.add(turnId);
     startStreamingMessageAutoScroll(assistantId);
     ensureAssistantMessageElement(assistantId, turnId);
-    syncCurrentChatSessionFromServer().catch(console.warn);
-    scheduleChatSessionPolling(150);
+    stopChatSessionPolling();
 
     // Build API Payload
     // Always start with a system prompt to define behavior and anchor the context
@@ -3650,6 +3868,8 @@ async function sendMessage() {
         activeStreamingMessageId = null;
         abortController = null;
         updateSendButtonState();
+        fastForwardChatSessionEvents().catch(console.warn);
+        scheduleChatSessionPolling(600);
     }
 
     if (assistantContent && assistantContent.trim()) {
@@ -3831,7 +4051,7 @@ async function streamResponse(payload, elementId, turnId = '') {
 // Helper to process the stream reader (shared by direct and proxy)
 async function processStream(response, elementId, turnId = '') {
     ensureAssistantMessageElement(elementId, turnId);
-    const deferToServerChatSession = !!turnId && !!currentUser;
+    const deferToServerChatSession = false;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -3840,6 +4060,7 @@ async function processStream(response, elementId, turnId = '') {
     let reasoningBuffer = '';     // Separate buffer for reasoning content (for history only)
     let speechBuffer = '';        // Dedicated buffer for speech content (no HTML/Tools)
     let currentlyReasoning = false; // State track for reasoning blocks
+    let reasoningStartMs = 0;
     let reasoningSource = null;    // 'sse' or 'field' to prevent duplication
     let historyContent = '';
     let lastToolCallHtml = '';
@@ -3914,13 +4135,15 @@ async function processStream(response, elementId, turnId = '') {
                             if (!currentlyReasoning) {
                                 reasoningBuffer += '<think>';
                                 currentlyReasoning = true;
+                                reasoningStartMs = Date.now();
                                 reasoningSource = 'field';
-                                if (!deferToServerChatSession) showReasoningStatus(elementId, '...'); // Start status
+                                if (!deferToServerChatSession) showReasoningStatus(elementId, '...', false, 0); // Start status
                             }
                             // Prioritize SSE if both present (LM Studio)
                             if (reasoningSource !== 'sse') {
                                 reasoningBuffer += delta.reasoning_content;
-                                if (!deferToServerChatSession) showReasoningStatus(elementId, reasoningBuffer); // Update status with full buffer
+                                const elapsedMs = reasoningStartMs > 0 ? Date.now() - reasoningStartMs : 0;
+                                if (!deferToServerChatSession) showReasoningStatus(elementId, reasoningBuffer, false, elapsedMs); // Update status with full buffer
                             }
                         }
 
@@ -3931,8 +4154,10 @@ async function processStream(response, elementId, turnId = '') {
                             // If we see actual content and we were in reasoning, close the block
                             reasoningBuffer += '</think>\n';
                             currentlyReasoning = false;
+                            const elapsedMs = reasoningStartMs > 0 ? Date.now() - reasoningStartMs : 0;
+                            reasoningStartMs = 0;
                             reasoningSource = null;
-                            if (!deferToServerChatSession) showReasoningStatus(elementId, null, true); // Remove status
+                            if (!deferToServerChatSession) finalizeReasoningStatus(elementId, 'done', '', elapsedMs);
                         }
 
                         if (!currentlyReasoning) {
@@ -3971,22 +4196,30 @@ async function processStream(response, elementId, turnId = '') {
                         if (!currentlyReasoning) {
                             reasoningBuffer += '<think>';
                             currentlyReasoning = true;
+                            reasoningStartMs = Date.now();
                         }
                         reasoningSource = 'sse';
-                        if (!deferToServerChatSession) showReasoningStatus(elementId, '...'); // Start status
+                        if (!deferToServerChatSession) showReasoningStatus(elementId, '...', false, Number(json.elapsed_ms || 0)); // Start status
                     }
                     else if (json.type === 'reasoning.delta' && json.content) {
                         // Add to reasoning buffer, NOT to contentToAdd/fullText
                         reasoningBuffer += json.content;
                         currentlyReasoning = true;
                         reasoningSource = 'sse';
-                        if (!deferToServerChatSession) showReasoningStatus(elementId, reasoningBuffer); // Update with full buffer
+                        const elapsedMs = Number.isFinite(Number(json.elapsed_ms))
+                            ? Number(json.elapsed_ms)
+                            : (reasoningStartMs > 0 ? Date.now() - reasoningStartMs : 0);
+                        if (!deferToServerChatSession) showReasoningStatus(elementId, reasoningBuffer, false, elapsedMs); // Update with full buffer
                     }
                     else if (json.type === 'reasoning.end') {
                         reasoningBuffer += '</think>\n';
                         currentlyReasoning = false;
+                        const elapsedMs = Number.isFinite(Number(json.elapsed_ms))
+                            ? Number(json.elapsed_ms)
+                            : (reasoningStartMs > 0 ? Date.now() - reasoningStartMs : 0);
+                        reasoningStartMs = 0;
                         reasoningSource = null;
-                        if (!deferToServerChatSession) showReasoningStatus(elementId, null, true); // Remove status
+                        if (!deferToServerChatSession) finalizeReasoningStatus(elementId, 'done', '', elapsedMs);
                     }
 
 
@@ -4196,7 +4429,8 @@ async function processStream(response, elementId, turnId = '') {
         if (!deferToServerChatSession) hideProgressDock();
         if (!streamAborted) {
             if (currentlyReasoning) {
-                if (!deferToServerChatSession) finalizeReasoningStatus(elementId, 'failed', t('status.unexpectedStop'));
+                const elapsedMs = reasoningStartMs > 0 ? Date.now() - reasoningStartMs : 0;
+                if (!deferToServerChatSession) finalizeReasoningStatus(elementId, 'failed', t('status.unexpectedStop'), elapsedMs);
             }
             if (getRunningToolCards(elementId).length > 0) {
                 if (!deferToServerChatSession) finalizeAssistantStatusCards(elementId, 'failed', t('status.failed'));
@@ -4220,6 +4454,10 @@ async function processStream(response, elementId, turnId = '') {
         }
         if (historyContent && !deferToServerChatSession) {
             setAssistantActionBarReady(elementId);
+        }
+        if (activeLocalAssistantId === elementId) {
+            activeLocalTurnId = '';
+            activeLocalAssistantId = '';
         }
         releaseWakeLock(); // Release screen lock after generation and TTS streaming is done
     }
@@ -4296,7 +4534,7 @@ function createMessageElement(msg) {
                         </div>
                     </section>
                 </div>
-                <div class="message-actions${textContent.trim() ? ' is-ready' : ' is-pending'}" ${textContent.trim() ? '' : 'hidden'}>
+                <div class="message-actions is-pending" hidden>
                     <button class="icon-btn save-btn" onclick="saveMessageTurn(this)" title="${escapeAttr(t('action.saveTurn'))}">
                         <span class="material-icons-round">bookmark_add</span>
                     </button>
@@ -4361,6 +4599,35 @@ function ensureAssistantMessageElement(id, turnId = '') {
     return document.getElementById(id);
 }
 
+function isAssistantMessageVisiblyEmpty(msgEl) {
+    if (!msgEl || !msgEl.classList?.contains('assistant')) return false;
+    const markdownText = msgEl.querySelector('.assistant-response-card .markdown-body')?.innerText?.trim() || '';
+    const reasoningText = msgEl.querySelector('.assistant-reasoning')?.innerText?.trim() || '';
+    const hasToolCards = msgEl.querySelectorAll('.assistant-tools .tool-card').length > 0;
+    const hasVisibleResponse = !msgEl.querySelector('.assistant-response-card')?.hidden && !!markdownText;
+    const hasVisibleReasoning = !!reasoningText;
+    return !hasVisibleResponse && !hasVisibleReasoning && !hasToolCards;
+}
+
+function cleanupTrailingEmptyAssistantMessages() {
+    if (!chatMessages) return;
+    const children = Array.from(chatMessages.children);
+    for (let i = children.length - 1; i >= 0; i -= 1) {
+        const node = children[i];
+        if (!(node instanceof HTMLElement) || !node.classList.contains('message')) {
+            continue;
+        }
+        if (!node.classList.contains('assistant')) {
+            break;
+        }
+        if (isAssistantMessageVisiblyEmpty(node)) {
+            node.remove();
+            continue;
+        }
+        break;
+    }
+}
+
 function getAssistantMessageParts(elementId, turnId = '') {
     const msgEl = ensureAssistantMessageElement(elementId, turnId);
     if (!msgEl) return {};
@@ -4379,10 +4646,15 @@ function setAssistantActionBarReady(elementId) {
     const { msgEl } = getAssistantMessageParts(elementId);
     const actionBar = msgEl?.querySelector('.message-actions');
     if (!actionBar) return;
+    if (actionBar.classList.contains('is-ready') && !actionBar.hidden) return;
     actionBar.hidden = false;
-    actionBar.classList.remove('is-pending');
     requestAnimationFrame(() => {
-        actionBar.classList.add('is-ready');
+        actionBar.classList.add('is-pending');
+        requestAnimationFrame(() => {
+            actionBar.classList.add('is-ready');
+            actionBar.classList.remove('is-pending');
+            cleanupTrailingEmptyAssistantMessages();
+        });
     });
 }
 
@@ -4994,7 +5266,7 @@ function stopAllAudio() {
 }
 
 // Show/Hide Reasoning Status Helper with Streaming Support
-function showReasoningStatus(elementId, text, isFinal = false) {
+function showReasoningStatus(elementId, text, isFinal = false, elapsedOverrideMs = null) {
     if (config.hideThink) return;
 
     const card = ensureReasoningCard(elementId);
@@ -5006,7 +5278,9 @@ function showReasoningStatus(elementId, text, isFinal = false) {
     if (!bodyEl) return;
 
     const startedAt = Number(card.dataset.startedAt || Date.now());
-    const durationMs = Math.max(0, Date.now() - startedAt);
+    const durationMs = Number.isFinite(Number(elapsedOverrideMs))
+        ? Math.max(0, Number(elapsedOverrideMs))
+        : Math.max(0, Date.now() - startedAt);
 
     if (isFinal) {
         finalizeReasoningStatus(elementId, 'done');
@@ -5039,7 +5313,7 @@ function showReasoningStatus(elementId, text, isFinal = false) {
     if (metaEl) metaEl.textContent = t('status.live');
     if (titleEl) {
         titleEl.classList.add('is-live');
-        titleEl.textContent = t('status.thinking');
+        titleEl.textContent = formatThoughtDuration(durationMs);
     }
     bodyEl.textContent = cleanText;
 }
@@ -5302,11 +5576,21 @@ function appendStreamChunkDedup(existingText, nextChunk) {
     const chunk = String(nextChunk || '');
     if (!chunk) return prev;
     if (!prev) return chunk;
+    if (prev === chunk) return prev;
     if (prev.endsWith(chunk)) return prev;
+    if (chunk.startsWith(prev)) return chunk;
+    if (chunk.length > prev.length && chunk.includes(prev)) return chunk;
 
     const maxOverlap = Math.min(prev.length, chunk.length);
-    for (let overlap = maxOverlap; overlap > 0; overlap--) {
+    const minSafeOverlap = 8;
+    for (let overlap = maxOverlap; overlap >= minSafeOverlap; overlap--) {
         if (prev.slice(-overlap) === chunk.slice(0, overlap)) {
+            const prevTail = prev.slice(-overlap);
+            const chunkRemainderFirst = chunk.charAt(overlap);
+            const prevTailLast = prevTail.charAt(prevTail.length - 1);
+            if (/\d/.test(prevTailLast) && /\d/.test(chunkRemainderFirst)) {
+                continue;
+            }
             return prev + chunk.slice(overlap);
         }
     }
@@ -6361,7 +6645,7 @@ async function checkSystemHealth() {
             }
         }
 
-        const shouldShowStartupCard = issues.length > 0 || !lastSessionCache;
+        const shouldShowStartupCard = !hasSubstantiveChatMessages() && (issues.length > 0 || !lastSessionCache);
         if (shouldShowStartupCard) {
             const healthMsg = {
                 role: 'assistant',
