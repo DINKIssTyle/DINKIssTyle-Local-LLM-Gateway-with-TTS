@@ -158,6 +158,7 @@ const translations = {
         'progress.loadingModel': '모델 로딩 중',
         'progress.modelLoaded': '모델 로딩 완료',
         'background.savedTurnTitle': '저장된 대화 제목 생성 중...',
+        'background.serverChatContinuing': '응답을 이어받는 중...',
         // Settings - TTS
         'setting.enableTTS.label': 'TTS 활성화',
         'setting.enableTTS.desc': '응답을 음성으로 재생합니다.',
@@ -377,6 +378,7 @@ const translations = {
         'input.placeholder.sttB': 'Listening...',
         'input.placeholder.restoring': 'Restoring previous conversation...',
         'progress.restoringHistory': 'Restoring previous conversation',
+        'background.serverChatContinuing': 'Resuming server response...',
         'restore.skeletonTitle': 'Restoring previous conversation.',
         'restore.skeletonBody': 'Loading chat history and state from the server.',
         // Health Check
@@ -1015,6 +1017,17 @@ function cancelComposerBackgroundTasks(reason = 'user-interrupt') {
         composerBackgroundTasks.delete(id);
     }
     updateComposerBackgroundTaskUI();
+}
+
+function isLikelyStreamDetachError(err) {
+    const message = String(err?.message || err || '').toLowerCase();
+    return err?.name === 'TypeError'
+        || message.includes('load failed')
+        || message.includes('fetch failed')
+        || message.includes('failed to fetch')
+        || message.includes('networkerror')
+        || message.includes('network error')
+        || message.includes('the network connection was lost');
 }
 
 function renderSavedTurnInlineTitle(title) {
@@ -2676,15 +2689,16 @@ function extractSessionClearedAt(session) {
 
 function getCurrentChatSessionUISnapshot(session = null) {
     const raw = String((session?.UIStateJSON ?? currentChatSessionCache?.UIStateJSON ?? '')).trim();
-    if (!raw) return { tool_cards: {}, messages: [] };
+    if (!raw) return { tool_cards: {}, messages: [], last_event_seq: 0 };
     try {
         const parsed = JSON.parse(raw);
         return {
             tool_cards: parsed?.tool_cards && typeof parsed.tool_cards === 'object' ? parsed.tool_cards : {},
-            messages: Array.isArray(parsed?.messages) ? parsed.messages : []
+            messages: Array.isArray(parsed?.messages) ? parsed.messages : [],
+            last_event_seq: Number(parsed?.last_event_seq || 0)
         };
     } catch (_) {
-        return { tool_cards: {}, messages: [] };
+        return { tool_cards: {}, messages: [], last_event_seq: 0 };
     }
 }
 
@@ -2837,6 +2851,7 @@ function applyCurrentChatSessionSnapshot(session) {
         updateSendButtonState();
     }
     if (!serverGenerating) {
+        clearComposerBackgroundTask('server-chat-detached');
         hideProgressDock();
     }
 
@@ -3122,18 +3137,64 @@ async function syncCurrentChatSessionFromServer() {
 
     const hasRenderedMessages = hasSubstantiveChatMessages();
     if (currentChatSessionEventSeq === 0 && !hasRenderedMessages) {
-        const snapshotMessages = getCurrentChatSessionUISnapshot(session).messages || [];
+        const sessionUISnapshot = getCurrentChatSessionUISnapshot(session);
+        const snapshotMessages = sessionUISnapshot.messages || [];
         if (snapshotMessages.length > 0) {
+            const snapshotLastEventSeq = Number(sessionUISnapshot.last_event_seq || 0);
+            if (snapshotLastEventSeq <= 0) {
+                const seedResult = await fetchCurrentChatSessionEvents(0, 200);
+                const seedItems = Array.isArray(seedResult.items) ? [...seedResult.items] : [];
+                if (seedItems.length > 0) {
+                    beginChatSessionRestore(seedResult.totalCount || seedItems.length);
+                    try {
+                        updateChatSessionRestoreProgress(seedItems.length, seedResult.totalCount || seedItems.length);
+                        let allItems = seedItems;
+                        let afterSeq = Number(allItems[allItems.length - 1]?.EventSeq || 0);
+                        while (allItems.length < Number(seedResult.totalCount || 0)) {
+                            const page = await fetchCurrentChatSessionEvents(afterSeq, 200);
+                            const pageItems = Array.isArray(page.items) ? page.items : [];
+                            if (pageItems.length === 0) break;
+                            allItems = allItems.concat(pageItems);
+                            afterSeq = Number(pageItems[pageItems.length - 1]?.EventSeq || afterSeq);
+                            updateChatSessionRestoreProgress(allItems.length, seedResult.totalCount || allItems.length);
+                        }
+                        hydrateChatSessionEventsSnapshot(allItems, seedResult.session || session);
+                        for (const entry of allItems) {
+                            currentChatSessionEventSeq = Math.max(currentChatSessionEventSeq, Number(entry.EventSeq || 0));
+                        }
+                    } finally {
+                        finishChatSessionRestore();
+                    }
+                    scheduleChatSessionPolling(session.Status === 'running' ? 900 : 1600);
+                    return;
+                }
+            }
             beginChatSessionRestore(snapshotMessages.length);
             try {
                 updateChatSessionRestoreProgress(0, snapshotMessages.length);
-                hydrateChatSessionUISnapshot(session);
-                updateChatSessionRestoreProgress(snapshotMessages.length, snapshotMessages.length);
-                const result = await fetchCurrentChatSessionEvents(0, 1);
-                if (result.session) {
-                    applyCurrentChatSessionSnapshot(result.session);
+                let trailingItems = [];
+                let afterSeq = snapshotLastEventSeq;
+                while (true) {
+                    const page = await fetchCurrentChatSessionEvents(afterSeq, 200);
+                    if (page.session) {
+                        applyCurrentChatSessionSnapshot(page.session);
+                    }
+                    const pageItems = Array.isArray(page.items) ? page.items : [];
+                    if (pageItems.length === 0) break;
+                    trailingItems = trailingItems.concat(pageItems);
+                    afterSeq = Number(pageItems[pageItems.length - 1].EventSeq || afterSeq);
+                    if (pageItems.length < 200) break;
                 }
-                currentChatSessionEventSeq = Number(result.totalCount || 0);
+                hydrateChatSessionUISnapshot(session);
+                if (trailingItems.length > 0) {
+                    dismissStartupCards();
+                    for (const entry of trailingItems) {
+                        applyCurrentChatSessionEvent(entry);
+                        currentChatSessionEventSeq = Math.max(currentChatSessionEventSeq, Number(entry.EventSeq || 0));
+                    }
+                }
+                currentChatSessionEventSeq = Math.max(currentChatSessionEventSeq, snapshotLastEventSeq);
+                updateChatSessionRestoreProgress(snapshotMessages.length + trailingItems.length, snapshotMessages.length + trailingItems.length);
             } finally {
                 finishChatSessionRestore();
             }
@@ -4141,6 +4202,11 @@ async function sendMessage() {
         if (e.name === 'AbortError') {
             finalizeAssistantStatusCards(assistantId, 'stopped', t('status.stopped'));
             updateMessageContent(assistantId, `**[Stopped by User]**`);
+        } else if (e?.streamDetached || isLikelyStreamDetachError(e)) {
+            setComposerBackgroundTask('server-chat-detached', {
+                label: t('background.serverChatContinuing')
+            });
+            scheduleChatSessionPolling(250);
         } else {
             finalizeAssistantStatusCards(assistantId, 'failed', e.message || t('status.failed'));
             updateMessageContent(assistantId, `**Error:** ${e.message}`);
@@ -4349,6 +4415,7 @@ async function processStream(response, elementId, turnId = '') {
     let historyContent = '';
     let lastToolCallHtml = '';
     let streamAborted = false;
+    let streamDetached = false;
 
 
 
@@ -4707,13 +4774,18 @@ async function processStream(response, elementId, turnId = '') {
         if (err.name === 'AbortError') {
             streamAborted = true;
             console.log('Stream aborted by user');
+        } else if (isLikelyStreamDetachError(err)) {
+            streamDetached = true;
+            err.streamDetached = true;
+            console.warn('Stream detached from client while server may still be running:', err);
+            throw err;
         } else {
             console.error('Stream Error:', err);
             throw err; // Re-throw other errors
         }
     } finally {
         if (!deferToServerChatSession) hideProgressDock();
-        if (!streamAborted) {
+        if (!streamAborted && !streamDetached) {
             if (currentlyReasoning) {
                 const elapsedMs = reasoningStartMs > 0 ? Date.now() - reasoningStartMs : 0;
                 if (!deferToServerChatSession) finalizeReasoningStatus(elementId, 'failed', t('status.unexpectedStop'), elapsedMs);
@@ -4725,7 +4797,7 @@ async function processStream(response, elementId, turnId = '') {
         // Finalize (Save to history even if aborted)
         // Keep only the user-visible answer in history to avoid ballooning context.
         historyContent = fullText.trim();
-        if (historyContent) {
+        if (historyContent && !streamDetached) {
             messages.push({ role: 'assistant', content: historyContent, turnId });
             if (config.llmMode === 'stateful') {
                 statefulTurnCount += 1;

@@ -139,8 +139,9 @@ type chatSessionMessageSnapshot struct {
 }
 
 type chatSessionUISnapshot struct {
-	ToolCards map[string]chatSessionToolCardSnapshot `json:"tool_cards"`
-	Messages  []chatSessionMessageSnapshot           `json:"messages,omitempty"`
+	ToolCards    map[string]chatSessionToolCardSnapshot `json:"tool_cards"`
+	Messages     []chatSessionMessageSnapshot           `json:"messages,omitempty"`
+	LastEventSeq int                                    `json:"last_event_seq,omitempty"`
 }
 
 func cleanSavedTurnTitleContext(input string, limit int) string {
@@ -2666,8 +2667,11 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				jsonPayload = string(bytes)
 			}
 		}
-		if _, err := mcp.AppendChatEvent(userID, chatSession.ID, role, eventType, "", clientTurnID, jsonPayload); err != nil {
+		eventEntry, err := mcp.AppendChatEvent(userID, chatSession.ID, role, eventType, "", clientTurnID, jsonPayload)
+		if err != nil {
 			log.Printf("[chat-session] failed to append %s event for %s: %v", eventType, userID, err)
+		} else if eventEntry.EventSeq > sessionUISnapshot.LastEventSeq {
+			sessionUISnapshot.LastEventSeq = eventEntry.EventSeq
 		}
 		if eventType == "message.created" || eventType == "message.delta" || eventType == "reasoning.start" || eventType == "reasoning.delta" || eventType == "reasoning.end" || eventType == "chat.end" || eventType == "request.complete" {
 			updateChatSessionMessageSnapshot(&sessionUISnapshot, clientTurnID, role, eventType, payload)
