@@ -478,6 +478,7 @@ type SavedTurnEntry struct {
 	UserID       string    `json:"user_id"`
 	Title        string    `json:"title"`
 	TitleSource  string    `json:"title_source"`
+	Processing   bool      `json:"processing,omitempty"`
 	PromptText   string    `json:"prompt_text"`
 	ResponseText string    `json:"response_text"`
 	CreatedAt    time.Time `json:"created_at"`
