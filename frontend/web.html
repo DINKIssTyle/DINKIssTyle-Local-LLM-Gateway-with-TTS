@@ -341,28 +341,9 @@
     <div id="saved-turn-modal" class="modal-overlay" onclick="if(event.target===this)closeSavedTurnModal()">
         <div class="modal saved-turn-modal">
             <div class="modal-header">
-                <h2 id="saved-turn-modal-title"></h2>
-                <button class="modal-close" onclick="closeSavedTurnModal()">
-                    <span class="material-icons-round">close</span>
-                </button>
-            </div>
-            <div class="modal-body saved-turn-modal-body">
-                <section class="saved-turn-modal-section">
-                    <div class="saved-turn-modal-label" data-i18n="library.prompt">Prompt</div>
-                    <div id="saved-turn-modal-prompt" class="saved-turn-modal-content"></div>
-                </section>
-                <div class="saved-turn-modal-actions">
-                    <button class="icon-btn" onclick="copySavedTurnResponse()" title="Copy Response">
-                        <span class="material-icons-round">content_copy</span>
-                    </button>
-                    <button class="icon-btn" onclick="speakSavedTurnResponse(this)" title="Speak Response">
-                        <span class="material-icons-round">volume_up</span>
-                    </button>
-                </div>
-                <section class="saved-turn-modal-section">
-                    <div class="saved-turn-modal-label" data-i18n="library.titleLabel">Title</div>
-                    <div id="saved-turn-inline-title-view" class="saved-turn-inline-title-view" onclick="startEditSavedTurnTitle()"></div>
-                    <div id="saved-turn-inline-title-edit" class="saved-turn-inline-title-edit" hidden>
+                <div class="saved-turn-modal-title-shell">
+                    <div id="saved-turn-inline-title-view" class="saved-turn-inline-title-view saved-turn-inline-title-view-header" onclick="startEditSavedTurnTitle()"></div>
+                    <div id="saved-turn-inline-title-edit" class="saved-turn-inline-title-edit saved-turn-inline-title-edit-header" hidden>
                         <input
                             id="saved-turn-inline-title-input"
                             class="saved-turn-inline-title-input"
@@ -388,7 +369,24 @@
                             >Save</button>
                         </div>
                     </div>
+                </div>
+                <button class="modal-close" onclick="closeSavedTurnModal()">
+                    <span class="material-icons-round">close</span>
+                </button>
+            </div>
+            <div class="modal-body saved-turn-modal-body">
+                <section class="saved-turn-modal-section">
+                    <div class="saved-turn-modal-label" data-i18n="library.prompt">Prompt</div>
+                    <div id="saved-turn-modal-prompt" class="saved-turn-modal-content"></div>
                 </section>
+                <div class="saved-turn-modal-actions">
+                    <button class="icon-btn" onclick="copySavedTurnResponse()" title="Copy Response">
+                        <span class="material-icons-round">content_copy</span>
+                    </button>
+                    <button class="icon-btn" onclick="speakSavedTurnResponse(this)" title="Speak Response">
+                        <span class="material-icons-round">volume_up</span>
+                    </button>
+                </div>
                 <section class="saved-turn-modal-section">
                     <div class="saved-turn-modal-label" data-i18n="library.response">Response</div>
                     <div id="saved-turn-modal-response" class="saved-turn-modal-content markdown-body"></div>
@@ -445,11 +443,23 @@
 
         <section id="saved-library-view" class="saved-library-view" hidden>
             <div class="saved-library-header">
-                <input
-                    id="saved-library-search"
-                    type="text"
-                    placeholder="Search saved turns..."
-                    oninput="handleSavedLibrarySearch(this.value)">
+                <div class="saved-library-search-shell">
+                    <input
+                        id="saved-library-search"
+                        type="text"
+                        placeholder="Search saved turns..."
+                        oninput="handleSavedLibrarySearch(this.value)">
+                    <button
+                        id="saved-library-search-clear"
+                        class="saved-library-search-clear"
+                        type="button"
+                        onclick="clearSavedLibrarySearch()"
+                        title="Clear search"
+                        hidden
+                    >
+                        <span class="material-icons-round">cancel</span>
+                    </button>
+                </div>
             </div>
             <div id="saved-library-list" class="saved-library-list"></div>
         </section>

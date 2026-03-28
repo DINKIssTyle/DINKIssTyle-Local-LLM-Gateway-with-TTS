@@ -1202,6 +1202,7 @@ async function loadSavedTurns() {
         savedTurns = Array.isArray(data.items) ? data.items : [];
         savedLibraryLoaded = true;
         renderSavedLibraryList();
+        updateSavedLibrarySearchClearButton();
         reconcileSavedTitleRefreshState();
     } catch (e) {
         console.warn('Failed to load saved turns:', e);
@@ -1224,6 +1225,7 @@ function openSavedLibrary() {
     loadSavedTurns();
     if (savedLibrarySearchInput) {
         savedLibrarySearchInput.value = savedLibraryQuery;
+        updateSavedLibrarySearchClearButton();
         requestAnimationFrame(() => savedLibrarySearchInput.focus());
     }
 }
@@ -1372,7 +1374,25 @@ function setupSavedLibrarySwipeGestures() {
 
 function handleSavedLibrarySearch(value) {
     savedLibraryQuery = value || '';
+    updateSavedLibrarySearchClearButton();
     renderSavedLibraryList();
+}
+
+function updateSavedLibrarySearchClearButton() {
+    const clearBtn = document.getElementById('saved-library-search-clear');
+    if (!clearBtn) return;
+    const hasQuery = !!String(savedLibrarySearchInput?.value ?? savedLibraryQuery ?? '').trim();
+    clearBtn.hidden = !hasQuery;
+}
+
+function clearSavedLibrarySearch() {
+    savedLibraryQuery = '';
+    if (savedLibrarySearchInput) {
+        savedLibrarySearchInput.value = '';
+    }
+    updateSavedLibrarySearchClearButton();
+    renderSavedLibraryList();
+    requestAnimationFrame(() => savedLibrarySearchInput?.focus());
 }
 
 function openSavedTurnModal(id) {
@@ -1383,7 +1403,6 @@ function openSavedTurnModal(id) {
     savedTurnModal.dataset.title = item.title || '';
     savedTurnModal.dataset.titleSource = item.title_source || '';
     savedTurnModal.dataset.responseText = item.response_text || '';
-    document.getElementById('saved-turn-modal-title').textContent = '';
     document.getElementById('saved-turn-modal-prompt').textContent = item.prompt_text || '';
     const responseHost = document.getElementById('saved-turn-modal-response');
     responseHost.innerHTML = renderInitialAssistantMarkdown(item.response_text || '');
@@ -1517,6 +1536,7 @@ function updateSavedTurnEntry(updatedItem) {
     if (!updatedItem) return;
     savedTurns = savedTurns.map((item) => item.id === updatedItem.id ? updatedItem : item);
     renderSavedLibraryList();
+    updateSavedLibrarySearchClearButton();
     reconcileSavedTitleRefreshState({ abortInFlightIfSettled: true });
 
     if (savedTurnModal?.classList.contains('active') && String(updatedItem.id) === savedTurnModal.dataset.turnId) {
@@ -1926,6 +1946,18 @@ savedTurnModalTitleInput?.addEventListener('keydown', (event) => {
         cancelEditSavedTurnTitle();
     }
 });
+
+savedLibraryList?.addEventListener('touchmove', () => {
+    if (document.activeElement === savedLibrarySearchInput) {
+        savedLibrarySearchInput.blur();
+    }
+}, { passive: true });
+
+savedLibraryList?.addEventListener('scroll', () => {
+    if (document.activeElement === savedLibrarySearchInput) {
+        savedLibrarySearchInput.blur();
+    }
+}, { passive: true });
 
 function updateViewportMetrics() {
     const root = document.documentElement;
