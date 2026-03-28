@@ -127,8 +127,17 @@ type chatSessionToolCardSnapshot struct {
 	History  []chatSessionToolHistorySnapshot `json:"history,omitempty"`
 }
 
+type chatSessionMessageSnapshot struct {
+	TurnID              string `json:"turn_id"`
+	UserContent         string `json:"user_content,omitempty"`
+	AssistantContent    string `json:"assistant_content,omitempty"`
+	ReasoningContent    string `json:"reasoning_content,omitempty"`
+	ReasoningDurationMS int64  `json:"reasoning_duration_ms,omitempty"`
+}
+
 type chatSessionUISnapshot struct {
 	ToolCards map[string]chatSessionToolCardSnapshot `json:"tool_cards"`
+	Messages  []chatSessionMessageSnapshot           `json:"messages,omitempty"`
 }
 
 func cleanSavedTurnTitleContext(input string, limit int) string {
@@ -158,16 +167,20 @@ func cleanSavedTurnTitleContext(input string, limit int) string {
 func parseChatSessionUISnapshot(raw string) chatSessionUISnapshot {
 	snapshot := chatSessionUISnapshot{
 		ToolCards: map[string]chatSessionToolCardSnapshot{},
+		Messages:  []chatSessionMessageSnapshot{},
 	}
 	raw = strings.TrimSpace(raw)
 	if raw == "" || raw == "{}" {
 		return snapshot
 	}
 	if err := json.Unmarshal([]byte(raw), &snapshot); err != nil {
-		return chatSessionUISnapshot{ToolCards: map[string]chatSessionToolCardSnapshot{}}
+		return chatSessionUISnapshot{ToolCards: map[string]chatSessionToolCardSnapshot{}, Messages: []chatSessionMessageSnapshot{}}
 	}
 	if snapshot.ToolCards == nil {
 		snapshot.ToolCards = map[string]chatSessionToolCardSnapshot{}
+	}
+	if snapshot.Messages == nil {
+		snapshot.Messages = []chatSessionMessageSnapshot{}
 	}
 	return snapshot
 }
@@ -175,6 +188,9 @@ func parseChatSessionUISnapshot(raw string) chatSessionUISnapshot {
 func encodeChatSessionUISnapshot(snapshot chatSessionUISnapshot) string {
 	if snapshot.ToolCards == nil {
 		snapshot.ToolCards = map[string]chatSessionToolCardSnapshot{}
+	}
+	if snapshot.Messages == nil {
+		snapshot.Messages = []chatSessionMessageSnapshot{}
 	}
 	bytes, err := json.Marshal(snapshot)
 	if err != nil {
@@ -242,12 +258,76 @@ func compactToolSnapshotDetail(args interface{}, summary string) string {
 	if s, ok := args.(string); ok && strings.TrimSpace(s) != "" {
 		return compactText(strings.TrimSpace(s), 220)
 	}
+	if argsMap, ok := args.(map[string]interface{}); ok {
+		normalizedTool := strings.ToLower(strings.TrimSpace(extractStringValue(argsMap, []string{"tool", "tool_name"})))
+		queryLike := extractStringValue(argsMap, []string{"query", "keyword", "title", "input", "prompt", "text"})
+		url := extractStringValue(argsMap, []string{"url"})
+		sourceID := extractStringValue(argsMap, []string{"source_id"})
+		command := extractStringValue(argsMap, []string{"command"})
+		memoryID := extractStringValue(argsMap, []string{"memory_id"})
+
+		switch normalizedTool {
+		case "search_web", "namu_wiki", "naver_search":
+			if queryLike != "" {
+				return compactText("검색어: "+queryLike, 220)
+			}
+		case "read_web_page":
+			if url != "" {
+				return compactText("페이지 읽기: "+url, 220)
+			}
+		case "read_buffered_source":
+			if queryLike != "" {
+				return compactText("버퍼 문서 읽기: "+queryLike, 220)
+			}
+			if sourceID != "" {
+				return compactText("버퍼 문서 읽기: "+sourceID, 220)
+			}
+		case "search_memory":
+			if queryLike != "" {
+				return compactText("메모리 검색: "+queryLike, 220)
+			}
+		case "read_memory":
+			if memoryID != "" {
+				return compactText("메모리 읽기: "+memoryID, 220)
+			}
+		case "delete_memory":
+			if memoryID != "" {
+				return compactText("메모리 삭제: "+memoryID, 220)
+			}
+		case "execute_command":
+			if command != "" {
+				return compactText("명령어 실행: "+command, 220)
+			}
+		case "get_current_location":
+			return "사용자 위치를 확인했습니다."
+		case "get_current_time":
+			return "현재 시간을 확인했습니다."
+		}
+
+		for _, key := range []string{"query", "url", "text", "prompt", "input", "title"} {
+			if value := extractStringValue(argsMap, []string{key}); value != "" {
+				return compactText(value, 220)
+			}
+		}
+		if bytes, err := json.Marshal(argsMap); err == nil {
+			return compactText(strings.TrimSpace(string(bytes)), 220)
+		}
+	}
 	if args != nil {
 		if bytes, err := json.Marshal(args); err == nil {
 			return compactText(strings.TrimSpace(string(bytes)), 220)
 		}
 	}
 	return compactText(strings.TrimSpace(summary), 220)
+}
+
+func extractStringValue(obj map[string]interface{}, keys []string) string {
+	for _, key := range keys {
+		if value, ok := obj[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func updateChatSessionToolSnapshot(snapshot *chatSessionUISnapshot, turnID, eventType string, payload interface{}) {
@@ -311,6 +391,66 @@ func updateChatSessionToolSnapshot(snapshot *chatSessionUISnapshot, turnID, even
 	}
 
 	snapshot.ToolCards[turnID] = card
+}
+
+func ensureChatSessionMessageSnapshot(snapshot *chatSessionUISnapshot, turnID string) *chatSessionMessageSnapshot {
+	if snapshot == nil || strings.TrimSpace(turnID) == "" {
+		return nil
+	}
+	if snapshot.Messages == nil {
+		snapshot.Messages = []chatSessionMessageSnapshot{}
+	}
+	for i := range snapshot.Messages {
+		if snapshot.Messages[i].TurnID == turnID {
+			return &snapshot.Messages[i]
+		}
+	}
+	snapshot.Messages = append(snapshot.Messages, chatSessionMessageSnapshot{TurnID: turnID})
+	return &snapshot.Messages[len(snapshot.Messages)-1]
+}
+
+func updateChatSessionMessageSnapshot(snapshot *chatSessionUISnapshot, turnID, role, eventType string, payload interface{}) {
+	if snapshot == nil || strings.TrimSpace(turnID) == "" {
+		return
+	}
+	msg := ensureChatSessionMessageSnapshot(snapshot, turnID)
+	if msg == nil {
+		return
+	}
+	payloadMap, _ := payload.(map[string]interface{})
+	if payloadMap == nil {
+		payloadMap = map[string]interface{}{}
+	}
+
+	switch eventType {
+	case "message.created":
+		if role == "user" {
+			if content, ok := payloadMap["content"].(string); ok {
+				msg.UserContent = content
+			}
+		}
+	case "message.delta":
+		if fullContent, ok := payloadMap["full_content"].(string); ok {
+			msg.AssistantContent = fullContent
+		} else if content, ok := payloadMap["content"].(string); ok && content != "" {
+			msg.AssistantContent += content
+		}
+	case "reasoning.delta":
+		if content, ok := payloadMap["content"].(string); ok && content != "" {
+			msg.ReasoningContent += content
+		} else if content, ok := payloadMap["reasoning_content"].(string); ok && content != "" {
+			msg.ReasoningContent += content
+		} else if text, ok := payloadMap["text"].(string); ok && text != "" {
+			msg.ReasoningContent += text
+		}
+		if elapsed, ok := payloadMap["elapsed_ms"].(float64); ok && elapsed > 0 {
+			msg.ReasoningDurationMS = int64(elapsed)
+		}
+	case "reasoning.end", "chat.end", "request.complete":
+		if elapsed, ok := payloadMap["elapsed_ms"].(float64); ok && elapsed > 0 {
+			msg.ReasoningDurationMS = int64(elapsed)
+		}
+	}
 }
 
 func normalizeSavedTurnTemperature(temp float64) float64 {
@@ -2319,7 +2459,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		sessionStatus         = "failed"
 		sessionLastResponseID string
 		sessionUIStateJSON    = "{}"
-		sessionUISnapshot     = chatSessionUISnapshot{ToolCards: map[string]chatSessionToolCardSnapshot{}}
+		sessionUISnapshot     = chatSessionUISnapshot{ToolCards: map[string]chatSessionToolCardSnapshot{}, Messages: []chatSessionMessageSnapshot{}}
 	)
 	if strings.TrimSpace(userID) != "" {
 		if existingSession, existingErr := mcp.GetCurrentChatSession(userID); existingErr == nil {
@@ -2404,8 +2544,13 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		if _, err := mcp.AppendChatEvent(userID, chatSession.ID, role, eventType, "", clientTurnID, jsonPayload); err != nil {
 			log.Printf("[chat-session] failed to append %s event for %s: %v", eventType, userID, err)
 		}
+		if eventType == "message.created" || eventType == "message.delta" || eventType == "reasoning.delta" || eventType == "reasoning.end" || eventType == "chat.end" || eventType == "request.complete" {
+			updateChatSessionMessageSnapshot(&sessionUISnapshot, clientTurnID, role, eventType, payload)
+		}
 		if strings.HasPrefix(eventType, "tool_call.") {
 			updateChatSessionToolSnapshot(&sessionUISnapshot, clientTurnID, eventType, payload)
+		}
+		if eventType == "message.created" || eventType == "message.delta" || eventType == "reasoning.delta" || eventType == "reasoning.end" || eventType == "chat.end" || eventType == "request.complete" || strings.HasPrefix(eventType, "tool_call.") {
 			sessionUIStateJSON = encodeChatSessionUISnapshot(sessionUISnapshot)
 			chatSession.UIStateJSON = sessionUIStateJSON
 			if _, err := mcp.UpsertChatSession(mcp.ChatSessionEntry{

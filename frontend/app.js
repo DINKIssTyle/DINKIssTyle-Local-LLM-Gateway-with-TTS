@@ -2588,15 +2588,82 @@ function extractSessionClearedAt(session) {
 
 function getCurrentChatSessionUISnapshot(session = null) {
     const raw = String((session?.UIStateJSON ?? currentChatSessionCache?.UIStateJSON ?? '')).trim();
-    if (!raw) return { tool_cards: {} };
+    if (!raw) return { tool_cards: {}, messages: [] };
     try {
         const parsed = JSON.parse(raw);
         return {
-            tool_cards: parsed?.tool_cards && typeof parsed.tool_cards === 'object' ? parsed.tool_cards : {}
+            tool_cards: parsed?.tool_cards && typeof parsed.tool_cards === 'object' ? parsed.tool_cards : {},
+            messages: Array.isArray(parsed?.messages) ? parsed.messages : []
         };
     } catch (_) {
-        return { tool_cards: {} };
+        return { tool_cards: {}, messages: [] };
     }
+}
+
+function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
+    const sessionUISnapshot = getCurrentChatSessionUISnapshot(sessionSnapshot);
+    const snapshotMessages = Array.isArray(sessionUISnapshot.messages) ? sessionUISnapshot.messages : [];
+    if (snapshotMessages.length === 0) return false;
+
+    beginChatSessionRestore(snapshotMessages.length);
+    updateChatSessionRestoreProgress(0, snapshotMessages.length);
+
+    const fragment = document.createDocumentFragment();
+    let lastTurnId = '';
+    let lastAssistantId = '';
+
+    snapshotMessages.forEach((item, index) => {
+        const turnId = String(item?.turn_id || `snapshot-turn-${index + 1}`);
+        const assistantId = `server-assistant-default-${turnId}`;
+        lastTurnId = turnId;
+        lastAssistantId = assistantId;
+
+        if (item?.user_content) {
+            appendMessage({ role: 'user', content: item.user_content, turnId }, { parent: fragment, skipScroll: true });
+        }
+        appendMessage({ role: 'assistant', content: '', id: assistantId, turnId }, { parent: fragment, skipScroll: true });
+    });
+
+    if (fragment.childNodes.length > 0) {
+        chatMessages.appendChild(fragment);
+    }
+    updateChatSessionRestoreProgress(snapshotMessages.length, snapshotMessages.length);
+
+    snapshotMessages.forEach((item, index) => {
+        const turnId = String(item?.turn_id || `snapshot-turn-${index + 1}`);
+        const assistantId = `server-assistant-default-${turnId}`;
+        const assistantText = String(item?.assistant_content || '');
+        const reasoningText = String(item?.reasoning_content || '');
+        const reasoningDuration = Number(item?.reasoning_duration_ms || 0);
+        const snapshotToolState = sessionUISnapshot.tool_cards?.[turnId] || null;
+
+        ensureAssistantMessageElement(assistantId, turnId);
+        if (reasoningText) {
+            serverReplayReasoningBuffers.set(assistantId, reasoningText);
+            showReasoningStatus(assistantId, reasoningText);
+            finalizeReasoningStatus(assistantId, 'done', '', reasoningDuration || null);
+        }
+        if (snapshotToolState) {
+            ensureToolCard(assistantId, snapshotToolState.toolName || 'Tool');
+            setToolCardState(assistantId, snapshotToolState.state, snapshotToolState.summary, snapshotToolState.args, snapshotToolState.toolName);
+            const card = getActiveToolCard(assistantId);
+            if (card) {
+                card._history = Array.isArray(snapshotToolState.history) ? [...snapshotToolState.history] : [];
+                const historyEl = card.querySelector('.tool-card-history');
+                renderToolHistory(card, historyEl, snapshotToolState.state);
+            }
+        }
+        serverReplayMessageBuffers.set(assistantId, assistantText);
+        updateSyncedMessageContent(assistantId, assistantText, { animate: false });
+        finalizeMessageContent(assistantId, assistantText);
+        finalizeAssistantStatusCards(assistantId, 'done');
+        setAssistantActionBarReady(assistantId);
+    });
+
+    serverReplayCurrentTurnId = lastTurnId;
+    serverReplayCurrentAssistantId = lastAssistantId;
+    finishChatSessionRestore();
+    return true;
 }
 
 function isActiveLocalTurn(turnId = '') {
@@ -2608,6 +2675,13 @@ function hasSubstantiveChatMessages() {
     return !!chatMessages.querySelector(
         '.message.user, .message.assistant:not(.has-startup-card), .message.system'
     );
+}
+
+function hasRestorableChatEvents(items = []) {
+    return Array.isArray(items) && items.some((entry) => {
+        const eventType = String(entry?.EventType || '').trim();
+        return eventType && eventType !== 'session.cleared';
+    });
 }
 
 function ensureServerReplayAssistant(turnId, sessionId, seq) {
@@ -2929,14 +3003,26 @@ async function syncCurrentChatSessionFromServer() {
         return;
     }
 
+    const hasRenderedMessages = hasSubstantiveChatMessages();
+    if (currentChatSessionEventSeq === 0 && !hasRenderedMessages && hydrateChatSessionUISnapshot(session)) {
+        const result = await fetchCurrentChatSessionEvents(0, 1);
+        if (result.session) {
+            applyCurrentChatSessionSnapshot(result.session);
+        }
+        currentChatSessionEventSeq = Number(result.totalCount || 0);
+        scheduleChatSessionPolling(session.Status === 'running' ? 900 : 1600);
+        return;
+    }
+
     const result = await fetchCurrentChatSessionEvents(currentChatSessionEventSeq, 200);
     if (result.session) {
         applyCurrentChatSessionSnapshot(result.session);
     }
 
-    const hasRenderedMessages = hasSubstantiveChatMessages();
-    const shouldRestoreSnapshot = currentChatSessionEventSeq === 0 && result.totalCount > 0 && !hasRenderedMessages;
-    const shouldFastForwardSeqOnly = currentChatSessionEventSeq === 0 && result.totalCount > 0 && hasRenderedMessages;
+    const renderedMessagesNow = hasSubstantiveChatMessages();
+    const hasRestorableEvents = hasRestorableChatEvents(result.items);
+    const shouldRestoreSnapshot = currentChatSessionEventSeq === 0 && result.totalCount > 0 && hasRestorableEvents && !renderedMessagesNow;
+    const shouldFastForwardSeqOnly = currentChatSessionEventSeq === 0 && result.totalCount > 0 && (!hasRestorableEvents || renderedMessagesNow);
     if (shouldRestoreSnapshot) {
         beginChatSessionRestore(result.totalCount);
         try {
@@ -3566,7 +3652,9 @@ function renderSessionRestoreSkeleton(cardCount = 5) {
 function beginChatSessionRestore(totalCount = 0) {
     isRestoringChatSession = true;
     resetChatViewState();
-    renderSessionRestoreSkeleton(Math.ceil(Math.max(1, totalCount) / 12));
+    if (chatMessages) {
+        chatMessages.innerHTML = '';
+    }
     chatMessages?.classList.add('is-session-hydrating');
     renderProgressDock(t('progress.restoringHistory'), 0, 'prompt-processing', false);
     updateMessageInputPlaceholder();
@@ -5110,6 +5198,24 @@ function formatToolDisplayName(toolName = '') {
     const cleaned = String(toolName || '').trim();
     if (!cleaned) return t('tool.fallbackName');
 
+    const normalized = cleaned.toLowerCase();
+    const knownLabels = {
+        get_current_time: 'Get Current Time',
+        get_current_location: 'Get Current Location',
+        execute_command: 'Execute Command',
+        search_web: 'Search Web',
+        namu_wiki: 'Namu Wiki',
+        naver_search: 'Naver Search',
+        read_web_page: 'Read Web Page',
+        read_buffered_source: 'Read Buffered Source',
+        search_memory: 'Search Memory',
+        read_memory: 'Read Memory',
+        delete_memory: 'Delete Memory'
+    };
+    if (knownLabels[normalized]) {
+        return knownLabels[normalized];
+    }
+
     return cleaned
         .replace(/[_-]+/g, ' ')
         .replace(/\s+/g, ' ')
@@ -5150,7 +5256,7 @@ function renderToolHistory(card, historyEl, state) {
     if (renderedCount > history.length || renderedCount === 0) {
         historyEl.innerHTML = history.map((entry, index) => `
             <div class="tool-history-item">
-                <div class="tool-history-title">${escapeHtml(`${index + 1}. ${entry.tool}`)}</div>
+                <div class="tool-history-title">${escapeHtml(`${index + 1}. ${formatToolDisplayName(entry.tool)}`)}</div>
                 <div class="tool-history-detail">${escapeHtml(entry.detail || t('tool.noQueryDetails'))}</div>
             </div>
         `).join('');
@@ -5160,7 +5266,7 @@ function renderToolHistory(card, historyEl, state) {
             const item = document.createElement('div');
             item.className = 'tool-history-item is-new';
             item.innerHTML = `
-                <div class="tool-history-title">${escapeHtml(`${renderedCount + index + 1}. ${entry.tool}`)}</div>
+                <div class="tool-history-title">${escapeHtml(`${renderedCount + index + 1}. ${formatToolDisplayName(entry.tool)}`)}</div>
                 <div class="tool-history-detail">${escapeHtml(entry.detail || t('tool.noQueryDetails'))}</div>
             `;
             fragment.appendChild(item);
