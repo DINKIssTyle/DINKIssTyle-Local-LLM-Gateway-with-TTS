@@ -836,7 +836,10 @@ function renderSavedLibraryList() {
                 <div class="saved-library-item-preview">${escapeHtml(summarizeSavedTurn(item))}</div>
                 <div class="saved-library-item-meta">${escapeHtml(t('library.savedAt'))}: ${escapeHtml(new Date(item.created_at).toLocaleString())}</div>
             </div>
-            ${item.title_source === 'fallback' ? `
+            ${item.processing ? `
+            <button class="icon-btn" title="${escapeAttr(t('background.savedTurnTitle'))}" disabled>
+                <span class="material-icons-round">hourglass_top</span>
+            </button>` : item.title_source === 'fallback' ? `
             <button class="icon-btn" onclick="refreshSavedTurnTitleById(${item.id})" title="${escapeAttr(t('library.titleRefresh'))}" ${savedTitleRefreshIds.has(item.id) ? 'disabled' : ''}>
                 <span class="material-icons-round">refresh</span>
             </button>` : ''}
@@ -856,7 +859,7 @@ async function loadSavedTurns() {
         savedTurns = Array.isArray(data.items) ? data.items : [];
         savedLibraryLoaded = true;
         renderSavedLibraryList();
-        scheduleSavedTitleRefresh();
+        reconcileSavedTitleRefreshState();
     } catch (e) {
         console.warn('Failed to load saved turns:', e);
     }
@@ -866,11 +869,8 @@ function openSavedLibrary() {
     if (!savedLibraryView) return;
     isSavedLibraryOpen = true;
     savedLibraryView.hidden = false;
-    if (!savedLibraryLoaded) {
-        loadSavedTurns();
-    } else {
-        renderSavedLibraryList();
-    }
+    renderSavedLibraryList();
+    loadSavedTurns();
     if (savedLibrarySearchInput) {
         savedLibrarySearchInput.value = savedLibraryQuery;
         requestAnimationFrame(() => savedLibrarySearchInput.focus());
@@ -1027,6 +1027,7 @@ function updateSavedTurnEntry(updatedItem) {
     if (!updatedItem) return;
     savedTurns = savedTurns.map((item) => item.id === updatedItem.id ? updatedItem : item);
     renderSavedLibraryList();
+    reconcileSavedTitleRefreshState({ abortInFlightIfSettled: true });
 
     if (savedTurnModal?.classList.contains('active') && String(updatedItem.id) === savedTurnModal.dataset.turnId) {
         savedTurnModal.dataset.title = updatedItem.title || '';
@@ -1104,7 +1105,7 @@ async function saveTurn(promptText, responseText) {
             savedTurns = [item, ...savedTurns.filter((entry) => entry.id !== item.id)];
             savedLibraryLoaded = true;
             renderSavedLibraryList();
-            scheduleSavedTitleRefresh();
+            reconcileSavedTitleRefreshState();
         }
         showToast(t('library.saved'));
     } catch (e) {
@@ -1131,11 +1132,52 @@ async function deleteSavedTurn(id) {
     }
 }
 
+function hasPendingSavedTurnTitleRefresh() {
+    return savedTurns.some((item) => item.title_source === 'fallback' && !item.processing);
+}
+
+function hasActiveSavedTurnTitleWork() {
+    return savedTurns.some((item) => item.processing || item.title_source === 'fallback');
+}
+
+function reconcileSavedTitleRefreshState(options = {}) {
+    const { abortInFlightIfSettled = false, delay = 1200 } = options;
+    const hasActive = hasActiveSavedTurnTitleWork();
+    const hasPending = hasPendingSavedTurnTitleRefresh();
+
+    if (!hasActive) {
+        if (savedTitleRefreshTimer) {
+            clearTimeout(savedTitleRefreshTimer);
+            savedTitleRefreshTimer = null;
+        }
+        if (abortInFlightIfSettled && savedTitleRefreshInFlight && savedTitleRefreshAbortController) {
+            savedTitleRefreshAbortController.abort();
+        }
+        clearComposerBackgroundTask('saved-turn-title-refresh');
+        return;
+    }
+
+    if (!hasPending) {
+        if (savedTitleRefreshTimer) {
+            clearTimeout(savedTitleRefreshTimer);
+        }
+        setComposerBackgroundTask('saved-turn-title-refresh', {
+            label: t('background.savedTurnTitle')
+        });
+        savedTitleRefreshTimer = setTimeout(() => {
+            loadSavedTurns();
+        }, Math.max(1500, delay));
+        return;
+    }
+
+    scheduleSavedTitleRefresh(delay);
+}
+
 function scheduleSavedTitleRefresh(delay = 1200) {
     if (savedTitleRefreshTimer) {
         clearTimeout(savedTitleRefreshTimer);
     }
-    const hasPending = savedTurns.some((item) => item.title_source === 'fallback');
+    const hasPending = hasPendingSavedTurnTitleRefresh();
     if (!hasPending) {
         clearComposerBackgroundTask('saved-turn-title-refresh');
         return;
@@ -1157,8 +1199,8 @@ function scheduleSavedTitleRefresh(delay = 1200) {
 
 async function refreshSavedTurnTitle() {
     if (savedTitleRefreshInFlight || !currentUser || document.hidden) return;
-    if (!savedTurns.some((item) => item.title_source === 'fallback')) {
-        clearComposerBackgroundTask('saved-turn-title-refresh');
+    if (!hasPendingSavedTurnTitleRefresh()) {
+        reconcileSavedTitleRefreshState();
         return;
     }
 
@@ -1180,9 +1222,12 @@ async function refreshSavedTurnTitle() {
         const data = await response.json();
         if (data.updated && data.item) {
             updateSavedTurnEntry(data.item);
-            scheduleSavedTitleRefresh(5000);
-        } else if (!savedTurns.some((item) => item.title_source === 'fallback')) {
-            clearComposerBackgroundTask('saved-turn-title-refresh');
+            reconcileSavedTitleRefreshState({ delay: 5000 });
+        } else if (data.processing && data.item) {
+            updateSavedTurnEntry(data.item);
+            reconcileSavedTitleRefreshState({ delay: 2500 });
+        } else if (!hasPendingSavedTurnTitleRefresh()) {
+            reconcileSavedTitleRefreshState();
         }
     } catch (e) {
         if (e.name === 'AbortError') {
@@ -1192,11 +1237,7 @@ async function refreshSavedTurnTitle() {
     } finally {
         savedTitleRefreshInFlight = false;
         savedTitleRefreshAbortController = null;
-        if (!savedTurns.some((item) => item.title_source === 'fallback')) {
-            clearComposerBackgroundTask('saved-turn-title-refresh');
-        } else {
-            updateComposerBackgroundTaskUI();
-        }
+        reconcileSavedTitleRefreshState();
     }
 }
 
@@ -1222,6 +1263,8 @@ async function refreshSavedTurnTitleById(id) {
 
         if (data.updated && data.item) {
             showToast(t('library.titleRefreshed'));
+        } else if (data.processing) {
+            reconcileSavedTitleRefreshState({ delay: 2500 });
         } else {
             showToast(t('library.titleRefreshFailed'), true);
         }

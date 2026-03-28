@@ -49,8 +49,13 @@ var (
 	// Global App Instance (for handlers to access app methods)
 	globalApp *App
 
-	currentChatCancels sync.Map
+	currentChatCancels  sync.Map
+	savedTurnTitleTasks sync.Map
 )
+
+type savedTurnTitleTask struct {
+	cancel context.CancelFunc
+}
 
 // Structured Tool Call Support
 type StructuredToolCall struct {
@@ -547,7 +552,7 @@ func ensureSelfSignedCert(appDataDir string, certDomain string) (string, string,
 // System context is now managed exclusively through the new SQLite Agentic RAG system and tools.
 
 // callLLMInternal makes a background request to the LLM for summary/validation
-func callLLMInternal(prompt string, opts savedTurnTitleOptions) string {
+func callLLMInternal(ctx context.Context, prompt string, opts savedTurnTitleOptions) string {
 	if globalApp == nil || globalApp.llmEndpoint == "" {
 		AddDebugTrace("saved-turn-title", "llm.skipped", "Skipped title generation request because LLM endpoint is empty", nil)
 		return ""
@@ -607,7 +612,11 @@ func callLLMInternal(prompt string, opts savedTurnTitleOptions) string {
 	})
 
 	jsonPayload, _ := json.Marshal(payload)
-	req, err := http.NewRequest("POST", reqURL, bytes.NewBuffer(jsonPayload))
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", reqURL, bytes.NewBuffer(jsonPayload))
 	if err != nil {
 		AddDebugTrace("saved-turn-title", "llm.error", "Failed to build title request", map[string]interface{}{
 			"error": err,
@@ -714,6 +723,61 @@ func callLLMInternal(prompt string, opts savedTurnTitleOptions) string {
 		"mode":  llmMode,
 	})
 	return ""
+}
+
+func savedTurnTitleTaskKey(userID string, turnID int64) string {
+	return fmt.Sprintf("%s:%d", strings.TrimSpace(userID), turnID)
+}
+
+func isSavedTurnTitleProcessing(userID string, turnID int64) bool {
+	_, ok := savedTurnTitleTasks.Load(savedTurnTitleTaskKey(userID, turnID))
+	return ok
+}
+
+func markSavedTurnEntriesProcessing(userID string, entries []mcp.SavedTurnEntry) []mcp.SavedTurnEntry {
+	for i := range entries {
+		entries[i].Processing = isSavedTurnTitleProcessing(userID, entries[i].ID)
+	}
+	return entries
+}
+
+func startSavedTurnTitleTask(userID string, turnID int64, fn func(ctx context.Context)) bool {
+	key := savedTurnTitleTaskKey(userID, turnID)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	task := &savedTurnTitleTask{cancel: cancel}
+	if _, loaded := savedTurnTitleTasks.LoadOrStore(key, task); loaded {
+		cancel()
+		return false
+	}
+
+	go func() {
+		defer func() {
+			cancel()
+			savedTurnTitleTasks.Delete(key)
+		}()
+		fn(ctx)
+	}()
+	return true
+}
+
+func cancelSavedTurnTitleTask(userID string, turnID int64) bool {
+	value, ok := savedTurnTitleTasks.Load(savedTurnTitleTaskKey(userID, turnID))
+	if !ok {
+		return false
+	}
+	task, ok := value.(*savedTurnTitleTask)
+	if !ok || task == nil || task.cancel == nil {
+		return false
+	}
+	task.cancel()
+	return true
+}
+
+func savedTurnQueuedStatus(started bool) string {
+	if started {
+		return "processing"
+	}
+	return "noop"
 }
 
 type ServerTTSConfig struct {
@@ -1433,7 +1497,7 @@ func handleLastSession() http.HandlerFunc {
 	}
 }
 
-func buildSavedTurnLLMTitle(promptText, responseText string, opts savedTurnTitleOptions) string {
+func buildSavedTurnLLMTitle(ctx context.Context, promptText, responseText string, opts savedTurnTitleOptions) string {
 	request := fmt.Sprintf(`Create a short title for this saved chat turn.
 
 Rules:
@@ -1456,7 +1520,7 @@ Saved assistant response:
 		"request_preview": compactText(request, 220),
 	})
 
-	rawResponse := callLLMInternal(request, opts)
+	rawResponse := callLLMInternal(ctx, request, opts)
 	title := parseSavedTurnTitleFromJSON(rawResponse)
 	title = strings.Trim(title, "\"'`")
 	title = strings.Join(strings.Fields(title), " ")
@@ -1505,6 +1569,7 @@ func handleSavedTurns() http.HandlerFunc {
 				http.Error(w, "Failed to load saved turns", http.StatusInternalServerError)
 				return
 			}
+			entries = markSavedTurnEntriesProcessing(userID, entries)
 			json.NewEncoder(w).Encode(map[string]interface{}{"items": entries})
 		case http.MethodPost:
 			var req struct {
@@ -1535,20 +1600,36 @@ func handleSavedTurns() http.HandlerFunc {
 				titleOpts.Temperature = normalizeSavedTurnTemperature(*req.Temperature)
 			}
 
-			go func(userID string, turnID int64, promptText string, responseText string, opts savedTurnTitleOptions) {
-				title := buildSavedTurnLLMTitle(promptText, responseText, opts)
-				if title == "" {
-					AddDebugTrace("saved-turn-title", "db.skipped", "Skipped DB update because no title was generated", map[string]interface{}{
+			started := startSavedTurnTitleTask(userID, entry.ID, func(ctx context.Context) {
+				title := buildSavedTurnLLMTitle(ctx, req.PromptText, req.ResponseText, titleOpts)
+				if errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					AddDebugTrace("saved-turn-title", "llm.cancelled", "Saved turn title generation stopped before completion", map[string]interface{}{
 						"user_id": userID,
-						"turn_id": turnID,
+						"turn_id": entry.ID,
+						"error":   ctx.Err(),
 					})
 					return
 				}
-				if err := mcp.UpdateSavedTurnTitle(userID, turnID, title, "generated"); err != nil {
-					log.Printf("[handleSavedTurns] Failed to generate async title for %s turn %d: %v", userID, turnID, err)
+				if title == "" {
+					AddDebugTrace("saved-turn-title", "db.skipped", "Skipped DB update because no title was generated", map[string]interface{}{
+						"user_id": userID,
+						"turn_id": entry.ID,
+					})
+					return
+				}
+				if latestEntry, err := mcp.GetSavedTurn(userID, entry.ID); err == nil && strings.TrimSpace(latestEntry.TitleSource) != "fallback" {
+					AddDebugTrace("saved-turn-title", "db.skipped", "Skipped DB update because title source changed while generating", map[string]interface{}{
+						"user_id":      userID,
+						"turn_id":      entry.ID,
+						"title_source": latestEntry.TitleSource,
+					})
+					return
+				}
+				if err := mcp.UpdateSavedTurnTitle(userID, entry.ID, title, "generated"); err != nil {
+					log.Printf("[handleSavedTurns] Failed to generate async title for %s turn %d: %v", userID, entry.ID, err)
 					AddDebugTrace("saved-turn-title", "db.error", "Failed to update saved turn title in DB", map[string]interface{}{
 						"user_id": userID,
-						"turn_id": turnID,
+						"turn_id": entry.ID,
 						"title":   title,
 						"error":   err,
 					})
@@ -1556,15 +1637,24 @@ func handleSavedTurns() http.HandlerFunc {
 				}
 				AddDebugTrace("saved-turn-title", "db.updated", "Updated saved turn title in DB", map[string]interface{}{
 					"user_id":      userID,
-					"turn_id":      turnID,
+					"turn_id":      entry.ID,
 					"title":        title,
 					"title_source": "generated",
 				})
-			}(userID, entry.ID, req.PromptText, req.ResponseText, titleOpts)
+			})
+
+			if started {
+				entry.Processing = true
+				AddDebugTrace("saved-turn-title", "llm.started", "Started saved turn title generation task", map[string]interface{}{
+					"user_id": userID,
+					"turn_id": entry.ID,
+				})
+			}
 
 			json.NewEncoder(w).Encode(map[string]interface{}{
-				"status": "ok",
-				"item":   entry,
+				"status":     "ok",
+				"processing": entry.Processing,
+				"item":       entry,
 			})
 		case http.MethodPatch:
 			var req struct {
@@ -1580,6 +1670,7 @@ func handleSavedTurns() http.HandlerFunc {
 				http.Error(w, "Valid id and title are required", http.StatusBadRequest)
 				return
 			}
+			cancelSavedTurnTitleTask(userID, req.ID)
 			if err := mcp.UpdateSavedTurnTitle(userID, req.ID, req.Title, "manual"); err != nil {
 				log.Printf("[handleSavedTurns] Failed to update manual title for %s turn %d: %v", userID, req.ID, err)
 				http.Error(w, "Failed to update title", http.StatusInternalServerError)
@@ -1663,6 +1754,16 @@ func handleSavedTurnTitleRefresh() http.HandlerFunc {
 				})
 				return
 			}
+			if isSavedTurnTitleProcessing(userID, entry.ID) {
+				entry.Processing = true
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"status":     "processing",
+					"updated":    false,
+					"processing": true,
+					"item":       entry,
+				})
+				return
+			}
 		} else {
 			entry, err = mcp.GetNextSavedTurnPendingTitle(userID)
 			if err != nil {
@@ -1677,51 +1778,69 @@ func handleSavedTurnTitleRefresh() http.HandlerFunc {
 				http.Error(w, "Failed to load pending title", http.StatusInternalServerError)
 				return
 			}
+			if isSavedTurnTitleProcessing(userID, entry.ID) {
+				entry.Processing = true
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"status":     "processing",
+					"updated":    false,
+					"processing": true,
+					"item":       entry,
+				})
+				return
+			}
 		}
 
-		title := buildSavedTurnLLMTitle(entry.PromptText, entry.ResponseText, titleOpts)
-		if title == "" {
-			AddDebugTrace("saved-turn-title", "db.skipped", "Manual title refresh produced no title", map[string]interface{}{
-				"user_id": userID,
-				"turn_id": entry.ID,
+		started := startSavedTurnTitleTask(userID, entry.ID, func(ctx context.Context) {
+			title := buildSavedTurnLLMTitle(ctx, entry.PromptText, entry.ResponseText, titleOpts)
+			if errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				AddDebugTrace("saved-turn-title", "llm.cancelled", "Manual title refresh task stopped before completion", map[string]interface{}{
+					"user_id": userID,
+					"turn_id": entry.ID,
+					"error":   ctx.Err(),
+				})
+				return
+			}
+			if title == "" {
+				AddDebugTrace("saved-turn-title", "db.skipped", "Manual title refresh produced no title", map[string]interface{}{
+					"user_id": userID,
+					"turn_id": entry.ID,
+				})
+				return
+			}
+			if latestEntry, err := mcp.GetSavedTurn(userID, entry.ID); err == nil && strings.TrimSpace(latestEntry.TitleSource) != "fallback" {
+				AddDebugTrace("saved-turn-title", "db.skipped", "Skipped manual refresh DB update because title source changed", map[string]interface{}{
+					"user_id":      userID,
+					"turn_id":      entry.ID,
+					"title_source": latestEntry.TitleSource,
+				})
+				return
+			}
+			if err := mcp.UpdateSavedTurnTitle(userID, entry.ID, title, "generated"); err != nil {
+				log.Printf("[handleSavedTurnTitleRefresh] Failed to update title for %s turn %d: %v", userID, entry.ID, err)
+				AddDebugTrace("saved-turn-title", "db.error", "Failed to update title during manual refresh", map[string]interface{}{
+					"user_id": userID,
+					"turn_id": entry.ID,
+					"title":   title,
+					"error":   err,
+				})
+				return
+			}
+			AddDebugTrace("saved-turn-title", "db.updated", "Updated saved turn title during manual refresh", map[string]interface{}{
+				"user_id":      userID,
+				"turn_id":      entry.ID,
+				"title":        title,
+				"title_source": "generated",
 			})
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"status":  "noop",
-				"updated": false,
-				"item":    entry,
-			})
-			return
-		}
-
-		if err := mcp.UpdateSavedTurnTitle(userID, entry.ID, title, "generated"); err != nil {
-			log.Printf("[handleSavedTurnTitleRefresh] Failed to update title for %s turn %d: %v", userID, entry.ID, err)
-			AddDebugTrace("saved-turn-title", "db.error", "Failed to update title during manual refresh", map[string]interface{}{
-				"user_id": userID,
-				"turn_id": entry.ID,
-				"title":   title,
-				"error":   err,
-			})
-			http.Error(w, "Failed to update title", http.StatusInternalServerError)
-			return
-		}
-		AddDebugTrace("saved-turn-title", "db.updated", "Updated saved turn title during manual refresh", map[string]interface{}{
-			"user_id":      userID,
-			"turn_id":      entry.ID,
-			"title":        title,
-			"title_source": "generated",
 		})
 
-		updatedEntry, err := mcp.GetSavedTurn(userID, entry.ID)
-		if err != nil {
-			log.Printf("[handleSavedTurnTitleRefresh] Failed to fetch updated turn %d for %s: %v", entry.ID, userID, err)
-			http.Error(w, "Failed to fetch updated turn", http.StatusInternalServerError)
-			return
+		if started {
+			entry.Processing = true
 		}
-
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":  "ok",
-			"updated": true,
-			"item":    updatedEntry,
+			"status":     savedTurnQueuedStatus(started),
+			"updated":    false,
+			"processing": started,
+			"item":       entry,
 		})
 	}
 }
