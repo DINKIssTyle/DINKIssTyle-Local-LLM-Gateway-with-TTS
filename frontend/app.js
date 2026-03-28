@@ -9,6 +9,7 @@
 let config = {
     apiEndpoint: 'http://127.0.0.1:1234',
     model: 'qwen/qwen3-vl-30b',
+    secondaryModel: '',
     hideThink: true,       // Default: True
     temperature: 0.7,      // Default: 0.7
     maxTokens: 4096,       // Default: 4096
@@ -714,6 +715,7 @@ async function releaseWakeLock() {
  */
 async function fetchModels() {
     const select = document.getElementById('cfg-model');
+    const secondarySelect = document.getElementById('cfg-secondary-model');
     if (!select) return;
 
     try {
@@ -745,6 +747,9 @@ async function fetchModels() {
 
         // Clear existing options
         select.innerHTML = '';
+        if (secondarySelect) {
+            secondarySelect.innerHTML = '<option value="">Use primary model</option>';
+        }
 
         if (models.length === 0) {
             select.innerHTML = '<option value="">No models available</option>';
@@ -757,6 +762,12 @@ async function fetchModels() {
             option.value = model.id;
             option.textContent = model.id;
             select.appendChild(option);
+            if (secondarySelect) {
+                const secondaryOption = document.createElement('option');
+                secondaryOption.value = model.id;
+                secondaryOption.textContent = model.id;
+                secondarySelect.appendChild(secondaryOption);
+            }
         });
 
         // Select current config value if it exists
@@ -765,6 +776,13 @@ async function fetchModels() {
         } else if (models.length > 0) {
             select.value = models[0].id;
             config.model = models[0].id;
+        }
+        if (secondarySelect) {
+            if (config.secondaryModel && Array.from(secondarySelect.options).some(opt => opt.value === config.secondaryModel)) {
+                secondarySelect.value = config.secondaryModel;
+            } else {
+                secondarySelect.value = '';
+            }
         }
     } catch (err) {
         console.error('[Models] Failed to fetch:', err);
@@ -776,6 +794,13 @@ async function fetchModels() {
         manualOption.value = config.model || '';
         manualOption.textContent = config.model || 'Enter model manually';
         select.appendChild(manualOption);
+        if (secondarySelect && config.secondaryModel) {
+            const manualSecondary = document.createElement('option');
+            manualSecondary.value = config.secondaryModel;
+            manualSecondary.textContent = config.secondaryModel;
+            secondarySelect.appendChild(manualSecondary);
+            secondarySelect.value = config.secondaryModel;
+        }
     }
 }
 
@@ -1065,6 +1090,7 @@ async function saveEditedSavedTurnTitle() {
         if (!data.item) throw new Error('Missing item');
         updateSavedTurnEntry(data.item);
         setSavedTurnTitleEditMode(false);
+        broadcastSavedTurnsChange('title-manual');
         showToast(t('library.titleUpdated'));
     } catch (err) {
         console.warn('Failed to update saved turn title:', err);
@@ -1080,6 +1106,7 @@ async function saveEditedSavedTurnTitle() {
 function buildSavedTurnTitleRequestPayload(extra = {}) {
     return {
         model_id: config.model || '',
+        secondary_model: config.secondaryModel || '',
         api_token: config.apiToken || '',
         llm_mode: config.llmMode || 'standard',
         temperature: typeof config.temperature === 'number' ? config.temperature : parseFloat(config.temperature) || 0.7,
@@ -1106,6 +1133,7 @@ async function saveTurn(promptText, responseText) {
             savedLibraryLoaded = true;
             renderSavedLibraryList();
             reconcileSavedTitleRefreshState();
+            broadcastSavedTurnsChange(item.processing ? 'title-processing' : 'saved');
         }
         showToast(t('library.saved'));
     } catch (e) {
@@ -1125,6 +1153,7 @@ async function deleteSavedTurn(id) {
         savedTurns = savedTurns.filter((item) => item.id !== id);
         renderSavedLibraryList();
         closeSavedTurnModal();
+        broadcastSavedTurnsChange('deleted');
         showToast(t('library.deleted'));
     } catch (e) {
         console.warn('Failed to delete saved turn:', e);
@@ -1222,9 +1251,11 @@ async function refreshSavedTurnTitle() {
         const data = await response.json();
         if (data.updated && data.item) {
             updateSavedTurnEntry(data.item);
+            broadcastSavedTurnsChange('title-updated');
             reconcileSavedTitleRefreshState({ delay: 5000 });
         } else if (data.processing && data.item) {
             updateSavedTurnEntry(data.item);
+            broadcastSavedTurnsChange('title-processing');
             reconcileSavedTitleRefreshState({ delay: 2500 });
         } else if (!hasPendingSavedTurnTitleRefresh()) {
             reconcileSavedTitleRefreshState();
@@ -1262,8 +1293,10 @@ async function refreshSavedTurnTitleById(id) {
         }
 
         if (data.updated && data.item) {
+            broadcastSavedTurnsChange('title-updated');
             showToast(t('library.titleRefreshed'));
         } else if (data.processing) {
+            broadcastSavedTurnsChange('title-processing');
             reconcileSavedTitleRefreshState({ delay: 2500 });
         } else {
             showToast(t('library.titleRefreshFailed'), true);
@@ -1701,6 +1734,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupEventListeners();
     initServerControl();
 
+    // Setup Markdown
+    marked.setOptions({
+        gfm: true,
+        breaks: true,
+        highlight: function (code, lang) {
+            const hljs = window.hljs;
+            if (!hljs) return code;
+            const language = lang && hljs.getLanguage(lang) ? lang : 'plaintext';
+            return hljs.highlight(code, { language }).value;
+        },
+        langPrefix: 'hljs language-'
+    });
+
     // Initial chat restore first, then startup/health UI only if needed.
     try {
         await bootstrapInitialChatView();
@@ -1711,18 +1757,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Start Location Tracking
     updateUserLocation();
     setInterval(updateUserLocation, 300000); // Update every 5 mins
-
-
-    // Setup Markdown
-    marked.setOptions({
-        gfm: true,
-        breaks: true,
-        highlight: function (code, lang) {
-            const language = highlight.getLanguage(lang) ? lang : 'plaintext';
-            return highlight.highlight(code, { language }).value;
-        },
-        langPrefix: 'hljs language-'
-    });
 
     // Register Service Worker for PWA
     if ('serviceWorker' in navigator) {
@@ -1767,6 +1801,56 @@ let savedTitleRefreshInFlight = false;
 let savedTitleRefreshTimer = null;
 let savedTitleRefreshAbortController = null;
 let isSavedLibraryOpen = false;
+const savedTurnsSyncChannel = typeof BroadcastChannel !== 'undefined'
+    ? new BroadcastChannel('dkst-saved-turns-sync')
+    : null;
+
+function handleSavedTurnsExternalSync() {
+    if (!currentUser) return;
+    loadSavedTurns();
+}
+
+function broadcastSavedTurnsChange(reason = 'updated') {
+    const payload = {
+        type: 'saved-turns-sync',
+        reason,
+        userId: currentUser?.id || '',
+        timestamp: Date.now()
+    };
+    try {
+        if (savedTurnsSyncChannel) {
+            savedTurnsSyncChannel.postMessage(payload);
+        }
+    } catch (err) {
+        console.warn('Failed to broadcast saved turns via channel:', err);
+    }
+    try {
+        localStorage.setItem('savedTurnsSyncEvent', JSON.stringify(payload));
+    } catch (err) {
+        console.warn('Failed to broadcast saved turns via storage:', err);
+    }
+}
+
+if (savedTurnsSyncChannel) {
+    savedTurnsSyncChannel.onmessage = (event) => {
+        const payload = event?.data;
+        if (!payload || payload.type !== 'saved-turns-sync') return;
+        if (payload.userId && currentUser?.id && payload.userId !== currentUser.id) return;
+        handleSavedTurnsExternalSync();
+    };
+}
+
+window.addEventListener('storage', (event) => {
+    if (event.key !== 'savedTurnsSyncEvent' || !event.newValue) return;
+    try {
+        const payload = JSON.parse(event.newValue);
+        if (!payload || payload.type !== 'saved-turns-sync') return;
+        if (payload.userId && currentUser?.id && payload.userId !== currentUser.id) return;
+        handleSavedTurnsExternalSync();
+    } catch (err) {
+        console.warn('Failed to parse saved turn sync payload:', err);
+    }
+});
 
 function restoreLastSessionIntoChatView() {
     if (!lastSessionCache || hasSubstantiveChatMessages()) return false;
@@ -2027,6 +2111,8 @@ function loadConfig() {
     const cfgApi = document.getElementById('cfg-api');
     if (cfgApi) cfgApi.value = config.apiEndpoint;
     document.getElementById('cfg-model').value = config.model;
+    const secondaryModelEl = document.getElementById('cfg-secondary-model');
+    if (secondaryModelEl) secondaryModelEl.value = config.secondaryModel || '';
     document.getElementById('cfg-hide-think').checked = config.hideThink;
     document.getElementById('cfg-temp').value = config.temperature;
     document.getElementById('cfg-max-tokens').value = config.maxTokens;
@@ -2164,7 +2250,7 @@ function setupSettingsListeners() {
     });
 
     // Selects & Inputs: save on change
-    const autoSaveIds = ['cfg-api', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-disable-stateful', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget'];
+    const autoSaveIds = ['cfg-api', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-disable-stateful', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model'];
     autoSaveIds.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.onchange = () => saveConfig(false);
@@ -2322,6 +2408,7 @@ function saveConfig(closeModal = true) {
     config.apiEndpoint = endpoint;
 
     config.model = document.getElementById('cfg-model').value.trim();
+    config.secondaryModel = document.getElementById('cfg-secondary-model')?.value?.trim() || '';
     config.hideThink = document.getElementById('cfg-hide-think').checked;
     config.temperature = parseFloat(document.getElementById('cfg-temp').value);
     config.maxTokens = parseInt(document.getElementById('cfg-max-tokens').value);
@@ -2394,6 +2481,7 @@ function saveConfig(closeModal = true) {
     // Build config payload - only include api_token if it was explicitly changed by user
     const configPayload = {
         api_endpoint: config.apiEndpoint,
+        secondary_model: config.secondaryModel,
         llm_mode: config.llmMode,
         enable_tts: config.enableTTS,
         enable_mcp: config.enableMCP,
@@ -2605,8 +2693,7 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
     const snapshotMessages = Array.isArray(sessionUISnapshot.messages) ? sessionUISnapshot.messages : [];
     if (snapshotMessages.length === 0) return false;
 
-    beginChatSessionRestore(snapshotMessages.length);
-    updateChatSessionRestoreProgress(0, snapshotMessages.length);
+    messages = [];
 
     const fragment = document.createDocumentFragment();
     let lastTurnId = '';
@@ -2620,6 +2707,7 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
 
         if (item?.user_content) {
             appendMessage({ role: 'user', content: item.user_content, turnId }, { parent: fragment, skipScroll: true });
+            messages.push({ role: 'user', content: item.user_content, turnId });
         }
         appendMessage({ role: 'assistant', content: '', id: assistantId, turnId }, { parent: fragment, skipScroll: true });
     });
@@ -2634,14 +2722,31 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
         const assistantId = `server-assistant-default-${turnId}`;
         const assistantText = String(item?.assistant_content || '');
         const reasoningText = String(item?.reasoning_content || '');
-        const reasoningDuration = Number(item?.reasoning_duration_ms || 0);
+        const reasoningDuration = getSnapshotReasoningDuration(item);
         const snapshotToolState = sessionUISnapshot.tool_cards?.[turnId] || null;
 
         ensureAssistantMessageElement(assistantId, turnId);
         if (reasoningText) {
             serverReplayReasoningBuffers.set(assistantId, reasoningText);
-            showReasoningStatus(assistantId, reasoningText);
-            finalizeReasoningStatus(assistantId, 'done', '', reasoningDuration || null);
+            const card = ensureReasoningCard(assistantId);
+            const titleEl = card?.querySelector('.reasoning-title');
+            const metaEl = card?.querySelector('.section-meta');
+            const bodyEl = card?.querySelector('.reasoning-body');
+            if (card) {
+                card.classList.remove('failed');
+                card.classList.add('completed');
+                card.dataset.collapsed = 'true';
+                card.dataset.userExpanded = 'false';
+                card.classList.add('collapsed');
+                card.dataset.durationMs = String(Math.max(0, reasoningDuration));
+                card.dataset.accumulatedDurationMs = String(Math.max(0, reasoningDuration));
+                if (titleEl) {
+                    titleEl.classList.remove('is-live');
+                    titleEl.textContent = formatThoughtDuration(Math.max(0, reasoningDuration));
+                }
+                if (metaEl) metaEl.textContent = t('status.done');
+                if (bodyEl) bodyEl.textContent = reasoningText;
+            }
         }
         if (snapshotToolState) {
             ensureToolCard(assistantId, snapshotToolState.toolName || 'Tool');
@@ -2658,11 +2763,11 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
         finalizeMessageContent(assistantId, assistantText);
         finalizeAssistantStatusCards(assistantId, 'done');
         setAssistantActionBarReady(assistantId);
+        messages.push({ role: 'assistant', content: assistantText, turnId });
     });
 
     serverReplayCurrentTurnId = lastTurnId;
     serverReplayCurrentAssistantId = lastAssistantId;
-    finishChatSessionRestore();
     return true;
 }
 
@@ -2850,7 +2955,9 @@ function applyCurrentChatSessionEvent(entry) {
             {
                 const reasoningAssistantId = isLocalActiveTurn ? activeLocalAssistantId : serverReplayCurrentAssistantId;
                 const reasoningText = payload.content || payload.reasoning_content || payload.text || payload.delta?.content || '';
-                const elapsedMs = Number.isFinite(Number(payload.elapsed_ms)) ? Number(payload.elapsed_ms) : null;
+                const elapsedMs = Number.isFinite(Number(payload.total_elapsed_ms))
+                    ? Number(payload.total_elapsed_ms)
+                    : (Number.isFinite(Number(payload.elapsed_ms)) ? Number(payload.elapsed_ms) : null);
                 if (reasoningAssistantId) {
                     const prevReasoning = serverReplayReasoningBuffers.get(reasoningAssistantId) || '';
                     const nextReasoning = appendStreamChunkDedup(prevReasoning, reasoningText);
@@ -2872,12 +2979,22 @@ function applyCurrentChatSessionEvent(entry) {
         case 'reasoning.end':
             if (isLocalActiveTurn) {
                 if (activeLocalAssistantId) {
-                    finalizeReasoningStatus(activeLocalAssistantId, 'done', '', Number(payload.elapsed_ms || 0));
+                    finalizeReasoningStatus(
+                        activeLocalAssistantId,
+                        'done',
+                        '',
+                        Number(payload.total_elapsed_ms || payload.elapsed_ms || 0)
+                    );
                 }
                 break;
             }
             if (serverReplayCurrentAssistantId) {
-                finalizeReasoningStatus(serverReplayCurrentAssistantId, 'done', '', Number(payload.elapsed_ms || 0));
+                finalizeReasoningStatus(
+                    serverReplayCurrentAssistantId,
+                    'done',
+                    '',
+                    Number(payload.total_elapsed_ms || payload.elapsed_ms || 0)
+                );
             }
             break;
         case 'tool_call.start':
@@ -2939,8 +3056,8 @@ function applyCurrentChatSessionEvent(entry) {
         case 'chat.end':
         case 'request.complete':
             if (isLocalActiveTurn) {
-                if (activeLocalAssistantId && Number.isFinite(Number(payload.elapsed_ms))) {
-                    finalizeReasoningStatus(activeLocalAssistantId, 'done', '', Number(payload.elapsed_ms));
+                if (activeLocalAssistantId && !serverReplayReasoningBuffers.has(activeLocalAssistantId) && Number.isFinite(Number(payload.total_elapsed_ms || payload.elapsed_ms))) {
+                    finalizeReasoningStatus(activeLocalAssistantId, 'done', '', Number(payload.total_elapsed_ms || payload.elapsed_ms));
                 }
                 if (activeLocalAssistantId) {
                     const finalText = serverReplayMessageBuffers.get(activeLocalAssistantId) || '';
@@ -2955,8 +3072,8 @@ function applyCurrentChatSessionEvent(entry) {
                 break;
             }
             if (serverReplayCurrentAssistantId) {
-                if (Number.isFinite(Number(payload.elapsed_ms))) {
-                    finalizeReasoningStatus(serverReplayCurrentAssistantId, 'done', '', Number(payload.elapsed_ms));
+                if (!serverReplayReasoningBuffers.has(serverReplayCurrentAssistantId) && Number.isFinite(Number(payload.total_elapsed_ms || payload.elapsed_ms))) {
+                    finalizeReasoningStatus(serverReplayCurrentAssistantId, 'done', '', Number(payload.total_elapsed_ms || payload.elapsed_ms));
                 }
                 const finalText = serverReplayMessageBuffers.get(serverReplayCurrentAssistantId) || '';
                 finalizeMessageContent(serverReplayCurrentAssistantId, finalText);
@@ -3004,14 +3121,25 @@ async function syncCurrentChatSessionFromServer() {
     }
 
     const hasRenderedMessages = hasSubstantiveChatMessages();
-    if (currentChatSessionEventSeq === 0 && !hasRenderedMessages && hydrateChatSessionUISnapshot(session)) {
-        const result = await fetchCurrentChatSessionEvents(0, 1);
-        if (result.session) {
-            applyCurrentChatSessionSnapshot(result.session);
+    if (currentChatSessionEventSeq === 0 && !hasRenderedMessages) {
+        const snapshotMessages = getCurrentChatSessionUISnapshot(session).messages || [];
+        if (snapshotMessages.length > 0) {
+            beginChatSessionRestore(snapshotMessages.length);
+            try {
+                updateChatSessionRestoreProgress(0, snapshotMessages.length);
+                hydrateChatSessionUISnapshot(session);
+                updateChatSessionRestoreProgress(snapshotMessages.length, snapshotMessages.length);
+                const result = await fetchCurrentChatSessionEvents(0, 1);
+                if (result.session) {
+                    applyCurrentChatSessionSnapshot(result.session);
+                }
+                currentChatSessionEventSeq = Number(result.totalCount || 0);
+            } finally {
+                finishChatSessionRestore();
+            }
+            scheduleChatSessionPolling(session.Status === 'running' ? 900 : 1600);
+            return;
         }
-        currentChatSessionEventSeq = Number(result.totalCount || 0);
-        scheduleChatSessionPolling(session.Status === 'running' ? 900 : 1600);
-        return;
     }
 
     const result = await fetchCurrentChatSessionEvents(currentChatSessionEventSeq, 200);
@@ -3072,6 +3200,7 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
     chatMessages?.classList.add('is-session-hydrating');
     resetChatViewState();
     dismissStartupCards();
+    messages = [];
 
     const users = [];
     const assistantByTurn = new Map();
@@ -3154,14 +3283,12 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
                 }
                 break;
             }
-            case 'reasoning.end':
-            case 'request.complete':
-            case 'chat.end': {
+            case 'reasoning.end': {
                 if (!currentAssistantId && currentTurnId) {
                     currentAssistantId = ensureAssistantId(currentTurnId, entry.EventSeq);
                 }
-                if (currentAssistantId && Number.isFinite(Number(payload.elapsed_ms))) {
-                    reasoningDurationById.set(currentAssistantId, Number(payload.elapsed_ms));
+                if (currentAssistantId && Number.isFinite(Number(payload.total_elapsed_ms || payload.elapsed_ms))) {
+                    reasoningDurationById.set(currentAssistantId, Number(payload.total_elapsed_ms || payload.elapsed_ms));
                 }
                 break;
             }
@@ -3221,6 +3348,7 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
         if (!document.querySelector(`.message.user[data-turn-id="${user.turnId}"]`)) {
             appendMessage({ role: 'user', content: user.content, turnId: user.turnId }, { parent: fragment, skipScroll: true });
         }
+        messages.push({ role: 'user', content: user.content, turnId: user.turnId });
         const assistantId = assistantByTurn.get(user.turnId);
         if (!assistantId) continue;
         if (!document.getElementById(assistantId)) {
@@ -3273,6 +3401,7 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
         finalizeMessageContent(assistantId, assistantText);
         finalizeAssistantStatusCards(assistantId, 'done');
         setAssistantActionBarReady(assistantId);
+        messages.push({ role: 'assistant', content: assistantText, turnId: user.turnId });
     }
 
     if (users.length > 0) {
@@ -3403,6 +3532,11 @@ async function syncServerConfig() {
                     cfgMode.value = config.llmMode;
                     updateSettingsVisibility();
                 }
+            }
+            if (serverCfg.secondary_model !== undefined) {
+                config.secondaryModel = String(serverCfg.secondary_model || '').trim();
+                const el = document.getElementById('cfg-secondary-model');
+                if (el) el.value = config.secondaryModel;
             }
             if (serverCfg.enable_tts !== undefined) {
                 config.enableTTS = serverCfg.enable_tts;
@@ -3700,6 +3834,7 @@ async function clearChat() {
         console.warn('Failed to clear current chat session on server:', e);
     }
 
+    lastSessionCache = null;
     resetChatViewState();
 }
 
@@ -4348,23 +4483,25 @@ async function processStream(response, elementId, turnId = '') {
                             reasoningStartMs = Date.now();
                         }
                         reasoningSource = 'sse';
-                        if (!deferToServerChatSession) showReasoningStatus(elementId, '...', false, Number(json.elapsed_ms || 0)); // Start status
+                        if (!deferToServerChatSession) {
+                            showReasoningStatus(elementId, '...', false, Number(json.total_elapsed_ms || json.elapsed_ms || 0));
+                        }
                     }
                     else if (json.type === 'reasoning.delta' && json.content) {
                         // Add to reasoning buffer, NOT to contentToAdd/fullText
                         reasoningBuffer += json.content;
                         currentlyReasoning = true;
                         reasoningSource = 'sse';
-                        const elapsedMs = Number.isFinite(Number(json.elapsed_ms))
-                            ? Number(json.elapsed_ms)
+                        const elapsedMs = Number.isFinite(Number(json.total_elapsed_ms || json.elapsed_ms))
+                            ? Number(json.total_elapsed_ms || json.elapsed_ms)
                             : (reasoningStartMs > 0 ? Date.now() - reasoningStartMs : 0);
                         if (!deferToServerChatSession) showReasoningStatus(elementId, reasoningBuffer, false, elapsedMs); // Update with full buffer
                     }
                     else if (json.type === 'reasoning.end') {
                         reasoningBuffer += '</think>\n';
                         currentlyReasoning = false;
-                        const elapsedMs = Number.isFinite(Number(json.elapsed_ms))
-                            ? Number(json.elapsed_ms)
+                        const elapsedMs = Number.isFinite(Number(json.total_elapsed_ms || json.elapsed_ms))
+                            ? Number(json.total_elapsed_ms || json.elapsed_ms)
                             : (reasoningStartMs > 0 ? Date.now() - reasoningStartMs : 0);
                         reasoningStartMs = 0;
                         reasoningSource = null;
@@ -4739,6 +4876,13 @@ function formatThoughtDuration(durationMs = 0) {
     return t('status.thoughtForMinutesSeconds')
         .replace('{minutes}', String(minutes))
         .replace('{seconds}', String(seconds));
+}
+
+function getSnapshotReasoningDuration(item) {
+    const total = Number(item?.reasoning_duration_ms || 0);
+    const accumulated = Number(item?.reasoning_accumulated_ms || 0);
+    const currentPhase = Number(item?.reasoning_current_phase_ms || 0);
+    return Math.max(0, total, accumulated + currentPhase);
 }
 
 function ensureAssistantMessageElement(id, turnId = '') {
@@ -5665,8 +5809,10 @@ function splitStreamingMarkdown(text) {
 
 function highlightMarkdownBlocks(container) {
     if (!container) return;
+    const hljs = window.hljs;
+    if (!hljs?.highlightElement) return;
     container.querySelectorAll('pre code').forEach((block) => {
-        highlight.highlightElement(block);
+        hljs.highlightElement(block);
         block.dataset.highlighted = 'true';
     });
 }

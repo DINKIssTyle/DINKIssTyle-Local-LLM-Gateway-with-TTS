@@ -108,10 +108,11 @@ func cancelCurrentChat(userID string) bool {
 }
 
 type savedTurnTitleOptions struct {
-	ModelID     string
-	APIToken    string
-	Temperature float64
-	LLMMode     string
+	ModelID        string
+	SecondaryModel string
+	APIToken       string
+	Temperature    float64
+	LLMMode        string
 }
 
 type chatSessionToolHistorySnapshot struct {
@@ -128,11 +129,13 @@ type chatSessionToolCardSnapshot struct {
 }
 
 type chatSessionMessageSnapshot struct {
-	TurnID              string `json:"turn_id"`
-	UserContent         string `json:"user_content,omitempty"`
-	AssistantContent    string `json:"assistant_content,omitempty"`
-	ReasoningContent    string `json:"reasoning_content,omitempty"`
-	ReasoningDurationMS int64  `json:"reasoning_duration_ms,omitempty"`
+	TurnID                  string `json:"turn_id"`
+	UserContent             string `json:"user_content,omitempty"`
+	AssistantContent        string `json:"assistant_content,omitempty"`
+	ReasoningContent        string `json:"reasoning_content,omitempty"`
+	ReasoningDurationMS     int64  `json:"reasoning_duration_ms,omitempty"`
+	ReasoningAccumulatedMS  int64  `json:"reasoning_accumulated_ms,omitempty"`
+	ReasoningCurrentPhaseMS int64  `json:"reasoning_current_phase_ms,omitempty"`
 }
 
 type chatSessionUISnapshot struct {
@@ -254,12 +257,15 @@ func extractChatInputText(reqMap map[string]interface{}) string {
 	return ""
 }
 
-func compactToolSnapshotDetail(args interface{}, summary string) string {
+func compactToolSnapshotDetail(toolName string, args interface{}, summary string) string {
 	if s, ok := args.(string); ok && strings.TrimSpace(s) != "" {
 		return compactText(strings.TrimSpace(s), 220)
 	}
 	if argsMap, ok := args.(map[string]interface{}); ok {
-		normalizedTool := strings.ToLower(strings.TrimSpace(extractStringValue(argsMap, []string{"tool", "tool_name"})))
+		normalizedTool := strings.ToLower(strings.TrimSpace(toolName))
+		if normalizedTool == "" {
+			normalizedTool = strings.ToLower(strings.TrimSpace(extractStringValue(argsMap, []string{"tool", "tool_name"})))
+		}
 		queryLike := extractStringValue(argsMap, []string{"query", "keyword", "title", "input", "prompt", "text"})
 		url := extractStringValue(argsMap, []string{"url"})
 		sourceID := extractStringValue(argsMap, []string{"source_id"})
@@ -359,7 +365,7 @@ func updateChatSessionToolSnapshot(snapshot *chatSessionUISnapshot, turnID, even
 			card.ToolName = strings.TrimSpace(toolName)
 		}
 		card.Args = args
-		detail := compactToolSnapshotDetail(args, summary)
+		detail := compactToolSnapshotDetail(card.ToolName, args, summary)
 		if detail != "" {
 			entry := chatSessionToolHistorySnapshot{
 				Tool:   strings.TrimSpace(card.ToolName),
@@ -409,6 +415,45 @@ func ensureChatSessionMessageSnapshot(snapshot *chatSessionUISnapshot, turnID st
 	return &snapshot.Messages[len(snapshot.Messages)-1]
 }
 
+func payloadInt64(value interface{}) (int64, bool) {
+	switch v := value.(type) {
+	case int:
+		return int64(v), true
+	case int8:
+		return int64(v), true
+	case int16:
+		return int64(v), true
+	case int32:
+		return int64(v), true
+	case int64:
+		return v, true
+	case float32:
+		return int64(v), true
+	case float64:
+		return int64(v), true
+	case json.Number:
+		n, err := v.Int64()
+		if err == nil {
+			return n, true
+		}
+		f, ferr := v.Float64()
+		if ferr == nil {
+			return int64(f), true
+		}
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return 0, false
+		}
+		if n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil {
+			return n, true
+		}
+		if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+			return int64(f), true
+		}
+	}
+	return 0, false
+}
+
 func updateChatSessionMessageSnapshot(snapshot *chatSessionUISnapshot, turnID, role, eventType string, payload interface{}) {
 	if snapshot == nil || strings.TrimSpace(turnID) == "" {
 		return
@@ -423,6 +468,9 @@ func updateChatSessionMessageSnapshot(snapshot *chatSessionUISnapshot, turnID, r
 	}
 
 	switch eventType {
+	case "reasoning.start":
+		msg.ReasoningCurrentPhaseMS = 0
+		msg.ReasoningDurationMS = msg.ReasoningAccumulatedMS
 	case "message.created":
 		if role == "user" {
 			if content, ok := payloadMap["content"].(string); ok {
@@ -443,13 +491,70 @@ func updateChatSessionMessageSnapshot(snapshot *chatSessionUISnapshot, turnID, r
 		} else if text, ok := payloadMap["text"].(string); ok && text != "" {
 			msg.ReasoningContent += text
 		}
-		if elapsed, ok := payloadMap["elapsed_ms"].(float64); ok && elapsed > 0 {
-			msg.ReasoningDurationMS = int64(elapsed)
+		if totalMS, ok := payloadInt64(payloadMap["total_elapsed_ms"]); ok && totalMS > 0 {
+			msg.ReasoningDurationMS = totalMS
+			if totalMS >= msg.ReasoningAccumulatedMS {
+				msg.ReasoningCurrentPhaseMS = totalMS - msg.ReasoningAccumulatedMS
+			}
+			AddDebugTrace("chat", "reasoning.snapshot", "Updated reasoning snapshot from total elapsed", map[string]interface{}{
+				"turn_id":                   turnID,
+				"event_type":                eventType,
+				"payload_elapsed_ms":        payloadMap["elapsed_ms"],
+				"payload_total_elapsed_ms":  payloadMap["total_elapsed_ms"],
+				"snapshot_duration_ms":      msg.ReasoningDurationMS,
+				"snapshot_accumulated_ms":   msg.ReasoningAccumulatedMS,
+				"snapshot_current_phase_ms": msg.ReasoningCurrentPhaseMS,
+			})
+			break
 		}
-	case "reasoning.end", "chat.end", "request.complete":
-		if elapsed, ok := payloadMap["elapsed_ms"].(float64); ok && elapsed > 0 {
-			msg.ReasoningDurationMS = int64(elapsed)
+		if elapsedMS, ok := payloadInt64(payloadMap["elapsed_ms"]); ok && elapsedMS > 0 {
+			if elapsedMS > msg.ReasoningCurrentPhaseMS {
+				msg.ReasoningCurrentPhaseMS = elapsedMS
+			}
+			msg.ReasoningDurationMS = msg.ReasoningAccumulatedMS + msg.ReasoningCurrentPhaseMS
+			AddDebugTrace("chat", "reasoning.snapshot", "Updated reasoning snapshot from segment elapsed", map[string]interface{}{
+				"turn_id":                   turnID,
+				"event_type":                eventType,
+				"payload_elapsed_ms":        payloadMap["elapsed_ms"],
+				"payload_total_elapsed_ms":  payloadMap["total_elapsed_ms"],
+				"snapshot_duration_ms":      msg.ReasoningDurationMS,
+				"snapshot_accumulated_ms":   msg.ReasoningAccumulatedMS,
+				"snapshot_current_phase_ms": msg.ReasoningCurrentPhaseMS,
+			})
 		}
+	case "reasoning.end":
+		if totalMS, ok := payloadInt64(payloadMap["total_elapsed_ms"]); ok && totalMS > 0 {
+			msg.ReasoningDurationMS = totalMS
+			msg.ReasoningAccumulatedMS = totalMS
+			msg.ReasoningCurrentPhaseMS = 0
+			AddDebugTrace("chat", "reasoning.snapshot", "Finalized reasoning snapshot from total elapsed", map[string]interface{}{
+				"turn_id":                   turnID,
+				"event_type":                eventType,
+				"payload_elapsed_ms":        payloadMap["elapsed_ms"],
+				"payload_total_elapsed_ms":  payloadMap["total_elapsed_ms"],
+				"snapshot_duration_ms":      msg.ReasoningDurationMS,
+				"snapshot_accumulated_ms":   msg.ReasoningAccumulatedMS,
+				"snapshot_current_phase_ms": msg.ReasoningCurrentPhaseMS,
+			})
+			break
+		}
+		if elapsedMS, ok := payloadInt64(payloadMap["elapsed_ms"]); ok && elapsedMS > 0 {
+			if elapsedMS > msg.ReasoningCurrentPhaseMS {
+				msg.ReasoningCurrentPhaseMS = elapsedMS
+			}
+		}
+		msg.ReasoningAccumulatedMS += msg.ReasoningCurrentPhaseMS
+		msg.ReasoningCurrentPhaseMS = 0
+		msg.ReasoningDurationMS = msg.ReasoningAccumulatedMS
+		AddDebugTrace("chat", "reasoning.snapshot", "Finalized reasoning snapshot from segment elapsed", map[string]interface{}{
+			"turn_id":                   turnID,
+			"event_type":                eventType,
+			"payload_elapsed_ms":        payloadMap["elapsed_ms"],
+			"payload_total_elapsed_ms":  payloadMap["total_elapsed_ms"],
+			"snapshot_duration_ms":      msg.ReasoningDurationMS,
+			"snapshot_accumulated_ms":   msg.ReasoningAccumulatedMS,
+			"snapshot_current_phase_ms": msg.ReasoningCurrentPhaseMS,
+		})
 	}
 }
 
@@ -481,16 +586,18 @@ func parseSavedTurnTitleOptionsFromBody(r *http.Request) (savedTurnTitleOptions,
 	}
 
 	var payload struct {
-		ModelID     string   `json:"model_id"`
-		APIToken    string   `json:"api_token"`
-		Temperature *float64 `json:"temperature"`
-		LLMMode     string   `json:"llm_mode"`
+		ModelID        string   `json:"model_id"`
+		SecondaryModel string   `json:"secondary_model"`
+		APIToken       string   `json:"api_token"`
+		Temperature    *float64 `json:"temperature"`
+		LLMMode        string   `json:"llm_mode"`
 	}
 	if err := json.Unmarshal(rawBody, &payload); err != nil {
 		return opts, nil
 	}
 
 	opts.ModelID = strings.TrimSpace(payload.ModelID)
+	opts.SecondaryModel = strings.TrimSpace(payload.SecondaryModel)
 	opts.APIToken = strings.TrimSpace(payload.APIToken)
 	opts.LLMMode = strings.TrimSpace(payload.LLMMode)
 	if payload.Temperature != nil {
@@ -701,7 +808,10 @@ func callLLMInternal(ctx context.Context, prompt string, opts savedTurnTitleOpti
 	endpoint := strings.TrimRight(globalApp.llmEndpoint, "/")
 	endpoint = strings.TrimSuffix(endpoint, "/v1")
 
-	modelID := strings.TrimSpace(opts.ModelID)
+	modelID := strings.TrimSpace(opts.SecondaryModel)
+	if modelID == "" {
+		modelID = strings.TrimSpace(opts.ModelID)
+	}
 	if modelID == "" {
 		modelID = "local-model"
 	}
@@ -977,6 +1087,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 				TTSThreads          int     `json:"tts_threads"`
 				ApiEndpoint         string  `json:"api_endpoint"`
 				ApiToken            *string `json:"api_token"`
+				SecondaryModel      *string `json:"secondary_model"`
 				LLMMode             string  `json:"llm_mode"`
 				EnableTTS           *bool   `json:"enable_tts"`
 				EnableMCP           *bool   `json:"enable_mcp"`
@@ -1010,6 +1121,11 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 							token = strings.TrimSpace(token[7:])
 						}
 						user.Settings.ApiToken = &token
+						updated = true
+					}
+					if newCfg.SecondaryModel != nil {
+						model := strings.TrimSpace(*newCfg.SecondaryModel)
+						user.Settings.SecondaryModel = &model
 						updated = true
 					}
 					if newCfg.LLMMode != "" {
@@ -1117,6 +1233,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 		resp := map[string]interface{}{
 			"llm_endpoint":          app.llmEndpoint,
 			"llm_mode":              app.llmMode,
+			"secondary_model":       "",
 			"enable_tts":            app.enableTTS,
 			"enable_mcp":            app.enableMCP,
 			"enable_memory":         false, // Global default is false, overridden by user settings below
@@ -1140,6 +1257,9 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 				}
 				if user.Settings.LLMMode != nil {
 					resp["llm_mode"] = *user.Settings.LLMMode
+				}
+				if user.Settings.SecondaryModel != nil {
+					resp["secondary_model"] = *user.Settings.SecondaryModel
 				}
 				if user.Settings.EnableTTS != nil {
 					resp["enable_tts"] = *user.Settings.EnableTTS
@@ -1550,6 +1670,9 @@ func handleClearCurrentChat() http.HandlerFunc {
 			http.Error(w, "Failed to clear current chat session", http.StatusInternalServerError)
 			return
 		}
+		if err := mcp.DeleteLastSession(userID); err != nil {
+			log.Printf("[handleClearCurrentChat] Failed to delete last session cache for %s: %v", userID, err)
+		}
 		if err := mcp.ClearChatSessionEvents(userID, entry.ID); err != nil {
 			log.Printf("[handleClearCurrentChat] Failed to clear chat events for %s: %v", userID, err)
 		}
@@ -1713,12 +1836,13 @@ func handleSavedTurns() http.HandlerFunc {
 			json.NewEncoder(w).Encode(map[string]interface{}{"items": entries})
 		case http.MethodPost:
 			var req struct {
-				PromptText   string   `json:"prompt_text"`
-				ResponseText string   `json:"response_text"`
-				ModelID      string   `json:"model_id"`
-				APIToken     string   `json:"api_token"`
-				LLMMode      string   `json:"llm_mode"`
-				Temperature  *float64 `json:"temperature"`
+				PromptText     string   `json:"prompt_text"`
+				ResponseText   string   `json:"response_text"`
+				ModelID        string   `json:"model_id"`
+				SecondaryModel string   `json:"secondary_model"`
+				APIToken       string   `json:"api_token"`
+				LLMMode        string   `json:"llm_mode"`
+				Temperature    *float64 `json:"temperature"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				http.Error(w, "Invalid request", http.StatusBadRequest)
@@ -1732,9 +1856,10 @@ func handleSavedTurns() http.HandlerFunc {
 			}
 
 			titleOpts := savedTurnTitleOptions{
-				ModelID:  strings.TrimSpace(req.ModelID),
-				APIToken: strings.TrimSpace(req.APIToken),
-				LLMMode:  strings.TrimSpace(req.LLMMode),
+				ModelID:        strings.TrimSpace(req.ModelID),
+				SecondaryModel: strings.TrimSpace(req.SecondaryModel),
+				APIToken:       strings.TrimSpace(req.APIToken),
+				LLMMode:        strings.TrimSpace(req.LLMMode),
 			}
 			if req.Temperature != nil {
 				titleOpts.Temperature = normalizeSavedTurnTemperature(*req.Temperature)
@@ -2544,13 +2669,13 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		if _, err := mcp.AppendChatEvent(userID, chatSession.ID, role, eventType, "", clientTurnID, jsonPayload); err != nil {
 			log.Printf("[chat-session] failed to append %s event for %s: %v", eventType, userID, err)
 		}
-		if eventType == "message.created" || eventType == "message.delta" || eventType == "reasoning.delta" || eventType == "reasoning.end" || eventType == "chat.end" || eventType == "request.complete" {
+		if eventType == "message.created" || eventType == "message.delta" || eventType == "reasoning.start" || eventType == "reasoning.delta" || eventType == "reasoning.end" || eventType == "chat.end" || eventType == "request.complete" {
 			updateChatSessionMessageSnapshot(&sessionUISnapshot, clientTurnID, role, eventType, payload)
 		}
 		if strings.HasPrefix(eventType, "tool_call.") {
 			updateChatSessionToolSnapshot(&sessionUISnapshot, clientTurnID, eventType, payload)
 		}
-		if eventType == "message.created" || eventType == "message.delta" || eventType == "reasoning.delta" || eventType == "reasoning.end" || eventType == "chat.end" || eventType == "request.complete" || strings.HasPrefix(eventType, "tool_call.") {
+		if eventType == "message.created" || eventType == "message.delta" || eventType == "reasoning.start" || eventType == "reasoning.delta" || eventType == "reasoning.end" || eventType == "chat.end" || eventType == "request.complete" || strings.HasPrefix(eventType, "tool_call.") {
 			sessionUIStateJSON = encodeChatSessionUISnapshot(sessionUISnapshot)
 			chatSession.UIStateJSON = sessionUIStateJSON
 			if _, err := mcp.UpsertChatSession(mcp.ChatSessionEntry{
@@ -2666,6 +2791,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	var lastResponseID string // Captured from chat.end for stateful chaining
 	reasoningActive := false
 	reasoningStartedAt := time.Time{}
+	reasoningAccumulatedMs := int64(0)
 	toolUsageCounts := make(map[string]int)
 	toolSignatureCounts := make(map[string]int)
 	previousResponseRetryUsed := false
@@ -2912,6 +3038,17 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 					if msgType, ok := chunk["type"].(string); ok {
 						if msgType == "message.delta" {
 							if content, ok := chunk["content"].(string); ok {
+								if reasoningActive {
+									totalReasoningMs := reasoningAccumulatedMs + time.Since(reasoningStartedAt).Milliseconds()
+									appendChatEvent("assistant", "reasoning.end", map[string]interface{}{
+										"type":             "reasoning.end",
+										"elapsed_ms":       time.Since(reasoningStartedAt).Milliseconds(),
+										"total_elapsed_ms": totalReasoningMs,
+									})
+									reasoningAccumulatedMs = totalReasoningMs
+									reasoningActive = false
+									reasoningStartedAt = time.Time{}
+								}
 								fullResponse += content
 
 								// 🔍 Self-Evolution for Custom Format
@@ -2939,6 +3076,42 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 								emitStreamChunk(line)
 								continue
 							}
+						} else if msgType == "reasoning.start" || msgType == "reasoning.delta" || msgType == "reasoning.end" {
+							eventPayload := map[string]interface{}{}
+							for key, value := range chunk {
+								eventPayload[key] = value
+							}
+							switch msgType {
+							case "reasoning.start":
+								reasoningActive = true
+								reasoningStartedAt = time.Now()
+								eventPayload["started_at"] = reasoningStartedAt.Format(time.RFC3339Nano)
+							case "reasoning.delta":
+								if !reasoningActive {
+									reasoningActive = true
+									reasoningStartedAt = time.Now()
+								}
+								eventPayload["elapsed_ms"] = time.Since(reasoningStartedAt).Milliseconds()
+								eventPayload["total_elapsed_ms"] = reasoningAccumulatedMs + time.Since(reasoningStartedAt).Milliseconds()
+							case "reasoning.end":
+								if !reasoningActive {
+									reasoningActive = true
+									reasoningStartedAt = time.Now()
+								}
+								totalReasoningMs := reasoningAccumulatedMs + time.Since(reasoningStartedAt).Milliseconds()
+								eventPayload["elapsed_ms"] = time.Since(reasoningStartedAt).Milliseconds()
+								eventPayload["total_elapsed_ms"] = totalReasoningMs
+								reasoningAccumulatedMs = totalReasoningMs
+								reasoningActive = false
+								reasoningStartedAt = time.Time{}
+							}
+							appendChatEvent("assistant", msgType, eventPayload)
+							if payloadBytes, err := json.Marshal(eventPayload); err == nil {
+								emitStreamChunk(fmt.Sprintf("data: %s", string(payloadBytes)))
+							} else {
+								emitStreamChunk(line)
+							}
+							continue
 						} else if msgType == "chat.end" || msgType == "message.end" {
 							log.Printf("[handleChat-DEBUG] Custom End Signal Received: %s", msgType)
 
@@ -3150,18 +3323,23 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 											"started_at": reasoningStartedAt.Format(time.RFC3339Nano),
 										})
 									}
+									totalReasoningMs := reasoningAccumulatedMs + time.Since(reasoningStartedAt).Milliseconds()
 									appendChatEvent("assistant", "reasoning.delta", map[string]interface{}{
-										"type":       "reasoning.delta",
-										"content":    reasoningText,
-										"elapsed_ms": time.Since(reasoningStartedAt).Milliseconds(),
+										"type":             "reasoning.delta",
+										"content":          reasoningText,
+										"elapsed_ms":       time.Since(reasoningStartedAt).Milliseconds(),
+										"total_elapsed_ms": totalReasoningMs,
 									})
 								}
 								if c, ok := delta["content"].(string); ok {
 									if reasoningActive {
+										totalReasoningMs := reasoningAccumulatedMs + time.Since(reasoningStartedAt).Milliseconds()
 										appendChatEvent("assistant", "reasoning.end", map[string]interface{}{
-											"type":       "reasoning.end",
-											"elapsed_ms": time.Since(reasoningStartedAt).Milliseconds(),
+											"type":             "reasoning.end",
+											"elapsed_ms":       time.Since(reasoningStartedAt).Milliseconds(),
+											"total_elapsed_ms": totalReasoningMs,
 										})
+										reasoningAccumulatedMs = totalReasoningMs
 										reasoningActive = false
 										reasoningStartedAt = time.Time{}
 									}
@@ -3382,10 +3560,13 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 		log.Printf("[handleChat-DEBUG] turn %d processing complete. Total response len: %d", turn, len(fullResponse))
 		if reasoningActive {
+			totalReasoningMs := reasoningAccumulatedMs + time.Since(reasoningStartedAt).Milliseconds()
 			appendChatEvent("assistant", "reasoning.end", map[string]interface{}{
-				"type":       "reasoning.end",
-				"elapsed_ms": time.Since(reasoningStartedAt).Milliseconds(),
+				"type":             "reasoning.end",
+				"elapsed_ms":       time.Since(reasoningStartedAt).Milliseconds(),
+				"total_elapsed_ms": totalReasoningMs,
 			})
+			reasoningAccumulatedMs = totalReasoningMs
 			reasoningActive = false
 			reasoningStartedAt = time.Time{}
 		}
