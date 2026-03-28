@@ -38,6 +38,152 @@ let config = {
     chatFontSize: 16
 };
 
+function getMarkdownRenderer() {
+    const remarkRenderer = window.remarkMarkdownRenderer;
+    if (remarkRenderer?.render) return remarkRenderer;
+
+    if (window.marked?.parse) {
+        return {
+            name: 'marked',
+            render(markdown) {
+                return window.marked.parse(markdown || '');
+            }
+        };
+    }
+
+    return {
+        name: 'plain',
+        render(markdown) {
+            const escaped = String(markdown || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+            return escaped ? `<pre>${escaped}</pre>` : '';
+        }
+    };
+}
+
+function rerenderAllMarkdownHosts() {
+    document.querySelectorAll('.markdown-committed, .markdown-pending, #saved-turn-modal-response').forEach((host) => {
+        const source = host?.dataset?.markdownSource;
+        if (typeof source !== 'string') return;
+        renderMarkdownIntoHost(host, source);
+    });
+}
+
+function escapeHtml(text) {
+    return String(text || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
+
+function renderLooseInlineMarkdown(text) {
+    let html = escapeHtml(text);
+    html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+    html = html.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2">$1</a>');
+    html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/(^|[^\*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+    return html;
+}
+
+function renderLooseMarkdownToHtml(markdownText) {
+    const lines = String(markdownText || '').split('\n');
+    const html = [];
+    let paragraph = [];
+    let listType = null;
+
+    const flushParagraph = () => {
+        if (!paragraph.length) return;
+        html.push(`<p>${renderLooseInlineMarkdown(paragraph.join(' '))}</p>`);
+        paragraph = [];
+    };
+
+    const closeList = () => {
+        if (!listType) return;
+        html.push(listType === 'ol' ? '</ol>' : '</ul>');
+        listType = null;
+    };
+
+    const openList = (type) => {
+        if (listType === type) return;
+        closeList();
+        html.push(type === 'ol' ? '<ol>' : '<ul>');
+        listType = type;
+    };
+
+    for (const rawLine of lines) {
+        const line = String(rawLine || '').trim();
+
+        if (!line) {
+            flushParagraph();
+            closeList();
+            continue;
+        }
+
+        if (/^---+$/.test(line)) {
+            flushParagraph();
+            closeList();
+            html.push('<hr>');
+            continue;
+        }
+
+        const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+        if (headingMatch) {
+            flushParagraph();
+            closeList();
+            const level = Math.min(headingMatch[1].length, 6);
+            html.push(`<h${level}>${renderLooseInlineMarkdown(headingMatch[2].trim())}</h${level}>`);
+            continue;
+        }
+
+        const orderedMatch = line.match(/^(\d+)\.\s+(.+)$/);
+        if (orderedMatch) {
+            flushParagraph();
+            openList('ol');
+            html.push(`<li>${renderLooseInlineMarkdown(orderedMatch[2].trim())}</li>`);
+            continue;
+        }
+
+        const unorderedMatch = line.match(/^[-*•●▪■▸▹▻▶▷►]\s+(.+)$/);
+        if (unorderedMatch) {
+            flushParagraph();
+            openList('ul');
+            html.push(`<li>${renderLooseInlineMarkdown(unorderedMatch[1].trim())}</li>`);
+            continue;
+        }
+
+        if (/^[#*•●▪■▸▹▻▶▷►-]+$/.test(line)) {
+            continue;
+        }
+
+        closeList();
+        paragraph.push(line);
+    }
+
+    flushParagraph();
+    closeList();
+    return html.join('');
+}
+
+function shouldFallbackToLooseMarkdown(host, normalized) {
+    if (!host || !normalized.trim()) return false;
+
+    const hasHeadingSyntax = /(^|\n)[ \t]*#{1,6}\s+\S/.test(normalized);
+    const hasListSyntax = /(^|\n)[ \t]*(?:[-*•●▪■▸▹▻▶▷►]\s+\S|\d+\.\s+\S)/.test(normalized);
+    const text = host.innerText || host.textContent || '';
+
+    if (hasHeadingSyntax && !host.querySelector('h1,h2,h3,h4,h5,h6') && /(^|\n)\s*#\s*\S/.test(text)) {
+        return true;
+    }
+
+    if (hasListSyntax && !host.querySelector('ul,ol,li') && /(^|\n)\s*(?:[-*•●▪■▸▹▻▶▷►]|\d+\.)\s*\S/.test(text)) {
+        return true;
+    }
+
+    return false;
+}
+
 // ============================================================================
 // i18n Translation System
 // ============================================================================
@@ -409,11 +555,23 @@ function t(key) {
 }
 
 function normalizeInlineMarkdownSpacing(segment) {
-    return segment.replace(/\*\*\s+([^*\n](?:[^*\n]*?[^*\s\n])?)\s+\*\*/g, '**$1**');
+    return segment
+        .replace(/\*\*[ \t]+([^*\n](?:[^*\n]*?[^*\s\n])?)[ \t]+\*\*/g, '**$1**')
+        .replace(/(^|\n)([ \t]*(?:#{1,6}\s|(?:[-*+]\s|\d+\.\s)))(\*\*|__)([^\n]*?)(?=\n|$)/g, (match, prefix, markerPrefix, marker, content) => {
+            const trimmed = String(content || '').trim();
+            if (!trimmed || trimmed.includes(marker)) return match;
+            return `${prefix}${markerPrefix}${marker}${trimmed}${marker}`;
+        })
+        .replace(/(^|\n)([ \t]*(?:#{1,6}\s|(?:[-*+]\s|\d+\.\s)))(\*|_)([^\n]*?)(?=\n|$)/g, (match, prefix, markerPrefix, marker, content) => {
+            const trimmed = String(content || '').trim();
+            if (!trimmed || trimmed.startsWith(' ') || trimmed.includes(marker)) return match;
+            return `${prefix}${markerPrefix}${marker}${trimmed}${marker}`;
+        });
 }
 
 function normalizeMarkdownOutsideCode(text, transform) {
-    const parts = String(text).split(/(```[\s\S]*?```|`[^`\n]+`)/g);
+    // Split by code blocks (``` or ~~~) and inline code (`)
+    const parts = String(text).split(/(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]+`)/g);
     return parts.map((part, index) => {
         if (index % 2 === 1) return part;
         return transform(part);
@@ -523,11 +681,18 @@ function canonicalizeTableLikeBlocks(text) {
 
 function closeUnbalancedCodeFences(text) {
     const source = String(text || '');
-    const fenceMatches = source.match(/(^|\n)```/g);
-    if (!fenceMatches || fenceMatches.length % 2 === 0) {
-        return source;
-    }
-    return `${source}\n\`\`\``;
+    // Handle backtick fences
+    const backtickFences = source.match(/(^|\n)```/g);
+    const hasUnclosedBacktick = backtickFences && backtickFences.length % 2 !== 0;
+
+    // Handle tilde fences
+    const tildeFences = source.match(/(^|\n)~~~/g);
+    const hasUnclosedTilde = tildeFences && tildeFences.length % 2 !== 0;
+
+    let result = source;
+    if (hasUnclosedBacktick) result += '\n```';
+    if (hasUnclosedTilde) result += '\n~~~';
+    return result;
 }
 
 function protectTableSegments(text) {
@@ -573,16 +738,36 @@ function normalizeMarkdownForRender(text) {
         .replace(/(^|\n)([ \t]*)[•●▪■▸▹▻▶▷►]\s+/g, '$1$2- ')
         .replace(/(^|\n)([ \t]*)[◦○◇◆]\s+/g, '$1$2  - ');
 
+    // Normalize markdown headings/lists/tables when streamed without enough spacing.
+    normalized = normalized
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
+        // Restore missing spaces after ATX headings. Use [^\s#] to avoid chaining:
+        // "###Title" -> "### Title" but "###" followed by "#" stays as-is (part of "####").
+        .replace(/(^|\n)([ \t]*#{1,6})(?=[^\s#])/g, '$1$2 ')
+        // Some model outputs omit the required space after ordered list markers
+        // ("1.Item" or "1. Item" with missing space)
+        .replace(/(^|\n)([ \t]*)(\d+)\.(?=\S)/g, '$1$2$3. ')
+        // Support for '-' list marker missing space (e.g. "-item").
+        // Exclude "---" (horizontal rule) by requiring the char after '-' is not '-'.
+        .replace(/(^|\n)([ \t]*)(-)(?=[^\s\-])/g, '$1$2$3 ')
+        // Support for '*' and '+' as list markers with missing space.
+        // Exclude '**' (bold) and '++' by requiring the char after is not the same.
+        .replace(/(^|\n)([ \t]*)(\*)(?=[^\s*])/g, '$1$2$3 ')
+        .replace(/(^|\n)([ \t]*)(\+)(?=[^\s+])/g, '$1$2$3 ')
+        // Support for blockquotes missing space: ">quote" -> "> quote"
+        .replace(/(^|\n)([ \t]*>)(?=\S)/g, '$1$2 ')
+        // Support for task lists: "- [ ]" and ensure space if "[ ]text"
+        .replace(/(^|\n)([ \t]*[-*+]\s+\[[ xX]\])(?=\S)/g, '$1$2 ')
+        // Remove stray empty bullet markers that become standalone list items.
+        .replace(/(^|\n)[ \t]*[•●▪■▸▹▻▶▷►][ \t]*(?=\n|$)/g, '$1');
+
     // Normalize stray spaces inside strong markers without touching code spans/blocks.
+    // Done after marker spacing to ensure marker detection works.
     normalized = normalizeMarkdownOutsideCode(normalized, (segment) =>
         normalizeInlineMarkdownSpacing(segment)
             .replace(/(^|\n)([ \t]*[-*+]\s+)\*\*\s+([^*\n]+?)\s+\*\*/g, '$1$2**$3**')
     );
-
-    // Normalize markdown headings/lists/tables when streamed without enough spacing.
-    normalized = normalized
-        .replace(/\r\n/g, '\n')
-        .replace(/\r/g, '\n');
 
     normalized = normalizeMarkdownOutsideCode(normalized, (segment) =>
         canonicalizeTableLikeBlocks(segment)
@@ -591,26 +776,48 @@ function normalizeMarkdownForRender(text) {
     const protectedTables = protectTableSegments(normalized);
     normalized = protectedTables.protectedText;
 
-    normalized = normalizeMarkdownOutsideCode(normalized, (segment) =>
-        segment
+    normalized = normalizeMarkdownOutsideCode(normalized, (segment) => {
+        let result = segment
             // Restore missing line breaks before markdown headers that get glued to
             // the previous sentence during streaming, e.g. "answer### Title".
-            .replace(/([^\n])([ \t]*#{1,6}\s)/g, '$1\n\n$2')
+            // Use [^\n#] to avoid splitting inside heading markers themselves.
+            .replace(/([^\n#])([ \t]*#{1,6}\s)/g, '$1\n\n$2')
+            // Split headings from list markers when streamed onto the same line,
+            // e.g. "### Title1. Item" or "### Title- Item".
+            // The lookahead must not confuse '**' (bold closing) with '*' (list marker).
+            .replace(/(^|\n)([ \t]*#{1,6}[^\n]*?\S)(?=[ \t]*(?:-(?!-)\s|\+\s|\d+\.\s))/g, '$1$2\n\n');
+
+        // Break paragraphs before standalone bold lead-ins ("sentence**Heading**").
+        // Process line-by-line so we can skip heading lines entirely.
+        result = result.split('\n').map(line => {
+            // Never split bold inside heading lines
+            if (/^\s*#{1,6}\s/.test(line)) return line;
+            // Only split if the bold block is preceded by a non-whitespace character
+            // (indicates two blocks glued together during streaming)
+            return line.replace(/([^\s])([ \t]*\*\*[^*\n][^\n]*\*\*)$/g, '$1\n\n$2');
+        }).join('\n');
+
+        return result
             // Restore missing line breaks before list items only when they appear
-            // after sentence-like punctuation. A broader rule breaks table cells
-            // that contain bold markers such as "| **제목** |".
+            // after sentence-like punctuation.
             .replace(/([.!?;:)\]。！？])([ \t]*(?:[-*+]\s|\d+\.\s))/g, '$1\n\n$2')
+            // Restore missing line breaks before blockquotes.
+            .replace(/([^\n])([ \t]*>)/g, '$1\n\n$2')
+            // Ensure horizontal rules have enough space.
+            .replace(/([^\n])\n?([ \t]*[-*_]{3,}[ \t]*)(?=\n|$)/g, '$1\n\n$2')
             .replace(/([^\n])([ \t]*\$\$)/g, '$1\n\n$2')
             .replace(/([^\n])\n(#{1,6}\s)/g, '$1\n\n$2')
             .replace(/([^\n])\n((?:[-*+]\s|\d+\.\s))/g, '$1\n\n$2')
+            // Cleanup extra spaces in links: "[text] (url)" -> "[text](url)"
+            .replace(/\[([^\]]+)\]\s+\((https?:\/\/[^\s)]+)\)/g, '[$1]($2)')
             .replace(/(\|[^\n]+\|)\n(?=\|[-:\s|]+\|)/g, '$1\n')
             // Streaming sometimes inserts blank lines between markdown table rows.
             // Collapse those gaps so GFM parsers can recognize the table again.
             .replace(/(\|[^\n]+\|)\n\s*\n(?=\|[-:\s|]+\|)/g, '$1\n')
             .replace(/(\|[-:\s|]+\|)\n\s*\n(?=\|)/g, '$1\n')
             .replace(/(\|[^\n]+\|)\n\s*\n(?=\|[^\n]+\|)/g, '$1\n')
-            .replace(/\n{3,}/g, '\n\n')
-    );
+            .replace(/\n{3,}/g, '\n\n');
+    });
 
     normalized = restoreProtectedSegments(normalized, protectedTables.placeholders);
     return restoreProtectedMathSegments(normalized, protectedMath.placeholders);
@@ -1759,6 +1966,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         },
         langPrefix: 'hljs language-'
     });
+
+    if (window.markdownEngineReady?.then) {
+        window.markdownEngineReady.then((renderer) => {
+            if (!renderer?.render) return;
+            rerenderAllMarkdownHosts();
+        }).catch((error) => {
+            console.warn('[Markdown] remark renderer warm-up failed', error);
+        });
+    }
 
     // Initial chat restore first, then startup/health UI only if needed.
     try {
@@ -5932,8 +6148,16 @@ function renderMathWithKatex(host) {
 function renderMarkdownIntoHost(host, markdownText) {
     if (!host) return;
     const normalized = normalizeMarkdownForRender(markdownText || '');
-    host.innerHTML = normalized.trim() ? marked.parse(normalized) : '';
-    renderMathInHost(host);
+    host.dataset.markdownSource = normalized;
+
+    const renderer = getMarkdownRenderer();
+    host.innerHTML = normalized.trim() ? renderer.render(normalized) : '';
+    if (shouldFallbackToLooseMarkdown(host, normalized)) {
+        host.innerHTML = renderLooseMarkdownToHtml(normalized);
+    }
+    if (renderer.name !== 'remark') {
+        renderMathInHost(host);
+    }
     host.querySelectorAll('a').forEach((link) => {
         link.setAttribute('target', '_blank');
         link.setAttribute('rel', 'noopener noreferrer');

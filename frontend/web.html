@@ -31,7 +31,7 @@
     <link rel="stylesheet" href="style.css?v=8">
 
     <!-- Highlight.js -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <link rel="stylesheet" href="vendor/github-dark.min.css">
 </head>
 
 <body>
@@ -499,13 +499,61 @@
             }
         };
     </script>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
-    <script src="app.js?v=8"></script>
+    <link rel="stylesheet" href="vendor/katex.min.css">
+    <script src="vendor/marked.min.js"></script>
+    <script src="vendor/highlight.min.js"></script>
+    <script defer src="vendor/mathjax-tex-svg.js"></script>
+    <script defer src="vendor/katex.min.js"></script>
+    <script defer src="vendor/auto-render.min.js"></script>
+    <script type="module">
+        window.markdownEngineReady = (async () => {
+            const [
+                { unified },
+                { default: remarkParse },
+                { default: remarkGfm },
+                { default: remarkBreaks },
+                { default: remarkMath },
+                { default: remarkRehype },
+                { default: rehypeRaw },
+                { default: rehypeKatex },
+                { default: rehypeStringify }
+            ] = await Promise.all([
+                import('./vendor/esm/unified@11.0.5/es2022/unified.bundle.mjs'),
+                import('./vendor/esm/remark-parse@11.0.0/es2022/remark-parse.bundle.mjs'),
+                import('./vendor/esm/remark-gfm@4.0.1/es2022/remark-gfm.bundle.mjs'),
+                import('./vendor/esm/remark-breaks@4.0.0/es2022/remark-breaks.bundle.mjs'),
+                import('./vendor/esm/remark-math@6.0.0/es2022/remark-math.bundle.mjs'),
+                import('./vendor/esm/remark-rehype@11.1.2/es2022/remark-rehype.bundle.mjs'),
+                import('./vendor/esm/rehype-raw@7.0.0/es2022/rehype-raw.bundle.mjs'),
+                import('./vendor/esm/rehype-katex@7.0.1/es2022/rehype-katex.bundle.mjs'),
+                import('./vendor/esm/rehype-stringify@10.0.1/es2022/rehype-stringify.bundle.mjs')
+            ]);
+
+            const processor = unified()
+                .use(remarkParse)
+                .use(remarkGfm)
+                .use(remarkBreaks)
+                .use(remarkMath)
+                .use(remarkRehype, { allowDangerousHtml: true })
+                .use(rehypeRaw)
+                .use(rehypeKatex, { throwOnError: false, strict: 'ignore' })
+                .use(rehypeStringify, { allowDangerousHtml: true });
+
+            const renderer = {
+                name: 'remark',
+                render(markdown) {
+                    return String(processor.processSync(markdown || ''));
+                }
+            };
+
+            window.remarkMarkdownRenderer = renderer;
+            return renderer;
+        })().catch((error) => {
+            console.warn('[Markdown] Failed to initialize remark renderer, using marked fallback.', error);
+            return null;
+        });
+    </script>
+    <script src="app.js?v=9"></script>
 
 </body>
 
