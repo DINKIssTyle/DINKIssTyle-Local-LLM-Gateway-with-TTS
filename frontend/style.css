@@ -1803,14 +1803,10 @@ body.is-desktop .desktop-only {
     radial-gradient(circle at top left, rgba(88, 166, 255, 0.14), transparent 40%),
     linear-gradient(180deg, rgba(11, 16, 24, 0.98), rgba(13, 17, 23, 0.98));
   z-index: 15;
-  --saved-library-translate-x: -100%;
-  transform: translate3d(var(--saved-library-translate-x), 0, 0);
   opacity: 0;
   pointer-events: none;
-  will-change: transform, opacity;
-  transition:
-    transform 490ms cubic-bezier(0.37, 0, 0.63, 1),
-    opacity 410ms cubic-bezier(0.37, 0, 0.63, 1);
+  will-change: opacity;
+  transition: opacity 180ms ease;
 }
 
 body.keyboard-open .saved-library-view {
@@ -1818,13 +1814,11 @@ body.keyboard-open .saved-library-view {
 }
 
 .saved-library-view.is-open {
-  --saved-library-translate-x: 0%;
   opacity: 1;
   pointer-events: auto;
 }
 
 .saved-library-view.is-closing {
-  --saved-library-translate-x: -100%;
   pointer-events: none;
 }
 

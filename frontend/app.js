@@ -1226,7 +1226,12 @@ function openSavedLibrary() {
     if (savedLibrarySearchInput) {
         savedLibrarySearchInput.value = savedLibraryQuery;
         updateSavedLibrarySearchClearButton();
-        requestAnimationFrame(() => savedLibrarySearchInput.focus());
+        const shouldAutoFocusSearch = window.matchMedia?.('(hover: hover) and (pointer: fine)')?.matches;
+        if (shouldAutoFocusSearch) {
+            requestAnimationFrame(() => savedLibrarySearchInput.focus());
+        } else {
+            savedLibrarySearchInput.blur();
+        }
     }
 }
 
@@ -1251,7 +1256,7 @@ function closeSavedLibrary() {
         if (!savedLibraryView || isSavedLibraryOpen) return;
         savedLibraryView.hidden = true;
         savedLibraryView.classList.remove('is-closing');
-    }, 500);
+    }, 220);
 }
 
 function getUserBubbleTheme(themeId) {
