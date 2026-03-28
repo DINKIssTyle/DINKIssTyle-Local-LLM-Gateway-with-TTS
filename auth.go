@@ -28,6 +28,7 @@ import (
 type UserSettings struct {
 	ApiEndpoint           *string          `json:"api_endpoint,omitempty"`
 	ApiToken              *string          `json:"api_token,omitempty"`
+	SecondaryModel        *string          `json:"secondary_model,omitempty"`
 	LLMMode               *string          `json:"llm_mode,omitempty"`
 	EnableTTS             *bool            `json:"enable_tts,omitempty"`
 	EnableMCP             *bool            `json:"enable_mcp,omitempty"`

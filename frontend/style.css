@@ -200,7 +200,6 @@ body {
 }
 
 #chat-messages.is-session-hydrating {
-  opacity: 0;
   pointer-events: none;
 }
 
