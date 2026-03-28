@@ -11,10 +11,12 @@
     <title>Login - DKST LLM Chat</title>
 
     <!-- Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="icons.css?v=1">
+    <link rel="preload" href="vendor/fonts/inter-400-latin.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="vendor/fonts/inter-500-latin.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="vendor/fonts/inter-600-latin.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="vendor/fonts/material-icons-round.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="fonts.css?v=1">
+    <link rel="stylesheet" href="icons.css?v=2">
 
     <style>
         :root {
@@ -369,6 +371,9 @@
                 const data = await response.json();
 
                 if (response.ok && data.status === 'ok') {
+                    if (data.token) {
+                        localStorage.setItem('sessionToken', data.token);
+                    }
                     if (rememberMe) {
                         localStorage.setItem('savedUsername', username);
                     } else {
@@ -388,7 +393,12 @@
 
         async function handleLogout() {
             try {
-                await fetch('/api/logout', { method: 'POST' });
+                const token = localStorage.getItem('sessionToken') || '';
+                await fetch('/api/logout', {
+                    method: 'POST',
+                    headers: token ? { Authorization: `Bearer ${token}` } : {}
+                });
+                localStorage.removeItem('sessionToken');
                 authContainer.style.display = 'none';
                 loginForm.style.display = 'block';
                 document.getElementById('password').value = '';
@@ -411,12 +421,16 @@
             }
 
             try {
-                const response = await fetchJSONWithTimeout('/api/auth/check', {}, 2500);
+                const token = localStorage.getItem('sessionToken') || '';
+                const response = await fetchJSONWithTimeout('/api/auth/check', {
+                    headers: token ? { Authorization: `Bearer ${token}` } : {}
+                }, 2500);
                 const data = await response.json();
 
                 if (data.authenticated) {
                     showAuthenticatedState(data.user_id);
                 } else {
+                    localStorage.removeItem('sessionToken');
                     showLoginState();
                 }
             } catch (e) {

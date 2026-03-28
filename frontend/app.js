@@ -38,6 +38,23 @@ let config = {
     chatFontSize: 16
 };
 
+function buildSessionFetchOptions(extra = {}) {
+    const { headers: extraHeaders = {}, ...rest } = extra || {};
+    const headers = {
+        ...extraHeaders
+    };
+    const sessionToken = localStorage.getItem('sessionToken') || '';
+    if (sessionToken && !headers.Authorization) {
+        headers.Authorization = `Bearer ${sessionToken}`;
+    }
+    return {
+        credentials: 'include',
+        cache: 'no-store',
+        headers,
+        ...rest
+    };
+}
+
 function getMarkdownRenderer() {
     const remarkRenderer = window.remarkMarkdownRenderer;
     if (remarkRenderer?.render) return remarkRenderer;
@@ -1990,7 +2007,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Register Service Worker for PWA
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-            navigator.serviceWorker.register('/sw.js?v=3')
+            navigator.serviceWorker.register('/sw.js?v=4')
                 .then(reg => console.log('[PWA] Service Worker registered:', reg.scope))
                 .catch(err => console.warn('[PWA] Service Worker failed:', err));
         });
@@ -2001,8 +2018,16 @@ document.addEventListener('DOMContentLoaded', async () => {
             cancelComposerBackgroundTasks('document-hidden');
         } else {
             scheduleSavedTitleRefresh(800);
-            syncCurrentChatSessionFromServer().catch(console.warn);
+            refreshSessionStateFromServer({ allowRestore: true }).catch(console.warn);
         }
+    });
+
+    window.addEventListener('pageshow', () => {
+        refreshSessionStateFromServer({ allowRestore: true }).catch(console.warn);
+    });
+
+    window.addEventListener('focus', () => {
+        refreshSessionStateFromServer({ allowRestore: false }).catch(console.warn);
     });
 });
 
@@ -2023,6 +2048,7 @@ let activeLocalAssistantId = '';
 let locallyRenderedTurnIds = new Set();
 let isRestoringChatSession = false;
 let didInitialChatBootstrap = false;
+let lastSessionRetryTimer = null;
 let savedTurns = [];
 let savedLibraryQuery = '';
 let savedLibraryLoaded = false;
@@ -2097,6 +2123,49 @@ function restoreLastSessionIntoChatView() {
     return true;
 }
 
+function clearLastSessionRetryTimer() {
+    if (!lastSessionRetryTimer) return;
+    clearTimeout(lastSessionRetryTimer);
+    lastSessionRetryTimer = null;
+}
+
+function scheduleLastSessionRefreshRetry(delay = 1800) {
+    clearLastSessionRetryTimer();
+    lastSessionRetryTimer = window.setTimeout(async () => {
+        lastSessionRetryTimer = null;
+        try {
+            if (!currentUser) {
+                await checkAuth();
+            }
+            if (!currentUser || hasSubstantiveChatMessages()) return;
+            lastSessionCache = await fetchLastSession();
+            restoreLastSessionIntoChatView();
+        } catch (error) {
+            console.warn('Deferred last session restore failed:', error);
+        }
+    }, Math.max(300, delay));
+}
+
+async function refreshSessionStateFromServer(options = {}) {
+    const allowRestore = options.allowRestore !== false;
+    try {
+        if (!currentUser) {
+            await checkAuth();
+        }
+        if (!currentUser) return;
+
+        await syncCurrentChatSessionFromServer();
+        if (!hasSubstantiveChatMessages()) {
+            lastSessionCache = await fetchLastSession();
+            if (allowRestore) {
+                restoreLastSessionIntoChatView();
+            }
+        }
+    } catch (error) {
+        console.warn('Session refresh failed:', error);
+    }
+}
+
 async function bootstrapInitialChatView() {
     if (didInitialChatBootstrap) return;
     didInitialChatBootstrap = true;
@@ -2113,6 +2182,9 @@ async function bootstrapInitialChatView() {
 
     if (!restoredFromSession && !hasSubstantiveChatMessages()) {
         restoreLastSessionIntoChatView();
+        if (!hasSubstantiveChatMessages()) {
+            scheduleLastSessionRefreshRetry();
+        }
     }
 }
 
@@ -2145,10 +2217,11 @@ function updateUserLocation() {
 // Check authentication status
 async function checkAuth() {
     try {
-        const response = await fetch('/api/auth/check', { credentials: 'include' });
+        const response = await fetch('/api/auth/check', buildSessionFetchOptions());
         const data = await response.json();
 
         if (!data.authenticated) {
+            localStorage.removeItem('sessionToken');
             window.location.href = '/login.html';
             return;
         }
@@ -2245,7 +2318,8 @@ async function deleteUser(id) {
 // Logout
 async function logout() {
     try {
-        await fetch('/api/logout', { method: 'POST' });
+        localStorage.removeItem('sessionToken');
+        await fetch('/api/logout', buildSessionFetchOptions({ method: 'POST' }));
         window.location.href = '/login.html';
     } catch (e) {
         console.error('Logout failed:', e);
@@ -2789,7 +2863,7 @@ function applyChatFontSize() {
 
 async function fetchLastSession() {
     try {
-        const response = await fetch('/api/last-session', { credentials: 'include' });
+        const response = await fetch('/api/last-session', buildSessionFetchOptions());
         if (!response.ok) {
             return null;
         }
@@ -2806,7 +2880,7 @@ async function fetchLastSession() {
 
 async function fetchCurrentChatSession() {
     try {
-        const response = await fetch('/api/chat-session/current', { credentials: 'include' });
+        const response = await fetch('/api/chat-session/current', buildSessionFetchOptions());
         if (!response.ok) return null;
         const data = await response.json();
         return data?.has_session ? data.item : null;
@@ -2818,7 +2892,7 @@ async function fetchCurrentChatSession() {
 
 async function fetchCurrentChatSessionEvents(afterSeq = 0, limit = 400) {
     try {
-        const response = await fetch(`/api/chat-session/events?after_seq=${afterSeq}&limit=${limit}`, { credentials: 'include' });
+        const response = await fetch(`/api/chat-session/events?after_seq=${afterSeq}&limit=${limit}`, buildSessionFetchOptions());
         if (!response.ok) return { session: null, items: [], totalCount: 0 };
         const data = await response.json();
         return {

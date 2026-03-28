@@ -1388,7 +1388,10 @@ func handleLogin(am *AuthManager) http.HandlerFunc {
 		})
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		json.NewEncoder(w).Encode(map[string]string{
+			"status": "ok",
+			"token":  token,
+		})
 	}
 }
 
@@ -1418,14 +1421,14 @@ func handleLogout(am *AuthManager) http.HandlerFunc {
 // handleAuthCheck checks if user is authenticated
 func handleAuthCheck(am *AuthManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		cookie, err := r.Cookie("session")
-		if err != nil {
+		token := extractSessionTokenFromRequest(r)
+		if token == "" {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{"authenticated": false})
 			return
 		}
 
-		user, valid := am.ValidateSession(cookie.Value)
+		user, valid := am.ValidateSession(token)
 		if !valid {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{"authenticated": false})

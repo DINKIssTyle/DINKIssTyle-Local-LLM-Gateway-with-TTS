@@ -466,16 +466,37 @@ func getClientAddress(r *http.Request) string {
 	return host
 }
 
+func extractSessionTokenFromRequest(r *http.Request) string {
+	if cookie, err := r.Cookie("session"); err == nil && strings.TrimSpace(cookie.Value) != "" {
+		return strings.TrimSpace(cookie.Value)
+	}
+
+	authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
+	if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
+		token := strings.TrimSpace(authHeader[len("Bearer "):])
+		if token != "" {
+			return token
+		}
+	}
+
+	headerToken := strings.TrimSpace(r.Header.Get("X-Session-Token"))
+	if headerToken != "" {
+		return headerToken
+	}
+
+	return ""
+}
+
 // AuthMiddleware wraps an http handler with authentication
 func AuthMiddleware(am *AuthManager, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		cookie, err := r.Cookie("session")
-		if err != nil {
+		token := extractSessionTokenFromRequest(r)
+		if token == "" {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 
-		user, valid := am.ValidateSession(cookie.Value)
+		user, valid := am.ValidateSession(token)
 		if !valid {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
