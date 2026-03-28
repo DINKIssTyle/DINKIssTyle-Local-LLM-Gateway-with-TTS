@@ -403,6 +403,9 @@ const translations = {
         'chat.startup.restoreLoaded': '마지막 대화를 불러왔습니다.',
         'chat.startup.restoreMissing': '불러올 마지막 대화가 없습니다.',
         'chat.startup.restoreFailed': '마지막 대화를 불러오지 못했습니다.',
+        'chat.reconnect.title': '연결이 잠시 멈춘 것 같습니다.',
+        'chat.reconnect.body': '백그라운드 복귀 후 동기화가 지연되고 있습니다. 다시 연결을 시도해 주세요.',
+        'chat.reconnect.action': '재접속 시도',
         'input.placeholder': '메시지를 입력하세요...',
         'input.placeholder.sttA': '지금 말하세요...',
         'input.placeholder.sttB': '듣는 중...',
@@ -586,6 +589,9 @@ const translations = {
         'chat.startup.restoreLoaded': 'Last conversation loaded.',
         'chat.startup.restoreMissing': 'No saved conversation to load.',
         'chat.startup.restoreFailed': 'Could not load the last conversation.',
+        'chat.reconnect.title': 'Connection seems paused.',
+        'chat.reconnect.body': 'Sync has not resumed after returning from the background. Try reconnecting.',
+        'chat.reconnect.action': 'Reconnect',
         'input.placeholder': 'Type a message...',
         'input.placeholder.sttA': 'Speak now...',
         'input.placeholder.sttB': 'Listening...',
@@ -2292,17 +2298,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.addEventListener('visibilitychange', () => {
         if (document.hidden) {
             cancelComposerBackgroundTasks('document-hidden');
+            clearReconnectWatchdog();
         } else {
             scheduleSavedTitleRefresh(800);
+            armReconnectWatchdog();
             refreshSessionStateFromServer().catch(console.warn);
         }
     });
 
     window.addEventListener('pageshow', () => {
+        armReconnectWatchdog();
         refreshSessionStateFromServer().catch(console.warn);
     });
 
     window.addEventListener('focus', () => {
+        armReconnectWatchdog();
         refreshSessionStateFromServer().catch(console.warn);
     });
 });
@@ -2314,6 +2324,8 @@ let lastSessionCache = null;
 let currentChatSessionCache = null;
 let currentChatSessionEventSeq = 0;
 let chatSessionPollTimer = null;
+let reconnectWatchdogTimer = null;
+let reconnectCardVisible = false;
 let currentChatSessionClearedAt = '';
 let serverReplayCurrentTurnId = '';
 let serverReplayCurrentAssistantId = '';
@@ -2342,6 +2354,75 @@ const savedTurnsSyncChannel = typeof BroadcastChannel !== 'undefined'
 function handleSavedTurnsExternalSync() {
     if (!currentUser) return;
     loadSavedTurns();
+}
+
+function dismissReconnectNoticeCard() {
+    const reconnectMessages = Array.from(document.querySelectorAll('.message.has-reconnect-card'));
+    reconnectMessages.forEach((msgEl) => {
+        if (msgEl.classList.contains('is-dismissing')) return;
+        msgEl.classList.add('is-dismissing');
+        window.setTimeout(() => {
+            if (msgEl.parentNode) {
+                msgEl.remove();
+            }
+        }, 320);
+    });
+    reconnectCardVisible = false;
+}
+
+function clearReconnectWatchdog() {
+    if (!reconnectWatchdogTimer) return;
+    clearTimeout(reconnectWatchdogTimer);
+    reconnectWatchdogTimer = null;
+}
+
+function showReconnectNoticeCard() {
+    if (reconnectCardVisible || hasSubstantiveChatMessages() === false) return;
+    const reconnectMsg = {
+        role: 'assistant',
+        startup: {
+            kind: 'reconnect',
+            title: t('chat.reconnect.title'),
+            body: t('chat.reconnect.body'),
+            issues: [],
+            actionLabel: t('chat.reconnect.action'),
+            actionHandler: 'retryChatReconnect()'
+        }
+    };
+    appendMessage(reconnectMsg, { skipScroll: true });
+    reconnectCardVisible = true;
+}
+
+function armReconnectWatchdog(delay = 4200) {
+    clearReconnectWatchdog();
+    if (document.hidden) return;
+    reconnectWatchdogTimer = window.setTimeout(() => {
+        reconnectWatchdogTimer = null;
+        showReconnectNoticeCard();
+    }, Math.max(1500, delay));
+}
+
+async function retryChatReconnect() {
+    dismissReconnectNoticeCard();
+    armReconnectWatchdog(5200);
+    try {
+        await checkAuth();
+        const results = await Promise.allSettled([
+            syncCurrentChatSessionFromServer(),
+            checkSystemHealth()
+        ]);
+        const failed = results.some((result) => result.status === 'rejected');
+        if (failed) {
+            showReconnectNoticeCard();
+            return;
+        }
+        dismissReconnectNoticeCard();
+    } catch (error) {
+        console.warn('Manual reconnect failed:', error);
+        showReconnectNoticeCard();
+    } finally {
+        clearReconnectWatchdog();
+    }
 }
 
 function broadcastSavedTurnsChange(reason = 'updated') {
@@ -2438,8 +2519,12 @@ async function refreshSessionStateFromServer() {
         if (!currentUser) return;
 
         await syncCurrentChatSessionFromServer();
+        clearReconnectWatchdog();
+        dismissReconnectNoticeCard();
     } catch (error) {
         console.warn('Session refresh failed:', error);
+        clearReconnectWatchdog();
+        showReconnectNoticeCard();
     }
 }
 
@@ -5448,13 +5533,23 @@ function createMessageElement(msg) {
             </div>`;
     } else if (msg.startup) {
         div.classList.add('has-startup-card');
+        if (msg.startup.kind === 'reconnect') {
+            div.classList.add('has-reconnect-card');
+        }
         const startup = msg.startup;
         const issues = Array.isArray(startup.issues) ? startup.issues : [];
         const issuesHtml = issues.length > 0
             ? `<ul class="startup-issues">${issues.map(issue => `<li>${escapeHtml(issue)}</li>`).join('')}</ul>`
             : '';
-        const actionHtml = startup.showRestoreButton
-            ? `<div class="startup-actions"><button class="startup-action-btn" onclick="restoreLastSession()">${escapeHtml(startup.restoreLabel || t('chat.startup.restore'))}</button></div>`
+        const actionButtons = [];
+        if (startup.showRestoreButton) {
+            actionButtons.push(`<button class="startup-action-btn" onclick="restoreLastSession()">${escapeHtml(startup.restoreLabel || t('chat.startup.restore'))}</button>`);
+        }
+        if (startup.actionLabel && startup.actionHandler) {
+            actionButtons.push(`<button class="startup-action-btn" onclick="${escapeAttr(startup.actionHandler)}">${escapeHtml(startup.actionLabel)}</button>`);
+        }
+        const actionHtml = actionButtons.length > 0
+            ? `<div class="startup-actions">${actionButtons.join('')}</div>`
             : '';
 
         div.innerHTML = `
