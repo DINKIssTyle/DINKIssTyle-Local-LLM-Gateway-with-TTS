@@ -7,3 +7,4 @@ dinkisstyle-chat
 *.log
 dinkisstyle-chat-test
 dinkisstyle-chat-test-context
+/note/os_tts_test
