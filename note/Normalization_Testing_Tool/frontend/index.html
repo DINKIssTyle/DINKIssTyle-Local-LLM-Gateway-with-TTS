@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Normalization Testing Tool</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="vendor/github-dark.min.css">
+    <link rel="stylesheet" href="vendor/katex.min.css">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
+</head>
+<body>
+    <div id="app">
+        <header>
+            <div class="logo">
+                <span class="material-icons-round">rule</span>
+                <h1>Normalization Testing Tool</h1>
+            </div>
+            <div class="header-actions">
+                <button id="btn-settings" class="icon-btn" title="Settings">
+                    <span class="material-icons-round">settings</span>
+                </button>
+            </div>
+        </header>
+
+        <main>
+            <!-- Left: Test Cases -->
+            <section class="column col-left">
+                <div class="column-header">
+                    <h2>Raw LLM Responses</h2>
+                    <button id="btn-add-testcase" class="icon-btn-small"><span class="material-icons-round">add</span></button>
+                </div>
+                <div class="testcase-list" id="testcase-list">
+                    <!-- Dynamic -->
+                </div>
+                <div class="editor-container">
+                    <textarea id="raw-editor" placeholder="Paste raw markdown here..."></textarea>
+                </div>
+            </section>
+
+            <!-- Middle: Rules -->
+            <section class="column col-middle">
+                <div class="column-header">
+                    <h2>Normalization Rules</h2>
+                    <button id="btn-add-rule" class="icon-btn-small" title="Add Rule"><span class="material-icons-round">add</span></button>
+                    <button id="btn-sync-rules" class="icon-btn-small" title="Sync from app.js"><span class="material-icons-round">sync</span></button>
+                </div>
+                <div class="rules-list" id="rules-list">
+                    <!-- Dynamic -->
+                </div>
+                <div class="rule-controls">
+                    <button id="btn-run-all" class="btn-primary">
+                        <span class="material-icons-round">play_arrow</span>
+                        Run Normalization
+                    </button>
+                </div>
+            </section>
+
+            <!-- Right: Preview -->
+            <section class="column col-right">
+                <div class="column-header">
+                    <h2>Remark Preview</h2>
+                    <div class="preview-mode">
+                        <button class="active" data-mode="rendered">Rendered</button>
+                        <button data-mode="diff">Diff</button>
+                    </div>
+                </div>
+                <div id="preview-container" class="preview-area">
+                    <!-- Rendered Markdown -->
+                </div>
+            </section>
+        </main>
+
+        <!-- Bottom: Chat Area -->
+        <footer>
+            <div class="chat-container">
+                <div id="chat-messages" class="chat-messages">
+                    <div class="message system">
+                        Welcome to the Optimizer. Type your feedback about the rendering below, and the LLM will help you tune the regex rules.
+                    </div>
+                </div>
+                <div class="chat-input-row">
+                    <textarea id="chat-input" placeholder="Describe the rendering issue... (e.g., 'Table pipes should be trimmed')"></textarea>
+                    <button id="btn-send-chat" class="icon-btn large">
+                        <span class="material-icons-round">send</span>
+                    </button>
+                </div>
+            </div>
+        </footer>
+
+        <!-- Settings Modal -->
+        <div id="settings-modal" class="modal">
+            <div class="modal-content">
+                <h3>OpenAI API Settings</h3>
+                <div class="form-group">
+                    <label>Endpoint</label>
+                    <input type="text" id="set-endpoint" placeholder="http://localhost:1234/v1">
+                </div>
+                <div class="form-group">
+                    <label>API Key</label>
+                    <input type="password" id="set-apikey" placeholder="Optional">
+                </div>
+                <div class="form-group">
+                    <label>Model</label>
+                    <input type="text" id="set-model" placeholder="gpt-4o">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Temperature</label>
+                        <input type="number" id="set-temp" step="0.1" min="0" max="2" value="0.7">
+                    </div>
+                    <div class="form-group">
+                        <label>Max Tokens</label>
+                        <input type="number" id="set-tokens" step="100" value="2048">
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button id="btn-settings-cancel" class="btn-secondary">Cancel</button>
+                    <button id="btn-settings-save" class="btn-primary">Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Remark rendering support -->
+    <script type="module" src="main.js"></script>
+</body>
+</html>
