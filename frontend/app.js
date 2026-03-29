@@ -1606,16 +1606,31 @@ function buildSavedTurnTitleRequestPayload(extra = {}) {
 
 async function saveTurn(promptText, responseText) {
     try {
+        const payload = buildSavedTurnTitleRequestPayload({
+            prompt_text: promptText,
+            response_text: responseText
+        });
+        console.log('[SavedTurn] Saving turn', {
+            promptLen: String(promptText || '').length,
+            responseLen: String(responseText || '').length,
+            promptPreview: String(promptText || '').slice(0, 120),
+            responsePreview: String(responseText || '').slice(0, 120)
+        });
         const response = await fetch('/api/saved-turns', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include',
-            body: JSON.stringify(buildSavedTurnTitleRequestPayload({
-                prompt_text: promptText,
-                response_text: responseText
-            }))
+            body: JSON.stringify(payload)
         });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        if (!response.ok) {
+            const errorText = await response.text().catch(() => '');
+            console.warn('[SavedTurn] Save request failed', {
+                status: response.status,
+                statusText: response.statusText,
+                body: errorText
+            });
+            throw new Error(`HTTP ${response.status}`);
+        }
         const data = await response.json();
         const item = data.item;
         if (item) {
@@ -1803,17 +1818,38 @@ async function refreshSavedTurnTitleById(id) {
 function getTurnDataFromAssistantButton(btn) {
     const messageEl = btn?.closest('.message.assistant');
     const turnId = messageEl?.dataset.turnId;
-    if (!turnId) return null;
-
-    const userMessage = messages.find((entry) => entry?.role === 'user' && entry?.turnId === turnId);
-    const assistantMessage = [...messages].reverse().find((entry) => entry?.role === 'assistant' && entry?.turnId === turnId);
+    if (!turnId) {
+        console.warn('[SavedTurn] Missing turnId on assistant button', { button: btn, messageEl });
+        return null;
+    }
 
     const userEl = document.querySelector(`.message.user[data-turn-id="${turnId}"] .message-bubble`);
     const responseEl = messageEl.querySelector('.markdown-body');
+    const userMessage = messages.find((entry) => entry?.role === 'user' && entry?.turnId === turnId);
+    const assistantMessage = [...messages].reverse().find((entry) => entry?.role === 'assistant' && entry?.turnId === turnId);
 
-    const promptText = (userMessage?.content || userEl?.innerText || '').trim();
-    const responseText = (assistantMessage?.content || responseEl?.innerText || '').trim();
-    if (!promptText || !responseText) return null;
+    const promptText = (userEl?.innerText || userMessage?.content || '').trim();
+    const responseText = (responseEl?.innerText || assistantMessage?.content || '').trim();
+    console.log('[SavedTurn] Extracted turn data candidates', {
+        turnId,
+        hasUserElement: !!userEl,
+        hasResponseElement: !!responseEl,
+        userMessageLen: (userMessage?.content || '').trim().length,
+        assistantMessageLen: (assistantMessage?.content || '').trim().length,
+        promptLen: promptText.length,
+        responseLen: responseText.length,
+        responsePreview: responseText.slice(0, 120)
+    });
+    if (!promptText || !responseText) {
+        console.warn('[SavedTurn] Turn data incomplete', {
+            turnId,
+            promptText,
+            responseText,
+            userHtml: userEl?.outerHTML || null,
+            responseHtml: responseEl?.outerHTML || null
+        });
+        return null;
+    }
     return {
         promptText,
         responseText
@@ -2370,6 +2406,7 @@ let serverReplayMessageBuffers = new Map();
 let serverReplayReasoningBuffers = new Map();
 let activeLocalTurnId = '';
 let activeLocalAssistantId = '';
+let assistantTurnIdMap = new Map();
 let locallyRenderedTurnIds = new Set();
 let isRestoringChatSession = false;
 let didInitialChatBootstrap = false;
@@ -3407,14 +3444,20 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
     snapshotMessages.forEach((item, index) => {
         const turnId = String(item?.turn_id || `snapshot-turn-${index + 1}`);
         const assistantId = buildServerAssistantMessageId(turnId, `snapshot-turn-${index + 1}`);
+        const snapshotToolState = sessionUISnapshot.tool_cards?.[turnId] || null;
+        const hasAssistantContent = hasAssistantSnapshotContent(item?.assistant_content, item?.reasoning_content, snapshotToolState);
         lastTurnId = turnId;
-        lastAssistantId = assistantId;
+        if (hasAssistantContent) {
+            lastAssistantId = assistantId;
+        }
 
         if (item?.user_content) {
             appendMessage({ role: 'user', content: item.user_content, turnId }, { parent: fragment, skipScroll: true });
             messages.push({ role: 'user', content: item.user_content, turnId });
         }
-        appendMessage({ role: 'assistant', content: '', id: assistantId, turnId }, { parent: fragment, skipScroll: true });
+        if (hasAssistantContent) {
+            appendMessage({ role: 'assistant', content: '', id: assistantId, turnId }, { parent: fragment, skipScroll: true });
+        }
     });
 
     if (fragment.childNodes.length > 0) {
@@ -3429,6 +3472,9 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
         const reasoningText = String(item?.reasoning_content || '');
         const reasoningDuration = getSnapshotReasoningDuration(item);
         const snapshotToolState = sessionUISnapshot.tool_cards?.[turnId] || null;
+        if (!hasAssistantSnapshotContent(assistantText, reasoningText, snapshotToolState)) {
+            return;
+        }
 
         ensureAssistantMessageElement(assistantId, turnId);
         if (reasoningText && !config.hideThink) {
@@ -3499,10 +3545,57 @@ function buildServerAssistantMessageId(turnId = '', fallbackKey = '') {
     return `server-assistant-${key}`;
 }
 
+function hasAssistantSnapshotContent(assistantText = '', reasoningText = '', toolState = null) {
+    if (String(assistantText || '').trim()) return true;
+    if (String(reasoningText || '').trim() && !config.hideThink) return true;
+    if (toolState && typeof toolState === 'object') {
+        if (String(toolState.summary || '').trim()) return true;
+        if (String(toolState.toolName || '').trim()) return true;
+        if (toolState.args != null) return true;
+        if (Array.isArray(toolState.history) && toolState.history.length > 0) return true;
+        if (String(toolState.state || '').trim()) return true;
+    }
+    return false;
+}
+
+function findAssistantMessageByTurnId(turnId = '') {
+    const resolvedTurnId = String(turnId || '').trim();
+    if (!resolvedTurnId) return null;
+    return document.querySelector(`.message.assistant[data-turn-id="${resolvedTurnId}"]`);
+}
+
+function cleanupAssistantMessagesForTurn(turnId = '', preferredId = '') {
+    const resolvedTurnId = String(turnId || '').trim();
+    if (!resolvedTurnId || !chatMessages) return;
+    const nodes = Array.from(chatMessages.querySelectorAll(`.message.assistant[data-turn-id="${resolvedTurnId}"]`));
+    if (nodes.length <= 1) return;
+
+    let keepNode = preferredId ? document.getElementById(preferredId) : null;
+    if (!keepNode || !nodes.includes(keepNode)) {
+        keepNode = [...nodes].reverse().find((node) => !isAssistantMessageVisiblyEmpty(node)) || nodes[nodes.length - 1];
+    }
+
+    nodes.forEach((node) => {
+        if (node === keepNode) return;
+        if (isAssistantMessageVisiblyEmpty(node) || keepNode) {
+            node.remove();
+        }
+    });
+}
+
 function ensureServerReplayAssistant(turnId, sessionId, seq) {
     const resolvedTurnId = String(turnId || '').trim();
     const fallbackKey = `server-turn-${sessionId || 'default'}-${seq || '0'}`;
     const messageId = buildServerAssistantMessageId(resolvedTurnId, fallbackKey);
+    const existingByTurn = findAssistantMessageByTurnId(resolvedTurnId || fallbackKey);
+    if (existingByTurn) {
+        if (!existingByTurn.id) {
+            existingByTurn.id = messageId;
+        }
+        serverReplayCurrentAssistantId = existingByTurn.id || messageId;
+        cleanupAssistantMessagesForTurn(resolvedTurnId || fallbackKey, serverReplayCurrentAssistantId);
+        return serverReplayCurrentAssistantId;
+    }
     if (!serverReplayCurrentAssistantId) {
         serverReplayCurrentAssistantId = messageId;
     }
@@ -3515,6 +3608,7 @@ function ensureServerReplayAssistant(turnId, sessionId, seq) {
             turnId: resolvedTurnId || fallbackKey
         });
     }
+    cleanupAssistantMessagesForTurn(resolvedTurnId || fallbackKey, stableMessageId);
     return stableMessageId;
 }
 
@@ -3644,9 +3738,15 @@ function applyCurrentChatSessionEvent(entry) {
                 : appendStreamChunkDedup(serverReplayMessageBuffers.get(assistantId) || '', String(payload.content || ''));
             serverReplayMessageBuffers.set(assistantId, next);
             updateSyncedMessageContent(assistantId, next);
+            cleanupAssistantMessagesForTurn(serverReplayCurrentTurnId || entryTurnId, assistantId);
             break;
         }
         case 'reasoning.start':
+            if (!isLocalActiveTurn && !serverReplayCurrentAssistantId && (entryTurnId || serverReplayCurrentTurnId)) {
+                const nextTurnId = entryTurnId || serverReplayCurrentTurnId;
+                serverReplayCurrentTurnId = nextTurnId;
+                serverReplayCurrentAssistantId = ensureServerReplayAssistant(nextTurnId, sessionId, entry.EventSeq);
+            }
             {
                 const reasoningAssistantId = isLocalActiveTurn ? activeLocalAssistantId : serverReplayCurrentAssistantId;
                 if (reasoningAssistantId) {
@@ -3665,6 +3765,11 @@ function applyCurrentChatSessionEvent(entry) {
             if (serverReplayCurrentAssistantId) showReasoningStatus(serverReplayCurrentAssistantId, '...');
             break;
         case 'reasoning.delta':
+            if (!isLocalActiveTurn && !serverReplayCurrentAssistantId && (entryTurnId || serverReplayCurrentTurnId)) {
+                const nextTurnId = entryTurnId || serverReplayCurrentTurnId;
+                serverReplayCurrentTurnId = nextTurnId;
+                serverReplayCurrentAssistantId = ensureServerReplayAssistant(nextTurnId, sessionId, entry.EventSeq);
+            }
             {
                 const reasoningAssistantId = isLocalActiveTurn ? activeLocalAssistantId : serverReplayCurrentAssistantId;
                 const reasoningText = payload.content || payload.reasoning_content || payload.text || payload.delta?.content || '';
@@ -3711,6 +3816,11 @@ function applyCurrentChatSessionEvent(entry) {
             }
             break;
         case 'tool_call.start':
+            if (!isLocalActiveTurn && !serverReplayCurrentAssistantId && (entryTurnId || serverReplayCurrentTurnId)) {
+                const nextTurnId = entryTurnId || serverReplayCurrentTurnId;
+                serverReplayCurrentTurnId = nextTurnId;
+                serverReplayCurrentAssistantId = ensureServerReplayAssistant(nextTurnId, sessionId, entry.EventSeq);
+            }
             if (isLocalActiveTurn) {
                 if (activeLocalAssistantId) setToolCardState(activeLocalAssistantId, 'running', '', null, payload.tool || '');
                 break;
@@ -3718,6 +3828,11 @@ function applyCurrentChatSessionEvent(entry) {
             if (serverReplayCurrentAssistantId) setToolCardState(serverReplayCurrentAssistantId, 'running', '', null, payload.tool || '');
             break;
         case 'tool_call.arguments':
+            if (!isLocalActiveTurn && !serverReplayCurrentAssistantId && (entryTurnId || serverReplayCurrentTurnId)) {
+                const nextTurnId = entryTurnId || serverReplayCurrentTurnId;
+                serverReplayCurrentTurnId = nextTurnId;
+                serverReplayCurrentAssistantId = ensureServerReplayAssistant(nextTurnId, sessionId, entry.EventSeq);
+            }
             if (isLocalActiveTurn) {
                 if (activeLocalAssistantId) setToolCardState(activeLocalAssistantId, 'running', '', payload.arguments || null, payload.tool || '');
                 break;
@@ -3792,6 +3907,7 @@ function applyCurrentChatSessionEvent(entry) {
                 finalizeMessageContent(serverReplayCurrentAssistantId, finalText);
                 finalizeAssistantStatusCards(serverReplayCurrentAssistantId, 'done');
                 setAssistantActionBarReady(serverReplayCurrentAssistantId);
+                cleanupAssistantMessagesForTurn(serverReplayCurrentTurnId || entryTurnId, serverReplayCurrentAssistantId);
             }
             hideProgressDock();
             cleanupTrailingEmptyAssistantMessages();
@@ -4110,6 +4226,10 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
         messages.push({ role: 'user', content: user.content, turnId: user.turnId });
         const assistantId = assistantByTurn.get(user.turnId);
         if (!assistantId) continue;
+        const assistantText = assistantTextById.get(assistantId) || '';
+        const reasoningText = reasoningTextById.get(assistantId) || '';
+        const toolState = toolStateById.get(assistantId) || sessionUISnapshot.tool_cards?.[user.turnId] || null;
+        if (!hasAssistantSnapshotContent(assistantText, reasoningText, toolState)) continue;
         if (!document.getElementById(assistantId)) {
             appendMessage({
                 role: 'assistant',
@@ -4127,22 +4247,24 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
     for (const user of users) {
         const assistantId = assistantByTurn.get(user.turnId);
         if (!assistantId) continue;
+        const assistantText = assistantTextById.get(assistantId) || '';
+        const reasoningText = reasoningTextById.get(assistantId) || '';
+        const toolState = toolStateById.get(assistantId);
+        const snapshotToolState = sessionUISnapshot.tool_cards?.[user.turnId] || null;
+        const mergedToolState = toolState || snapshotToolState;
+        if (!hasAssistantSnapshotContent(assistantText, reasoningText, mergedToolState)) continue;
         const assistantEl = ensureAssistantMessageElement(assistantId);
         if (!assistantEl) continue;
 
         if (reasoningStartedAtById.has(assistantId)) {
             setReasoningCardStartedAt(assistantId, reasoningStartedAtById.get(assistantId));
         }
-        const reasoningText = reasoningTextById.get(assistantId) || '';
         if (reasoningText && !config.hideThink) {
             serverReplayReasoningBuffers.set(assistantId, reasoningText);
             showReasoningStatus(assistantId, reasoningText);
             finalizeReasoningStatus(assistantId, 'done', '', reasoningDurationById.get(assistantId) || null);
         }
 
-        const toolState = toolStateById.get(assistantId);
-        const snapshotToolState = sessionUISnapshot.tool_cards?.[user.turnId] || null;
-        const mergedToolState = toolState || snapshotToolState;
         if (mergedToolState) {
             ensureToolCard(assistantId, mergedToolState.toolName || 'Tool');
             setToolCardState(assistantId, mergedToolState.state, mergedToolState.summary, mergedToolState.args, mergedToolState.toolName);
@@ -4154,7 +4276,6 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
             }
         }
 
-        const assistantText = assistantTextById.get(assistantId) || '';
         serverReplayMessageBuffers.set(assistantId, assistantText);
         updateSyncedMessageContent(assistantId, assistantText, { animate: false });
         finalizeMessageContent(assistantId, assistantText);
@@ -4801,6 +4922,7 @@ async function sendMessage() {
     activeStreamingMessageId = assistantId;
     activeLocalTurnId = turnId;
     activeLocalAssistantId = assistantId;
+    assistantTurnIdMap.set(assistantId, turnId);
     locallyRenderedTurnIds.add(turnId);
     stopChatSessionPolling();
 
@@ -5657,13 +5779,20 @@ function getSnapshotReasoningDuration(item) {
 }
 
 function ensureAssistantMessageElement(id, turnId = '') {
+    const resolvedTurnId = String(turnId || assistantTurnIdMap.get(id) || (id === activeLocalAssistantId ? activeLocalTurnId : '') || '').trim();
+    if (id && resolvedTurnId) {
+        assistantTurnIdMap.set(id, resolvedTurnId);
+    }
     let el = document.getElementById(id);
     if (el) {
+        if (resolvedTurnId && !el.dataset.turnId) {
+            el.dataset.turnId = resolvedTurnId;
+        }
         attachStreamingAudioButtonToMessage(el);
         syncAssistantMessageShellState(el);
         return el;
     }
-    appendMessage({ role: 'assistant', content: '', id, turnId });
+    appendMessage({ role: 'assistant', content: '', id, turnId: resolvedTurnId });
     el = document.getElementById(id);
     if (el && activeStreamingMessageId === id) {
         startStreamingMessageAutoScroll(id);
@@ -5675,10 +5804,13 @@ function ensureAssistantMessageElement(id, turnId = '') {
 
 function isAssistantMessageVisiblyEmpty(msgEl) {
     if (!msgEl || !msgEl.classList?.contains('assistant')) return false;
-    const markdownText = msgEl.querySelector('.assistant-response-card .markdown-body')?.innerText?.trim() || '';
-    const reasoningText = msgEl.querySelector('.assistant-reasoning')?.innerText?.trim() || '';
+    const markdownHost = msgEl.querySelector('.assistant-response-card .markdown-body');
+    const markdownSource = String(markdownHost?.dataset?.markdownSource || '').trim();
+    const markdownText = String(markdownHost?.textContent || '').trim();
+    const reasoningText = String(msgEl.querySelector('.assistant-reasoning')?.textContent || '').trim();
     const hasToolCards = msgEl.querySelectorAll('.assistant-tools .tool-card').length > 0;
-    const hasVisibleResponse = !msgEl.querySelector('.assistant-response-card')?.hidden && !!markdownText;
+    const responseCard = msgEl.querySelector('.assistant-response-card');
+    const hasVisibleResponse = !responseCard?.hidden && (!!markdownSource || !!markdownText);
     const hasVisibleReasoning = !!reasoningText;
     return !hasVisibleResponse && !hasVisibleReasoning && !hasToolCards;
 }
@@ -6253,6 +6385,7 @@ async function saveMessageTurn(btn) {
     if (btn?.dataset?.saving === 'true') return;
     const turnData = getTurnDataFromAssistantButton(btn);
     if (!turnData) {
+        console.warn('[SavedTurn] saveMessageTurn aborted because turnData is missing');
         showToast(t('library.saveFailed'), true);
         return;
     }

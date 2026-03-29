@@ -775,7 +775,11 @@ func (a *App) StartServer(port string) error {
 
 	// Wrap mux with logging middleware
 	loggingMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("[HTTP] %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+		path := r.URL.Path
+		isChatSessionPoll := path == "/api/chat-session/current" || path == "/api/chat-session/events"
+		if !isChatSessionPoll {
+			log.Printf("[HTTP] %s %s from %s", r.Method, path, r.RemoteAddr)
+		}
 		mux.ServeHTTP(w, r)
 	})
 

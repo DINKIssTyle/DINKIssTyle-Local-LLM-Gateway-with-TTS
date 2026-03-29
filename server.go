@@ -228,6 +228,105 @@ func deriveLastSessionFromChatSession(entry mcp.ChatSessionEntry) (map[string]in
 	return nil, false
 }
 
+func summarizeLastSessionSnapshot(snapshot chatSessionUISnapshot) string {
+	if len(snapshot.Messages) == 0 {
+		return "messages=0"
+	}
+	parts := make([]string, 0, min(3, len(snapshot.Messages)))
+	for i := len(snapshot.Messages) - 1; i >= 0 && len(parts) < 3; i-- {
+		item := snapshot.Messages[i]
+		parts = append(parts, fmt.Sprintf("turn=%s user=%d assistant=%d reasoning=%d",
+			strings.TrimSpace(item.TurnID),
+			len([]rune(strings.TrimSpace(item.UserContent))),
+			len([]rune(strings.TrimSpace(item.AssistantContent))),
+			len([]rune(strings.TrimSpace(item.ReasoningContent))),
+		))
+	}
+	return fmt.Sprintf("messages=%d last=[%s]", len(snapshot.Messages), strings.Join(parts, "; "))
+}
+
+func deriveLastSessionFromChatEvents(userID string, entry mcp.ChatSessionEntry) (map[string]interface{}, bool) {
+	events, err := mcp.ListChatEvents(userID, entry.ID, 0, 2000)
+	if err != nil || len(events) == 0 {
+		return nil, false
+	}
+
+	type turnSnapshot struct {
+		user      string
+		assistant string
+	}
+
+	byTurn := make(map[string]*turnSnapshot)
+	order := make([]string, 0, len(events))
+
+	ensureTurn := func(turnID string) *turnSnapshot {
+		key := strings.TrimSpace(turnID)
+		if key == "" {
+			return nil
+		}
+		if existing, ok := byTurn[key]; ok {
+			return existing
+		}
+		next := &turnSnapshot{}
+		byTurn[key] = next
+		order = append(order, key)
+		return next
+	}
+
+	for _, event := range events {
+		var payload map[string]interface{}
+		if err := json.Unmarshal([]byte(strings.TrimSpace(event.PayloadJSON)), &payload); err != nil {
+			payload = map[string]interface{}{}
+		}
+
+		turnID := strings.TrimSpace(event.TurnID)
+		if turnID == "" {
+			if raw, ok := payload["turn_id"].(string); ok {
+				turnID = strings.TrimSpace(raw)
+			}
+		}
+		turn := ensureTurn(turnID)
+		if turn == nil {
+			continue
+		}
+
+		switch event.EventType {
+		case "message.created":
+			if event.Role == "user" {
+				if content, ok := payload["content"].(string); ok && strings.TrimSpace(content) != "" {
+					turn.user = strings.TrimSpace(content)
+				}
+			}
+		case "message.delta":
+			if fullContent, ok := payload["full_content"].(string); ok && strings.TrimSpace(fullContent) != "" {
+				turn.assistant = strings.TrimSpace(fullContent)
+			} else if content, ok := payload["content"].(string); ok && strings.TrimSpace(content) != "" {
+				turn.assistant += content
+				turn.assistant = strings.TrimSpace(turn.assistant)
+			}
+		}
+	}
+
+	for i := len(order) - 1; i >= 0; i-- {
+		turn := byTurn[order[i]]
+		if turn == nil {
+			continue
+		}
+		if strings.TrimSpace(turn.user) == "" || strings.TrimSpace(turn.assistant) == "" {
+			continue
+		}
+		return map[string]interface{}{
+			"has_session":       true,
+			"user_message":      strings.TrimSpace(turn.user),
+			"assistant_message": strings.TrimSpace(turn.assistant),
+			"mode":              strings.TrimSpace(entry.LLMMode),
+			"updated_at":        entry.UpdatedAt,
+		}, true
+	}
+
+	return nil, false
+}
+
 func estimateStatefulTokens(text string) int {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
@@ -1737,20 +1836,41 @@ func handleLastSession() http.HandlerFunc {
 				if !errors.Is(err, sql.ErrNoRows) {
 					log.Printf("[handleLastSession] Failed to load current chat session for user %s: %v", userID, err)
 				}
+				log.Printf("[handleLastSession] No current chat session for %s", userID)
 				json.NewEncoder(w).Encode(map[string]interface{}{
 					"has_session": false,
 				})
 				return
 			}
+
+			snapshot := parseChatSessionUISnapshot(entry.UIStateJSON)
+			log.Printf("[handleLastSession] Resolving last session for %s session_id=%d status=%s updated_at=%s snapshot=%s",
+				userID,
+				entry.ID,
+				strings.TrimSpace(entry.Status),
+				entry.UpdatedAt.Format(time.RFC3339Nano),
+				summarizeLastSessionSnapshot(snapshot),
+			)
 
 			payload, ok := deriveLastSessionFromChatSession(entry)
 			if !ok {
+				log.Printf("[handleLastSession] Snapshot fallback needed for %s session_id=%d", userID, entry.ID)
+				payload, ok = deriveLastSessionFromChatEvents(userID, entry)
+			}
+			if !ok {
+				log.Printf("[handleLastSession] No restorable last session for %s session_id=%d", userID, entry.ID)
 				json.NewEncoder(w).Encode(map[string]interface{}{
 					"has_session": false,
 				})
 				return
 			}
 
+			log.Printf("[handleLastSession] Restored last session for %s user_len=%d assistant_len=%d mode=%s",
+				userID,
+				len([]rune(strings.TrimSpace(fmt.Sprintf("%v", payload["user_message"])))),
+				len([]rune(strings.TrimSpace(fmt.Sprintf("%v", payload["assistant_message"])))),
+				strings.TrimSpace(fmt.Sprintf("%v", payload["mode"])),
+			)
 			json.NewEncoder(w).Encode(payload)
 		default:
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1843,7 +1963,22 @@ func handleSavedTurns() http.HandlerFunc {
 				Temperature    *float64 `json:"temperature"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				log.Printf("[handleSavedTurns] Invalid request JSON for %s: %v", userID, err)
 				http.Error(w, "Invalid request", http.StatusBadRequest)
+				return
+			}
+			req.PromptText = strings.TrimSpace(req.PromptText)
+			req.ResponseText = strings.TrimSpace(req.ResponseText)
+			log.Printf("[handleSavedTurns] Save request for %s prompt_len=%d response_len=%d prompt_preview=%q response_preview=%q",
+				userID,
+				len([]rune(req.PromptText)),
+				len([]rune(req.ResponseText)),
+				compactText(req.PromptText, 80),
+				compactText(req.ResponseText, 120),
+			)
+			if req.PromptText == "" || req.ResponseText == "" {
+				log.Printf("[handleSavedTurns] Rejecting save for %s because prompt/response is empty", userID)
+				http.Error(w, "Valid prompt_text and response_text are required", http.StatusBadRequest)
 				return
 			}
 			entry, err := mcp.SaveSavedTurn(userID, req.PromptText, req.ResponseText)
