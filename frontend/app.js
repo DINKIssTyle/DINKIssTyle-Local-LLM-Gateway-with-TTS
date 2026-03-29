@@ -412,6 +412,7 @@ const translations = {
         'setting.threads.desc': '(기본값: 2) TTS 생성에 할당하는 CPU 스레드',
         'setting.format.label': '재생 형식',
         'setting.format.desc': 'MP3는 WAV를 변환하여 재생합니다.',
+        'setting.format.note': 'WAV형식을 사용하면 모바일에서 화면이 꺼져도 백그라운드 재생을 계속할 수 있습니다.',
         // Advanced
         'section.advanced': '고급 설정',
         'setting.cert.label': 'HTTPS 인증서',
@@ -612,6 +613,7 @@ const translations = {
         'setting.threads.desc': '(Default: 2) CPU threads for TTS generation',
         'setting.format.label': 'Audio Format',
         'setting.format.desc': 'MP3 is converted from WAV.',
+        'setting.format.note': 'Using WAV helps mobile devices keep background playback running even when the screen turns off.',
         // Advanced
         'section.advanced': 'Advanced Settings',
         'setting.cert.label': 'HTTPS Certificate',
