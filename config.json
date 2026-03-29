@@ -5,9 +5,12 @@
   "llmMode": "standard",
   "enableTTS": true,
   "tts": {
+    "engine": "supertonic",
     "voiceStyle": "M1.json",
     "speed": 1.0,
-    "threads": 4
+    "threads": 4,
+    "osRate": 1.0,
+    "osPitch": 1.0
   },
   "startOnBoot": false,
   "minimizeToTray": false,

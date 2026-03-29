@@ -25,12 +25,18 @@ let config = {
     ttsLang: 'ko',
     chunkSize: 200,        // Default: 200 (Smart Chunking)
     systemPrompt: 'You are a helpful AI assistant.',
+    ttsEngine: 'supertonic', // 'supertonic' or 'os'
     ttsVoice: 'F1',        // Default: F1
     ttsSpeed: 1.1,         // Default: 1.1
     autoTTS: true,         // Default: True (Auto-play)
     ttsFormat: 'wav',      // Default: wav
     ttsSteps: 5,           // Default: 5
     ttsThreads: 2,         // Default: 2
+    osTtsVoiceURI: '',
+    osTtsVoiceName: '',
+    osTtsVoiceLang: '',
+    osTtsRate: 1.0,
+    osTtsPitch: 1.0,
     language: 'ko', // UI language
     apiToken: '',
     llmMode: 'standard', // 'standard' or 'stateful'
@@ -302,6 +308,8 @@ const translations = {
         'setting.llmEndpoint.label': 'LLM 엔드포인트',
         'setting.model.label': '모델 이름',
         'setting.model.desc': 'LLM서버에서 현재 로드되어 있는 모델 이름을 적어주세요.',
+        'setting.secondaryModel.label': '보조 모델',
+        'setting.secondaryModel.desc': '저장된 대화 제목 생성 같은 가벼운 작업에 우선 사용할 보조 모델입니다.',
         'setting.hideThink.label': 'Hide <think>',
         'setting.hideThink.desc': 'LLM이 생각하는 과정을 채팅창에 보여주지 않습니다.',
         'setting.systemPrompt.label': '시스템 프롬프트',
@@ -378,8 +386,20 @@ const translations = {
         'setting.enableTTS.desc': '응답을 음성으로 재생합니다.',
         'setting.autoPlay.label': '자동 재생',
         'setting.autoPlay.desc': '응답을 자동으로 음성 재생합니다.',
+        'setting.ttsEngine.label': 'TTS 엔진',
+        'setting.ttsEngine.desc': 'Supertonic 2 또는 운영체제 기본 음성을 선택합니다.',
+        'setting.ttsEngine.option.supertonic': 'Supertonic 2',
+        'setting.ttsEngine.option.os': 'OS TTS',
         'setting.voiceStyle.label': '음성 스타일',
         'setting.voiceStyle.desc': 'TTS 음성 스타일을 선택합니다.',
+        'setting.osVoice.label': 'OS 목소리',
+        'setting.osVoice.desc': '운영체제에서 제공하는 음성을 선택합니다.',
+        'setting.osRate.label': 'OS 속도',
+        'setting.osRate.desc': '운영체제 음성의 재생 속도입니다.',
+        'setting.osPitch.label': 'OS 음조',
+        'setting.osPitch.desc': '운영체제 음성의 음조를 조절합니다.',
+        'setting.osVoice.loading': '목소리 불러오는 중...',
+        'setting.osVoice.unavailable': 'OS TTS 사용 불가',
         'setting.speed.label': '속도',
         'setting.speed.desc': '음성 재생 속도입니다.',
         'setting.ttsLang.label': 'TTS 언어',
@@ -489,6 +509,8 @@ const translations = {
         'setting.llmEndpoint.label': 'LLM Endpoint',
         'setting.model.label': 'Model Name',
         'setting.model.desc': 'Enter the model name loaded on your LLM server.',
+        'setting.secondaryModel.label': 'Secondary Model',
+        'setting.secondaryModel.desc': 'A helper model preferred for lighter tasks such as generating saved conversation titles.',
         'setting.hideThink.label': 'Hide <think>',
         'setting.hideThink.desc': 'Hides the thinking process from the chat.',
         'setting.systemPrompt.label': 'System Prompt',
@@ -564,8 +586,20 @@ const translations = {
         'setting.enableTTS.desc': 'Play responses as audio.',
         'setting.autoPlay.label': 'Auto-play',
         'setting.autoPlay.desc': 'Automatically play audio responses.',
+        'setting.ttsEngine.label': 'TTS Engine',
+        'setting.ttsEngine.desc': 'Choose between Supertonic 2 and the operating system voice.',
+        'setting.ttsEngine.option.supertonic': 'Supertonic 2',
+        'setting.ttsEngine.option.os': 'OS TTS',
         'setting.voiceStyle.label': 'Voice Style',
         'setting.voiceStyle.desc': 'Select the TTS voice style.',
+        'setting.osVoice.label': 'OS Voice',
+        'setting.osVoice.desc': 'Select a voice provided by the operating system.',
+        'setting.osRate.label': 'OS Speed',
+        'setting.osRate.desc': 'Playback speed for the operating system voice.',
+        'setting.osPitch.label': 'OS Pitch',
+        'setting.osPitch.desc': 'Pitch for the operating system voice.',
+        'setting.osVoice.loading': 'Loading voices...',
+        'setting.osVoice.unavailable': 'OS TTS unavailable',
         'setting.speed.label': 'Speed',
         'setting.speed.desc': 'Audio playback speed.',
         'setting.ttsLang.label': 'TTS Language',
@@ -1914,6 +1948,8 @@ let streamingTTSCommittedIndex = 0; // How much of the display text has been sen
 let streamingTTSBuffer = ""; // Uncommitted text buffer
 let streamingTTSProcessor = null; // Reference to the active processor loop
 let ttsSessionId = 0;
+let osTTSVoices = [];
+let osTTSVoicesReady = false;
 
 
 // DOM Elements
@@ -1986,6 +2022,7 @@ const savedTurnModalTitleEdit = document.getElementById('saved-turn-inline-title
 const savedTurnModalTitleInput = document.getElementById('saved-turn-inline-title-input');
 const savedTurnModalTitleSaveBtn = document.getElementById('saved-turn-inline-title-save');
 const savedTurnModalTitleCancelBtn = document.getElementById('saved-turn-inline-title-cancel');
+const osTTSVoiceSelect = document.getElementById('cfg-os-tts-voice');
 
 savedTurnModalTitleInput?.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') {
@@ -2368,6 +2405,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     fetchModels().catch(console.warn); // Fetch models in background
 
     await loadVoiceStyles(); // Fetch voice styles
+    initOSTTSVoiceLoading();
     await syncServerConfig(); // Sync with server
     setupEventListeners();
     initServerControl();
@@ -2936,6 +2974,10 @@ function loadConfig() {
         }
     }
 
+    config.ttsEngine = config.ttsEngine === 'os' ? 'os' : 'supertonic';
+    config.osTtsRate = Number(config.osTtsRate) > 0 ? Number(config.osTtsRate) : 1.0;
+    config.osTtsPitch = Number(config.osTtsPitch) >= 0 ? Number(config.osTtsPitch) : 1.0;
+
     // Update UI
     const cfgApi = document.getElementById('cfg-api');
     if (cfgApi) cfgApi.value = config.apiEndpoint;
@@ -2969,19 +3011,30 @@ function loadConfig() {
     if (statefulTokenBudgetEl) statefulTokenBudgetEl.value = parseInt(config.statefulTokenBudget, 10) || DEFAULT_STATEFUL_TOKEN_BUDGET;
 
     document.getElementById('cfg-auto-tts').checked = config.autoTTS || false;
+    document.getElementById('cfg-tts-engine').value = config.ttsEngine || 'supertonic';
     document.getElementById('cfg-tts-lang').value = config.ttsLang;
     document.getElementById('cfg-chunk-size').value = config.chunkSize || 300;
     document.getElementById('cfg-system-prompt').value = config.systemPrompt || 'You are a helpful AI assistant.';
-    if (config.ttsVoice) document.getElementById('cfg-tts-voice').value = config.ttsVoice;
+    if (config.ttsVoice) document.getElementById('cfg-tts-voice').value = String(config.ttsVoice).replace(/\.json$/i, '');
     document.getElementById('cfg-tts-speed').value = config.ttsSpeed || 1.0;
     document.getElementById('speed-val').textContent = config.ttsSpeed || 1.0;
     document.getElementById('cfg-tts-steps').value = config.ttsSteps || 5;
     document.getElementById('steps-val').textContent = config.ttsSteps || 5;
     document.getElementById('cfg-tts-threads').value = config.ttsThreads || 4;
     document.getElementById('threads-val').textContent = config.ttsThreads || 4;
+    document.getElementById('cfg-os-tts-rate').value = config.osTtsRate || 1.0;
+    document.getElementById('os-rate-val').textContent = config.osTtsRate || 1.0;
+    document.getElementById('cfg-os-tts-pitch').value = config.osTtsPitch || 1.0;
+    document.getElementById('os-pitch-val').textContent = config.osTtsPitch || 1.0;
     let format = config.ttsFormat || 'wav';
     if (format === 'mp3') format = 'mp3-high'; // Legacy mapping
     document.getElementById('cfg-tts-format').value = format;
+    populateOSTTSVoiceList();
+    if (config.osTtsVoiceURI && osTTSVoiceSelect && osTTSVoicesReady) {
+        osTTSVoiceSelect.value = config.osTtsVoiceURI;
+    }
+    syncOSTTSVoiceConfigFromSelection();
+    updateTTSSettingsVisibility();
 
     // Mic Layout
     document.getElementById('cfg-mic-layout').value = config.micLayout || 'none';
@@ -3010,7 +3063,7 @@ function loadConfig() {
     loadSystemPrompts();
 
     // Load TTS Dictionary
-    loadTTSDictionary();
+    loadTTSDictionary(getEffectiveTTSDictionaryLang());
 
     // Setup settings listeners
     setupSettingsListeners();
@@ -3070,7 +3123,9 @@ function setupSettingsListeners() {
     const sliders = [
         { id: 'cfg-tts-speed', val: 'speed-val' },
         { id: 'cfg-tts-steps', val: 'steps-val' },
-        { id: 'cfg-tts-threads', val: 'threads-val' }
+        { id: 'cfg-tts-threads', val: 'threads-val' },
+        { id: 'cfg-os-tts-rate', val: 'os-rate-val' },
+        { id: 'cfg-os-tts-pitch', val: 'os-pitch-val' }
     ];
 
     sliders.forEach(item => {
@@ -3083,7 +3138,7 @@ function setupSettingsListeners() {
     });
 
     // Selects & Inputs: save on change
-    const autoSaveIds = ['cfg-api', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-disable-stateful', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model'];
+    const autoSaveIds = ['cfg-api', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-os-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-disable-stateful', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model', 'cfg-tts-engine'];
     autoSaveIds.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.onchange = () => saveConfig(false);
@@ -3222,7 +3277,7 @@ function initSystemPromptPresets() {
 async function reloadExternalFiles() {
     try {
         await loadSystemPrompts();
-        await loadTTSDictionary(config.ttsLang);
+        await loadTTSDictionary(getEffectiveTTSDictionaryLang());
         await fetchModels(); // Reload models
         showToast(t('action.reload') + ' ✓');
     } catch (e) {
@@ -3257,6 +3312,7 @@ function saveConfig(closeModal = true) {
     config.enableMemory = memEl ? memEl.checked : false;
 
     config.autoTTS = document.getElementById('cfg-auto-tts').checked;
+    config.ttsEngine = document.getElementById('cfg-tts-engine').value || 'supertonic';
     config.ttsLang = document.getElementById('cfg-tts-lang').value;
 
     // API Token handling - skip if element not present (web.html removed it)
@@ -3281,12 +3337,13 @@ function saveConfig(closeModal = true) {
 
     // Update visibility immediately
     updateSettingsVisibility();
+    updateTTSSettingsVisibility();
     updateMicLayout();
     applyUserBubbleTheme();
     applyChatFontSize();
 
     // Reload dictionary since language changes
-    loadTTSDictionary(config.ttsLang);
+    loadTTSDictionary(getEffectiveTTSDictionaryLang());
 
     config.chunkSize = parseInt(document.getElementById('cfg-chunk-size').value) || 300;
     config.systemPrompt = document.getElementById('cfg-system-prompt').value.trim() || 'You are a helpful AI assistant.';
@@ -3295,6 +3352,14 @@ function saveConfig(closeModal = true) {
     config.ttsSteps = parseInt(document.getElementById('cfg-tts-steps').value);
     config.ttsThreads = parseInt(document.getElementById('cfg-tts-threads').value);
     config.ttsFormat = document.getElementById('cfg-tts-format').value;
+    config.osTtsRate = parseFloat(document.getElementById('cfg-os-tts-rate').value) || 1.0;
+    config.osTtsPitch = parseFloat(document.getElementById('cfg-os-tts-pitch').value) || 1.0;
+    if (osTTSVoiceSelect) {
+        config.osTtsVoiceURI = osTTSVoiceSelect.value || '';
+        const selectedVoice = osTTSVoices.find((voice) => voice.voiceURI === config.osTtsVoiceURI) || null;
+        config.osTtsVoiceName = selectedVoice?.name || '';
+        config.osTtsVoiceLang = selectedVoice?.lang || '';
+    }
 
     localStorage.setItem('appConfig', JSON.stringify(config));
 
@@ -3305,9 +3370,20 @@ function saveConfig(closeModal = true) {
         window.go.main.App.SetLLMMode(config.llmMode).catch(console.error);
         window.go.main.App.SetEnableTTS(config.enableTTS);
         window.go.main.App.SetEnableMCP(config.enableMCP);
+        window.go.main.App.SetServerTTSConfig({
+            engine: config.ttsEngine,
+            voiceStyle: config.ttsVoice,
+            speed: config.ttsSpeed,
+            threads: config.ttsThreads,
+            osVoiceURI: config.osTtsVoiceURI,
+            osVoiceName: config.osTtsVoiceName,
+            osVoiceLang: config.osTtsVoiceLang,
+            osRate: config.osTtsRate,
+            osPitch: config.osTtsPitch
+        }).catch(console.error);
 
         // This is separate from saveConfig in app.go, but SetTTSThreads triggers reload
-        if (config.ttsThreads) {
+        if (config.ttsThreads && config.ttsEngine === 'supertonic') {
             window.go.main.App.SetTTSThreads(config.ttsThreads);
         }
     }
@@ -3324,7 +3400,18 @@ function saveConfig(closeModal = true) {
         stateful_turn_limit: config.statefulTurnLimit,
         stateful_char_budget: config.statefulCharBudget,
         stateful_token_budget: config.statefulTokenBudget,
-        tts_threads: config.ttsThreads
+        tts_threads: config.ttsThreads,
+        tts_config: {
+            engine: config.ttsEngine,
+            voiceStyle: config.ttsVoice,
+            speed: config.ttsSpeed,
+            threads: config.ttsThreads,
+            osVoiceURI: config.osTtsVoiceURI,
+            osVoiceName: config.osTtsVoiceName,
+            osVoiceLang: config.osTtsVoiceLang,
+            osRate: config.osTtsRate,
+            osPitch: config.osTtsPitch
+        }
     };
 
     // Only include api_token if element exists and has a valid non-masked value
@@ -4484,6 +4571,44 @@ async function syncServerConfig() {
                 config.enableTTS = serverCfg.enable_tts;
                 document.getElementById('cfg-enable-tts').checked = config.enableTTS;
             }
+            if (serverCfg.tts_config) {
+                const ttsCfg = serverCfg.tts_config;
+                config.ttsEngine = ttsCfg.engine || config.ttsEngine || 'supertonic';
+                config.ttsVoice = ttsCfg.voiceStyle || config.ttsVoice;
+                config.ttsSpeed = Number(ttsCfg.speed) > 0 ? Number(ttsCfg.speed) : config.ttsSpeed;
+                config.ttsThreads = Number(ttsCfg.threads) > 0 ? Number(ttsCfg.threads) : config.ttsThreads;
+                config.osTtsVoiceURI = ttsCfg.osVoiceURI || config.osTtsVoiceURI || '';
+                config.osTtsVoiceName = ttsCfg.osVoiceName || config.osTtsVoiceName || '';
+                config.osTtsVoiceLang = ttsCfg.osVoiceLang || config.osTtsVoiceLang || '';
+                config.osTtsRate = Number(ttsCfg.osRate) > 0 ? Number(ttsCfg.osRate) : (config.osTtsRate || 1.0);
+                config.osTtsPitch = Number(ttsCfg.osPitch) > 0 ? Number(ttsCfg.osPitch) : (config.osTtsPitch || 1.0);
+
+                const engineEl = document.getElementById('cfg-tts-engine');
+                if (engineEl) engineEl.value = config.ttsEngine;
+                const voiceEl = document.getElementById('cfg-tts-voice');
+                if (voiceEl && config.ttsVoice) voiceEl.value = config.ttsVoice.replace('.json', '');
+                const speedEl = document.getElementById('cfg-tts-speed');
+                if (speedEl) speedEl.value = config.ttsSpeed || 1.0;
+                const speedValEl = document.getElementById('speed-val');
+                if (speedValEl) speedValEl.textContent = String(config.ttsSpeed || 1.0);
+                const threadsEl = document.getElementById('cfg-tts-threads');
+                if (threadsEl) threadsEl.value = config.ttsThreads || 4;
+                const threadsValEl = document.getElementById('threads-val');
+                if (threadsValEl) threadsValEl.textContent = String(config.ttsThreads || 4);
+                const osRateEl = document.getElementById('cfg-os-tts-rate');
+                if (osRateEl) osRateEl.value = config.osTtsRate || 1.0;
+                const osRateValEl = document.getElementById('os-rate-val');
+                if (osRateValEl) osRateValEl.textContent = String(config.osTtsRate || 1.0);
+                const osPitchEl = document.getElementById('cfg-os-tts-pitch');
+                if (osPitchEl) osPitchEl.value = config.osTtsPitch || 1.0;
+                const osPitchValEl = document.getElementById('os-pitch-val');
+                if (osPitchValEl) osPitchValEl.textContent = String(config.osTtsPitch || 1.0);
+                populateOSTTSVoiceList();
+                if (osTTSVoiceSelect && config.osTtsVoiceURI && osTTSVoicesReady) {
+                    osTTSVoiceSelect.value = config.osTtsVoiceURI;
+                }
+                updateTTSSettingsVisibility();
+            }
             if (serverCfg.enable_mcp !== undefined) {
                 config.enableMCP = serverCfg.enable_mcp;
                 const mcpEl = document.getElementById('cfg-enable-mcp');
@@ -4514,6 +4639,7 @@ async function syncServerConfig() {
 
             // Save to localStorage so next reload uses these
             localStorage.setItem('appConfig', JSON.stringify(config));
+            loadTTSDictionary(getEffectiveTTSDictionaryLang());
         }
     } catch (e) {
         console.warn('Failed to sync server config:', e);
@@ -4538,6 +4664,134 @@ async function loadVoiceStyles() {
     } catch (e) {
         console.warn('Failed to load voice styles:', e);
     }
+}
+
+function supportsOSTTS() {
+    return typeof window !== 'undefined'
+        && 'speechSynthesis' in window
+        && typeof window.SpeechSynthesisUtterance !== 'undefined';
+}
+
+function getCurrentTTSEngine() {
+    return config.ttsEngine === 'os' ? 'os' : 'supertonic';
+}
+
+function mapVoiceLangToDictionaryLang(lang = '') {
+    const normalized = String(lang || '').toLowerCase();
+    if (normalized.startsWith('ko')) return 'ko';
+    if (normalized.startsWith('en')) return 'en';
+    if (normalized.startsWith('es')) return 'es';
+    if (normalized.startsWith('fr')) return 'fr';
+    if (normalized.startsWith('pt')) return 'pt';
+    return config.ttsLang || 'ko';
+}
+
+function getEffectiveTTSDictionaryLang() {
+    if (getCurrentTTSEngine() === 'os' && config.osTtsVoiceLang) {
+        return mapVoiceLangToDictionaryLang(config.osTtsVoiceLang);
+    }
+    return config.ttsLang || 'ko';
+}
+
+function getSelectedOSTTSVoice() {
+    if (!supportsOSTTS()) return null;
+    if (!Array.isArray(osTTSVoices) || osTTSVoices.length === 0) {
+        osTTSVoices = window.speechSynthesis.getVoices() || [];
+    }
+
+    const byURI = osTTSVoices.find((voice) => voice.voiceURI === config.osTtsVoiceURI);
+    if (byURI) return byURI;
+
+    const byNameLang = osTTSVoices.find((voice) =>
+        voice.name === config.osTtsVoiceName && voice.lang === config.osTtsVoiceLang
+    );
+    if (byNameLang) return byNameLang;
+
+    return osTTSVoices.find((voice) => String(voice.lang || '').toLowerCase().startsWith('ko'))
+        || osTTSVoices[0]
+        || null;
+}
+
+function syncOSTTSVoiceConfigFromSelection() {
+    const selectedVoiceURI = osTTSVoiceSelect?.value || config.osTtsVoiceURI;
+    const selected = osTTSVoices.find((voice) => voice.voiceURI === selectedVoiceURI) || getSelectedOSTTSVoice();
+    if (!selected) return;
+    config.osTtsVoiceURI = selected.voiceURI || '';
+    config.osTtsVoiceName = selected.name || '';
+    config.osTtsVoiceLang = selected.lang || '';
+}
+
+function populateOSTTSVoiceList() {
+    if (!osTTSVoiceSelect) return;
+
+    if (!supportsOSTTS()) {
+        osTTSVoices = [];
+        osTTSVoicesReady = false;
+        osTTSVoiceSelect.innerHTML = `<option value="">${escapeHtml(t('setting.osVoice.unavailable'))}</option>`;
+        osTTSVoiceSelect.disabled = true;
+        return;
+    }
+
+    osTTSVoices = window.speechSynthesis.getVoices() || [];
+    if (!osTTSVoices.length) {
+        osTTSVoicesReady = false;
+        osTTSVoiceSelect.innerHTML = `<option value="">${escapeHtml(t('setting.osVoice.loading'))}</option>`;
+        osTTSVoiceSelect.disabled = true;
+        return;
+    }
+
+    osTTSVoicesReady = true;
+    osTTSVoiceSelect.disabled = false;
+    osTTSVoiceSelect.innerHTML = osTTSVoices.map((voice) => {
+        const label = `${voice.name} (${voice.lang})${voice.default ? ' - DEFAULT' : ''}`;
+        return `<option value="${escapeAttr(voice.voiceURI || '')}">${escapeHtml(label)}</option>`;
+    }).join('');
+
+    const selected = getSelectedOSTTSVoice();
+    if (selected?.voiceURI) {
+        osTTSVoiceSelect.value = selected.voiceURI;
+    }
+    syncOSTTSVoiceConfigFromSelection();
+}
+
+function initOSTTSVoiceLoading() {
+    if (!supportsOSTTS()) {
+        populateOSTTSVoiceList();
+        return;
+    }
+
+    populateOSTTSVoiceList();
+    if (typeof window.speechSynthesis.onvoiceschanged !== 'undefined') {
+        window.speechSynthesis.onvoiceschanged = () => {
+            populateOSTTSVoiceList();
+        };
+    }
+}
+
+function updateTTSSettingsVisibility() {
+    const engine = getCurrentTTSEngine();
+    const supertonicIds = [
+        'container-tts-supertonic-voice',
+        'container-tts-supertonic-speed',
+        'container-tts-lang',
+        'container-tts-supertonic-steps',
+        'container-tts-supertonic-threads',
+        'container-tts-supertonic-format'
+    ];
+    const osIds = [
+        'container-tts-os-voice',
+        'container-tts-os-rate',
+        'container-tts-os-pitch'
+    ];
+
+    supertonicIds.forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = engine === 'supertonic' ? 'block' : 'none';
+    });
+    osIds.forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = engine === 'os' ? 'block' : 'none';
+    });
 }
 
 
@@ -6620,6 +6874,14 @@ function stopAllAudio() {
     ttsQueue = [];
     audioWarmup = null;
 
+    if (supportsOSTTS()) {
+        try {
+            window.speechSynthesis.cancel();
+        } catch (_) {
+            // Ignore OS TTS cancellation errors
+        }
+    }
+
     // Stop current audio source
     if (currentAudio) {
         try {
@@ -7349,6 +7611,13 @@ async function speakMessage(text, btn = null) {
         return;
     }
 
+    if (getCurrentTTSEngine() === 'os' && !supportsOSTTS()) {
+        if (btn) {
+            alert(t('setting.osVoice.unavailable'));
+        }
+        return;
+    }
+
     // Clean text for TTS (remove emojis, markdown, etc.)
     const cleanText = cleanTextForTTS(text);
     if (!cleanText) return;
@@ -7779,9 +8048,11 @@ function pushToStreamingTTSQueue(text, force = false) {
         }
     }
 
-    // IMMEDIATELY start prefetching new chunks (don't wait for the playback loop)
-    for (const chunk of newChunks) {
-        prefetchTTSAudio(chunk);
+    // IMMEDIATELY start prefetching new chunks for engines that fetch audio.
+    if (getCurrentTTSEngine() === 'supertonic') {
+        for (const chunk of newChunks) {
+            prefetchTTSAudio(chunk);
+        }
     }
 
     // Start processing if not already running
@@ -7797,6 +8068,76 @@ const ttsAudioCache = new Map(); // text -> Promise<url>
 
 function firstChunkPlayedInCurrentSession() {
     return ttsQueue.length > 0 || isPlayingQueue;
+}
+
+async function processOSTTSQueue() {
+    if (!supportsOSTTS()) return;
+    if (isPlayingQueue) return;
+    if (ttsQueue.length === 0) return;
+
+    isPlayingQueue = true;
+    requestWakeLock();
+    const btn = currentAudioBtn;
+    const sessionId = ttsSessionId;
+    const mediaSessionLabel = activeTTSSessionLabel;
+    let firstChunkPlayed = false;
+
+    while (true) {
+        if (sessionId !== ttsSessionId) break;
+
+        const text = ttsQueue.shift();
+        if (!text) {
+            if (streamingTTSActive) {
+                await new Promise((resolve) => setTimeout(resolve, 100));
+                continue;
+            }
+            break;
+        }
+
+        const utterance = new SpeechSynthesisUtterance(text);
+        const selectedVoice = getSelectedOSTTSVoice();
+        if (selectedVoice) {
+            utterance.voice = selectedVoice;
+            utterance.lang = selectedVoice.lang || config.osTtsVoiceLang || config.ttsLang || 'ko';
+        } else {
+            utterance.lang = config.osTtsVoiceLang || config.ttsLang || 'ko';
+        }
+        utterance.rate = parseFloat(config.osTtsRate) || 1.0;
+        utterance.pitch = parseFloat(config.osTtsPitch) || 1.0;
+
+        try {
+            if (!firstChunkPlayed && mediaSessionLabel) {
+                updateMediaSessionMetadata(mediaSessionLabel);
+            }
+
+            await new Promise((resolve, reject) => {
+                utterance.onstart = () => {
+                    if (!firstChunkPlayed && btn) {
+                        firstChunkPlayed = true;
+                        syncCurrentAudioButtonUI();
+                    }
+                };
+                utterance.onend = () => resolve();
+                utterance.onerror = (event) => {
+                    console.error('[OS TTS] Playback failed:', event);
+                    reject(event);
+                };
+
+                if (sessionId !== ttsSessionId) {
+                    resolve();
+                    return;
+                }
+
+                window.speechSynthesis.speak(utterance);
+            });
+        } catch (e) {
+            console.error('[OS TTS] Chunk playback error:', e);
+        }
+    }
+
+    if (sessionId === ttsSessionId) {
+        endTTS(btn, sessionId);
+    }
 }
 
 /**
@@ -7867,6 +8208,9 @@ function clearTTSAudioCache() {
 }
 
 async function processTTSQueue(isFirstChunk = false) {
+    if (getCurrentTTSEngine() === 'os') {
+        return processOSTTSQueue();
+    }
     if (ttsQueue.length === 0) return;
     if (isPlayingQueue) return; // Already running
 

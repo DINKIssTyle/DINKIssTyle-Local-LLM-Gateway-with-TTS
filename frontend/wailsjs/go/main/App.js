@@ -182,6 +182,10 @@ export function SetPort(arg1) {
   return window['go']['main']['App']['SetPort'](arg1);
 }
 
+export function SetServerTTSConfig(arg1) {
+  return window['go']['main']['App']['SetServerTTSConfig'](arg1);
+}
+
 export function SetStartOnBoot(arg1) {
   return window['go']['main']['App']['SetStartOnBoot'](arg1);
 }

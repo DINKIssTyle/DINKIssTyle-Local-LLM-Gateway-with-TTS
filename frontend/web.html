@@ -69,8 +69,8 @@
                     </div>
 
                     <div class="setting-item">
-                        <label>Secondary Model</label>
-                        <p class="setting-desc">저장된 대화 제목 생성 같은 가벼운 작업에 우선 사용할 보조 모델입니다.</p>
+                        <label data-i18n="setting.secondaryModel.label">Secondary Model</label>
+                        <p class="setting-desc" data-i18n="setting.secondaryModel.desc">저장된 대화 제목 생성 같은 가벼운 작업에 우선 사용할 보조 모델입니다.</p>
                         <select id="cfg-secondary-model">
                             <option value="">Use primary model</option>
                         </select>
@@ -230,6 +230,15 @@
                     </div>
 
                     <div class="setting-item">
+                        <label data-i18n="setting.ttsEngine.label">TTS Engine</label>
+                        <p class="setting-desc" data-i18n="setting.ttsEngine.desc">Supertonic 2 또는 운영체제 기본 음성을 선택합니다.</p>
+                        <select id="cfg-tts-engine">
+                            <option value="supertonic" data-i18n="setting.ttsEngine.option.supertonic">Supertonic 2</option>
+                            <option value="os" data-i18n="setting.ttsEngine.option.os">OS TTS</option>
+                        </select>
+                    </div>
+
+                    <div class="setting-item" id="container-tts-supertonic-voice">
                         <label data-i18n="setting.voiceStyle.label">Voice Style</label>
                         <p class="setting-desc" data-i18n="setting.voiceStyle.desc">TTS 음성 스타일을 선택합니다.</p>
                         <select id="cfg-tts-voice">
@@ -237,7 +246,7 @@
                         </select>
                     </div>
 
-                    <div class="setting-item">
+                    <div class="setting-item" id="container-tts-supertonic-speed">
                         <label data-i18n="setting.speed.label">Speed</label>
                         <p class="setting-desc" data-i18n="setting.speed.desc">음성 재생 속도입니다.</p>
                         <div class="slider-row">
@@ -246,7 +255,33 @@
                         </div>
                     </div>
 
-                    <div class="setting-item">
+                    <div class="setting-item" id="container-tts-os-voice">
+                        <label data-i18n="setting.osVoice.label">OS Voice</label>
+                        <p class="setting-desc" data-i18n="setting.osVoice.desc">운영체제에서 제공하는 음성을 선택합니다.</p>
+                        <select id="cfg-os-tts-voice">
+                            <option value="" data-i18n="setting.osVoice.loading">목소리 불러오는 중...</option>
+                        </select>
+                    </div>
+
+                    <div class="setting-item" id="container-tts-os-rate">
+                        <label data-i18n="setting.osRate.label">OS Speed</label>
+                        <p class="setting-desc" data-i18n="setting.osRate.desc">운영체제 음성의 재생 속도입니다.</p>
+                        <div class="slider-row">
+                            <input type="range" id="cfg-os-tts-rate" min="0.5" max="2.0" step="0.1" value="1.0">
+                            <span class="slider-value" id="os-rate-val">1.0</span>
+                        </div>
+                    </div>
+
+                    <div class="setting-item" id="container-tts-os-pitch">
+                        <label data-i18n="setting.osPitch.label">OS Pitch</label>
+                        <p class="setting-desc" data-i18n="setting.osPitch.desc">운영체제 음성의 음조를 조절합니다.</p>
+                        <div class="slider-row">
+                            <input type="range" id="cfg-os-tts-pitch" min="0.0" max="2.0" step="0.1" value="1.0">
+                            <span class="slider-value" id="os-pitch-val">1.0</span>
+                        </div>
+                    </div>
+
+                    <div class="setting-item" id="container-tts-lang">
                         <label data-i18n="setting.ttsLang.label">TTS Language</label>
                         <p class="setting-desc" data-i18n="setting.ttsLang.desc">선호하는 언어를 선택하세요.</p>
                         <select id="cfg-tts-lang">
@@ -258,14 +293,14 @@
                         </select>
                     </div>
 
-                    <div class="setting-item">
+                    <div class="setting-item" id="container-tts-chunk-size">
                         <label data-i18n="setting.chunkSize.label">Smart Chunking</label>
                         <p class="setting-desc" data-i18n="setting.chunkSize.desc">(추천값: 150~300) TTS가 몇 글자씩 잘라 생성할지 지정
                         </p>
                         <input type="number" id="cfg-chunk-size" value="300" min="50" max="1000">
                     </div>
 
-                    <div class="setting-item">
+                    <div class="setting-item" id="container-tts-supertonic-steps">
                         <label data-i18n="setting.steps.label">Inference Steps</label>
                         <p class="setting-desc" data-i18n="setting.steps.desc">(추천값: 2~8, 기본값: 5) 높을수록 자연스러운 음성</p>
                         <div class="slider-row">
@@ -274,7 +309,7 @@
                         </div>
                     </div>
 
-                    <div class="setting-item">
+                    <div class="setting-item" id="container-tts-supertonic-threads">
                         <label data-i18n="setting.threads.label">CPU Threads</label>
                         <p class="setting-desc" data-i18n="setting.threads.desc">(기본값: 4) TTS 생성에 할당하는 CPU 스레드</p>
                         <div class="slider-row">
@@ -283,7 +318,7 @@
                         </div>
                     </div>
 
-                    <div class="setting-item">
+                    <div class="setting-item" id="container-tts-supertonic-format">
                         <label data-i18n="setting.format.label">Audio Format</label>
                         <p class="setting-desc" data-i18n="setting.format.desc">MP3는 WAV를 변환하여 재생합니다.</p>
                         <select id="cfg-tts-format">

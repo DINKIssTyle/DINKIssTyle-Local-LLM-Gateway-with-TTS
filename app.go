@@ -250,7 +250,14 @@ func (a *App) loadConfig() {
 	a.llmEndpoint = "http://127.0.0.1:1234"
 	a.enableTTS = false
 	a.certDomain = "localhost"
-	ttsConfig = ServerTTSConfig{VoiceStyle: "M1.json", Speed: 1.0, Threads: 4}
+	ttsConfig = ServerTTSConfig{
+		Engine:     "supertonic",
+		VoiceStyle: "M1.json",
+		Speed:      1.0,
+		Threads:    4,
+		OSRate:     1.0,
+		OSPitch:    1.0,
+	}
 
 	cfgPath := GetResourcePath(configFile)
 	fmt.Printf("Loading config from: %s\n", cfgPath)
@@ -290,6 +297,9 @@ func (a *App) loadConfig() {
 	fmt.Printf("   -> Port: %s, Endpoint: %s, Mode: %s\n", a.port, a.llmEndpoint, a.llmMode)
 
 	// Update global TTS config if loaded values are valid
+	if cfg.TTS.Engine != "" {
+		ttsConfig.Engine = cfg.TTS.Engine
+	}
 	if cfg.TTS.VoiceStyle != "" {
 		ttsConfig.VoiceStyle = cfg.TTS.VoiceStyle
 	}
@@ -298,6 +308,15 @@ func (a *App) loadConfig() {
 	}
 	if cfg.TTS.Threads > 0 {
 		ttsConfig.Threads = cfg.TTS.Threads
+	}
+	ttsConfig.OSVoiceURI = cfg.TTS.OSVoiceURI
+	ttsConfig.OSVoiceName = cfg.TTS.OSVoiceName
+	ttsConfig.OSVoiceLang = cfg.TTS.OSVoiceLang
+	if cfg.TTS.OSRate > 0 {
+		ttsConfig.OSRate = cfg.TTS.OSRate
+	}
+	if cfg.TTS.OSPitch > 0 {
+		ttsConfig.OSPitch = cfg.TTS.OSPitch
 	}
 }
 
@@ -371,8 +390,8 @@ func (a *App) startup(ctx context.Context) {
 		}
 	}()
 
-	// Initialize TTS if enabled
-	if a.enableTTS {
+	// Initialize TTS if enabled and the Supertonic engine is selected
+	if a.enableTTS && ttsConfig.Engine == "supertonic" {
 		if !a.CheckAssets() {
 			selection, err := wruntime.MessageDialog(ctx, wruntime.MessageDialogOptions{
 				Type:          wruntime.QuestionDialog,
@@ -495,7 +514,7 @@ func (a *App) SetEnableTTS(enabled bool) {
 	a.serverMux.Lock()
 	defer a.serverMux.Unlock()
 	a.enableTTS = enabled
-	if enabled && globalTTS == nil {
+	if enabled && ttsConfig.Engine == "supertonic" && globalTTS == nil {
 		go func() {
 			if err := InitTTS(GetResourcePath("assets"), ttsConfig.Threads); err != nil {
 				fmt.Printf("Dynamic TTS Init failed: %v\n", err)
@@ -1070,6 +1089,43 @@ func (a *App) SetTTSConfig(style string, speed float32) {
 	a.saveConfig()
 }
 
+// SetServerTTSConfig replaces the persisted TTS engine settings.
+func (a *App) SetServerTTSConfig(cfg ServerTTSConfig) {
+	a.serverMux.Lock()
+	defer a.serverMux.Unlock()
+
+	if cfg.Engine == "" {
+		cfg.Engine = "supertonic"
+	}
+	if cfg.VoiceStyle == "" {
+		cfg.VoiceStyle = ttsConfig.VoiceStyle
+	}
+	if cfg.Speed <= 0 {
+		cfg.Speed = ttsConfig.Speed
+	}
+	if cfg.Threads <= 0 {
+		cfg.Threads = ttsConfig.Threads
+	}
+	if cfg.OSRate <= 0 {
+		cfg.OSRate = 1.0
+	}
+	if cfg.OSPitch <= 0 {
+		cfg.OSPitch = 1.0
+	}
+
+	ttsConfig = cfg
+	a.saveConfig()
+
+	if a.enableTTS && cfg.Engine == "supertonic" {
+		fmt.Printf("Reloading TTS engine with %d threads...\n", cfg.Threads)
+		go func() {
+			if err := InitTTS(GetResourcePath("assets"), cfg.Threads); err != nil {
+				fmt.Printf("Failed to reload TTS after config update: %v\n", err)
+			}
+		}()
+	}
+}
+
 // SetTTSThreads updates TTS thread count and reloads model
 func (a *App) SetTTSThreads(threads int) {
 	if threads <= 0 {
@@ -1078,7 +1134,7 @@ func (a *App) SetTTSThreads(threads int) {
 	ttsConfig.Threads = threads
 	a.saveConfig()
 
-	if a.enableTTS {
+	if a.enableTTS && ttsConfig.Engine == "supertonic" {
 		fmt.Printf("Reloading TTS with %d threads...\n", threads)
 		go func() {
 			if err := InitTTS(GetResourcePath("assets"), threads); err != nil {
@@ -1169,6 +1225,12 @@ func (a *App) CheckHealth() HealthCheckResult {
 		result.TTSStatus = "disabled"
 		result.TTSMessage = "Disabled in settings"
 	} else {
+		if ttsConfig.Engine == "os" {
+			result.TTSStatus = "ok"
+			result.TTSMessage = "Ready (OS TTS)"
+			return result
+		}
+
 		globalTTSMutex.RLock()
 		isInit := globalTTS != nil
 		globalTTSMutex.RUnlock()

@@ -45,9 +45,15 @@ export namespace main {
 	    }
 	}
 	export class ServerTTSConfig {
+	    engine: string;
 	    voiceStyle: string;
 	    speed: number;
 	    threads: number;
+	    osVoiceURI?: string;
+	    osVoiceName?: string;
+	    osVoiceLang?: string;
+	    osRate?: number;
+	    osPitch?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new ServerTTSConfig(source);
@@ -55,9 +61,15 @@ export namespace main {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.engine = source["engine"];
 	        this.voiceStyle = source["voiceStyle"];
 	        this.speed = source["speed"];
 	        this.threads = source["threads"];
+	        this.osVoiceURI = source["osVoiceURI"];
+	        this.osVoiceName = source["osVoiceName"];
+	        this.osVoiceLang = source["osVoiceLang"];
+	        this.osRate = source["osRate"];
+	        this.osPitch = source["osPitch"];
 	    }
 	}
 	export class SystemPrompt {

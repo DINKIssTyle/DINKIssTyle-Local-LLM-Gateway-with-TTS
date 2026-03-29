@@ -92,6 +92,8 @@ export function SetMinimizeToTray(arg1:boolean):Promise<void>;
 
 export function SetPort(arg1:string):Promise<void>;
 
+export function SetServerTTSConfig(arg1:main.ServerTTSConfig):Promise<void>;
+
 export function SetStartOnBoot(arg1:boolean):Promise<void>;
 
 export function SetTTSConfig(arg1:string,arg2:number):Promise<void>;

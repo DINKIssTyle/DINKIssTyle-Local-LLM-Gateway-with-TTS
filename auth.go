@@ -169,6 +169,9 @@ func (am *AuthManager) AddUser(id, password, role string) error {
 	voiceStyle := "F1" // F1.json usually
 	speed := float32(1.1)
 	threads := 2
+	engine := "supertonic"
+	osRate := float32(1.0)
+	osPitch := float32(1.0)
 
 	am.users[id] = &User{
 		ID:           id,
@@ -181,9 +184,12 @@ func (am *AuthManager) AddUser(id, password, role string) error {
 			EnableTTS:    &enableTTS,
 			EnableMemory: &enableMCP, // Default to same as MCP for new users, or false? Let's default true if new user.
 			TTSConfig: &ServerTTSConfig{
+				Engine:     engine,
 				VoiceStyle: voiceStyle,
 				Speed:      speed,
 				Threads:    threads,
+				OSRate:     osRate,
+				OSPitch:    osPitch,
 			},
 			DisallowedCommands: []string{
 				"rm", "rmdir", "unlink", "dd", "mkfs", "mkfs.ext4", "mkfs.xfs", "mkfs.apfs",
