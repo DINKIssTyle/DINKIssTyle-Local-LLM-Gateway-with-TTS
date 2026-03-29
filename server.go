@@ -1363,8 +1363,8 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 			"enable_mcp":            app.enableMCP,
 			"enable_memory":         false, // Global default is false, overridden by user settings below
 			"stateful_turn_limit":   8,
-			"stateful_char_budget":  12000,
-			"stateful_token_budget": 10000,
+			"stateful_char_budget":  32000,
+			"stateful_token_budget": 30000,
 			"tts_config":            ttsConfig,
 			"has_token":             app.llmApiToken != "",
 		}
@@ -2701,7 +2701,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	statefulPeakInputTokensValue := parseIntHeader(statefulPeakInputTokens)
 	statefulTokenBudgetValue := parseIntHeader(statefulTokenBudget)
 	if statefulTokenBudgetValue <= 0 {
-		statefulTokenBudgetValue = 10000
+		statefulTokenBudgetValue = 30000
 	}
 	statefulRiskScoreValue := parseFloatHeader(statefulRiskScore)
 	statefulRiskLevelValue := strings.TrimSpace(statefulRiskLevel)
@@ -2725,12 +2725,22 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			sessionUISnapshot = parseChatSessionUISnapshot(existingSession.UIStateJSON)
 			statefulSummaryText = existingSession.SummaryText
 			if llmMode == "stateful" && statefulResetReason == "" {
-				statefulTurnCountValue = existingSession.TurnCount
-				statefulEstimatedCharsValue = existingSession.EstimatedChars
-				statefulLastInputTokensValue = existingSession.LastInputTokens
-				statefulLastOutputTokensValue = existingSession.LastOutputTokens
-				statefulPeakInputTokensValue = existingSession.PeakInputTokens
-				if existingSession.TokenBudget > 0 {
+				if statefulTurnCountValue <= 0 {
+					statefulTurnCountValue = existingSession.TurnCount
+				}
+				if statefulEstimatedCharsValue <= 0 {
+					statefulEstimatedCharsValue = existingSession.EstimatedChars
+				}
+				if statefulLastInputTokensValue <= 0 {
+					statefulLastInputTokensValue = existingSession.LastInputTokens
+				}
+				if statefulLastOutputTokensValue <= 0 {
+					statefulLastOutputTokensValue = existingSession.LastOutputTokens
+				}
+				if statefulPeakInputTokensValue <= 0 {
+					statefulPeakInputTokensValue = existingSession.PeakInputTokens
+				}
+				if statefulTokenBudgetValue <= 0 && existingSession.TokenBudget > 0 {
 					statefulTokenBudgetValue = existingSession.TokenBudget
 				}
 				if existingSession.RiskScore > 0 {
