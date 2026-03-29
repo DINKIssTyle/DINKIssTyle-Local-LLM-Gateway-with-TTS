@@ -6,6 +6,10 @@
 // Configuration State
 // [NOTICE] 웹페이지(web.html)의 초기 설정값은 아래 객체에서 정의됩니다. HTML 파일의 value 속성은 무시됩니다.
 // 브라우저 캐시(LocalStorage)에 저장된 값이 있다면 그것이 가장 우선됩니다.
+const DEFAULT_STATEFUL_TURN_LIMIT = 8;
+const DEFAULT_STATEFUL_CHAR_BUDGET = 32000;
+const DEFAULT_STATEFUL_TOKEN_BUDGET = 30000;
+
 let config = {
     apiEndpoint: 'http://127.0.0.1:1234',
     model: 'qwen/qwen3-vl-30b',
@@ -31,9 +35,9 @@ let config = {
     apiToken: '',
     llmMode: 'standard', // 'standard' or 'stateful'
     disableStateful: false, // LM Studio specific
-    statefulTurnLimit: 8,
-    statefulCharBudget: 32000,
-    statefulTokenBudget: 30000,
+    statefulTurnLimit: DEFAULT_STATEFUL_TURN_LIMIT,
+    statefulCharBudget: DEFAULT_STATEFUL_CHAR_BUDGET,
+    statefulTokenBudget: DEFAULT_STATEFUL_TOKEN_BUDGET,
     micLayout: 'none', // 'none', 'left', 'right', 'bottom', 'inline'
     chatFontSize: 16,
     userBubbleTheme: 'ocean'
@@ -2868,11 +2872,11 @@ function loadConfig() {
     const memControls = document.getElementById('memory-controls');
     if (memControls) memControls.style.display = config.enableMemory ? 'block' : 'none';
     const statefulTurnLimitEl = document.getElementById('cfg-stateful-turn-limit');
-    if (statefulTurnLimitEl) statefulTurnLimitEl.value = parseInt(config.statefulTurnLimit, 10) || 8;
+    if (statefulTurnLimitEl) statefulTurnLimitEl.value = parseInt(config.statefulTurnLimit, 10) || DEFAULT_STATEFUL_TURN_LIMIT;
     const statefulCharBudgetEl = document.getElementById('cfg-stateful-char-budget');
-    if (statefulCharBudgetEl) statefulCharBudgetEl.value = parseInt(config.statefulCharBudget, 10) || 12000;
+    if (statefulCharBudgetEl) statefulCharBudgetEl.value = parseInt(config.statefulCharBudget, 10) || DEFAULT_STATEFUL_CHAR_BUDGET;
     const statefulTokenBudgetEl = document.getElementById('cfg-stateful-token-budget');
-    if (statefulTokenBudgetEl) statefulTokenBudgetEl.value = parseInt(config.statefulTokenBudget, 10) || 10000;
+    if (statefulTokenBudgetEl) statefulTokenBudgetEl.value = parseInt(config.statefulTokenBudget, 10) || DEFAULT_STATEFUL_TOKEN_BUDGET;
 
     document.getElementById('cfg-auto-tts').checked = config.autoTTS || false;
     document.getElementById('cfg-tts-lang').value = config.ttsLang;
@@ -3178,9 +3182,9 @@ function saveConfig(closeModal = true) {
 
     config.llmMode = document.getElementById('cfg-llm-mode').value;
     config.disableStateful = document.getElementById('cfg-disable-stateful').checked;
-    config.statefulTurnLimit = Math.max(1, parseInt(document.getElementById('cfg-stateful-turn-limit')?.value, 10) || 8);
-    config.statefulCharBudget = Math.max(1000, parseInt(document.getElementById('cfg-stateful-char-budget')?.value, 10) || 12000);
-    config.statefulTokenBudget = Math.max(1000, parseInt(document.getElementById('cfg-stateful-token-budget')?.value, 10) || 10000);
+    config.statefulTurnLimit = Math.max(1, parseInt(document.getElementById('cfg-stateful-turn-limit')?.value, 10) || DEFAULT_STATEFUL_TURN_LIMIT);
+    config.statefulCharBudget = Math.max(1000, parseInt(document.getElementById('cfg-stateful-char-budget')?.value, 10) || DEFAULT_STATEFUL_CHAR_BUDGET);
+    config.statefulTokenBudget = Math.max(1000, parseInt(document.getElementById('cfg-stateful-token-budget')?.value, 10) || DEFAULT_STATEFUL_TOKEN_BUDGET);
     config.micLayout = document.getElementById('cfg-mic-layout').value;
     config.userBubbleTheme = USER_BUBBLE_THEMES[config.userBubbleTheme] ? config.userBubbleTheme : 'ocean';
     config.chatFontSize = Math.max(12, Math.min(24, parseInt(config.chatFontSize, 10) || 16));
@@ -3655,9 +3659,6 @@ function applyCurrentChatSessionSnapshot(session) {
         statefulLastInputTokens = Number(session.LastInputTokens || 0);
         statefulLastOutputTokens = Number(session.LastOutputTokens || 0);
         statefulPeakInputTokens = Number(session.PeakInputTokens || 0);
-        if (session.TokenBudget) {
-            config.statefulTokenBudget = Math.max(1000, Number(session.TokenBudget));
-        }
         updateStatefulBudgetIndicator();
     }
 }
@@ -4405,17 +4406,17 @@ async function syncServerConfig() {
                 if (memControls) memControls.style.display = config.enableMemory ? 'block' : 'none';
             }
             if (serverCfg.stateful_turn_limit !== undefined) {
-                config.statefulTurnLimit = Math.max(1, Number(serverCfg.stateful_turn_limit) || 8);
+                config.statefulTurnLimit = Math.max(1, Number(serverCfg.stateful_turn_limit) || DEFAULT_STATEFUL_TURN_LIMIT);
                 const el = document.getElementById('cfg-stateful-turn-limit');
                 if (el) el.value = String(config.statefulTurnLimit);
             }
             if (serverCfg.stateful_char_budget !== undefined) {
-                config.statefulCharBudget = Math.max(1000, Number(serverCfg.stateful_char_budget) || 12000);
+                config.statefulCharBudget = Math.max(1000, Number(serverCfg.stateful_char_budget) || DEFAULT_STATEFUL_CHAR_BUDGET);
                 const el = document.getElementById('cfg-stateful-char-budget');
                 if (el) el.value = String(config.statefulCharBudget);
             }
             if (serverCfg.stateful_token_budget !== undefined) {
-                config.statefulTokenBudget = Math.max(1000, Number(serverCfg.stateful_token_budget) || 10000);
+                config.statefulTokenBudget = Math.max(1000, Number(serverCfg.stateful_token_budget) || DEFAULT_STATEFUL_TOKEN_BUDGET);
                 const el = document.getElementById('cfg-stateful-token-budget');
                 if (el) el.value = String(config.statefulTokenBudget);
             }
@@ -4772,9 +4773,9 @@ function estimateTokensFromText(text) {
 }
 
 function getStatefulRiskMetrics(nextUserText = '') {
-    const limitTurns = parseInt(config.statefulTurnLimit, 10) || 8;
-    const charBudget = parseInt(config.statefulCharBudget, 10) || 12000;
-    const tokenBudget = parseInt(config.statefulTokenBudget, 10) || 10000;
+    const limitTurns = parseInt(config.statefulTurnLimit, 10) || DEFAULT_STATEFUL_TURN_LIMIT;
+    const charBudget = parseInt(config.statefulCharBudget, 10) || DEFAULT_STATEFUL_CHAR_BUDGET;
+    const tokenBudget = parseInt(config.statefulTokenBudget, 10) || DEFAULT_STATEFUL_TOKEN_BUDGET;
     const projectedChars = statefulEstimatedChars + (nextUserText ? nextUserText.length : 0);
     const projectedTokens = statefulLastInputTokens + estimateTokensFromText(nextUserText);
     const turnFactor = Math.min(1, statefulTurnCount / Math.max(limitTurns, 1));
@@ -4831,20 +4832,46 @@ function updateStatefulBudgetIndicator(nextUserText = '') {
 
 function shouldResetStatefulContext(nextUserText = '') {
     if (config.llmMode !== 'stateful' || config.disableStateful) {
-        return false;
+        return { shouldReset: false, reasons: [], risk: getStatefulRiskMetrics(nextUserText) };
     }
     const risk = getStatefulRiskMetrics(nextUserText);
-    return statefulTurnCount >= risk.turnLimit ||
-        risk.projectedChars >= risk.charBudget ||
-        risk.projectedTokens >= risk.tokenBudget ||
-        statefulLastInputTokens >= risk.tokenBudget;
+    const reasons = [];
+    if (statefulTurnCount >= risk.turnLimit) {
+        reasons.push(`turns ${statefulTurnCount}/${risk.turnLimit}`);
+    }
+    if (risk.projectedChars >= risk.charBudget) {
+        reasons.push(`chars ${risk.projectedChars}/${risk.charBudget}`);
+    }
+    if (risk.projectedTokens >= risk.tokenBudget) {
+        reasons.push(`projected tokens ${risk.projectedTokens}/${risk.tokenBudget}`);
+    }
+    if (statefulLastInputTokens >= risk.tokenBudget) {
+        reasons.push(`input tokens ${statefulLastInputTokens}/${risk.tokenBudget}`);
+    }
+    return {
+        shouldReset: reasons.length > 0,
+        reasons,
+        risk
+    };
 }
 
 async function ensureStatefulContextBudget(nextUserText = '') {
-    if (!shouldResetStatefulContext(nextUserText)) {
+    const resetDecision = shouldResetStatefulContext(nextUserText);
+    if (!resetDecision.shouldReset) {
         return;
     }
 
+    const compactedFrom = statefulPeakInputTokens || statefulLastInputTokens || 0;
+    const compactReasons = resetDecision.reasons.join(', ');
+    console.log('[Stateful] Auto compact triggered', {
+        reasons: resetDecision.reasons,
+        turnCount: statefulTurnCount,
+        projectedChars: resetDecision.risk.projectedChars,
+        projectedTokens: resetDecision.risk.projectedTokens,
+        tokenBudget: resetDecision.risk.tokenBudget,
+        charBudget: resetDecision.risk.charBudget,
+        turnLimit: resetDecision.risk.turnLimit
+    });
     statefulSummary = summarizeMessagesForStatefulReset();
     lastResponseId = null;
     statefulTurnCount = 0;
@@ -4856,7 +4883,7 @@ async function ensureStatefulContextBudget(nextUserText = '') {
     updateStatefulBudgetIndicator(nextUserText);
     appendMessage({
         role: 'system',
-        content: `Stateful context compacted ${statefulPeakInputTokens || 0} -> ~${statefulLastInputTokens}`
+        content: `Stateful context compacted ${compactedFrom} -> ~${statefulLastInputTokens}`
     });
 }
 
@@ -5132,7 +5159,7 @@ async function streamResponse(payload, elementId, turnId = '') {
     headers['X-Stateful-Reset-Count'] = String(statefulResetCount);
     headers['X-Stateful-Input-Tokens'] = String(statefulLastInputTokens);
     headers['X-Stateful-Peak-Input-Tokens'] = String(statefulPeakInputTokens);
-    headers['X-Stateful-Token-Budget'] = String(parseInt(config.statefulTokenBudget, 10) || 10000);
+    headers['X-Stateful-Token-Budget'] = String(parseInt(config.statefulTokenBudget, 10) || DEFAULT_STATEFUL_TOKEN_BUDGET);
     headers['X-Stateful-Risk-Score'] = String(statefulRisk.score);
     headers['X-Stateful-Risk-Level'] = statefulRisk.level;
     if (pendingStatefulResetReason) {
