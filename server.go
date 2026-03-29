@@ -22,6 +22,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"math"
 	"math/big"
 	"net"
 	"net/http"
@@ -334,6 +335,79 @@ func estimateStatefulTokens(text string) int {
 	}
 	runeCount := len([]rune(trimmed))
 	return (runeCount + 3) / 4
+}
+
+func cleanContentForStatefulSummaryServer(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+	return strings.TrimSpace(
+		regexp.MustCompile(`\s+`).ReplaceAllString(
+			regexp.MustCompile(`<think>[\s\S]*?</think>`).ReplaceAllString(text, ""),
+			" ",
+		),
+	)
+}
+
+func summarizeChatSessionForReset(existingSummary string, snapshot chatSessionUISnapshot) string {
+	lines := make([]string, 0, 16)
+	if strings.TrimSpace(existingSummary) != "" {
+		lines = append(lines, "Previous summary:")
+		lines = append(lines, strings.TrimSpace(existingSummary))
+		lines = append(lines, "")
+		lines = append(lines, "Recent turns:")
+	}
+
+	start := 0
+	if len(snapshot.Messages) > 12 {
+		start = len(snapshot.Messages) - 12
+	}
+	index := 1
+	for _, msg := range snapshot.Messages[start:] {
+		userText := cleanContentForStatefulSummaryServer(msg.UserContent)
+		if userText != "" {
+			lines = append(lines, fmt.Sprintf("%d. User: %s", index, compactText(userText, 320)))
+			index++
+		}
+		assistantText := cleanContentForStatefulSummaryServer(msg.AssistantContent)
+		if assistantText != "" {
+			lines = append(lines, fmt.Sprintf("%d. Assistant: %s", index, compactText(assistantText, 320)))
+			index++
+		}
+	}
+
+	summary := strings.TrimSpace(strings.Join(lines, "\n"))
+	if len(summary) > 1800 {
+		summary = summary[len(summary)-1800:]
+	}
+	return strings.TrimSpace(summary)
+}
+
+func computeServerStatefulRisk(turnCount, estimatedChars, lastInputTokens int, nextUserText string, turnLimit, charBudget, tokenBudget int) (float64, string) {
+	if turnLimit <= 0 {
+		turnLimit = 8
+	}
+	if charBudget <= 0 {
+		charBudget = 32000
+	}
+	if tokenBudget <= 0 {
+		tokenBudget = 30000
+	}
+	projectedChars := estimatedChars + len([]rune(strings.TrimSpace(nextUserText)))
+	projectedTokens := lastInputTokens + estimateStatefulTokens(nextUserText)
+	turnFactor := math.Min(1, float64(turnCount)/math.Max(float64(turnLimit), 1))
+	charFactor := math.Min(1, float64(projectedChars)/math.Max(float64(charBudget), 1))
+	tokenFactor := math.Min(1, float64(projectedTokens)/math.Max(float64(tokenBudget), 1))
+	score := math.Round((turnFactor*20+charFactor*15+tokenFactor*65)*100) / 100
+	level := "low"
+	if score >= 0.9 {
+		level = "critical"
+	} else if score >= 0.7 {
+		level = "high"
+	} else if score >= 0.45 {
+		level = "medium"
+	}
+	return score, level
 }
 
 func extractChatInputText(reqMap map[string]interface{}) string {
@@ -2341,6 +2415,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	var locationInfo string
 	var disallowedCmds []string
 	var disallowedDirs []string
+	serverStatefulTurnLimitValue := 8
+	serverStatefulCharBudgetValue := 32000
+	serverStatefulTokenBudgetValue := 30000
 
 	// Override with User Settings
 	userID := r.Header.Get("X-User-ID")
@@ -2399,6 +2476,15 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			if user.Settings.DisallowedDirectories != nil {
 				disallowedDirs = user.Settings.DisallowedDirectories
 			}
+			if user.Settings.StatefulTurnLimit != nil && *user.Settings.StatefulTurnLimit > 0 {
+				serverStatefulTurnLimitValue = *user.Settings.StatefulTurnLimit
+			}
+			if user.Settings.StatefulCharBudget != nil && *user.Settings.StatefulCharBudget > 0 {
+				serverStatefulCharBudgetValue = *user.Settings.StatefulCharBudget
+			}
+			if user.Settings.StatefulTokenBudget != nil && *user.Settings.StatefulTokenBudget > 0 {
+				serverStatefulTokenBudgetValue = *user.Settings.StatefulTokenBudget
+			}
 		}
 	}
 
@@ -2407,20 +2493,23 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	mcp.SetContext(userID, enableMemory, disabledTools, locationInfo, disallowedCmds, disallowedDirs)
 	log.Printf("[handleChat-DEBUG] userID=%s, enableMemory=%v, disabledTools=%v, Location=%s, DisallowedCmds=%v, DisallowedDirs=%v", userID, enableMemory, disabledTools, locationInfo, disallowedCmds, disallowedDirs)
 	AddDebugTrace("chat", "request.context", "Resolved chat execution context", map[string]interface{}{
-		"user":            userID,
-		"memory":          enableMemory,
-		"disabled_tools":  len(disabledTools),
-		"disallowed_cmds": len(disallowedCmds),
-		"disallowed_dirs": len(disallowedDirs),
-		"location":        compactText(locationInfo, 80),
-		"stateful_turns":  statefulTurnCount,
-		"stateful_chars":  statefulEstChars,
-		"summary_chars":   statefulSummaryChars,
-		"input_tokens":    statefulInputTokens,
-		"peak_tokens":     statefulPeakInputTokens,
-		"token_budget":    statefulTokenBudget,
-		"risk_score":      statefulRiskScore,
-		"risk_level":      statefulRiskLevel,
+		"user":                userID,
+		"memory":              enableMemory,
+		"disabled_tools":      len(disabledTools),
+		"disallowed_cmds":     len(disallowedCmds),
+		"disallowed_dirs":     len(disallowedDirs),
+		"location":            compactText(locationInfo, 80),
+		"stateful_turns":      statefulTurnCount,
+		"stateful_chars":      statefulEstChars,
+		"summary_chars":       statefulSummaryChars,
+		"input_tokens":        statefulInputTokens,
+		"peak_tokens":         statefulPeakInputTokens,
+		"token_budget":        statefulTokenBudget,
+		"risk_score":          statefulRiskScore,
+		"risk_level":          statefulRiskLevel,
+		"server_turn_limit":   serverStatefulTurnLimitValue,
+		"server_char_budget":  serverStatefulCharBudgetValue,
+		"server_token_budget": serverStatefulTokenBudgetValue,
 	})
 	if statefulResetReason != "" {
 		AddDebugTrace("stateful", "reset", "Stateful conversation was compacted or reset", map[string]interface{}{
@@ -2688,28 +2777,22 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		parsed, _ := strconv.Atoi(strings.TrimSpace(value))
 		return parsed
 	}
-	parseFloatHeader := func(value string) float64 {
-		parsed, _ := strconv.ParseFloat(strings.TrimSpace(value), 64)
-		return parsed
-	}
 
-	statefulTurnCountValue := parseIntHeader(statefulTurnCount)
-	statefulEstimatedCharsValue := parseIntHeader(statefulEstChars)
-	statefulSummaryCharsValue := parseIntHeader(statefulSummaryChars)
-	statefulResetCountValue := parseIntHeader(statefulResetCount)
-	statefulLastInputTokensValue := parseIntHeader(statefulInputTokens)
-	statefulPeakInputTokensValue := parseIntHeader(statefulPeakInputTokens)
-	statefulTokenBudgetValue := parseIntHeader(statefulTokenBudget)
-	if statefulTokenBudgetValue <= 0 {
-		statefulTokenBudgetValue = 30000
-	}
-	statefulRiskScoreValue := parseFloatHeader(statefulRiskScore)
-	statefulRiskLevelValue := strings.TrimSpace(statefulRiskLevel)
-	if statefulRiskLevelValue == "" {
-		statefulRiskLevelValue = "low"
-	}
+	statefulTurnCountValue := 0
+	statefulEstimatedCharsValue := 0
+	statefulSummaryCharsValue := 0
+	statefulResetCountValue := 0
+	statefulLastInputTokensValue := 0
+	statefulPeakInputTokensValue := 0
+	statefulTokenBudgetValue := serverStatefulTokenBudgetValue
+	statefulRiskScoreValue := 0.0
+	statefulRiskLevelValue := "low"
 	statefulLastOutputTokensValue := 0
 	statefulSummaryText := ""
+
+	if strings.TrimSpace(statefulResetReason) != "" {
+		statefulResetCountValue = parseIntHeader(statefulResetCount)
+	}
 
 	var (
 		chatSession           mcp.ChatSessionEntry
@@ -2725,30 +2808,12 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			sessionUISnapshot = parseChatSessionUISnapshot(existingSession.UIStateJSON)
 			statefulSummaryText = existingSession.SummaryText
 			if llmMode == "stateful" && statefulResetReason == "" {
-				if statefulTurnCountValue <= 0 {
-					statefulTurnCountValue = existingSession.TurnCount
-				}
-				if statefulEstimatedCharsValue <= 0 {
-					statefulEstimatedCharsValue = existingSession.EstimatedChars
-				}
-				if statefulLastInputTokensValue <= 0 {
-					statefulLastInputTokensValue = existingSession.LastInputTokens
-				}
-				if statefulLastOutputTokensValue <= 0 {
-					statefulLastOutputTokensValue = existingSession.LastOutputTokens
-				}
-				if statefulPeakInputTokensValue <= 0 {
-					statefulPeakInputTokensValue = existingSession.PeakInputTokens
-				}
-				if statefulTokenBudgetValue <= 0 && existingSession.TokenBudget > 0 {
-					statefulTokenBudgetValue = existingSession.TokenBudget
-				}
-				if existingSession.RiskScore > 0 {
-					statefulRiskScoreValue = existingSession.RiskScore
-				}
-				if strings.TrimSpace(existingSession.RiskLevel) != "" {
-					statefulRiskLevelValue = existingSession.RiskLevel
-				}
+				statefulTurnCountValue = existingSession.TurnCount
+				statefulEstimatedCharsValue = existingSession.EstimatedChars
+				statefulLastInputTokensValue = existingSession.LastInputTokens
+				statefulLastOutputTokensValue = existingSession.LastOutputTokens
+				statefulPeakInputTokensValue = existingSession.PeakInputTokens
+				statefulTokenBudgetValue = serverStatefulTokenBudgetValue
 				if strings.TrimSpace(existingSession.LastResponseID) != "" {
 					sessionLastResponseID = existingSession.LastResponseID
 					if reqMap != nil {
@@ -2761,6 +2826,51 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			delete(reqMap, "previous_response_id")
 			sessionLastResponseID = ""
 		}
+		if llmMode == "stateful" && statefulResetReason == "" {
+			projectedChars := statefulEstimatedCharsValue + len([]rune(strings.TrimSpace(initialUserInputText)))
+			projectedTokens := statefulLastInputTokensValue + estimateStatefulTokens(initialUserInputText)
+			shouldCompact := statefulTurnCountValue >= serverStatefulTurnLimitValue ||
+				projectedChars >= serverStatefulCharBudgetValue ||
+				projectedTokens >= serverStatefulTokenBudgetValue ||
+				statefulLastInputTokensValue >= serverStatefulTokenBudgetValue
+			if shouldCompact {
+				statefulSummaryText = summarizeChatSessionForReset(statefulSummaryText, sessionUISnapshot)
+				statefulResetReason = "auto_summary_reset"
+				statefulResetCountValue += 1
+				sessionLastResponseID = ""
+				statefulTurnCountValue = 0
+				statefulEstimatedCharsValue = len([]rune(statefulSummaryText))
+				statefulLastInputTokensValue = estimateStatefulTokens(statefulSummaryText)
+				statefulLastOutputTokensValue = 0
+				if statefulPeakInputTokensValue < statefulLastInputTokensValue {
+					statefulPeakInputTokensValue = statefulLastInputTokensValue
+				}
+				if reqMap != nil {
+					delete(reqMap, "previous_response_id")
+				}
+				AddDebugTrace("stateful", "reset", "Server-side automatic stateful compact triggered", map[string]interface{}{
+					"user":             userID,
+					"reason":           statefulResetReason,
+					"turn_count":       statefulTurnCountValue,
+					"projected_chars":  projectedChars,
+					"projected_tokens": projectedTokens,
+					"turn_limit":       serverStatefulTurnLimitValue,
+					"char_budget":      serverStatefulCharBudgetValue,
+					"token_budget":     serverStatefulTokenBudgetValue,
+				})
+			}
+		}
+		statefulSummaryCharsValue = len([]rune(statefulSummaryText))
+		statefulTokenBudgetValue = serverStatefulTokenBudgetValue
+		statefulRiskScoreValue, statefulRiskLevelValue = computeServerStatefulRisk(
+			statefulTurnCountValue,
+			statefulEstimatedCharsValue,
+			statefulLastInputTokensValue,
+			initialUserInputText,
+			serverStatefulTurnLimitValue,
+			serverStatefulCharBudgetValue,
+			serverStatefulTokenBudgetValue,
+		)
 		statefulTurnCount = strconv.Itoa(statefulTurnCountValue)
 		statefulEstChars = strconv.Itoa(statefulEstimatedCharsValue)
 		statefulSummaryChars = strconv.Itoa(statefulSummaryCharsValue)

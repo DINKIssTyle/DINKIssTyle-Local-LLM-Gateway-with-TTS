@@ -2428,6 +2428,34 @@ let savedLibraryCloseTimer = null;
 const savedTurnsSyncChannel = typeof BroadcastChannel !== 'undefined'
     ? new BroadcastChannel('dkst-saved-turns-sync')
     : null;
+const configSyncChannel = typeof BroadcastChannel !== 'undefined'
+    ? new BroadcastChannel('dkst-config-sync')
+    : null;
+
+function broadcastConfigSync() {
+    const payload = {
+        type: 'config-updated',
+        timestamp: Date.now()
+    };
+    try {
+        configSyncChannel?.postMessage(payload);
+    } catch (err) {
+        console.warn('Failed to broadcast config sync channel event:', err);
+    }
+    try {
+        localStorage.setItem('dkst-config-sync', JSON.stringify(payload));
+    } catch (err) {
+        console.warn('Failed to broadcast config via storage:', err);
+    }
+}
+
+async function handleExternalConfigSync() {
+    try {
+        await syncServerConfig();
+    } catch (err) {
+        console.warn('Failed to sync config from external event:', err);
+    }
+}
 
 function handleSavedTurnsExternalSync() {
     if (!currentUser) return;
@@ -2533,6 +2561,14 @@ if (savedTurnsSyncChannel) {
     };
 }
 
+if (configSyncChannel) {
+    configSyncChannel.onmessage = (event) => {
+        const payload = event?.data;
+        if (!payload || payload.type !== 'config-updated') return;
+        handleExternalConfigSync();
+    };
+}
+
 window.addEventListener('storage', (event) => {
     if (event.key !== 'savedTurnsSyncEvent' || !event.newValue) return;
     try {
@@ -2542,6 +2578,17 @@ window.addEventListener('storage', (event) => {
         handleSavedTurnsExternalSync();
     } catch (err) {
         console.warn('Failed to parse saved turn sync payload:', err);
+    }
+});
+
+window.addEventListener('storage', (event) => {
+    if (event.key !== 'dkst-config-sync' || !event.newValue) return;
+    try {
+        const payload = JSON.parse(event.newValue);
+        if (!payload || payload.type !== 'config-updated') return;
+        handleExternalConfigSync();
+    } catch (err) {
+        console.warn('Failed to parse config sync payload:', err);
     }
 });
 
@@ -2596,6 +2643,7 @@ async function refreshSessionStateFromServer() {
         }
         if (!currentUser) return;
 
+        await syncServerConfig();
         await syncCurrentChatSessionFromServer();
         clearReconnectWatchdog();
         dismissReconnectNoticeCard();
@@ -3256,6 +3304,7 @@ function saveConfig(closeModal = true) {
         body: JSON.stringify(configPayload)
     }).then(r => {
         if (!r.ok) console.warn('Failed to sync settings');
+        broadcastConfigSync();
     }).catch(e => console.warn('Sync error:', e));
 
 
@@ -4904,10 +4953,6 @@ async function sendMessage() {
     if (!text && !currentImage) return;
     if (isGenerating) return;
 
-    if (config.llmMode === 'stateful') {
-        await ensureStatefulContextBudget(text);
-    }
-
     dismissStartupCards();
 
     // Stop and clear any existing audio/TTS
@@ -5152,16 +5197,6 @@ async function streamResponse(payload, elementId, turnId = '') {
     if (currentUserLocation) {
         headers['X-User-Location'] = currentUserLocation;
     }
-    const statefulRisk = getStatefulRiskMetrics(typeof payload.input === 'string' ? payload.input : '');
-    headers['X-Stateful-Turn-Count'] = String(statefulTurnCount);
-    headers['X-Stateful-Est-Chars'] = String(statefulEstimatedChars);
-    headers['X-Stateful-Summary-Chars'] = String(statefulSummary.length);
-    headers['X-Stateful-Reset-Count'] = String(statefulResetCount);
-    headers['X-Stateful-Input-Tokens'] = String(statefulLastInputTokens);
-    headers['X-Stateful-Peak-Input-Tokens'] = String(statefulPeakInputTokens);
-    headers['X-Stateful-Token-Budget'] = String(parseInt(config.statefulTokenBudget, 10) || DEFAULT_STATEFUL_TOKEN_BUDGET);
-    headers['X-Stateful-Risk-Score'] = String(statefulRisk.score);
-    headers['X-Stateful-Risk-Level'] = statefulRisk.level;
     if (pendingStatefulResetReason) {
         headers['X-Stateful-Reset-Reason'] = pendingStatefulResetReason;
     }
