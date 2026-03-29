@@ -203,6 +203,31 @@ func encodeChatSessionUISnapshot(snapshot chatSessionUISnapshot) string {
 	return string(bytes)
 }
 
+func deriveLastSessionFromChatSession(entry mcp.ChatSessionEntry) (map[string]interface{}, bool) {
+	snapshot := parseChatSessionUISnapshot(entry.UIStateJSON)
+	if len(snapshot.Messages) == 0 {
+		return nil, false
+	}
+
+	for i := len(snapshot.Messages) - 1; i >= 0; i-- {
+		item := snapshot.Messages[i]
+		userText := strings.TrimSpace(item.UserContent)
+		assistantText := strings.TrimSpace(item.AssistantContent)
+		if userText == "" || assistantText == "" {
+			continue
+		}
+		return map[string]interface{}{
+			"has_session":       true,
+			"user_message":      userText,
+			"assistant_message": assistantText,
+			"mode":              strings.TrimSpace(entry.LLMMode),
+			"updated_at":        entry.UpdatedAt,
+		}, true
+	}
+
+	return nil, false
+}
+
 func estimateStatefulTokens(text string) int {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
@@ -1674,9 +1699,6 @@ func handleClearCurrentChat() http.HandlerFunc {
 			http.Error(w, "Failed to clear current chat session", http.StatusInternalServerError)
 			return
 		}
-		if err := mcp.DeleteLastSession(userID); err != nil {
-			log.Printf("[handleClearCurrentChat] Failed to delete last session cache for %s: %v", userID, err)
-		}
 		if err := mcp.ClearChatSessionEvents(userID, entry.ID); err != nil {
 			log.Printf("[handleClearCurrentChat] Failed to clear chat events for %s: %v", userID, err)
 		}
@@ -1710,10 +1732,10 @@ func handleLastSession() http.HandlerFunc {
 
 		switch r.Method {
 		case http.MethodGet:
-			entry, err := mcp.GetLastSession(userID)
+			entry, err := mcp.GetCurrentChatSession(userID)
 			if err != nil {
 				if !errors.Is(err, sql.ErrNoRows) {
-					log.Printf("[handleLastSession] Failed to load last session for user %s: %v", userID, err)
+					log.Printf("[handleLastSession] Failed to load current chat session for user %s: %v", userID, err)
 				}
 				json.NewEncoder(w).Encode(map[string]interface{}{
 					"has_session": false,
@@ -1721,43 +1743,15 @@ func handleLastSession() http.HandlerFunc {
 				return
 			}
 
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"has_session":       true,
-				"user_message":      entry.LastUserMessage,
-				"assistant_message": entry.LastAssistantMessage,
-				"mode":              entry.Mode,
-				"updated_at":        entry.UpdatedAt,
-			})
-		case http.MethodPost:
-			var req struct {
-				UserMessage      string `json:"user_message"`
-				AssistantMessage string `json:"assistant_message"`
-				Mode             string `json:"mode"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				http.Error(w, "Invalid request", http.StatusBadRequest)
+			payload, ok := deriveLastSessionFromChatSession(entry)
+			if !ok {
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"has_session": false,
+				})
 				return
 			}
 
-			if strings.TrimSpace(req.UserMessage) == "" || strings.TrimSpace(req.AssistantMessage) == "" {
-				http.Error(w, "Both user_message and assistant_message are required", http.StatusBadRequest)
-				return
-			}
-
-			if err := mcp.UpsertLastSession(userID, req.UserMessage, req.AssistantMessage, req.Mode, time.Now()); err != nil {
-				log.Printf("[handleLastSession] Failed to save last session for %s: %v", userID, err)
-				http.Error(w, "Failed to save last session", http.StatusInternalServerError)
-				return
-			}
-
-			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-		case http.MethodDelete:
-			if err := mcp.DeleteLastSession(userID); err != nil {
-				log.Printf("[handleLastSession] Failed to delete last session for %s: %v", userID, err)
-				http.Error(w, "Failed to delete last session", http.StatusInternalServerError)
-				return
-			}
-			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			json.NewEncoder(w).Encode(payload)
 		default:
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
