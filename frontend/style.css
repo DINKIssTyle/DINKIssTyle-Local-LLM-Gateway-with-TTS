@@ -320,6 +320,18 @@ body.keyboard-open #chat-header {
   align-items: flex-start;
 }
 
+.message.assistant.is-empty-shell {
+  margin-bottom: 0;
+}
+
+.message.assistant.is-empty-shell .message-inner {
+  gap: 0;
+}
+
+.message.assistant.is-empty-shell .message-label {
+  display: none;
+}
+
 .message.system {
   align-items: flex-start;
 }

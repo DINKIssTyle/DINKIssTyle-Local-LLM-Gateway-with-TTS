@@ -10,7 +10,7 @@ let config = {
     apiEndpoint: 'http://127.0.0.1:1234',
     model: 'qwen/qwen3-vl-30b',
     secondaryModel: '',
-    hideThink: true,       // Default: True
+    hideThink: false,       // Default: False
     temperature: 0.7,      // Default: 0.7
     maxTokens: 4096,       // Default: 4096
     historyCount: 10,
@@ -32,8 +32,8 @@ let config = {
     llmMode: 'standard', // 'standard' or 'stateful'
     disableStateful: false, // LM Studio specific
     statefulTurnLimit: 8,
-    statefulCharBudget: 12000,
-    statefulTokenBudget: 10000,
+    statefulCharBudget: 32000,
+    statefulTokenBudget: 30000,
     micLayout: 'none', // 'none', 'left', 'right', 'bottom', 'inline'
     chatFontSize: 16,
     userBubbleTheme: 'ocean'
@@ -324,9 +324,9 @@ const translations = {
         'setting.statefulTurnLimit.label': 'Stateful Turn Limit',
         'setting.statefulTurnLimit.desc': '(기본값: 8) LM Studio 모드에서 몇 턴까지 유지한 뒤 대화 문맥을 요약하고 새 체인으로 이어갈지 지정합니다.',
         'setting.statefulCharBudget.label': 'Stateful Character Budget',
-        'setting.statefulCharBudget.desc': '(기본값: 12000) 활성 문맥의 예상 총 글자 수가 이 값을 넘기면 자동 compact가 실행됩니다.',
+        'setting.statefulCharBudget.desc': '(기본값: 32000) 활성 문맥의 예상 총 글자 수가 이 값을 넘기면 자동 compact가 실행됩니다.',
         'setting.statefulTokenBudget.label': 'Stateful Token Budget',
-        'setting.statefulTokenBudget.desc': '(기본값: 10000) 자동 compact 판단에서 가장 우선으로 사용하는 예상 토큰 예산입니다.',
+        'setting.statefulTokenBudget.desc': '(기본값: 30000) 자동 compact 판단에서 가장 우선으로 사용하는 예상 토큰 예산입니다.',
         'setting.memory.warning': '주의: 개인 정보가 PC에 평문으로 저장됩니다.',
         'setting.memory.open': '파일 열기',
         'setting.memory.reset': '메모리 초기화',
@@ -511,9 +511,9 @@ const translations = {
         'setting.statefulTurnLimit.label': 'Stateful Turn Limit',
         'setting.statefulTurnLimit.desc': '(Default: 8) Choose how many turns LM Studio keeps before compacting the conversation into a summary and starting a fresh chain.',
         'setting.statefulCharBudget.label': 'Stateful Character Budget',
-        'setting.statefulCharBudget.desc': '(Default: 12000) If the estimated active context grows past this many characters, automatic compaction runs.',
+        'setting.statefulCharBudget.desc': '(Default: 32000) If the estimated active context grows past this many characters, automatic compaction runs.',
         'setting.statefulTokenBudget.label': 'Stateful Token Budget',
-        'setting.statefulTokenBudget.desc': '(Default: 10000) Primary token safety threshold used to decide when automatic context compaction should trigger.',
+        'setting.statefulTokenBudget.desc': '(Default: 30000) Primary token safety threshold used to decide when automatic context compaction should trigger.',
         'setting.memory.warning': 'Warning: Personal data is stored unencrypted on local disk.',
         'setting.memory.open': 'Open File',
         'setting.memory.reset': 'Reset Memory',
@@ -3406,7 +3406,7 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
 
     snapshotMessages.forEach((item, index) => {
         const turnId = String(item?.turn_id || `snapshot-turn-${index + 1}`);
-        const assistantId = `server-assistant-default-${turnId}`;
+        const assistantId = buildServerAssistantMessageId(turnId, `snapshot-turn-${index + 1}`);
         lastTurnId = turnId;
         lastAssistantId = assistantId;
 
@@ -3424,14 +3424,14 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
 
     snapshotMessages.forEach((item, index) => {
         const turnId = String(item?.turn_id || `snapshot-turn-${index + 1}`);
-        const assistantId = `server-assistant-default-${turnId}`;
+        const assistantId = buildServerAssistantMessageId(turnId, `snapshot-turn-${index + 1}`);
         const assistantText = String(item?.assistant_content || '');
         const reasoningText = String(item?.reasoning_content || '');
         const reasoningDuration = getSnapshotReasoningDuration(item);
         const snapshotToolState = sessionUISnapshot.tool_cards?.[turnId] || null;
 
         ensureAssistantMessageElement(assistantId, turnId);
-        if (reasoningText) {
+        if (reasoningText && !config.hideThink) {
             serverReplayReasoningBuffers.set(assistantId, reasoningText);
             const card = ensureReasoningCard(assistantId);
             const titleEl = card?.querySelector('.reasoning-title');
@@ -3494,21 +3494,28 @@ function hasRestorableChatEvents(items = []) {
     });
 }
 
+function buildServerAssistantMessageId(turnId = '', fallbackKey = '') {
+    const key = String(turnId || fallbackKey || 'default').trim();
+    return `server-assistant-${key}`;
+}
+
 function ensureServerReplayAssistant(turnId, sessionId, seq) {
-    if (!turnId) return null;
+    const resolvedTurnId = String(turnId || '').trim();
+    const fallbackKey = `server-turn-${sessionId || 'default'}-${seq || '0'}`;
+    const messageId = buildServerAssistantMessageId(resolvedTurnId, fallbackKey);
     if (!serverReplayCurrentAssistantId) {
-        serverReplayCurrentAssistantId = `server-assistant-${sessionId}-${seq}`;
+        serverReplayCurrentAssistantId = messageId;
     }
-    const messageId = serverReplayCurrentAssistantId;
-    if (!document.getElementById(messageId)) {
+    const stableMessageId = serverReplayCurrentAssistantId || messageId;
+    if (!document.getElementById(stableMessageId)) {
         appendMessage({
             role: 'assistant',
             content: '',
-            id: messageId,
-            turnId
+            id: stableMessageId,
+            turnId: resolvedTurnId || fallbackKey
         });
     }
-    return messageId;
+    return stableMessageId;
 }
 
 function applyCurrentChatSessionSnapshot(session) {
@@ -3970,7 +3977,7 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
     const ensureAssistantId = (turnId, eventSeq) => {
         const key = turnId || `server-turn-default-${eventSeq}`;
         if (!assistantByTurn.has(key)) {
-            const assistantId = `server-assistant-${currentSessionId}-${key}`;
+            const assistantId = buildServerAssistantMessageId(key, `server-turn-${currentSessionId}-${eventSeq}`);
             assistantByTurn.set(key, assistantId);
             assistantOrder.push({ turnId: key, assistantId });
         }
@@ -4127,7 +4134,7 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
             setReasoningCardStartedAt(assistantId, reasoningStartedAtById.get(assistantId));
         }
         const reasoningText = reasoningTextById.get(assistantId) || '';
-        if (reasoningText) {
+        if (reasoningText && !config.hideThink) {
             serverReplayReasoningBuffers.set(assistantId, reasoningText);
             showReasoningStatus(assistantId, reasoningText);
             finalizeReasoningStatus(assistantId, 'done', '', reasoningDurationById.get(assistantId) || null);
@@ -4176,39 +4183,6 @@ function buildRestoredStatefulSummary(session) {
         userText ? `User: ${userText}` : '',
         assistantText ? `Assistant: ${assistantText}` : ''
     ].filter(Boolean).join('\n');
-}
-
-async function saveLastSessionTurn(userMsg, assistantText) {
-    const userText = (userMsg?.content || '').trim();
-    const assistantMessage = (assistantText || '').trim();
-    if (!currentUser || !userText || !assistantMessage) {
-        return;
-    }
-
-    const payload = {
-        user_message: userText,
-        assistant_message: assistantMessage,
-        mode: config.llmMode || 'standard'
-    };
-
-    try {
-        const response = await fetch('/api/last-session', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify(payload)
-        });
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-        }
-        lastSessionCache = {
-            has_session: true,
-            ...payload,
-            updated_at: new Date().toISOString()
-        };
-    } catch (e) {
-        console.warn('Failed to save last session:', e);
-    }
 }
 
 async function restoreLastSession() {
@@ -4828,8 +4802,6 @@ async function sendMessage() {
     activeLocalTurnId = turnId;
     activeLocalAssistantId = assistantId;
     locallyRenderedTurnIds.add(turnId);
-    startStreamingMessageAutoScroll(assistantId);
-    ensureAssistantMessageElement(assistantId, turnId);
     stopChatSessionPolling();
 
     // Build API Payload
@@ -4941,7 +4913,7 @@ async function sendMessage() {
     }
 
     if (assistantContent && assistantContent.trim()) {
-        await saveLastSessionTurn(userMsg, assistantContent);
+        ensureLastSessionCacheLoaded(true).catch(console.warn);
     }
 }
 
@@ -5118,7 +5090,6 @@ async function streamResponse(payload, elementId, turnId = '') {
 
 // Helper to process the stream reader (shared by direct and proxy)
 async function processStream(response, elementId, turnId = '') {
-    ensureAssistantMessageElement(elementId, turnId);
     const deferToServerChatSession = false;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -5687,9 +5658,19 @@ function getSnapshotReasoningDuration(item) {
 
 function ensureAssistantMessageElement(id, turnId = '') {
     let el = document.getElementById(id);
-    if (el) return el;
+    if (el) {
+        attachStreamingAudioButtonToMessage(el);
+        syncAssistantMessageShellState(el);
+        return el;
+    }
     appendMessage({ role: 'assistant', content: '', id, turnId });
-    return document.getElementById(id);
+    el = document.getElementById(id);
+    if (el && activeStreamingMessageId === id) {
+        startStreamingMessageAutoScroll(id);
+    }
+    attachStreamingAudioButtonToMessage(el);
+    syncAssistantMessageShellState(el);
+    return el;
 }
 
 function isAssistantMessageVisiblyEmpty(msgEl) {
@@ -5702,6 +5683,11 @@ function isAssistantMessageVisiblyEmpty(msgEl) {
     return !hasVisibleResponse && !hasVisibleReasoning && !hasToolCards;
 }
 
+function syncAssistantMessageShellState(msgEl) {
+    if (!msgEl || !msgEl.classList?.contains('assistant')) return;
+    msgEl.classList.toggle('is-empty-shell', isAssistantMessageVisiblyEmpty(msgEl));
+}
+
 function cleanupTrailingEmptyAssistantMessages() {
     if (!chatMessages) return;
     const children = Array.from(chatMessages.children);
@@ -5710,6 +5696,7 @@ function cleanupTrailingEmptyAssistantMessages() {
         if (!(node instanceof HTMLElement) || !node.classList.contains('message')) {
             continue;
         }
+        syncAssistantMessageShellState(node);
         if (!node.classList.contains('assistant')) {
             break;
         }
@@ -5735,6 +5722,42 @@ function getAssistantMessageParts(elementId, turnId = '') {
     };
 }
 
+function syncCurrentAudioButtonUI() {
+    const btn = currentAudioBtn;
+    if (!btn) return;
+    const iconEl = btn.querySelector('.material-icons-round');
+    if (!iconEl) return;
+
+    if (isPlayingQueue) {
+        iconEl.textContent = 'stop';
+        btn.title = 'Stop';
+        btn.disabled = false;
+        return;
+    }
+
+    if (streamingTTSActive || ttsQueue.length > 0) {
+        iconEl.textContent = 'hourglass_empty';
+        btn.title = 'Preparing audio';
+        btn.disabled = true;
+        return;
+    }
+
+    iconEl.textContent = 'volume_up';
+    btn.title = 'Speak';
+    btn.disabled = false;
+}
+
+function attachStreamingAudioButtonToMessage(msgEl) {
+    if (!msgEl || !msgEl.id) return;
+    if (msgEl.id !== activeStreamingMessageId) return;
+    if (!(streamingTTSActive || isPlayingQueue || ttsQueue.length > 0)) return;
+
+    const speakBtn = msgEl.querySelector('.speak-btn');
+    if (!speakBtn) return;
+    currentAudioBtn = speakBtn;
+    syncCurrentAudioButtonUI();
+}
+
 function setAssistantActionBarReady(elementId) {
     const { msgEl } = getAssistantMessageParts(elementId);
     const actionBar = msgEl?.querySelector('.message-actions');
@@ -5746,6 +5769,7 @@ function setAssistantActionBarReady(elementId) {
         requestAnimationFrame(() => {
             actionBar.classList.add('is-ready');
             actionBar.classList.remove('is-pending');
+            attachStreamingAudioButtonToMessage(msgEl);
             cleanupTrailingEmptyAssistantMessages();
         });
     });
@@ -6027,6 +6051,7 @@ function setToolCardState(elementId, state, summary = '', args = null, toolName 
         queryEl.textContent = detailText || '';
     }
     renderToolHistory(card, historyEl, state);
+    syncAssistantMessageShellState(card.closest('.message.assistant'));
 }
 
 function extractToolPreview(args, summary = '', toolName = '') {
@@ -6430,6 +6455,7 @@ function showReasoningStatus(elementId, text, isFinal = false, elapsedOverrideMs
         titleEl.textContent = formatThoughtDuration(durationMs);
     }
     bodyEl.textContent = cleanText;
+    syncAssistantMessageShellState(card.closest('.message.assistant'));
 }
 
 function finalizeReasoningStatus(elementId, outcome = 'done', detail = '', durationOverrideMs = null) {
@@ -6478,6 +6504,7 @@ function finalizeReasoningStatus(elementId, outcome = 'done', detail = '', durat
     if (bodyEl && detail) {
         bodyEl.textContent = detail;
     }
+    syncAssistantMessageShellState(card.closest('.message.assistant'));
 }
 
 function finalizeAssistantStatusCards(elementId, outcome = 'done', detail = '') {
@@ -6805,6 +6832,7 @@ function finalizeMessageContent(id, text) {
     const hasVisibleContent = !!cleanText.trim();
     if (responseCard) responseCard.hidden = !hasVisibleContent;
     if (actionBar) actionBar.hidden = !hasVisibleContent;
+    syncAssistantMessageShellState(el);
 }
 
 function updateSyncedMessageContent(id, text, options = {}) {
@@ -6832,6 +6860,7 @@ function updateSyncedMessageContent(id, text, options = {}) {
     if (actionBar && actionBar.classList.contains('is-ready')) {
         actionBar.hidden = !hasVisibleContent;
     }
+    syncAssistantMessageShellState(el);
 
     const shouldPulse = animate && !previousCommittedText.trim() && !!cleanText.trim();
     if (shouldPulse) {
@@ -6899,6 +6928,7 @@ function updateMessageContent(id, text) {
             actionBar.hidden = !hasVisibleContent;
         }
     }
+    syncAssistantMessageShellState(el);
 
     if (!previousCommittedText.trim() && hasVisibleContent) {
         pulseMessageRender(el.querySelector('.assistant-response-card'));
@@ -7221,6 +7251,7 @@ function initStreamingTTS(elementId) {
     if (msgEl) {
         currentAudioBtn = msgEl.querySelector('.speak-btn');
     }
+    syncCurrentAudioButtonUI();
 
     console.log("[Streaming TTS] Initialized");
 }
@@ -7563,9 +7594,7 @@ async function processTTSQueue(isFirstChunk = false) {
     const mediaSessionLabel = activeTTSSessionLabel;
 
     if (btn) {
-        const iconEl = btn.querySelector('.material-icons-round');
-        if (iconEl) iconEl.textContent = 'hourglass_empty';
-        btn.disabled = true;
+        syncCurrentAudioButtonUI();
     }
 
     let firstChunkPlayed = false;
@@ -7640,11 +7669,8 @@ async function processTTSQueue(isFirstChunk = false) {
 
             // Update UI on first chunk playing
             if (!firstChunkPlayed && btn) {
-                btn.disabled = false;
-                const iconEl = btn.querySelector('.material-icons-round');
-                if (iconEl) iconEl.textContent = 'stop';
-                btn.title = "Stop";
                 firstChunkPlayed = true;
+                syncCurrentAudioButtonUI();
             }
 
             // Play via Audio element
@@ -7952,9 +7978,9 @@ function updateMessageInputPlaceholder() {
         ? listeningPhrases[sttPlaceholderIndex % listeningPhrases.length]
         : isRestoringChatSession
             ? t('input.placeholder.restoring')
-        : (composerProgressActive
-            ? [composerProgressLabel, composerProgressPercent].filter(Boolean).join(' - ')
-            : (backgroundTask?.label || t('input.placeholder')));
+            : (composerProgressActive
+                ? [composerProgressLabel, composerProgressPercent].filter(Boolean).join(' - ')
+                : (backgroundTask?.label || t('input.placeholder')));
 
     messageInput.placeholder = nextPlaceholder;
     messageInput.classList.toggle('stt-listening', isSTTActive);
