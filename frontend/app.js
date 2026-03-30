@@ -2498,6 +2498,10 @@ let isRestoringChatSession = false;
 let didInitialChatBootstrap = false;
 let lastSessionRetryTimer = null;
 let lastSessionFetchPromise = null;
+let sessionRefreshPromise = null;
+let pendingSessionRefresh = false;
+let currentChatSessionSyncPromise = null;
+let pendingCurrentChatSessionSync = false;
 let savedTurns = [];
 let savedLibraryQuery = '';
 let savedLibraryLoaded = false;
@@ -2719,21 +2723,38 @@ async function ensureLastSessionCacheLoaded(force = false) {
 }
 
 async function refreshSessionStateFromServer() {
-    try {
-        if (!currentUser) {
-            await checkAuth();
-        }
-        if (!currentUser) return;
-
-        await syncServerConfig();
-        await syncCurrentChatSessionFromServer();
-        clearReconnectWatchdog();
-        dismissReconnectNoticeCard();
-    } catch (error) {
-        console.warn('Session refresh failed:', error);
-        clearReconnectWatchdog();
-        showReconnectNoticeCard();
+    if (sessionRefreshPromise) {
+        pendingSessionRefresh = true;
+        return sessionRefreshPromise;
     }
+
+    sessionRefreshPromise = (async () => {
+        try {
+            do {
+                pendingSessionRefresh = false;
+
+                if (!currentUser) {
+                    await checkAuth();
+                }
+                if (!currentUser) return;
+
+                await syncServerConfig();
+                await syncCurrentChatSessionFromServer();
+            } while (pendingSessionRefresh);
+
+            clearReconnectWatchdog();
+            dismissReconnectNoticeCard();
+        } catch (error) {
+            console.warn('Session refresh failed:', error);
+            clearReconnectWatchdog();
+            showReconnectNoticeCard();
+            throw error;
+        } finally {
+            sessionRefreshPromise = null;
+        }
+    })();
+
+    return sessionRefreshPromise;
 }
 
 async function bootstrapInitialChatView() {
@@ -4120,6 +4141,24 @@ function applyCurrentChatSessionEvent(entry) {
 }
 
 async function syncCurrentChatSessionFromServer() {
+    if (currentChatSessionSyncPromise) {
+        pendingCurrentChatSessionSync = true;
+        return currentChatSessionSyncPromise;
+    }
+
+    currentChatSessionSyncPromise = (async () => {
+        do {
+            pendingCurrentChatSessionSync = false;
+            await syncCurrentChatSessionFromServerInternal();
+        } while (pendingCurrentChatSessionSync);
+    })().finally(() => {
+        currentChatSessionSyncPromise = null;
+    });
+
+    return currentChatSessionSyncPromise;
+}
+
+async function syncCurrentChatSessionFromServerInternal() {
     if (!currentUser) return;
 
     const session = await fetchCurrentChatSession();
@@ -4137,10 +4176,10 @@ async function syncCurrentChatSessionFromServer() {
         if (snapshotMessages.length > 0) {
             const snapshotLastEventSeq = Number(sessionUISnapshot.last_event_seq || 0);
             if (snapshotLastEventSeq <= 0) {
+                beginChatSessionRestore(snapshotMessages.length);
                 const seedResult = await fetchCurrentChatSessionEvents(0, 200);
                 const seedItems = Array.isArray(seedResult.items) ? [...seedResult.items] : [];
                 if (seedItems.length > 0) {
-                    beginChatSessionRestore(seedResult.totalCount || seedItems.length);
                     try {
                         updateChatSessionRestoreProgress(seedItems.length, seedResult.totalCount || seedItems.length);
                         let allItems = seedItems;
@@ -4164,7 +4203,9 @@ async function syncCurrentChatSessionFromServer() {
                     return;
                 }
             }
-            beginChatSessionRestore(snapshotMessages.length);
+            if (!isRestoringChatSession) {
+                beginChatSessionRestore(snapshotMessages.length);
+            }
             try {
                 updateChatSessionRestoreProgress(0, snapshotMessages.length);
                 let trailingItems = [];
@@ -5029,6 +5070,7 @@ function beginChatSessionRestore(totalCount = 0) {
         chatMessages.innerHTML = '';
     }
     chatMessages?.classList.add('is-session-hydrating');
+    renderSessionRestoreSkeleton(totalCount);
     renderProgressDock(t('progress.restoringHistory'), 0, 'prompt-processing', false);
     updateMessageInputPlaceholder();
 }

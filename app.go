@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -381,9 +382,11 @@ func (a *App) startup(ctx context.Context) {
 	// Reload config now that paths are set up and files potentially copied
 	a.loadConfig()
 	if a.enableDebugTrace {
-		wruntime.WindowSetSize(ctx, 1470, 800)
+		wruntime.WindowSetMinSize(ctx, 1200, 800)
+		wruntime.WindowSetSize(ctx, 1200, 800)
 	} else {
-		wruntime.WindowSetSize(ctx, 980, 800)
+		wruntime.WindowSetMinSize(ctx, 755, 800)
+		wruntime.WindowSetSize(ctx, 755, 800)
 	}
 
 	// Start Async Memory Worker (Disabled: Transitioned to real-time raw-to-DB model)
@@ -588,6 +591,52 @@ func (a *App) SetCertDomain(domain string) {
 	defer a.serverMux.Unlock()
 	a.certDomain = domain
 	a.saveConfig()
+}
+
+// GenerateCertificate forces regeneration of a self-signed certificate for the given domain.
+func (a *App) GenerateCertificate(domain string) error {
+	domain = strings.TrimSpace(domain)
+	if domain == "" {
+		return fmt.Errorf("domain cannot be empty")
+	}
+
+	appDataDir := GetAppDataDir()
+	certPath := filepath.Join(appDataDir, domain+".crt")
+	keyPath := filepath.Join(appDataDir, domain+".key")
+	derPath := filepath.Join(appDataDir, domain+".der.crt")
+
+	// Remove existing files to force regeneration
+	os.Remove(certPath)
+	os.Remove(keyPath)
+	os.Remove(derPath)
+
+	_, _, err := ensureSelfSignedCert(appDataDir, domain)
+	if err != nil {
+		fmt.Printf("[GenerateCertificate] Error: %v\n", err)
+		return err
+	}
+
+	fmt.Printf("[GenerateCertificate] Successfully generated certs for %s\n", domain)
+	return nil
+}
+
+// OpenCertFolder opens the application's data directory in the system file explorer.
+func (a *App) OpenCertFolder() error {
+	appDataDir := GetAppDataDir()
+
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("explorer", appDataDir)
+	case "darwin":
+		cmd = exec.Command("open", appDataDir)
+	case "linux":
+		cmd = exec.Command("xdg-open", appDataDir)
+	default:
+		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
+	}
+
+	return cmd.Start()
 }
 
 // SetEnableMemory is removed; use per-user settings via /api/config

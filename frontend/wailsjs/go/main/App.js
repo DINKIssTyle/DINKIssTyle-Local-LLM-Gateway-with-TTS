@@ -34,6 +34,10 @@ export function FetchAndCacheModels() {
   return window['go']['main']['App']['FetchAndCacheModels']();
 }
 
+export function GenerateCertificate(arg1) {
+  return window['go']['main']['App']['GenerateCertificate'](arg1);
+}
+
 export function GetAutoStartServer() {
   return window['go']['main']['App']['GetAutoStartServer']();
 }
@@ -124,6 +128,10 @@ export function LearnToolPattern(arg1, arg2) {
 
 export function LoadModel(arg1) {
   return window['go']['main']['App']['LoadModel'](arg1);
+}
+
+export function OpenCertFolder() {
+  return window['go']['main']['App']['OpenCertFolder']();
 }
 
 export function OpenMemoryFolder(arg1) {

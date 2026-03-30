@@ -18,6 +18,8 @@ export function DownloadAssets():Promise<void>;
 
 export function FetchAndCacheModels():Promise<Array<number>>;
 
+export function GenerateCertificate(arg1:string):Promise<void>;
+
 export function GetAutoStartServer():Promise<boolean>;
 
 export function GetCachedModels():Promise<Array<number>>;
@@ -63,6 +65,8 @@ export function GetVoiceStyles():Promise<Array<string>>;
 export function LearnToolPattern(arg1:string,arg2:string):Promise<void>;
 
 export function LoadModel(arg1:string):Promise<void>;
+
+export function OpenCertFolder():Promise<void>;
 
 export function OpenMemoryFolder(arg1:string):Promise<string>;
 
