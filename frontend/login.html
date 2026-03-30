@@ -256,15 +256,15 @@
             </button>
         </div>
 
-        <form id="login-form" onsubmit="handleLogin(event)" style="display: none;">
+        <form id="login-form" onsubmit="handleLogin(event)" style="display: none;" autocapitalize="off" autocorrect="off" spellcheck="false">
             <div class="form-group">
                 <label for="username">Username</label>
-                <input type="text" id="username" name="username" required autocomplete="username">
+                <input type="text" id="username" name="username" required autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text">
             </div>
 
             <div class="form-group">
                 <label for="password">Password</label>
-                <input type="password" id="password" name="password" required autocomplete="current-password">
+                <input type="password" id="password" name="password" required autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false">
             </div>
 
             <div class="form-group" style="display: flex; align-items: center; gap: 8px;">
