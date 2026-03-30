@@ -62,6 +62,8 @@ wails build -platform darwin/universal -skipbindings
 
 if [ $? -eq 0 ]; then
     APP_CONTENT_DIR="build/bin/DKST LLM Chat Server.app/Contents/MacOS/"
+    APP_RESOURCE_DIR="build/bin/DKST LLM Chat Server.app/Contents/Resources/"
+    mkdir -p "$APP_RESOURCE_DIR"
     
     # Copy onnxruntime folder but clean out binary files (keep only LICENSE and metadata)
     cp -r onnxruntime "$APP_CONTENT_DIR"
@@ -73,17 +75,17 @@ if [ $? -eq 0 ]; then
     # Copy the dylib to root MacOS folder for linking
     cp onnxruntime/libonnxruntime.dylib "$APP_CONTENT_DIR"
     
-    # cp -r assets "$APP_CONTENT_DIR"
-    cp -r frontend "$APP_CONTENT_DIR"
-    cp users.json "$APP_CONTENT_DIR" 2>/dev/null || echo "{}" > "$APP_CONTENT_DIR/users.json"
-    cp config.json "$APP_CONTENT_DIR" 2>/dev/null || true
-    cp dictionary_*.txt "$APP_CONTENT_DIR" 2>/dev/null || true
-    cp Dictionary_editor.py "$APP_CONTENT_DIR" 2>/dev/null || true
-    cp system_prompts.json "$APP_CONTENT_DIR" 2>/dev/null || true
+    # cp -r assets "$APP_RESOURCE_DIR"
+    cp -r frontend "$APP_RESOURCE_DIR"
+    cp users.json "$APP_RESOURCE_DIR" 2>/dev/null || echo "{}" > "$APP_RESOURCE_DIR/users.json"
+    cp config.json "$APP_RESOURCE_DIR" 2>/dev/null || true
+    cp dictionary_*.txt "$APP_RESOURCE_DIR" 2>/dev/null || true
+    cp Dictionary_editor.py "$APP_RESOURCE_DIR" 2>/dev/null || true
+    cp system_prompts.json "$APP_RESOURCE_DIR" 2>/dev/null || true
     
     # Clean up unnecessary files from bundle
-    rm -rf "$APP_CONTENT_DIR/assets/.git"
-    rm -rf "$APP_CONTENT_DIR/frontend/.git"
+    rm -rf "$APP_RESOURCE_DIR/assets/.git"
+    rm -rf "$APP_RESOURCE_DIR/frontend/.git"
     
     # Fix RPATH and Dylib ID for portability
     EXE_PATH="$APP_CONTENT_DIR/DKST LLM Chat Server"
@@ -99,9 +101,12 @@ if [ $? -eq 0 ]; then
     # Remove hidden metadata attributes that can break code signing
     xattr -cr "$APP_BUNDLE_PATH"
     
-    codesign --force --sign "$SIGN_IDENTITY" --timestamp=none "$DYLIB_PATH"
-    codesign --force --sign "$SIGN_IDENTITY" --timestamp=none "$EXE_PATH"
-    codesign --force --sign "$SIGN_IDENTITY" --timestamp=none --deep "$APP_BUNDLE_PATH"
+    BUNDLE_ID="com.dinkisstyle.llmchat"
+    ENTITLEMENTS="entitlements.plist"
+    
+    codesign --force --sign "$SIGN_IDENTITY" --timestamp=none --identifier "$BUNDLE_ID" --options runtime "$DYLIB_PATH"
+    codesign --force --sign "$SIGN_IDENTITY" --timestamp=none --identifier "$BUNDLE_ID" --options runtime --entitlements "$ENTITLEMENTS" "$EXE_PATH"
+    codesign --force --sign "$SIGN_IDENTITY" --timestamp=none --identifier "$BUNDLE_ID" --options runtime --entitlements "$ENTITLEMENTS" --deep "$APP_BUNDLE_PATH"
 
     echo "Build success!"
 else

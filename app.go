@@ -129,6 +129,16 @@ func GetResourcePath(relativePath string) string {
 	exePath, err := os.Executable()
 	if err == nil {
 		exeDir := filepath.Dir(exePath)
+
+		// 1. MacOS Bundle: Check Contents/Resources (Preferred for data)
+		if runtime.GOOS == "darwin" {
+			resPath := filepath.Join(filepath.Dir(exeDir), "Resources", relativePath)
+			if _, err := os.Stat(resPath); err == nil {
+				return resPath
+			}
+		}
+
+		// 2. Check next to executable (Legacy/Standard/onnxruntime)
 		prodPath := filepath.Join(exeDir, relativePath)
 		if _, err := os.Stat(prodPath); err == nil {
 			return prodPath
@@ -153,6 +163,10 @@ func (a *App) CheckAndSetupPaths() {
 	appDataDir := GetAppDataDir()
 	exePath, _ := os.Executable()
 	bundleDir := filepath.Dir(exePath)
+	resourceDir := bundleDir
+	if runtime.GOOS == "darwin" {
+		resourceDir = filepath.Join(filepath.Dir(bundleDir), "Resources")
+	}
 
 	// List of things to copy from bundle to AppDataDir if missing
 	items := []string{"onnxruntime", "users.json", "config.json", "Dictionary_editor.py", "system_prompts.json"}
@@ -176,7 +190,10 @@ func (a *App) CheckAndSetupPaths() {
 	// Copy all dictionary files (dictionary_*.txt)
 	// Check bundle first, then CWD
 	dictPattern := "dictionary_*.txt"
-	matches, _ := filepath.Glob(filepath.Join(bundleDir, dictPattern))
+	matches, _ := filepath.Glob(filepath.Join(resourceDir, dictPattern))
+	if len(matches) == 0 {
+		matches, _ = filepath.Glob(filepath.Join(bundleDir, dictPattern)) // Legacy MacOS check
+	}
 	if len(matches) == 0 {
 		matches, _ = filepath.Glob(dictPattern) // CWD check
 	}
