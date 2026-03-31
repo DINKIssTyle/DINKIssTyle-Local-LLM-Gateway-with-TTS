@@ -11,10 +11,12 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"database/sql"
 	"dinkisstyle-chat/mcp"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -76,6 +78,11 @@ func compactText(input string, limit int) string {
 	}
 	runes := []rune(input)
 	return strings.TrimSpace(string(runes[:limit])) + "... (truncated)"
+}
+
+func buildAssistantContentHash(input string) string {
+	sum := sha256.Sum256([]byte(input))
+	return hex.EncodeToString(sum[:8])
 }
 
 func currentChatCancelKey(userID string) string {
@@ -686,6 +693,10 @@ func updateChatSessionMessageSnapshot(snapshot *chatSessionUISnapshot, turnID, r
 		} else if content, ok := payloadMap["content"].(string); ok && content != "" {
 			msg.AssistantContent += content
 		}
+	case "chat.end", "request.complete":
+		if finalContent, ok := payloadMap["final_assistant_content"].(string); ok && finalContent != "" {
+			msg.AssistantContent = finalContent
+		}
 	case "reasoning.delta":
 		if content, ok := payloadMap["content"].(string); ok && content != "" {
 			msg.ReasoningContent += content
@@ -880,7 +891,7 @@ func getActiveCertPaths(appDataDir string, certDomain string) (string, string, b
 func ensureSelfSignedCert(appDataDir string, certDomain string) (string, string, error) {
 	certPath, keyPath, isDomainSpecific := getActiveCertPaths(appDataDir, certDomain)
 
-	// If we have a domain-specific cert, we use it. 
+	// If we have a domain-specific cert, we use it.
 	// Unless we are forcing regeneration via a direct call (GenerateCertificate).
 	if isDomainSpecific {
 		// Validating existing certificate CN
@@ -982,7 +993,6 @@ func ensureSelfSignedCert(appDataDir string, certDomain string) (string, string,
 	log.Printf("[HTTPS] Certificate generated at %s (and .der.crt)", certPath)
 	return certPath, keyPath, nil
 }
-
 
 // preloadUserMemory has been removed as it was part of the legacy file-based memory system.
 // System context is now managed exclusively through the new SQLite Agentic RAG system and tools.
@@ -3063,6 +3073,30 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	previousResponseRetryUsed := false
 	discardStatefulResponseIDForTurn := false
 
+	emitCanonicalAssistantDelta := func(content string) {
+		if strings.TrimSpace(content) == "" {
+			return
+		}
+		fullResponse += content
+		appendChatEvent("assistant", "message.delta", map[string]interface{}{
+			"type":         "message.delta",
+			"content":      content,
+			"full_content": fullResponse,
+		})
+		payload := map[string]interface{}{
+			"choices": []interface{}{
+				map[string]interface{}{
+					"delta": map[string]string{
+						"content": content,
+					},
+				},
+			},
+		}
+		if jsonBytes, err := json.Marshal(payload); err == nil {
+			emitStreamChunk(fmt.Sprintf("data: %s", string(jsonBytes)))
+		}
+	}
+
 	// --- TURN LOOP START ---
 	// We allow up to 10 turns (tool call cycles) per request
 	for turn := 0; turn < 10; turn++ {
@@ -3793,34 +3827,13 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		// 🛠️ FINAL BUFFER FLUSH: If we were buffering and the stream ended, flush what's left.
 		if isBuffering && len(buffer) > 0 {
 			log.Printf("[handleChat] Final buffer flush triggered (Stream End)")
-			payload := map[string]interface{}{
-				"choices": []interface{}{
-					map[string]interface{}{
-						"delta": map[string]string{
-							"content": buffer,
-						},
-					},
-				},
-			}
-			jsonBytes, _ := json.Marshal(payload)
-			emitStreamChunk(fmt.Sprintf("data: %s", string(jsonBytes)))
-			fullResponse += buffer
+			emitCanonicalAssistantDelta(buffer)
 			lastSavedBufferForTurn = buffer // Save for history before clearing
 			buffer = ""
 		} else if len(partialTagBuffer) > 0 {
 			// Flush partial tag buffer if stream ends
-			payload := map[string]interface{}{
-				"choices": []interface{}{
-					map[string]interface{}{
-						"delta": map[string]string{
-							"content": partialTagBuffer,
-						},
-					},
-				},
-			}
-			jsonBytes, _ := json.Marshal(payload)
-			emitStreamChunk(fmt.Sprintf("data: %s", string(jsonBytes)))
-			fullResponse += partialTagBuffer
+			emitCanonicalAssistantDelta(partialTagBuffer)
+			lastSavedBufferForTurn += partialTagBuffer
 			partialTagBuffer = ""
 		}
 
@@ -4158,11 +4171,14 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	}
 	sessionStatus = "idle"
 	appendChatEvent("assistant", "request.complete", map[string]interface{}{
-		"response_chars": len(fullResponse),
-		"response_id":    sessionLastResponseID,
-		"mode":           llmMode,
-		"elapsed_ms":     time.Since(requestStart).Milliseconds(),
-		"turn_id":        clientTurnID,
+		"response_chars":          len(fullResponse),
+		"response_id":             sessionLastResponseID,
+		"mode":                    llmMode,
+		"elapsed_ms":              time.Since(requestStart).Milliseconds(),
+		"turn_id":                 clientTurnID,
+		"final_assistant_content": fullResponse,
+		"final_assistant_chars":   len(fullResponse),
+		"final_assistant_hash":    buildAssistantContentHash(fullResponse),
 	})
 	AddDebugTrace("chat", "request.complete", "Chat request finished", map[string]interface{}{
 		"user":           userID,

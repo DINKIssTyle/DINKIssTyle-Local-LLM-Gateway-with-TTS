@@ -2457,6 +2457,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     document.addEventListener('visibilitychange', () => {
         if (document.hidden) {
+            relinquishLocalStreamOwnership('document-hidden');
             cancelComposerBackgroundTasks('document-hidden');
             clearReconnectWatchdog();
         } else {
@@ -2464,6 +2465,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             armReconnectWatchdog();
             refreshSessionStateFromServer().catch(console.warn);
         }
+    });
+
+    window.addEventListener('pagehide', () => {
+        relinquishLocalStreamOwnership('pagehide');
     });
 
     window.addEventListener('pageshow', () => {
@@ -2503,6 +2508,7 @@ let sessionRefreshPromise = null;
 let pendingSessionRefresh = false;
 let currentChatSessionSyncPromise = null;
 let pendingCurrentChatSessionSync = false;
+let localStreamOwnershipReleased = false;
 let savedTurns = [];
 let savedLibraryQuery = '';
 let savedLibraryLoaded = false;
@@ -2700,6 +2706,22 @@ function clearLastSessionRetryTimer() {
     if (!lastSessionRetryTimer) return;
     clearTimeout(lastSessionRetryTimer);
     lastSessionRetryTimer = null;
+}
+
+function relinquishLocalStreamOwnership(reason = 'server-sync') {
+    if (!activeLocalTurnId && !activeLocalAssistantId && !isGenerating) return false;
+    console.info('[ChatSession] Relinquishing local stream ownership:', reason, {
+        turnId: activeLocalTurnId,
+        assistantId: activeLocalAssistantId
+    });
+    activeLocalTurnId = '';
+    activeLocalAssistantId = '';
+    locallyRenderedTurnIds = new Set();
+    isGenerating = false;
+    localStreamOwnershipReleased = true;
+    hideProgressDock();
+    updateSendButtonState();
+    return true;
 }
 
 async function ensureLastSessionCacheLoaded(force = false) {
@@ -3878,9 +3900,8 @@ function applyCurrentChatSessionEvent(entry) {
     const sessionId = entry.SessionID || 'default';
     const entryTurnId = entry.TurnID || payload.turn_id || '';
     const isLocalActiveTurn = isActiveLocalTurn(entryTurnId);
-    const isLocallyRenderedTurn = !!entryTurnId && locallyRenderedTurnIds.has(entryTurnId);
 
-    if (isLocalActiveTurn || isLocallyRenderedTurn) {
+    if (isLocalActiveTurn) {
         switch (entry.EventType) {
             case 'message.created':
             case 'message.delta':
@@ -4091,7 +4112,13 @@ function applyCurrentChatSessionEvent(entry) {
                     finalizeReasoningStatus(activeLocalAssistantId, 'done', '', Number(payload.total_elapsed_ms || payload.elapsed_ms));
                 }
                 if (activeLocalAssistantId) {
-                    const finalText = serverReplayMessageBuffers.get(activeLocalAssistantId) || '';
+                    const finalText = typeof payload.final_assistant_content === 'string'
+                        ? payload.final_assistant_content
+                        : (serverReplayMessageBuffers.get(activeLocalAssistantId) || '');
+                    if (typeof payload.final_assistant_content === 'string') {
+                        serverReplayMessageBuffers.set(activeLocalAssistantId, payload.final_assistant_content);
+                        updateSyncedMessageContent(activeLocalAssistantId, payload.final_assistant_content, { animate: false });
+                    }
                     finalizeMessageContent(activeLocalAssistantId, finalText);
                     finalizeAssistantStatusCards(activeLocalAssistantId, 'done');
                     setAssistantActionBarReady(activeLocalAssistantId);
@@ -4106,7 +4133,13 @@ function applyCurrentChatSessionEvent(entry) {
                 if (!serverReplayReasoningBuffers.has(serverReplayCurrentAssistantId) && Number.isFinite(Number(payload.total_elapsed_ms || payload.elapsed_ms))) {
                     finalizeReasoningStatus(serverReplayCurrentAssistantId, 'done', '', Number(payload.total_elapsed_ms || payload.elapsed_ms));
                 }
-                const finalText = serverReplayMessageBuffers.get(serverReplayCurrentAssistantId) || '';
+                const finalText = typeof payload.final_assistant_content === 'string'
+                    ? payload.final_assistant_content
+                    : (serverReplayMessageBuffers.get(serverReplayCurrentAssistantId) || '');
+                if (typeof payload.final_assistant_content === 'string') {
+                    serverReplayMessageBuffers.set(serverReplayCurrentAssistantId, payload.final_assistant_content);
+                    updateSyncedMessageContent(serverReplayCurrentAssistantId, payload.final_assistant_content, { animate: false });
+                }
                 finalizeMessageContent(serverReplayCurrentAssistantId, finalText);
                 finalizeAssistantStatusCards(serverReplayCurrentAssistantId, 'done');
                 setAssistantActionBarReady(serverReplayCurrentAssistantId);
@@ -4164,6 +4197,9 @@ async function syncCurrentChatSessionFromServerInternal() {
 
     const session = await fetchCurrentChatSession();
     applyCurrentChatSessionSnapshot(session);
+    if (activeLocalTurnId || activeLocalAssistantId || isGenerating) {
+        relinquishLocalStreamOwnership(`session-sync:${session?.Status || 'none'}`);
+    }
 
     if (!session) {
         scheduleChatSessionPolling(1800);
@@ -5357,7 +5393,6 @@ async function sendMessage() {
     activeLocalTurnId = turnId;
     activeLocalAssistantId = assistantId;
     assistantTurnIdMap.set(assistantId, turnId);
-    locallyRenderedTurnIds.add(turnId);
     stopChatSessionPolling();
 
     // Build API Payload
@@ -6032,7 +6067,7 @@ async function processStream(response, elementId, turnId = '') {
         // Finalize (Save to history even if aborted)
         // Keep only the user-visible answer in history to avoid ballooning context.
         historyContent = fullText.trim();
-        if (historyContent && !streamDetached) {
+        if (historyContent && !streamDetached && !localStreamOwnershipReleased) {
             messages.push({ role: 'assistant', content: historyContent, turnId });
             if (config.llmMode === 'stateful') {
                 statefulTurnCount += 1;
@@ -6045,13 +6080,14 @@ async function processStream(response, elementId, turnId = '') {
         if (useStreamingTTS) {
             finalizeStreamingTTS(speechBuffer); // Pass final speech buffer
         }
-        if (historyContent && !deferToServerChatSession) {
+        if (historyContent && !deferToServerChatSession && !localStreamOwnershipReleased) {
             setAssistantActionBarReady(elementId);
         }
         if (activeLocalAssistantId === elementId) {
             activeLocalTurnId = '';
             activeLocalAssistantId = '';
         }
+        localStreamOwnershipReleased = false;
         releaseWakeLock(); // Release screen lock after generation and TTS streaming is done
     }
 
