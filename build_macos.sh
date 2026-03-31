@@ -75,17 +75,15 @@ if [ $? -eq 0 ]; then
     # Copy the dylib to root MacOS folder for linking
     cp onnxruntime/libonnxruntime.dylib "$APP_CONTENT_DIR"
     
-    # cp -r assets "$APP_RESOURCE_DIR"
-    cp -r frontend "$APP_RESOURCE_DIR"
     cp users.json "$APP_RESOURCE_DIR" 2>/dev/null || echo "{}" > "$APP_RESOURCE_DIR/users.json"
     cp config.json "$APP_RESOURCE_DIR" 2>/dev/null || true
     cp dictionary_*.txt "$APP_RESOURCE_DIR" 2>/dev/null || true
     cp Dictionary_editor.py "$APP_RESOURCE_DIR" 2>/dev/null || true
     cp system_prompts.json "$APP_RESOURCE_DIR" 2>/dev/null || true
+    cp ThirdPartyNotices.md "$APP_RESOURCE_DIR" 2>/dev/null || true
     
     # Clean up unnecessary files from bundle
     rm -rf "$APP_RESOURCE_DIR/assets/.git"
-    rm -rf "$APP_RESOURCE_DIR/frontend/.git"
     
     # Fix RPATH and Dylib ID for portability
     EXE_PATH="$APP_CONTENT_DIR/DKST LLM Chat Server"
