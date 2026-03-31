@@ -611,7 +611,7 @@
 
             const processor = unified()
                 .use(remarkParse)
-                .use(remarkGfm)
+                .use(remarkGfm, { singleTilde: false })
                 .use(remarkBreaks)
                 .use(remarkMath)
                 .use(remarkRehype, { allowDangerousHtml: true })

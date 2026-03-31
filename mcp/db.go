@@ -175,6 +175,7 @@ func createSchema() error {
 		user_id TEXT NOT NULL,
 		title TEXT NOT NULL,
 		title_source TEXT NOT NULL DEFAULT 'fallback',
+		auto_title_failures INTEGER NOT NULL DEFAULT 0,
 		prompt_text TEXT NOT NULL,
 		response_text TEXT NOT NULL,
 		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -275,8 +276,51 @@ func createSchema() error {
 	if err := migrateChatSessionsSchema(); err != nil {
 		return err
 	}
+	if err := migrateSavedTurnsSchema(); err != nil {
+		return err
+	}
 
 	log.Println("[DB] Schema initialized successfully.")
+	return nil
+}
+
+func migrateSavedTurnsSchema() error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	rows, err := db.Query(`PRAGMA table_info(saved_turns)`)
+	if err != nil {
+		return fmt.Errorf("failed to inspect saved_turns schema: %w", err)
+	}
+	defer rows.Close()
+
+	hasAutoTitleFailures := false
+	for rows.Next() {
+		var cid int
+		var name string
+		var colType string
+		var notNull int
+		var dflt sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			return fmt.Errorf("failed to scan saved_turns schema: %w", err)
+		}
+		if name == "auto_title_failures" {
+			hasAutoTitleFailures = true
+		}
+	}
+
+	if hasAutoTitleFailures {
+		return nil
+	}
+
+	if _, err := db.Exec(`ALTER TABLE saved_turns ADD COLUMN auto_title_failures INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return fmt.Errorf("failed to add auto_title_failures to saved_turns: %w", err)
+	}
+	if _, err := db.Exec(`UPDATE saved_turns SET auto_title_failures = 0 WHERE auto_title_failures IS NULL`); err != nil {
+		return fmt.Errorf("failed to backfill auto_title_failures: %w", err)
+	}
 	return nil
 }
 
@@ -474,15 +518,16 @@ type ChatEventEntry struct {
 }
 
 type SavedTurnEntry struct {
-	ID           int64     `json:"id"`
-	UserID       string    `json:"user_id"`
-	Title        string    `json:"title"`
-	TitleSource  string    `json:"title_source"`
-	Processing   bool      `json:"processing,omitempty"`
-	PromptText   string    `json:"prompt_text"`
-	ResponseText string    `json:"response_text"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID                int64     `json:"id"`
+	UserID            string    `json:"user_id"`
+	Title             string    `json:"title"`
+	TitleSource       string    `json:"title_source"`
+	AutoTitleFailures int       `json:"auto_title_failures"`
+	Processing        bool      `json:"processing,omitempty"`
+	PromptText        string    `json:"prompt_text"`
+	ResponseText      string    `json:"response_text"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 type RequestExecutionEntry struct {
@@ -1465,8 +1510,8 @@ func SaveSavedTurn(userID, promptText, responseText string) (SavedTurnEntry, err
 	now := time.Now().UTC()
 	query := `
 	INSERT INTO saved_turns (
-		user_id, title, title_source, prompt_text, response_text, created_at, updated_at
-	) VALUES (?, ?, 'fallback', ?, ?, ?, ?)`
+		user_id, title, title_source, auto_title_failures, prompt_text, response_text, created_at, updated_at
+	) VALUES (?, ?, 'fallback', 0, ?, ?, ?, ?)`
 
 	result, err := db.Exec(query, userID, title, promptText, responseText, now, now)
 	if err != nil {
@@ -1490,7 +1535,7 @@ func ListSavedTurns(userID string, limit int) ([]SavedTurnEntry, error) {
 	}
 
 	rows, err := db.Query(`
-		SELECT id, user_id, title, title_source, prompt_text, response_text, created_at, updated_at
+		SELECT id, user_id, title, title_source, auto_title_failures, prompt_text, response_text, created_at, updated_at
 		FROM saved_turns
 		WHERE user_id = ?
 		ORDER BY created_at DESC
@@ -1508,6 +1553,7 @@ func ListSavedTurns(userID string, limit int) ([]SavedTurnEntry, error) {
 			&entry.UserID,
 			&entry.Title,
 			&entry.TitleSource,
+			&entry.AutoTitleFailures,
 			&entry.PromptText,
 			&entry.ResponseText,
 			&entry.CreatedAt,
@@ -1535,7 +1581,7 @@ func SearchSavedTurns(userID, queryStr string, limit int) ([]SavedTurnEntry, err
 
 	pattern := "%" + queryStr + "%"
 	rows, err := db.Query(`
-		SELECT id, user_id, title, title_source, prompt_text, response_text, created_at, updated_at
+		SELECT id, user_id, title, title_source, auto_title_failures, prompt_text, response_text, created_at, updated_at
 		FROM saved_turns
 		WHERE user_id = ?
 		  AND (title LIKE ? OR prompt_text LIKE ? OR response_text LIKE ?)
@@ -1554,6 +1600,7 @@ func SearchSavedTurns(userID, queryStr string, limit int) ([]SavedTurnEntry, err
 			&entry.UserID,
 			&entry.Title,
 			&entry.TitleSource,
+			&entry.AutoTitleFailures,
 			&entry.PromptText,
 			&entry.ResponseText,
 			&entry.CreatedAt,
@@ -1573,13 +1620,14 @@ func GetSavedTurn(userID string, turnID int64) (SavedTurnEntry, error) {
 	}
 
 	err := db.QueryRow(`
-		SELECT id, user_id, title, title_source, prompt_text, response_text, created_at, updated_at
+		SELECT id, user_id, title, title_source, auto_title_failures, prompt_text, response_text, created_at, updated_at
 		FROM saved_turns
 		WHERE id = ? AND user_id = ?`, turnID, userID).Scan(
 		&entry.ID,
 		&entry.UserID,
 		&entry.Title,
 		&entry.TitleSource,
+		&entry.AutoTitleFailures,
 		&entry.PromptText,
 		&entry.ResponseText,
 		&entry.CreatedAt,
@@ -1620,15 +1668,16 @@ func GetNextSavedTurnPendingTitle(userID string) (SavedTurnEntry, error) {
 	}
 
 	err := db.QueryRow(`
-		SELECT id, user_id, title, title_source, prompt_text, response_text, created_at, updated_at
+		SELECT id, user_id, title, title_source, auto_title_failures, prompt_text, response_text, created_at, updated_at
 		FROM saved_turns
-		WHERE user_id = ? AND title_source = 'fallback'
+		WHERE user_id = ? AND title_source = 'fallback' AND auto_title_failures < 3
 		ORDER BY created_at ASC
 		LIMIT 1`, userID).Scan(
 		&entry.ID,
 		&entry.UserID,
 		&entry.Title,
 		&entry.TitleSource,
+		&entry.AutoTitleFailures,
 		&entry.PromptText,
 		&entry.ResponseText,
 		&entry.CreatedAt,
@@ -1659,7 +1708,7 @@ func UpdateSavedTurnTitle(userID string, turnID int64, title string, titleSource
 
 	res, err := db.Exec(`
 		UPDATE saved_turns
-		SET title = ?, title_source = ?, updated_at = ?
+		SET title = ?, title_source = ?, auto_title_failures = 0, updated_at = ?
 		WHERE id = ? AND user_id = ?`, title, titleSource, time.Now().UTC(), turnID, userID)
 	if err != nil {
 		return fmt.Errorf("failed to update saved turn title: %w", err)
@@ -1672,6 +1721,37 @@ func UpdateSavedTurnTitle(userID string, turnID int64, title string, titleSource
 		return fmt.Errorf("saved turn not found or not owned by user")
 	}
 	return nil
+}
+
+func IncrementSavedTurnAutoTitleFailures(userID string, turnID int64) (int, error) {
+	if db == nil {
+		return 0, fmt.Errorf("database not initialized")
+	}
+
+	now := time.Now().UTC()
+	res, err := db.Exec(`
+		UPDATE saved_turns
+		SET auto_title_failures = auto_title_failures + 1, updated_at = ?
+		WHERE id = ? AND user_id = ?`, now, turnID, userID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to increment saved turn auto title failures: %w", err)
+	}
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to verify auto title failure increment: %w", err)
+	}
+	if rowsAffected == 0 {
+		return 0, fmt.Errorf("saved turn not found or not owned by user")
+	}
+
+	var failures int
+	if err := db.QueryRow(`
+		SELECT auto_title_failures
+		FROM saved_turns
+		WHERE id = ? AND user_id = ?`, turnID, userID).Scan(&failures); err != nil {
+		return 0, fmt.Errorf("failed to read saved turn auto title failures: %w", err)
+	}
+	return failures, nil
 }
 
 // InsertMemory saves a new memory entry into the database.
