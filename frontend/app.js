@@ -9,6 +9,8 @@
 const DEFAULT_STATEFUL_TURN_LIMIT = 8;
 const DEFAULT_STATEFUL_CHAR_BUDGET = 32000;
 const DEFAULT_STATEFUL_TOKEN_BUDGET = 30000;
+const LM_STUDIO_REPEAT_RECOVERY_PENALTY = 1.15;
+const LM_STUDIO_REPEAT_RECOVERY_TEMPERATURE = 0.65;
 
 let config = {
     apiEndpoint: 'http://127.0.0.1:1234',
@@ -458,7 +460,9 @@ const translations = {
         'error.mcpFailed': 'LM Studio MCP 연결 실패.\n\n해결 방법:\n1. LM Studio -> Developer(사이드바) -> Server Settings\n2. \'Allow calling servers from mcp.json\' 옵션 켜기\n3. 또는 우측 상단 설정(⚙️)에서 \'MCP 기능 활성화\' 옵션을 꺼주세요.\n\n원본 오류: ',
         'error.contextExceeded': '대화 문맥 길이가 초과되었습니다. 사이드바 하단의 [문맥 초기화] 버튼을 눌러주세요.',
         'error.visionNotSupported': '선택한 모델은 이미지를 인식할 수 없습니다. 비전(Vision) 모델을 선택해주세요.',
-        'warning.loopDetected': '[⚠️ 반복 응답 감지로 인해 응답 처리를 중단했습니다.]'
+        'warning.loopDetected': '[⚠️ 반복 응답 감지로 인해 응답 처리를 중단했습니다.]',
+        'warning.repeatRetrying': '[⚠️ 반복 응답을 감지해 LM Studio 가중치를 보정한 뒤 다시 시도합니다.]',
+        'warning.repeatStopped': '[⚠️ 반복 응답을 감지해 응답을 중단했습니다.]'
     },
     en: {
         // Modal
@@ -658,7 +662,9 @@ const translations = {
         // Errors
         'error.authFailed': 'LM Studio Authentication Failed.\n\nSolution:\n1. Open LM Studio -> Developer (sidebar) -> Server Settings\n2. Turn OFF \'Require Authentication\'\n3. Or go to \'Manage Tokens\' -> \'Create new token\' and enter it in Settings.\n\nOriginal Error: ',
         'error.mcpFailed': 'LM Studio MCP Connection Failed.\n\nSolution:\n1. Open LM Studio -> Developer (sidebar) -> Server Settings\n2. Turn ON \'Allow calling servers from mcp.json\'\n3. Or turn OFF \'Enable MCP Features\' in the top right settings (⚙️).\n\nOriginal Error: ',
-        'warning.loopDetected': '[⚠️ Repeated responses were detected, and the response was stopped.]'
+        'warning.loopDetected': '[⚠️ Repeated responses were detected, and the response was stopped.]',
+        'warning.repeatRetrying': '[⚠️ Repetition was detected, so the request is being retried with adjusted LM Studio weights.]',
+        'warning.repeatStopped': '[⚠️ Repetition was detected, so the response was stopped.]'
     }
 };
 
@@ -5302,6 +5308,88 @@ function shouldResetStatefulContext(nextUserText = '') {
     };
 }
 
+function clampNumber(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+}
+
+function buildRepeatRecoveryOverrides() {
+    const baseTemperature = Number.isFinite(Number(config.temperature))
+        ? Number(config.temperature)
+        : 0.7;
+    return {
+        repeatPenalty: LM_STUDIO_REPEAT_RECOVERY_PENALTY,
+        temperature: clampNumber(Math.max(baseTemperature, LM_STUDIO_REPEAT_RECOVERY_TEMPERATURE), 0, 1)
+    };
+}
+
+function buildChatPayload({ text, currentImage, temperatureOverride = null, repeatPenaltyOverride = null } = {}) {
+    const systemMsg = { role: 'system', content: config.systemPrompt };
+    const resolvedTemperature = Number.isFinite(Number(temperatureOverride))
+        ? Number(temperatureOverride)
+        : Number(config.temperature);
+    let payload = {};
+
+    if (config.llmMode === 'stateful') {
+        let inputData = text;
+        if (currentImage) {
+            inputData = [];
+            if (text) {
+                inputData.push({ type: 'text', content: text });
+            }
+            inputData.push({ type: 'image', data_url: currentImage });
+        }
+
+        payload = {
+            model: config.model,
+            input: inputData,
+            system_prompt: buildStatefulSystemPrompt(),
+            temperature: resolvedTemperature,
+            stream: true
+        };
+
+        if (Number.isFinite(Number(repeatPenaltyOverride))) {
+            payload.repeat_penalty = Number(repeatPenaltyOverride);
+        }
+
+        if (config.disableStateful) {
+            payload.store = false;
+        }
+
+        if (lastResponseId) {
+            payload.previous_response_id = lastResponseId;
+        }
+        return payload;
+    }
+
+    const payloadHistory = messages.map(m => {
+        if (m.image) {
+            const visionContent = [];
+            if (m.content) {
+                visionContent.push({ type: 'text', text: m.content });
+            }
+            visionContent.push({ type: 'image_url', image_url: { url: m.image } });
+            return {
+                role: m.role,
+                content: visionContent
+            };
+        }
+
+        let content = m.content || '';
+        if (m.role === 'assistant') {
+            content = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+        }
+        return { role: m.role, content };
+    });
+
+    return {
+        model: config.model,
+        messages: [systemMsg, ...payloadHistory],
+        temperature: resolvedTemperature,
+        max_tokens: config.maxTokens,
+        stream: true
+    };
+}
+
 async function ensureStatefulContextBudget(nextUserText = '') {
     const resetDecision = shouldResetStatefulContext(nextUserText);
     if (!resetDecision.shouldReset) {
@@ -5349,7 +5437,10 @@ async function sendMessage() {
     const currentImage = pendingImage; // Capture early
 
     if (!text && !currentImage) return;
-    if (isGenerating) return;
+    if (isGenerating) {
+        await stopGeneration();
+        await new Promise((resolve) => setTimeout(resolve, 120));
+    }
 
     dismissStartupCards();
 
@@ -5406,79 +5497,43 @@ async function sendMessage() {
         messages = messages.slice(-maxMessages);
     }
 
-    let payload = {};
-
-    if (config.llmMode === 'stateful') {
-        // Stateful Chat Mode
-        // LM Studio Stateful API (Experimental) uses a specific multimodal format:
-        // { type: 'text', content: '...' } and { type: 'image', data_url: '...' }
-        let inputData = text;
-        if (currentImage) {
-            inputData = [];
-            if (text) {
-                inputData.push({ type: 'text', content: text });
-            }
-            inputData.push({ type: 'image', data_url: currentImage });
-        }
-
-        payload = {
-            model: config.model,
-            input: inputData,
-            system_prompt: buildStatefulSystemPrompt(),
-            temperature: config.temperature,
-            stream: true
-        };
-
-        if (config.disableStateful) {
-            payload.store = false;
-        }
-
-        if (lastResponseId) {
-            payload.previous_response_id = lastResponseId;
-        }
-    } else {
-        // Standard Stateless Mode (Default)
-        const payloadHistory = messages.map(m => {
-            if (m.image) {
-                // Vision format
-                const visionContent = [];
-                if (m.content) {
-                    visionContent.push({ type: 'text', text: m.content });
-                }
-                visionContent.push({ type: 'image_url', image_url: { url: m.image } });
-                return {
-                    role: m.role,
-                    content: visionContent
-                };
-            } else {
-                // Clean content for history
-                let content = m.content || '';
-                if (m.role === 'assistant') {
-                    // Remove think tags from history to prevent recursion/confusion
-                    content = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-                }
-                return { role: m.role, content: content };
-            }
-        });
-
-        payload = {
-            model: config.model,
-            messages: [systemMsg, ...payloadHistory],
-            temperature: config.temperature,
-            max_tokens: config.maxTokens,
-            stream: true
-        };
-    }
-
-    // Debug: Log payload to verify what's being sent
-    console.log('=== LLM Request Payload ===');
-    console.log('System Prompt:', systemMsg.content);
-    console.log('History Count:', history.length);
-    console.log('Messages:', JSON.stringify(payload.messages, null, 2));
-
     let assistantContent = '';
     try {
-        assistantContent = await streamResponse(payload, assistantId, turnId);
+        let retryOverrides = null;
+        for (let attempt = 0; attempt < 2; attempt++) {
+            const payload = buildChatPayload({
+                text,
+                currentImage,
+                temperatureOverride: retryOverrides?.temperature ?? null,
+                repeatPenaltyOverride: retryOverrides?.repeatPenalty ?? null
+            });
+
+            console.log('=== LLM Request Payload ===');
+            console.log('Attempt:', attempt + 1);
+            console.log('Temperature:', payload.temperature);
+            if (payload.repeat_penalty) {
+                console.log('Repeat Penalty:', payload.repeat_penalty);
+            }
+
+            try {
+                assistantContent = await streamResponse(payload, assistantId, turnId, {
+                    repeatRecoveryApplied: attempt > 0
+                });
+                break;
+            } catch (e) {
+                if (e?.code === 'LMSTUDIO_RUNAWAY_REPETITION'
+                    && config.llmMode === 'stateful'
+                    && attempt === 0) {
+                    retryOverrides = buildRepeatRecoveryOverrides();
+                    await stopGeneration({ preserveAssistantUI: true });
+                    updateMessageContent(assistantId, '');
+                    finalizeReasoningStatus(assistantId, 'failed', t('warning.repeatRetrying'));
+                    hideProgressDock();
+                    continue;
+                }
+                throw e;
+            }
+        }
     } catch (e) {
         if (e.name === 'AbortError') {
             finalizeAssistantStatusCards(assistantId, 'stopped', t('status.stopped'));
@@ -5508,22 +5563,59 @@ async function sendMessage() {
     }
 }
 
-async function stopGeneration() {
+async function stopCurrentChatSessionOnServer() {
+    try {
+        await fetch('/api/chat-session/stop', buildSessionFetchOptions({ method: 'POST' }));
+    } catch (e) {
+        console.warn('Failed to stop current chat session on server:', e);
+    }
+}
+
+async function stopGeneration({ preserveAssistantUI = false } = {}) {
     if (abortController) {
         abortController.abort();
         abortController = null;
     }
-    try {
-        await fetch('/api/chat-session/stop', {
-            method: 'POST',
-            credentials: 'include'
-        });
-    } catch (e) {
-        console.warn('Failed to stop current chat session on server:', e);
-    }
+    await stopCurrentChatSessionOnServer();
     hideProgressDock();
+    if (!preserveAssistantUI) {
+        relinquishLocalStreamOwnership('stop-generation');
+    } else {
+        localStreamOwnershipReleased = true;
+    }
     // Stop any currently playing audio/TTS
     stopAllAudio();
+}
+
+function detectRunawayRepetition(text = '') {
+    const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+    if (normalized.length < 140) return null;
+
+    const shortLoopMatch = normalized.match(/([\s\S]{6,}?)\1{8,}/);
+    if (shortLoopMatch && shortLoopMatch[1]) {
+        return {
+            snippet: shortLoopMatch[1].slice(0, 80),
+            source: 'chunk-loop'
+        };
+    }
+
+    const sentenceLoopMatch = normalized.match(/(.{12,}?[.!?"])(?:\s+\1){5,}/i);
+    if (sentenceLoopMatch && sentenceLoopMatch[1]) {
+        return {
+            snippet: sentenceLoopMatch[1].slice(0, 120),
+            source: 'sentence-loop'
+        };
+    }
+
+    const wordLoopMatch = normalized.match(/\b([^\s]{2,30})\b(?:\s+\1){11,}/i);
+    if (wordLoopMatch && wordLoopMatch[1]) {
+        return {
+            snippet: wordLoopMatch[1],
+            source: 'word-loop'
+        };
+    }
+
+    return null;
 }
 
 function updateSendButtonState() {
@@ -5586,7 +5678,7 @@ function updateInlineComposerActionVisibility() {
 }
 
 
-async function streamResponse(payload, elementId, turnId = '') {
+async function streamResponse(payload, elementId, turnId = '', streamOptions = {}) {
     const headers = { 'Content-Type': 'application/json' };
     if (turnId) {
         headers['X-Client-Turn-Id'] = turnId;
@@ -5666,11 +5758,11 @@ async function streamResponse(payload, elementId, turnId = '') {
     }
     pendingStatefulResetReason = null;
 
-    return await processStream(response, elementId, turnId);
+    return await processStream(response, elementId, turnId, streamOptions);
 }
 
 // Helper to process the stream reader (shared by direct and proxy)
-async function processStream(response, elementId, turnId = '') {
+async function processStream(response, elementId, turnId = '', streamOptions = {}) {
     const deferToServerChatSession = false;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -5686,6 +5778,7 @@ async function processStream(response, elementId, turnId = '') {
     let lastToolCallHtml = '';
     let streamAborted = false;
     let streamDetached = false;
+    let streamRestartRequested = false;
 
 
 
@@ -5827,6 +5920,19 @@ async function processStream(response, elementId, turnId = '') {
                     else if (json.type === 'reasoning.delta' && json.content) {
                         // Add to reasoning buffer, NOT to contentToAdd/fullText
                         reasoningBuffer += json.content;
+                        const reasoningLoop = detectRunawayRepetition(reasoningBuffer);
+                        if (reasoningLoop) {
+                            const repetitionError = new Error(
+                                config.llmMode === 'stateful' && !streamOptions.repeatRecoveryApplied
+                                    ? t('warning.repeatRetrying')
+                                    : t('warning.repeatStopped')
+                            );
+                            repetitionError.code = 'LMSTUDIO_RUNAWAY_REPETITION';
+                            repetitionError.phase = 'reasoning';
+                            repetitionError.snippet = reasoningLoop.snippet;
+                            streamRestartRequested = true;
+                            throw repetitionError;
+                        }
                         currentlyReasoning = true;
                         reasoningSource = 'sse';
                         const elapsedMs = Number.isFinite(Number(json.total_elapsed_ms || json.elapsed_ms))
@@ -5944,9 +6050,16 @@ async function processStream(response, elementId, turnId = '') {
                                 if (!isToolLog) {
                                     console.warn(`[Loop Detection] Pattern detected: "${loopMatch[1].substring(0, 30)}..." repeated ${Math.floor(loopMatch[0].length / loopMatch[1].length)}+ times`);
                                     loopDetected = true;
-                                    stopGeneration();
-
-                                    fullText += "\n\n" + (typeof t === 'function' ? t('warning.loopDetected') : "⚠️ Loop detected. Generation stopped.");
+                                    const repetitionError = new Error(
+                                        config.llmMode === 'stateful' && !streamOptions.repeatRecoveryApplied
+                                            ? t('warning.repeatRetrying')
+                                            : t('warning.repeatStopped')
+                                    );
+                                    repetitionError.code = 'LMSTUDIO_RUNAWAY_REPETITION';
+                                    repetitionError.phase = 'message';
+                                    repetitionError.snippet = loopMatch[1].substring(0, 120);
+                                    streamRestartRequested = true;
+                                    throw repetitionError;
                                 } else {
                                     console.log(`[Loop Detection] Ignored tool pattern: "${loopMatch[1].substring(0, 20)}..."`);
                                 }
@@ -6036,6 +6149,9 @@ async function processStream(response, elementId, turnId = '') {
                     }
 
                 } catch (e) {
+                    if (e?.code === 'LMSTUDIO_RUNAWAY_REPETITION') {
+                        throw e;
+                    }
                     console.error('JSON Parse Error', e);
                 }
             }
@@ -6055,7 +6171,7 @@ async function processStream(response, elementId, turnId = '') {
         }
     } finally {
         if (!deferToServerChatSession) hideProgressDock();
-        if (!streamAborted && !streamDetached) {
+        if (!streamAborted && !streamDetached && !streamRestartRequested) {
             if (currentlyReasoning) {
                 const elapsedMs = reasoningStartMs > 0 ? Date.now() - reasoningStartMs : 0;
                 if (!deferToServerChatSession) finalizeReasoningStatus(elementId, 'failed', t('status.unexpectedStop'), elapsedMs);
@@ -6067,7 +6183,7 @@ async function processStream(response, elementId, turnId = '') {
         // Finalize (Save to history even if aborted)
         // Keep only the user-visible answer in history to avoid ballooning context.
         historyContent = fullText.trim();
-        if (historyContent && !streamDetached && !localStreamOwnershipReleased) {
+        if (historyContent && !streamDetached && !streamRestartRequested && !localStreamOwnershipReleased) {
             messages.push({ role: 'assistant', content: historyContent, turnId });
             if (config.llmMode === 'stateful') {
                 statefulTurnCount += 1;
@@ -6080,7 +6196,7 @@ async function processStream(response, elementId, turnId = '') {
         if (useStreamingTTS) {
             finalizeStreamingTTS(speechBuffer); // Pass final speech buffer
         }
-        if (historyContent && !deferToServerChatSession && !localStreamOwnershipReleased) {
+        if (historyContent && !deferToServerChatSession && !streamRestartRequested && !localStreamOwnershipReleased) {
             setAssistantActionBarReady(elementId);
         }
         if (activeLocalAssistantId === elementId) {
