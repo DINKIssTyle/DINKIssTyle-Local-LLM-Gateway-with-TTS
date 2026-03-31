@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"sync"
@@ -85,6 +86,11 @@ func AddDebugTrace(source, stage, message string, details map[string]interface{}
 		Payload:   payload,
 	}
 
+	if !shouldBufferDebugTraceEntry(entry) {
+		printDebugTraceToTerminal(entry)
+		return
+	}
+
 	debugTraceState.mu.Lock()
 	debugTraceState.entries = append(debugTraceState.entries, entry)
 	if len(debugTraceState.entries) > maxDebugTraceEntries {
@@ -95,6 +101,61 @@ func AddDebugTrace(source, stage, message string, details map[string]interface{}
 	if globalApp != nil && globalApp.ctx != nil {
 		wruntime.EventsEmit(globalApp.ctx, "debug-trace", entry)
 	}
+}
+
+func shouldBufferDebugTraceEntry(entry DebugTraceEntry) bool {
+	source := strings.ToLower(strings.TrimSpace(entry.Source))
+	stage := strings.TrimSpace(entry.Stage)
+
+	switch {
+	case source == "chat" && strings.HasPrefix(stage, "request."):
+		return true
+	case source == "chat" && strings.HasPrefix(stage, "tool."):
+		return true
+	case source == "chat" && stage == "turn.followup":
+		return true
+	case source == "chat" && strings.HasPrefix(stage, "tool_call."):
+		return true
+	case source == "mcp":
+		return true
+	case source == "saved-turn-title" && stage == "llm.request":
+		return true
+	case source == "saved-turn-title" && stage == "llm.response":
+		return true
+	default:
+		return false
+	}
+}
+
+func printDebugTraceToTerminal(entry DebugTraceEntry) {
+	var builder strings.Builder
+	builder.WriteString("[debug-trace] ")
+	builder.WriteString(strings.ToUpper(entry.Source))
+	builder.WriteString(" ")
+	builder.WriteString(entry.Stage)
+	builder.WriteString(" ")
+	builder.WriteString(entry.Message)
+
+	if len(entry.Details) > 0 {
+		keys := make([]string, 0, len(entry.Details))
+		for k := range entry.Details {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			builder.WriteString("\n  - ")
+			builder.WriteString(k)
+			builder.WriteString(": ")
+			builder.WriteString(entry.Details[k])
+		}
+	}
+
+	if strings.TrimSpace(entry.Payload) != "" {
+		builder.WriteString("\n  payload:\n")
+		builder.WriteString(entry.Payload)
+	}
+
+	log.Print(builder.String())
 }
 
 func extractDebugPayload(details map[string]interface{}) string {

@@ -10,7 +10,7 @@ const DEFAULT_STATEFUL_TURN_LIMIT = 8;
 const DEFAULT_STATEFUL_CHAR_BUDGET = 32000;
 const DEFAULT_STATEFUL_TOKEN_BUDGET = 30000;
 const LM_STUDIO_REPEAT_RECOVERY_PENALTY = 1.15;
-const LM_STUDIO_REPEAT_RECOVERY_TEMPERATURE = 0.65;
+const LM_STUDIO_REPEAT_RECOVERY_TEMPERATURE_DELTA = 0.15;
 
 let config = {
     apiEndpoint: 'http://127.0.0.1:1234',
@@ -1656,7 +1656,7 @@ function buildSavedTurnTitleRequestPayload(extra = {}) {
         secondary_model: config.secondaryModel || '',
         api_token: config.apiToken || '',
         llm_mode: config.llmMode || 'standard',
-        temperature: typeof config.temperature === 'number' ? config.temperature : parseFloat(config.temperature) || 0.7,
+        temperature: getConfiguredTemperature(),
         ...extra
     };
 }
@@ -3038,6 +3038,7 @@ function loadConfig() {
     }
 
     config.ttsEngine = config.ttsEngine === 'os' ? 'os' : 'supertonic';
+    config.temperature = normalizeTemperatureValue(config.temperature, 0.7);
     config.osTtsRate = Number(config.osTtsRate) > 0 ? Number(config.osTtsRate) : 1.0;
     config.osTtsPitch = Number(config.osTtsPitch) >= 0 ? Number(config.osTtsPitch) : 1.0;
 
@@ -3204,11 +3205,17 @@ function setupSettingsListeners() {
     });
 
     // Selects & Inputs: save on change
-    const autoSaveIds = ['cfg-api', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-os-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-disable-stateful', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model', 'cfg-tts-engine', 'cfg-markdown-render-mode'];
+    const autoSaveIds = ['cfg-api', 'cfg-temp', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-os-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-disable-stateful', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model', 'cfg-tts-engine', 'cfg-markdown-render-mode'];
     autoSaveIds.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.onchange = () => saveConfig(false);
     });
+    const tempEl = document.getElementById('cfg-temp');
+    if (tempEl) {
+        tempEl.oninput = () => {
+            config.temperature = normalizeTemperatureValue(tempEl.value, 0.7);
+        };
+    }
 
     // Enable Memory Checkbox
     const memCheck = document.getElementById('setting-enable-memory');
@@ -3364,7 +3371,7 @@ function saveConfig(closeModal = true) {
     config.model = document.getElementById('cfg-model').value.trim();
     config.secondaryModel = document.getElementById('cfg-secondary-model')?.value?.trim() || '';
     config.hideThink = document.getElementById('cfg-hide-think').checked;
-    config.temperature = parseFloat(document.getElementById('cfg-temp').value);
+    config.temperature = normalizeTemperatureValue(document.getElementById('cfg-temp').value, 0.7);
     config.maxTokens = parseInt(document.getElementById('cfg-max-tokens').value);
     config.historyCount = parseInt(document.getElementById('cfg-history').value);
     config.enableTTS = document.getElementById('cfg-enable-tts').checked;
@@ -5327,21 +5334,41 @@ function clampNumber(value, min, max) {
     return Math.min(max, Math.max(min, value));
 }
 
+function normalizeTemperatureValue(value, fallback = 0.7) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+        return fallback;
+    }
+    return clampNumber(numeric, 0, 2);
+}
+
+function getConfiguredTemperature() {
+    const tempInput = document.getElementById('cfg-temp');
+    if (tempInput) {
+        const normalized = normalizeTemperatureValue(tempInput.value, normalizeTemperatureValue(config.temperature, 0.7));
+        config.temperature = normalized;
+        return normalized;
+    }
+    return normalizeTemperatureValue(config.temperature, 0.7);
+}
+
 function buildRepeatRecoveryOverrides() {
-    const baseTemperature = Number.isFinite(Number(config.temperature))
-        ? Number(config.temperature)
-        : 0.7;
+    const baseTemperature = getConfiguredTemperature();
     return {
         repeatPenalty: LM_STUDIO_REPEAT_RECOVERY_PENALTY,
-        temperature: clampNumber(Math.max(baseTemperature, LM_STUDIO_REPEAT_RECOVERY_TEMPERATURE), 0, 1)
+        temperature: clampNumber(baseTemperature + LM_STUDIO_REPEAT_RECOVERY_TEMPERATURE_DELTA, 0, 1)
     };
 }
 
 function buildChatPayload({ text, currentImage, temperatureOverride = null, repeatPenaltyOverride = null } = {}) {
     const systemMsg = { role: 'system', content: config.systemPrompt };
-    const resolvedTemperature = Number.isFinite(Number(temperatureOverride))
+    const configuredTemperature = getConfiguredTemperature();
+    const hasTemperatureOverride = temperatureOverride !== null
+        && temperatureOverride !== undefined
+        && Number.isFinite(Number(temperatureOverride));
+    const resolvedTemperature = hasTemperatureOverride
         ? Number(temperatureOverride)
-        : Number(config.temperature);
+        : configuredTemperature;
     let payload = {};
 
     if (config.llmMode === 'stateful') {
@@ -5362,7 +5389,10 @@ function buildChatPayload({ text, currentImage, temperatureOverride = null, repe
             stream: true
         };
 
-        if (Number.isFinite(Number(repeatPenaltyOverride))) {
+        if (repeatPenaltyOverride !== null
+            && repeatPenaltyOverride !== undefined
+            && Number.isFinite(Number(repeatPenaltyOverride))
+            && Number(repeatPenaltyOverride) > 0) {
             payload.repeat_penalty = Number(repeatPenaltyOverride);
         }
 
