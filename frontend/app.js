@@ -49,7 +49,8 @@ let config = {
     micLayout: 'none', // 'none', 'left', 'right', 'bottom', 'inline'
     chatFontSize: 16,
     userBubbleTheme: 'ocean',
-    markdownRenderMode: 'balanced'
+    markdownRenderMode: 'balanced',
+    hapticsEnabled: true
 };
 
 const USER_BUBBLE_THEMES = {
@@ -150,6 +151,15 @@ function escapeHtml(text) {
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
+}
+
+function syncHapticsPreference() {
+    window.DKSTHaptics?.setEnabled(config.hapticsEnabled !== false);
+}
+
+function triggerHaptic(type) {
+    if (config.hapticsEnabled === false) return;
+    window.DKSTHaptics?.trigger(type);
 }
 
 function renderLooseInlineMarkdown(text) {
@@ -354,6 +364,8 @@ const translations = {
         'setting.markdownRenderMode.option.fast': '빠르게 랜더링',
         'setting.markdownRenderMode.option.balanced': '약간 지연된 랜더링',
         'setting.markdownRenderMode.option.final': '응답 완료 후 랜더링',
+        'setting.hapticsEnabled.label': '햅틱 활성화',
+        'setting.hapticsEnabled.desc': '지원되는 모바일 기기에서 주요 버튼에 진동 피드백을 줍니다.',
         'setting.micLayout.label': '마이크 레이아웃',
         'setting.micLayout.desc': '화면에 마이크를 배치합니다.',
         'setting.micLayout.option.none': '사용 안 함',
@@ -563,6 +575,8 @@ const translations = {
         'setting.markdownRenderMode.option.fast': 'Fast Rendering',
         'setting.markdownRenderMode.option.balanced': 'Slightly Delayed Rendering',
         'setting.markdownRenderMode.option.final': 'Render After Completion',
+        'setting.hapticsEnabled.label': 'Enable Haptics',
+        'setting.hapticsEnabled.desc': 'Adds vibration feedback to key buttons on supported mobile devices.',
         'setting.micLayout.label': 'Mic Layout',
         'setting.micLayout.desc': 'Place a microphone on the screen.',
         'setting.micLayout.option.none': 'None',
@@ -1180,6 +1194,7 @@ async function fetchModels() {
 }
 
 function openSettingsModal() {
+    triggerHaptic('error');
     document.getElementById('settings-modal').classList.add('active');
     fetchModels(); // Populate model dropdown when modal opens
 }
@@ -1268,6 +1283,7 @@ async function loadSavedTurns() {
 
 function openSavedLibrary() {
     if (!savedLibraryView) return;
+    triggerHaptic('error');
     if (savedLibraryCloseTimer) {
         clearTimeout(savedLibraryCloseTimer);
         savedLibraryCloseTimer = null;
@@ -1490,6 +1506,7 @@ async function copySavedTurnResponse() {
     if (!text.trim()) return;
     try {
         await navigator.clipboard.writeText(text);
+        triggerHaptic('success');
         showToast(t('clipboard.copied'));
     } catch (err) {
         console.warn('Clipboard API failed, trying fallback', err);
@@ -3039,6 +3056,7 @@ function loadConfig() {
 
     config.ttsEngine = config.ttsEngine === 'os' ? 'os' : 'supertonic';
     config.temperature = normalizeTemperatureValue(config.temperature, 0.7);
+    config.hapticsEnabled = config.hapticsEnabled !== false;
     config.osTtsRate = Number(config.osTtsRate) > 0 ? Number(config.osTtsRate) : 1.0;
     config.osTtsPitch = Number(config.osTtsPitch) >= 0 ? Number(config.osTtsPitch) : 1.0;
 
@@ -3110,6 +3128,9 @@ function loadConfig() {
     renderUserBubbleThemeOptions();
     const markdownRenderModeEl = document.getElementById('cfg-markdown-render-mode');
     if (markdownRenderModeEl) markdownRenderModeEl.value = config.markdownRenderMode;
+    const hapticsEl = document.getElementById('cfg-enable-haptics');
+    if (hapticsEl) hapticsEl.checked = config.hapticsEnabled;
+    syncHapticsPreference();
 
     // Language selector
     document.getElementById('cfg-lang').value = config.language || 'ko';
@@ -3205,7 +3226,7 @@ function setupSettingsListeners() {
     });
 
     // Selects & Inputs: save on change
-    const autoSaveIds = ['cfg-api', 'cfg-temp', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-os-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-disable-stateful', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model', 'cfg-tts-engine', 'cfg-markdown-render-mode'];
+    const autoSaveIds = ['cfg-api', 'cfg-temp', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-os-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-disable-stateful', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model', 'cfg-tts-engine', 'cfg-markdown-render-mode', 'cfg-enable-haptics'];
     autoSaveIds.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.onchange = () => saveConfig(false);
@@ -3407,6 +3428,7 @@ function saveConfig(closeModal = true) {
     config.micLayout = document.getElementById('cfg-mic-layout').value;
     config.userBubbleTheme = USER_BUBBLE_THEMES[config.userBubbleTheme] ? config.userBubbleTheme : 'ocean';
     config.markdownRenderMode = document.getElementById('cfg-markdown-render-mode')?.value || 'balanced';
+    config.hapticsEnabled = document.getElementById('cfg-enable-haptics')?.checked !== false;
     config.chatFontSize = Math.max(12, Math.min(24, parseInt(config.chatFontSize, 10) || 16));
 
     // Update visibility immediately
@@ -3415,6 +3437,7 @@ function saveConfig(closeModal = true) {
     updateMicLayout();
     applyUserBubbleTheme();
     applyChatFontSize();
+    syncHapticsPreference();
 
     // Reload dictionary since language changes
     loadTTSDictionary(getEffectiveTTSDictionaryLang());
@@ -5073,6 +5096,11 @@ function handleImageUpload(input) {
     }
 }
 
+function triggerImagePicker() {
+    triggerHaptic('success');
+    document.getElementById('image-upload')?.click();
+}
+
 function removeImage() {
     pendingImage = null;
     document.getElementById('image-upload').value = '';
@@ -5165,6 +5193,7 @@ function finishChatSessionRestore() {
 }
 
 async function clearChat() {
+    triggerHaptic('buzz');
     // Stop any TTS playback and generation
     stopAllAudio();
 
@@ -7007,6 +7036,7 @@ function renderToolHistory(card, historyEl, state) {
 // New helper functions
 async function saveMessageTurn(btn) {
     if (btn?.dataset?.saving === 'true') return;
+    triggerHaptic('error');
     const turnData = getTurnDataFromAssistantButton(btn);
     if (!turnData) {
         console.warn('[SavedTurn] saveMessageTurn aborted because turnData is missing');
@@ -7035,6 +7065,7 @@ async function copyMessage(btn) {
     const text = bubble.innerText;
     try {
         await navigator.clipboard.writeText(text);
+        triggerHaptic('success');
         showToast(t('clipboard.copied'));
     } catch (err) {
         console.warn('Clipboard API failed, trying fallback', err);
@@ -7058,6 +7089,7 @@ function fallbackCopyTextToClipboard(text) {
     try {
         var successful = document.execCommand('copy');
         if (successful) {
+            triggerHaptic('success');
             showToast(t('clipboard.copied'));
         } else {
             showToast(t('clipboard.copyFailed'), true);
@@ -7833,6 +7865,7 @@ function updateScrollToBottomButton() {
 }
 
 function jumpToLatestMessages() {
+    triggerHaptic('success');
     lockScrollToLatest = true;
     holdAutoScrollAtBottom(900);
     scrollToBottom(true);
@@ -7969,6 +8002,9 @@ async function speakMessage(text, btn = null) {
     // Clean text for TTS (remove emojis, markdown, etc.)
     const cleanText = cleanTextForTTS(text);
     if (!cleanText) return;
+    if (btn) {
+        triggerHaptic('nudge');
+    }
     activeTTSSessionLabel = cleanText.substring(0, 120) + (cleanText.length > 120 ? '...' : '');
 
     // Initialize/Clear queue
@@ -8851,6 +8887,7 @@ let sttPlaceholderIndex = 0;
  * Toggles Speech-to-Text (STT) recognition
  */
 function toggleSTT() {
+    triggerHaptic('nudge');
     // 1. If generating response, stop it (Mic acts as stop button)
     if (isGenerating) {
         stopGeneration();

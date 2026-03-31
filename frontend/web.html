@@ -200,6 +200,13 @@
                             <option value="final" data-i18n="setting.markdownRenderMode.option.final">Render After Completion</option>
                         </select>
                     </div>
+                    <div class="setting-item">
+                        <div class="setting-toggle" onclick="toggleSwitch('cfg-enable-haptics')">
+                            <span data-i18n="setting.hapticsEnabled.label">햅틱 활성화</span>
+                            <input type="checkbox" id="cfg-enable-haptics" checked>
+                        </div>
+                        <p class="setting-desc" data-i18n="setting.hapticsEnabled.desc">지원되는 모바일 기기에서 주요 버튼에 진동 피드백을 줍니다.</p>
+                    </div>
                 </div>
 
                 <!-- Voice Input Section -->
@@ -546,7 +553,7 @@
                         <span id="stateful-budget-indicator" class="stateful-budget-indicator" hidden aria-hidden="true"></span>
                         <input type="file" id="image-upload" accept="image/*" style="display: none"
                             onchange="handleImageUpload(this)">
-                        <button class="icon-btn" onclick="document.getElementById('image-upload').click()"
+                        <button class="icon-btn" onclick="triggerImagePicker()"
                             title="Upload Image">
                             <span class="material-icons-round">add_photo_alternate</span>
                         </button>
@@ -580,6 +587,7 @@
         };
     </script>
     <link rel="stylesheet" href="vendor/katex.min.css">
+    <script src="haptics.js"></script>
     <script src="vendor/marked.min.js"></script>
     <script src="vendor/highlight.min.js"></script>
     <script defer src="vendor/mathjax-tex-svg.js"></script>

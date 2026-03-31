@@ -248,7 +248,7 @@
                 <p style="color: var(--text-secondary); font-size: 14px;">You are already logged in</p>
             </div>
 
-            <button class="login-btn" onclick="window.location.href='/'" style="margin-bottom: 12px;">Continue</button>
+            <button class="login-btn" onclick="continueToChat()" style="margin-bottom: 12px;">Continue</button>
 
             <button class="login-btn" onclick="handleLogout()"
                 style="background: var(--card-bg); border: 1px solid var(--border-color); color: var(--text-secondary);">
@@ -286,12 +286,22 @@
         </div>
     </div>
 
+    <script src="haptics.js"></script>
     <script>
         const authContainer = document.getElementById('auth-container');
         const loginForm = document.getElementById('login-form');
         const statusBanner = document.getElementById('status-banner');
         const loginSubtitle = document.querySelector('.login-header p');
         const certBtn = document.querySelector('.cert-btn');
+
+        function triggerHaptic(type) {
+            window.DKSTHaptics?.trigger(type);
+        }
+
+        function continueToChat() {
+            triggerHaptic('success');
+            window.location.href = '/';
+        }
 
         function setBanner(message = '', kind = 'info') {
             statusBanner.textContent = message;
@@ -371,6 +381,7 @@
                 const data = await response.json();
 
                 if (response.ok && data.status === 'ok') {
+                    triggerHaptic('success');
                     if (data.token) {
                         localStorage.setItem('sessionToken', data.token);
                     }

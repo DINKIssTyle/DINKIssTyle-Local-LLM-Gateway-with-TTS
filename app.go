@@ -1505,6 +1505,14 @@ func (a *App) GetLicenseText() string {
 		builder.WriteString("\n\n")
 	}
 
+	// Third Party Notices
+	tpnPath := GetResourcePath("ThirdPartyNotices.md")
+	if content, err := os.ReadFile(tpnPath); err == nil {
+		builder.WriteString("=== Third Party Notices ===\n")
+		builder.WriteString(string(content))
+		builder.WriteString("\n\n")
+	}
+
 	return builder.String()
 }
 
