@@ -2988,7 +2988,7 @@ async function initServerControl() {
 
     // Get initial server status
     try {
-        const status = await window.go.main.App.GetServerStatus();
+        const status = await window.go.core.App.GetServerStatus();
         updateServerUI(status.running, status.port);
     } catch (e) {
         console.error('Failed to get server status:', e);
@@ -3008,13 +3008,13 @@ async function toggleServer() {
 
     try {
         if (serverRunning) {
-            await window.go.main.App.StopServer();
+            await window.go.core.App.StopServer();
             updateServerUI(false, port);
         } else {
             // Also update LLM endpoint
             // const llmEndpoint = document.getElementById('cfg-api').value; // UI Element removed
-            await window.go.main.App.SetLLMEndpoint(config.apiEndpoint);
-            await window.go.main.App.StartServer(port);
+            await window.go.core.App.SetLLMEndpoint(config.apiEndpoint);
+            await window.go.core.App.StartServer(port);
             updateServerUI(true, port);
         }
     } catch (e) {
@@ -3255,7 +3255,7 @@ function setupSettingsListeners() {
         openMemBtn.onclick = async () => {
             const uid = (typeof currentUser !== 'undefined' && currentUser) ? currentUser.id : "default";
             try {
-                const err = await window.go.main.App.OpenMemoryFolder(uid);
+                const err = await window.go.core.App.OpenMemoryFolder(uid);
                 if (err) alert(err);
             } catch (e) {
                 alert("Error opening folder: " + e);
@@ -3270,7 +3270,7 @@ function setupSettingsListeners() {
             if (!confirm(confirmation)) return;
             const uid = (typeof currentUser !== 'undefined' && currentUser) ? currentUser.id : "default";
             try {
-                const res = await window.go.main.App.ResetMemory(uid);
+                const res = await window.go.core.App.ResetMemory(uid);
                 alert(t('setting.memory.reset.success') || res);
             } catch (e) {
                 alert("Error resetting memory: " + e);
@@ -3288,8 +3288,8 @@ async function loadTTSDictionary(lang) {
     const targetLang = lang || config.ttsLang || 'ko';
     let rawDict = {};
     try {
-        if (window.go && window.go.main && window.go.main.App) {
-            rawDict = await window.go.main.App.GetTTSDictionary(targetLang);
+        if (window.go && window.go.main && window.go.core.App) {
+            rawDict = await window.go.core.App.GetTTSDictionary(targetLang);
         } else {
             const res = await fetch(`/api/dictionary?lang=${targetLang}`);
             if (res.ok) rawDict = await res.json();
@@ -3329,8 +3329,8 @@ let systemPromptPresets = [];
 
 async function loadSystemPrompts() {
     try {
-        if (window.go && window.go.main && window.go.main.App) {
-            systemPromptPresets = await window.go.main.App.GetSystemPrompts();
+        if (window.go && window.go.main && window.go.core.App) {
+            systemPromptPresets = await window.go.core.App.GetSystemPrompts();
         } else {
             const res = await fetch('/api/prompts');
             if (res.ok) systemPromptPresets = await res.json();
@@ -3461,13 +3461,13 @@ function saveConfig(closeModal = true) {
     localStorage.setItem('appConfig', JSON.stringify(config));
 
     // Sync configs to server
-    if (window.go && window.go.main && window.go.main.App) {
-        window.go.main.App.SetLLMEndpoint(config.apiEndpoint).catch(console.error);
-        window.go.main.App.SetLLMApiToken(config.apiToken).catch(console.error);
-        window.go.main.App.SetLLMMode(config.llmMode).catch(console.error);
-        window.go.main.App.SetEnableTTS(config.enableTTS);
-        window.go.main.App.SetEnableMCP(config.enableMCP);
-        window.go.main.App.SetServerTTSConfig({
+    if (window.go && window.go.main && window.go.core.App) {
+        window.go.core.App.SetLLMEndpoint(config.apiEndpoint).catch(console.error);
+        window.go.core.App.SetLLMApiToken(config.apiToken).catch(console.error);
+        window.go.core.App.SetLLMMode(config.llmMode).catch(console.error);
+        window.go.core.App.SetEnableTTS(config.enableTTS);
+        window.go.core.App.SetEnableMCP(config.enableMCP);
+        window.go.core.App.SetServerTTSConfig({
             engine: config.ttsEngine,
             voiceStyle: config.ttsVoice,
             speed: config.ttsSpeed,
@@ -3481,7 +3481,7 @@ function saveConfig(closeModal = true) {
 
         // This is separate from saveConfig in app.go, but SetTTSThreads triggers reload
         if (config.ttsThreads && config.ttsEngine === 'supertonic') {
-            window.go.main.App.SetTTSThreads(config.ttsThreads);
+            window.go.core.App.SetTTSThreads(config.ttsThreads);
         }
     }
 
@@ -8763,9 +8763,9 @@ async function checkSystemHealth() {
     let health;
 
     // 1. Try Wails (Desktop)
-    if (typeof window.go !== 'undefined' && window.go.main && window.go.main.App) {
+    if (typeof window.go !== 'undefined' && window.go.main && window.go.core.App) {
         try {
-            health = await window.go.main.App.CheckHealth();
+            health = await window.go.core.App.CheckHealth();
         } catch (e) {
             console.error("Wails health check failed:", e);
         }

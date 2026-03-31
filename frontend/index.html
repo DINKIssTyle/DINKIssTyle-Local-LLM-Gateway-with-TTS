@@ -1141,14 +1141,14 @@
         async function init() {
             if (typeof window.go !== 'undefined') {
                 try {
-                    const status = await window.go.main.App.GetServerStatus();
+                    const status = await window.go.core.App.GetServerStatus();
                     updateUI(status.running, status.port);
                     document.getElementById('port-input').value = status.port; // Set loaded port
                     updateMcpPort();
                     document.getElementById('llm-endpoint').value = status.llmEndpoint || 'http://127.0.0.1:1234';
 
                     // Load API Key
-                    const apiKey = await window.go.main.App.GetLLMApiToken();
+                    const apiKey = await window.go.core.App.GetLLMApiToken();
                     document.getElementById('llm-api-key').value = apiKey || '';
 
                     loadUsers();
@@ -1187,7 +1187,7 @@
         async function loadTTSConfig() {
             try {
                 // Get general config for enableTTS
-                const status = await window.go.main.App.GetServerStatus();
+                const status = await window.go.core.App.GetServerStatus();
                 document.getElementById('enable-tts').checked = status.enableTTS;
 
                 checkAssetStatus();
@@ -1199,7 +1199,7 @@
         async function loadAdvancedConfig() {
             if (typeof window.go === 'undefined') return;
             try {
-                const domain = await window.go.main.App.GetCertDomain();
+                const domain = await window.go.core.App.GetCertDomain();
                 document.getElementById('cert-domain').value = domain || 'localhost';
             } catch (e) {
                 console.error('Advanced Config Load Failed:', e);
@@ -1209,7 +1209,7 @@
         async function loadDebugTraceConfig() {
             if (typeof window.go === 'undefined') return;
             try {
-                debugTraceEnabled = await window.go.main.App.GetDebugTraceEnabled();
+                debugTraceEnabled = await window.go.core.App.GetDebugTraceEnabled();
                 document.getElementById('enable-debug-trace').checked = debugTraceEnabled;
                 applyDebugLayoutState();
                 await refreshDebugTrace();
@@ -1221,7 +1221,7 @@
         async function toggleDebugTrace() {
             const enabled = document.getElementById('enable-debug-trace').checked;
             try {
-                await window.go.main.App.SetDebugTraceEnabled(enabled);
+                await window.go.core.App.SetDebugTraceEnabled(enabled);
                 debugTraceEnabled = enabled;
                 applyDebugLayoutState();
                 await syncDebugWindowSize(enabled);
@@ -1239,7 +1239,7 @@
         async function refreshDebugTrace() {
             if (typeof window.go === 'undefined') return;
             try {
-                debugTraceEntries = await window.go.main.App.GetDebugTraceEntries() || [];
+                debugTraceEntries = await window.go.core.App.GetDebugTraceEntries() || [];
                 renderDebugTrace();
             } catch (e) {
                 console.error('Failed to refresh Debug Trace:', e);
@@ -1249,7 +1249,7 @@
         async function clearDebugTrace() {
             if (typeof window.go === 'undefined') return;
             try {
-                await window.go.main.App.ClearDebugTrace();
+                await window.go.core.App.ClearDebugTrace();
                 debugTraceEntries = [];
                 renderDebugTrace();
             } catch (e) {
@@ -1424,7 +1424,7 @@
         async function saveCertDomain() {
             const domain = document.getElementById('cert-domain').value;
             try {
-                await window.go.main.App.SetCertDomain(domain);
+                await window.go.core.App.SetCertDomain(domain);
                 checkRestartRequired();
             } catch (e) {
                 console.error('Failed to set Cert Domain:', e);
@@ -1445,7 +1445,7 @@
                 btn.disabled = true;
                 btn.innerHTML = '<span class="material-icons-round">sync</span> Generating...';
 
-                await window.go.main.App.GenerateCertificate(domain);
+                await window.go.core.App.GenerateCertificate(domain);
                 
                 showAlert("Certificate generated successfully!");
                 checkRestartRequired();
@@ -1460,7 +1460,7 @@
 
         async function openCertFolder() {
             try {
-                await window.go.main.App.OpenCertFolder();
+                await window.go.core.App.OpenCertFolder();
             } catch (e) {
                 console.error('Failed to open certificate folder:', e);
                 showAlert("Failed to open folder: " + e);
@@ -1491,7 +1491,7 @@
                 document.getElementById('status-dot').style.backgroundColor = '#eab308';
                 document.getElementById('status-text').innerText = 'Restarting...';
 
-                await window.go.main.App.RestartServer();
+                await window.go.core.App.RestartServer();
 
                 // Refresh status after a short delay
                 setTimeout(updateStatus, 1000);
@@ -1505,7 +1505,7 @@
         async function checkAssetStatus() {
             if (typeof window.go === 'undefined') return;
             try {
-                const ready = await window.go.main.App.CheckAssets();
+                const ready = await window.go.core.App.CheckAssets();
                 updateAssetUI(ready);
             } catch (e) {
                 console.error('Asset Check Failed:', e);
@@ -1541,7 +1541,7 @@
                 btn.innerHTML = '<span class="material-icons-round">hourglass_bottom</span> Downloading...';
 
                 try {
-                    await window.go.main.App.DownloadAssets();
+                    await window.go.core.App.DownloadAssets();
                     showAlert("Assets downloaded successfully!");
                     checkAssetStatus(); // Refresh status
                 } catch (e) {
@@ -1556,7 +1556,7 @@
         async function toggleEnableTTS() {
             const enabled = document.getElementById('enable-tts').checked;
             try {
-                await window.go.main.App.SetEnableTTS(enabled);
+                await window.go.core.App.SetEnableTTS(enabled);
             } catch (e) {
                 console.error('Failed to set TTS:', e);
             }
@@ -1565,7 +1565,7 @@
         async function toggleStartOnBoot() {
             const enabled = document.getElementById('start-on-boot').checked;
             try {
-                await window.go.main.App.SetStartOnBoot(enabled);
+                await window.go.core.App.SetStartOnBoot(enabled);
             } catch (e) {
                 console.error('Failed to set Start on Boot:', e);
             }
@@ -1574,7 +1574,7 @@
         async function toggleMinimizeToTray() {
             const enabled = document.getElementById('minimize-to-tray').checked;
             try {
-                await window.go.main.App.SetMinimizeToTray(enabled);
+                await window.go.core.App.SetMinimizeToTray(enabled);
             } catch (e) {
                 console.error('Failed to set Minimize to Tray:', e);
             }
@@ -1583,7 +1583,7 @@
         async function toggleAutoStartServer() {
             const enabled = document.getElementById('auto-start-server').checked;
             try {
-                await window.go.main.App.SetAutoStartServer(enabled);
+                await window.go.core.App.SetAutoStartServer(enabled);
             } catch (e) {
                 console.error('Failed to set Auto Start Server:', e);
             }
@@ -1593,9 +1593,9 @@
 
         async function loadStartupSettings() {
             try {
-                const startOnBoot = await window.go.main.App.GetStartOnBoot();
-                const minimizeToTray = await window.go.main.App.GetMinimizeToTray();
-                const autoStartServer = await window.go.main.App.GetAutoStartServer();
+                const startOnBoot = await window.go.core.App.GetStartOnBoot();
+                const minimizeToTray = await window.go.core.App.GetMinimizeToTray();
+                const autoStartServer = await window.go.core.App.GetAutoStartServer();
 
                 document.getElementById('start-on-boot').checked = startOnBoot;
                 document.getElementById('minimize-to-tray').checked = minimizeToTray;
@@ -1619,7 +1619,7 @@
         async function savePort() {
             const port = document.getElementById('port-input').value;
             try {
-                await window.go.main.App.SetPort(port);
+                await window.go.core.App.SetPort(port);
                 updateMcpPort();
                 checkRestartRequired();
             } catch (e) {
@@ -1630,7 +1630,7 @@
         async function saveLLMEndpoint() {
             const endpoint = document.getElementById('llm-endpoint').value;
             try {
-                await window.go.main.App.SetLLMEndpoint(endpoint);
+                await window.go.core.App.SetLLMEndpoint(endpoint);
                 console.log('LLM Endpoint saved:', endpoint);
                 checkRestartRequired();
             } catch (e) {
@@ -1641,7 +1641,7 @@
         async function saveLLMApiKey() {
             const apiKey = document.getElementById('llm-api-key').value;
             try {
-                await window.go.main.App.SetLLMApiToken(apiKey);
+                await window.go.core.App.SetLLMApiToken(apiKey);
                 console.log('API Key saved (length:', apiKey.length, ')');
             } catch (e) {
                 console.error('Failed to save API Key:', e);
@@ -1695,11 +1695,11 @@
 
             try {
                 if (isRunning) {
-                    await window.go.main.App.StopServer();
+                    await window.go.core.App.StopServer();
                     updateUI(false, port);
                 } else {
-                    await window.go.main.App.SetLLMEndpoint(llmEndpoint);
-                    await window.go.main.App.StartServer(port);
+                    await window.go.core.App.SetLLMEndpoint(llmEndpoint);
+                    await window.go.core.App.StartServer(port);
                     updateUI(true, port);
                 }
             } catch (e) {
@@ -1712,7 +1712,7 @@
         async function loadUsers() {
             if (typeof window.go === 'undefined') return;
             try {
-                const users = await window.go.main.App.GetUsers();
+                const users = await window.go.core.App.GetUsers();
                 const list = document.getElementById('user-list');
                 list.innerHTML = users.map(u => `
                     <div class="user-item" onclick="openEditUserModal('${u.id}')" style="cursor: pointer;" title="Click to edit">
@@ -1757,7 +1757,7 @@
             const role = isAdmin ? 'admin' : 'user';
 
             try {
-                await window.go.main.App.AddUser(id, password, role);
+                await window.go.core.App.AddUser(id, password, role);
                 closeAddUserModal();
                 loadUsers();
             } catch (e) {
@@ -1793,7 +1793,7 @@
             showConfirm(`Delete user "${id}"?`, async (confirmed) => {
                 if (!confirmed) return;
                 try {
-                    await window.go.main.App.DeleteUser(id);
+                    await window.go.core.App.DeleteUser(id);
                     loadUsers();
                 } catch (e) {
                     showAlert('Failed: ' + e.message);
@@ -1807,7 +1807,7 @@
 
             try {
                 if (window.go) {
-                    const text = await window.go.main.App.GetLicenseText();
+                    const text = await window.go.core.App.GetLicenseText();
                     document.getElementById('license-text').textContent = text;
                 }
             } catch (e) {
@@ -1827,7 +1827,7 @@
 
             try {
                 // Load user details
-                const userDetail = await window.go.main.App.GetUserDetail(userId);
+                const userDetail = await window.go.core.App.GetUserDetail(userId);
 
                 document.getElementById('edit-user-id').value = userId;
                 document.getElementById('edit-user-id-display').textContent = userId;
@@ -1841,13 +1841,13 @@
                 editUserOriginalRole = userDetail.role;
 
                 // Load API Key (full token)
-                const apiKey = await window.go.main.App.GetUserApiToken(userId);
+                const apiKey = await window.go.core.App.GetUserApiToken(userId);
                 document.getElementById('edit-user-api-key').value = apiKey || '';
 
                 // Load Disabled Tools
                 let disabledTools = [];
                 try {
-                    disabledTools = await window.go.main.App.GetUserDisabledTools(userId) || [];
+                    disabledTools = await window.go.core.App.GetUserDisabledTools(userId) || [];
                 } catch (e) {
                     console.warn('Failed to load disabled tools:', e);
                 }
@@ -1856,8 +1856,8 @@
                 let disallowedCmds = [];
                 let disallowedDirs = [];
                 try {
-                    disallowedCmds = await window.go.main.App.GetUserDisallowedCommands(userId) || [];
-                    disallowedDirs = await window.go.main.App.GetUserDisallowedDirectories(userId) || [];
+                    disallowedCmds = await window.go.core.App.GetUserDisallowedCommands(userId) || [];
+                    disallowedDirs = await window.go.core.App.GetUserDisallowedDirectories(userId) || [];
                 } catch (e) {
                     console.warn('Failed to load disallowed lists:', e);
                 }
@@ -1921,7 +1921,7 @@
             }
 
             try {
-                await window.go.main.App.UpdateUserPassword(userId, newPassword);
+                await window.go.core.App.UpdateUserPassword(userId, newPassword);
                 showAlert('Password changed successfully.');
                 // Clear password fields
                 document.getElementById('edit-new-password').value = '';
@@ -1940,11 +1940,11 @@
             try {
                 // Update role if changed
                 if (newRole !== editUserOriginalRole) {
-                    await window.go.main.App.UpdateUserRole(userId, newRole);
+                    await window.go.core.App.UpdateUserRole(userId, newRole);
                 }
 
                 // Update API key
-                await window.go.main.App.SetUserApiToken(userId, apiKey);
+                await window.go.core.App.SetUserApiToken(userId, apiKey);
 
                 // Update Disabled Tools
                 const toolCheckboxes = document.querySelectorAll('.tool-toggle');
@@ -1954,7 +1954,7 @@
                         disabledTools.push(cb.getAttribute('data-tool-id'));
                     }
                 });
-                await window.go.main.App.SetUserDisabledTools(userId, disabledTools);
+                await window.go.core.App.SetUserDisabledTools(userId, disabledTools);
 
                 // Update Disallowed Commands/Dirs
                 const rawCmds = document.getElementById('edit-disallowed-cmds').value;
@@ -1963,8 +1963,8 @@
                 const newCmds = rawCmds.split(',').map(s => s.trim()).filter(s => s !== "");
                 const newDirs = rawDirs.split(',').map(s => s.trim()).filter(s => s !== "");
 
-                await window.go.main.App.SetUserDisallowedCommands(userId, newCmds);
-                await window.go.main.App.SetUserDisallowedDirectories(userId, newDirs);
+                await window.go.core.App.SetUserDisallowedCommands(userId, newCmds);
+                await window.go.core.App.SetUserDisallowedDirectories(userId, newDirs);
 
                 closeEditUserModal();
                 loadUsers();
