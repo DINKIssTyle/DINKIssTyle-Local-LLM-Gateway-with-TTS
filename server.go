@@ -1229,6 +1229,39 @@ func savedTurnQueuedStatus(started bool) string {
 	return "noop"
 }
 
+func recordSavedTurnAutoTitleFailure(userID string, turnID int64, reason string, extra map[string]interface{}) {
+	failures, err := mcp.IncrementSavedTurnAutoTitleFailures(userID, turnID)
+	if err != nil {
+		log.Printf("[saved-turn-title] Failed to increment auto title failure for %s turn %d: %v", userID, turnID, err)
+		AddDebugTrace("saved-turn-title", "db.error", "Failed to increment automatic title failure count", map[string]interface{}{
+			"user_id": userID,
+			"turn_id": turnID,
+			"reason":  reason,
+			"error":   err,
+		})
+		return
+	}
+
+	details := map[string]interface{}{
+		"user_id":       userID,
+		"turn_id":       turnID,
+		"reason":        reason,
+		"failure_count": failures,
+		"auto_disabled": failures >= 3,
+	}
+	for key, value := range extra {
+		details[key] = value
+	}
+
+	stage := "retry.scheduled"
+	message := "Automatic saved turn title retry remains enabled"
+	if failures >= 3 {
+		stage = "retry.disabled"
+		message = "Disabled automatic saved turn title retries after repeated failures"
+	}
+	AddDebugTrace("saved-turn-title", stage, message, details)
+}
+
 type ServerTTSConfig struct {
 	Engine      string  `json:"engine"`
 	VoiceStyle  string  `json:"voiceStyle"`
@@ -2107,6 +2140,7 @@ func handleSavedTurns() http.HandlerFunc {
 						"user_id": userID,
 						"turn_id": entry.ID,
 					})
+					recordSavedTurnAutoTitleFailure(userID, entry.ID, "empty_title", nil)
 					return
 				}
 				if latestEntry, err := mcp.GetSavedTurn(userID, entry.ID); err == nil && strings.TrimSpace(latestEntry.TitleSource) != "fallback" {
@@ -2124,6 +2158,10 @@ func handleSavedTurns() http.HandlerFunc {
 						"turn_id": entry.ID,
 						"title":   title,
 						"error":   err,
+					})
+					recordSavedTurnAutoTitleFailure(userID, entry.ID, "db_update_failed", map[string]interface{}{
+						"title": title,
+						"error": err,
 					})
 					return
 				}
@@ -2297,6 +2335,9 @@ func handleSavedTurnTitleRefresh() http.HandlerFunc {
 					"user_id": userID,
 					"turn_id": entry.ID,
 				})
+				if idStr == "" {
+					recordSavedTurnAutoTitleFailure(userID, entry.ID, "empty_title", nil)
+				}
 				return
 			}
 			if latestEntry, err := mcp.GetSavedTurn(userID, entry.ID); err == nil && strings.TrimSpace(latestEntry.TitleSource) != "fallback" {
@@ -2315,6 +2356,12 @@ func handleSavedTurnTitleRefresh() http.HandlerFunc {
 					"title":   title,
 					"error":   err,
 				})
+				if idStr == "" {
+					recordSavedTurnAutoTitleFailure(userID, entry.ID, "db_update_failed", map[string]interface{}{
+						"title": title,
+						"error": err,
+					})
+				}
 				return
 			}
 			AddDebugTrace("saved-turn-title", "db.updated", "Updated saved turn title during manual refresh", map[string]interface{}{

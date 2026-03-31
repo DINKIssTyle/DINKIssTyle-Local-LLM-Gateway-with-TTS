@@ -43,7 +43,7 @@ func GetCurrentTime() (string, error) {
 	return fmt.Sprintf("Current Local Time: %s", now.Format("2006-01-02 15:04:05 Monday MST")), nil
 }
 
-// SearchWeb performs a web search using Google first, then falls back to DuckDuckGo Lite.
+// SearchWeb performs a web search using DuckDuckGo Lite.
 func SearchWeb(query string) (string, error) {
 	originalQuery := query
 	query = normalizeSearchQuery(query)
@@ -56,15 +56,6 @@ func SearchWeb(query string) (string, error) {
 	EmitTrace("mcp", "search_web.start", "Starting web search", traceDetails(traceArgs...))
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	if results, err := searchGoogle(query, client); err == nil && len(results) > 0 {
-		EmitTrace("mcp", "search_web.complete", "Google search completed", traceDetails("query", query, "elapsed_ms", durationMs(start), "results", len(results), "provider", "google"))
-		return strings.Join(results, "\n---\n"), nil
-	} else if err != nil {
-		log.Printf("[MCP] Google search failed, falling back to DuckDuckGo: %v", err)
-	} else {
-		log.Printf("[MCP] Google search returned no parsed results, falling back to DuckDuckGo")
-	}
-
 	results, err := searchDuckDuckGo(query, client)
 	if err != nil {
 		EmitTrace("mcp", "search_web.error", "Web search failed", traceDetails("query", query, "elapsed_ms", durationMs(start), "error", errorDetail(err)))
@@ -77,33 +68,6 @@ func SearchWeb(query string) (string, error) {
 
 	EmitTrace("mcp", "search_web.complete", "DuckDuckGo search completed", traceDetails("query", query, "elapsed_ms", durationMs(start), "results", len(results), "provider", "duckduckgo"))
 	return strings.Join(results, "\n---\n"), nil
-}
-
-func searchGoogle(query string, client *http.Client) ([]string, error) {
-	searchURL := fmt.Sprintf("https://www.google.com/search?hl=en&q=%s", url.QueryEscape(query))
-	htmlContent, err := fetchSearchPage(client, searchURL)
-	if err != nil {
-		return nil, err
-	}
-
-	blockRegex := regexp.MustCompile(`(?s)<a href="/url\?q=(https?://[^"&]+)[^"]*".*?<h3[^>]*>(.*?)</h3>.*?</a>(.*?)</div>`)
-	snippetRegex := regexp.MustCompile(`(?s)<div[^>]*data-sncf="1"[^>]*>(.*?)</div>`)
-	matches := blockRegex.FindAllStringSubmatch(htmlContent, 5)
-
-	var results []string
-	for _, match := range matches {
-		link := html.UnescapeString(match[1])
-		title := cleanSearchText(match[2])
-		snippet := ""
-		if parts := snippetRegex.FindStringSubmatch(match[3]); len(parts) > 1 {
-			snippet = cleanSearchText(parts[1])
-		}
-		if title == "" || link == "" {
-			continue
-		}
-		results = append(results, fmt.Sprintf("Title: %s\nLink: %s\nSnippet: %s\n", title, link, snippet))
-	}
-	return results, nil
 }
 
 func searchDuckDuckGo(query string, client *http.Client) ([]string, error) {
