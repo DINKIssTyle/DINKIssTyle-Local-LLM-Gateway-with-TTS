@@ -100,7 +100,7 @@ if [ $? -eq 0 ]; then
     xattr -cr "$APP_BUNDLE_PATH"
     
     BUNDLE_ID="com.dinkisstyle.llmchat"
-    ENTITLEMENTS="entitlements.plist"
+    ENTITLEMENTS="bundle/entitlements.plist"
     
     codesign --force --sign "$SIGN_IDENTITY" --timestamp=none --identifier "$BUNDLE_ID" --options runtime "$DYLIB_PATH"
     codesign --force --sign "$SIGN_IDENTITY" --timestamp=none --identifier "$BUNDLE_ID" --options runtime --entitlements "$ENTITLEMENTS" "$EXE_PATH"

@@ -3,7 +3,7 @@
  * Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
  */
 
-package main
+package core
 
 import (
 	"crypto/rand"
@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"dinkisstyle-chat/mcp"
+	"dinkisstyle-chat/internal/mcp"
 
 	"golang.org/x/crypto/bcrypt"
 )

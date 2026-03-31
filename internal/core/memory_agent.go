@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"bufio"
@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"dinkisstyle-chat/mcp"
+	"dinkisstyle-chat/internal/mcp"
 )
 
 // MemoryAnalysisRequest represents the payload for memory extraction

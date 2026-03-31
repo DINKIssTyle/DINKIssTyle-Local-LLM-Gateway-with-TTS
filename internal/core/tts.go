@@ -6,7 +6,7 @@
  * Based on: https://github.com/supertone-inc/supertonic
  */
 
-package main
+package core
 
 import (
 	"bytes"
