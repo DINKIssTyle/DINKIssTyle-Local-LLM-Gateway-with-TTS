@@ -1956,6 +1956,7 @@ let osTTSVoicesReady = false;
 
 // DOM Elements
 const chatMessages = document.getElementById('chat-messages');
+const chatRestoreOverlay = document.getElementById('chat-restore-overlay');
 const AUTO_SCROLL_THRESHOLD_PX = 80;
 let shouldAutoScroll = true;
 let autoScrollHoldTimeout = null;
@@ -5043,7 +5044,7 @@ function resetChatViewState() {
 }
 
 function renderSessionRestoreSkeleton(cardCount = 5) {
-    if (!chatMessages) return;
+    if (!chatRestoreOverlay) return;
     const total = Math.max(3, Math.min(8, Number(cardCount) || 5));
     const cards = Array.from({ length: total }, (_, index) => {
         const widthClass = index % 3 === 0 ? 'is-wide' : index % 3 === 1 ? 'is-medium' : 'is-short';
@@ -5055,7 +5056,8 @@ function renderSessionRestoreSkeleton(cardCount = 5) {
             </div>`;
     }).join('');
 
-    chatMessages.innerHTML = `
+    chatRestoreOverlay.hidden = false;
+    chatRestoreOverlay.innerHTML = `
         <div class="session-restore-skeleton">
             <div class="session-restore-heading">${escapeHtml(t('restore.skeletonTitle'))}</div>
             <div class="session-restore-subheading">${escapeHtml(t('restore.skeletonBody'))}</div>
@@ -5066,12 +5068,10 @@ function renderSessionRestoreSkeleton(cardCount = 5) {
 function beginChatSessionRestore(totalCount = 0) {
     isRestoringChatSession = true;
     resetChatViewState();
-    if (chatMessages) {
-        chatMessages.innerHTML = '';
-    }
     chatMessages?.classList.add('is-session-hydrating');
     renderSessionRestoreSkeleton(totalCount);
     renderProgressDock(t('progress.restoringHistory'), 0, 'prompt-processing', false);
+    updateScrollToBottomButton();
     updateMessageInputPlaceholder();
 }
 
@@ -5087,6 +5087,10 @@ function finishChatSessionRestore() {
     isRestoringChatSession = false;
     hideProgressDock();
     requestAnimationFrame(() => {
+        if (chatRestoreOverlay) {
+            chatRestoreOverlay.innerHTML = '';
+            chatRestoreOverlay.hidden = true;
+        }
         chatMessages?.classList.remove('is-session-hydrating');
         scrollToBottom(true);
         requestAnimationFrame(() => {
@@ -7522,6 +7526,7 @@ function updateScrollToBottomButton() {
     const shouldShow = !!chatMessages
         && hasLongScrollableChat()
         && !isChatNearBottom()
+        && !isRestoringChatSession
         && !isSavedLibraryOpen;
 
     scrollToBottomBtn.classList.toggle('is-visible', shouldShow);
