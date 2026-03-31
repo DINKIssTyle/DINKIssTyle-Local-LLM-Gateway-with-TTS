@@ -134,12 +134,12 @@ if [ -d "$APP_CONTENT_DIR" ]; then
     # Copy resources
     # cp -r assets "$APP_CONTENT_DIR"
 
-    cp users.json "$APP_CONTENT_DIR" 2>/dev/null || echo "{}" > "$APP_CONTENT_DIR/users.json"
-    cp -f config.json "$APP_CONTENT_DIR"
-    cp dictionary_*.txt "$APP_CONTENT_DIR" 2>/dev/null || true
-    cp Dictionary_editor.py "$APP_CONTENT_DIR" 2>/dev/null || true
-    cp system_prompts.json "$APP_CONTENT_DIR" 2>/dev/null || true
-    cp ThirdPartyNotices.md "$APP_CONTENT_DIR" 2>/dev/null || true
+    cp bundle/users.json "$APP_CONTENT_DIR" 2>/dev/null || echo "{}" > "$APP_CONTENT_DIR/users.json"
+    cp -f bundle/config.json "$APP_CONTENT_DIR"
+    cp bundle/dictionary_*.txt "$APP_CONTENT_DIR" 2>/dev/null || true
+    cp bundle/Dictionary_editor.py "$APP_CONTENT_DIR" 2>/dev/null || true
+    cp bundle/system_prompts.json "$APP_CONTENT_DIR" 2>/dev/null || true
+    cp bundle/ThirdPartyNotices.md "$APP_CONTENT_DIR" 2>/dev/null || true
     
     # Cleanup
     rm -rf "$APP_CONTENT_DIR/assets/.git"

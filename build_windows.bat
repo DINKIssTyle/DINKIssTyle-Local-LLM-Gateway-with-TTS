@@ -10,7 +10,7 @@ echo Clean complete. Building...
 rem Using manual build (generate + go build) because wails build CLI is failing in this environment.
 wails generate bindings
 rem Generate Windows resources (icon, manifest, version info)
-goversioninfo -64 -o resource_windows.syso
+goversioninfo -64 -o resource_windows.syso bundle\versioninfo.json
 go build -ldflags "-s -w -H windowsgui" -tags desktop,production -o "build\bin\DKST LLM Chat Server.exe" .
 
 if exist "build\bin\DKST LLM Chat Server.exe" (
@@ -19,12 +19,12 @@ if exist "build\bin\DKST LLM Chat Server.exe" (
     copy /Y "onnxruntime\onnxruntime.dll" "build\bin\onnxruntime\" >nul
     copy /Y "onnxruntime\LICENSE.txt" "build\bin\onnxruntime\" >nul
     copy /Y "onnxruntime\ThirdPartyNotices.txt" "build\bin\onnxruntime\" >nul
-    copy /Y "users.json" "build\bin\" >nul
-    copy /Y "config.json" "build\bin\" 2>nul
-    copy /Y "dictionary_*.txt" "build\bin\" 2>nul
-    copy /Y "Dictionary_editor.py" "build\bin\" 2>nul
-    copy /Y "system_prompts.json" "build\bin\" >nul
-    copy /Y "ThirdPartyNotices.md" "build\bin\" >nul
+    copy /Y "bundle\users.json" "build\bin\" >nul
+    copy /Y "bundle\config.json" "build\bin\" 2>nul
+    copy /Y "bundle\dictionary_*.txt" "build\bin\" 2>nul
+    copy /Y "bundle\Dictionary_editor.py" "build\bin\" 2>nul
+    copy /Y "bundle\system_prompts.json" "build\bin\" >nul
+    copy /Y "bundle\ThirdPartyNotices.md" "build\bin\" >nul
     echo Build success!
 ) else (
     echo Build failed!

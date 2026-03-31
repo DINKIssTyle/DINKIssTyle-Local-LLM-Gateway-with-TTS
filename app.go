@@ -151,6 +151,12 @@ func GetResourcePath(relativePath string) string {
 		return relativePath
 	}
 
+	// Also check in bundle/ for dev mode
+	bundlePath := filepath.Join("bundle", relativePath)
+	if _, err := os.Stat(bundlePath); err == nil {
+		return bundlePath
+	}
+
 	// Default to AppDataDir path even if missing (for creation)
 	return fullPath
 }
@@ -180,6 +186,8 @@ func (a *App) CheckAndSetupPaths() {
 			if _, err := os.Stat(srcPath); os.IsNotExist(err) {
 				if _, err := os.Stat(item); err == nil {
 					srcPath = item
+				} else if _, err := os.Stat(filepath.Join("bundle", item)); err == nil {
+					srcPath = filepath.Join("bundle", item)
 				} else {
 					continue
 				}
@@ -197,6 +205,9 @@ func (a *App) CheckAndSetupPaths() {
 	}
 	if len(matches) == 0 {
 		matches, _ = filepath.Glob(dictPattern) // CWD check
+	}
+	if len(matches) == 0 {
+		matches, _ = filepath.Glob(filepath.Join("bundle", dictPattern)) // Bundle check
 	}
 
 	for _, srcPath := range matches {

@@ -23,10 +23,10 @@ import (
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-//go:embed trayicon.png
+//go:embed bundle/trayicon.png
 var trayIconPng []byte
 
-//go:embed trayicon.ico
+//go:embed bundle/trayicon.ico
 var trayIconIco []byte
 
 //go:embed build/windows/icon.ico
