@@ -29,3 +29,6 @@ if exist "build\bin\DKST LLM Chat Server.exe" (
 ) else (
     echo Build failed!
 )
+
+rem Clean up auto-generated Windows resource after build
+if exist "resource_windows.syso" del resource_windows.syso

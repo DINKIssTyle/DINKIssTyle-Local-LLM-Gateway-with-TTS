@@ -3,7 +3,7 @@
  * Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
  */
 
-package main
+package core
 
 import (
 	"bufio"
@@ -15,7 +15,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"database/sql"
-	"dinkisstyle-chat/mcp"
+	"dinkisstyle-chat/internal/mcp"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"

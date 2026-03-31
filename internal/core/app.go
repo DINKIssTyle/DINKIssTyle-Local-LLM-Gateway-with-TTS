@@ -3,12 +3,12 @@
  * Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
  */
 
-package main
+package core
 
 import (
 	"bytes"
 	"context"
-	"dinkisstyle-chat/mcp"
+	"dinkisstyle-chat/internal/mcp"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -25,6 +25,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wailsapp/wails/v2/pkg/menu"
+	"github.com/wailsapp/wails/v2/pkg/menu/keys"
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -45,7 +47,7 @@ type App struct {
 	certDomain       string
 	authMgr          *AuthManager
 	assets           embed.FS
-	isQuitting       bool
+	IsQuitting       bool
 
 	// Server-side Model Cache
 	modelCache     []byte
@@ -382,8 +384,8 @@ func (a *App) saveConfig() {
 	}
 }
 
-// startup is called when the app starts
-func (a *App) startup(ctx context.Context) {
+// Startup is called when the app starts
+func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
 	globalApp = a
 
@@ -470,8 +472,8 @@ func (a *App) startup(ctx context.Context) {
 	}
 }
 
-// shutdown is called when the app terminates
-func (a *App) shutdown(ctx context.Context) {
+// Shutdown is called when the app terminates
+func (a *App) Shutdown(ctx context.Context) {
 	fmt.Println("Shutting down application...")
 	a.StopServer()
 	QuitSystemTray()
@@ -479,7 +481,7 @@ func (a *App) shutdown(ctx context.Context) {
 
 // Quit initiates the application shutdown
 func (a *App) Quit() {
-	a.isQuitting = true
+	a.IsQuitting = true
 	wruntime.Quit(a.ctx)
 }
 
@@ -648,6 +650,40 @@ func (a *App) OpenCertFolder() error {
 	}
 
 	return cmd.Start()
+}
+
+func CreateAppMenu(app *App) *menu.Menu {
+	men := menu.NewMenu()
+
+	if runtime.GOOS == "darwin" {
+		// macOS: AppMenu handles all standard roles (About, Hide, Services, Quit)
+		men.Append(menu.AppMenu())
+	} else {
+		appMenu := men.AddSubmenu("App")
+		appMenu.AddText("About DKST LLM Chat Server", keys.CmdOrCtrl("i"), func(_ *menu.CallbackData) {
+			app.ShowAbout()
+		})
+		appMenu.AddSeparator()
+		appMenu.AddText("Quit", keys.CmdOrCtrl("q"), func(_ *menu.CallbackData) {
+			app.Quit()
+		})
+	}
+
+	men.Append(menu.EditMenu())
+
+	windowMenu := men.AddSubmenu("Window")
+	windowMenu.AddText("Minimize", keys.CmdOrCtrl("m"), func(_ *menu.CallbackData) {
+		if app.ctx != nil {
+			wruntime.WindowMinimise(app.ctx)
+		}
+	})
+	windowMenu.AddText("Zoom", nil, func(_ *menu.CallbackData) {
+		if app.ctx != nil {
+			wruntime.WindowMaximise(app.ctx)
+		}
+	})
+
+	return men
 }
 
 // SetEnableMemory is removed; use per-user settings via /api/config

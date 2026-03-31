@@ -11,11 +11,10 @@ import (
 	"log"
 	"runtime"
 
-	"dinkisstyle-chat/mcp"
+	"dinkisstyle-chat/internal/core"
+	"dinkisstyle-chat/internal/mcp"
 
 	"github.com/wailsapp/wails/v2"
-	"github.com/wailsapp/wails/v2/pkg/menu"
-	"github.com/wailsapp/wails/v2/pkg/menu/keys"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
@@ -36,8 +35,8 @@ var windowIcon []byte
 var assets embed.FS
 
 func main() {
-	initLoggingFilter()
-	app := NewApp(assets)
+	core.InitLoggingFilter()
+	app := core.NewApp(assets)
 
 	// Select tray icon based on OS (Windows prefers ICO)
 	var trayIcon []byte
@@ -48,7 +47,7 @@ func main() {
 	}
 
 	// Initialize system tray
-	InitSystemTray(app, trayIcon)
+	core.InitSystemTray(app, trayIcon)
 
 	err := wails.Run(&options.App{
 		Title:     "DKST LLM Chat Server",
@@ -69,15 +68,15 @@ func main() {
 					log.Printf("Failed to init SQLite: %v", err)
 				}
 			}
-			app.startup(ctx)
+			app.Startup(ctx)
 		},
 		OnShutdown: func(ctx context.Context) {
 			mcp.CloseDB()
-			app.shutdown(ctx)
+			app.Shutdown(ctx)
 		},
 		HideWindowOnClose: false, // Handled by OnBeforeClose
 		OnBeforeClose: func(ctx context.Context) (prevent bool) {
-			if app.isQuitting {
+			if app.IsQuitting {
 				return false
 			}
 			minimize := app.GetMinimizeToTray()
@@ -87,7 +86,7 @@ func main() {
 			}
 			return false
 		},
-		Menu: createAppMenu(app),
+		Menu: core.CreateAppMenu(app),
 		Bind: []interface{}{
 			app,
 		},
@@ -109,41 +108,3 @@ func main() {
 	// Process exit is handled by onTrayExit callback in systray
 }
 
-func createAppMenu(app *App) *menu.Menu {
-	men := menu.NewMenu()
-
-	if runtime.GOOS == "darwin" {
-		// macOS: AppMenu handles all standard roles (About, Hide, Services, Quit)
-		men.Append(menu.AppMenu())
-
-		// Add custom items to the AppMenu if needed, but AppMenu() is the standard way
-		// Alternatively, we can build it manually but accurately:
-	} else {
-		appMenu := men.AddSubmenu("App")
-		appMenu.AddText("About DKST LLM Chat Server", keys.CmdOrCtrl("i"), func(_ *menu.CallbackData) {
-			app.ShowAbout()
-		})
-		appMenu.AddSeparator()
-		appMenu.AddText("Quit", keys.CmdOrCtrl("q"), func(_ *menu.CallbackData) {
-			app.Quit()
-		})
-	}
-
-	// Edit Menu - Use Wails built-in EditMenu for proper clipboard support
-	men.Append(menu.EditMenu())
-
-	// Window Menu
-	windowMenu := men.AddSubmenu("Window")
-	windowMenu.AddText("Minimize", keys.CmdOrCtrl("m"), func(_ *menu.CallbackData) {
-		if app.ctx != nil {
-			wruntime.WindowMinimise(app.ctx)
-		}
-	})
-	windowMenu.AddText("Zoom", nil, func(_ *menu.CallbackData) {
-		if app.ctx != nil {
-			wruntime.WindowMaximise(app.ctx)
-		}
-	})
-
-	return men
-}

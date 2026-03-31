@@ -1,8 +1,8 @@
-package main
+package core
 
 import (
 	"bytes"
-	"dinkisstyle-chat/mcp"
+	"dinkisstyle-chat/internal/mcp"
 	"encoding/json"
 	"io"
 	"log"

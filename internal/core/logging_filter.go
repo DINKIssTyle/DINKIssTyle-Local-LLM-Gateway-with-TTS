@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"bytes"
@@ -26,7 +26,7 @@ func (w *filteredLogWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func initLoggingFilter() {
+func InitLoggingFilter() {
 	log.SetOutput(&filteredLogWriter{target: log.Writer()})
 }
 

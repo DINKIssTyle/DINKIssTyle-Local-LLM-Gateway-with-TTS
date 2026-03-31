@@ -6,7 +6,7 @@
  * Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
  */
 
-package main
+package core
 
 // InitSystemTray is a no-op on macOS due to AppDelegate conflict with Wails
 // macOS users can use Dock icon to restore the window

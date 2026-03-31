@@ -1,9 +1,9 @@
-package main
+package core
 
 import (
 	"crypto/sha1"
 	"database/sql"
-	"dinkisstyle-chat/mcp"
+	"dinkisstyle-chat/internal/mcp"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
