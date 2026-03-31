@@ -48,7 +48,8 @@ let config = {
     statefulTokenBudget: DEFAULT_STATEFUL_TOKEN_BUDGET,
     micLayout: 'none', // 'none', 'left', 'right', 'bottom', 'inline'
     chatFontSize: 16,
-    userBubbleTheme: 'ocean'
+    userBubbleTheme: 'ocean',
+    markdownRenderMode: 'balanced'
 };
 
 const USER_BUBBLE_THEMES = {
@@ -137,7 +138,7 @@ function getMarkdownRenderer() {
 }
 
 function rerenderAllMarkdownHosts() {
-    document.querySelectorAll('.markdown-committed, .markdown-pending, #saved-turn-modal-response').forEach((host) => {
+    document.querySelectorAll('.markdown-committed, #saved-turn-modal-response').forEach((host) => {
         const source = host?.dataset?.markdownSource;
         if (typeof source !== 'string') return;
         renderMarkdownIntoHost(host, source);
@@ -348,6 +349,11 @@ const translations = {
         'setting.memory.reset.success': '메모리가 초기화되었습니다.',
         'setting.userBubbleTheme.label': '사용자 버블 스타일',
         'setting.userBubbleTheme.desc': '내 메시지 버블의 그라데이션 색상을 선택합니다.',
+        'setting.markdownRenderMode.label': '마크다운 랜더링 방식',
+        'setting.markdownRenderMode.desc': '응답 스트리밍 중 마크다운을 얼마나 적극적으로 랜더링할지 선택합니다.',
+        'setting.markdownRenderMode.option.fast': '빠르게 랜더링',
+        'setting.markdownRenderMode.option.balanced': '약간 지연된 랜더링',
+        'setting.markdownRenderMode.option.final': '응답 완료 후 랜더링',
         'setting.micLayout.label': '마이크 레이아웃',
         'setting.micLayout.desc': '화면에 마이크를 배치합니다.',
         'setting.micLayout.option.none': '사용 안 함',
@@ -552,6 +558,11 @@ const translations = {
         'setting.memory.reset.success': 'Memory reset successfully.',
         'setting.userBubbleTheme.label': 'User Bubble Style',
         'setting.userBubbleTheme.desc': 'Choose the gradient preset for your message bubbles.',
+        'setting.markdownRenderMode.label': 'Markdown Rendering Mode',
+        'setting.markdownRenderMode.desc': 'Choose how aggressively markdown is rendered while the response is still streaming.',
+        'setting.markdownRenderMode.option.fast': 'Fast Rendering',
+        'setting.markdownRenderMode.option.balanced': 'Slightly Delayed Rendering',
+        'setting.markdownRenderMode.option.final': 'Render After Completion',
         'setting.micLayout.label': 'Mic Layout',
         'setting.micLayout.desc': 'Place a microphone on the screen.',
         'setting.micLayout.option.none': 'None',
@@ -3093,8 +3104,11 @@ function loadConfig() {
     updateMicLayout();
 
     config.userBubbleTheme = USER_BUBBLE_THEMES[config.userBubbleTheme] ? config.userBubbleTheme : 'ocean';
+    config.markdownRenderMode = ['fast', 'balanced', 'final'].includes(config.markdownRenderMode) ? config.markdownRenderMode : 'balanced';
     applyUserBubbleTheme();
     renderUserBubbleThemeOptions();
+    const markdownRenderModeEl = document.getElementById('cfg-markdown-render-mode');
+    if (markdownRenderModeEl) markdownRenderModeEl.value = config.markdownRenderMode;
 
     // Language selector
     document.getElementById('cfg-lang').value = config.language || 'ko';
@@ -3190,7 +3204,7 @@ function setupSettingsListeners() {
     });
 
     // Selects & Inputs: save on change
-    const autoSaveIds = ['cfg-api', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-os-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-disable-stateful', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model', 'cfg-tts-engine'];
+    const autoSaveIds = ['cfg-api', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-os-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-disable-stateful', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model', 'cfg-tts-engine', 'cfg-markdown-render-mode'];
     autoSaveIds.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.onchange = () => saveConfig(false);
@@ -3385,6 +3399,7 @@ function saveConfig(closeModal = true) {
     config.statefulTokenBudget = Math.max(1000, parseInt(document.getElementById('cfg-stateful-token-budget')?.value, 10) || DEFAULT_STATEFUL_TOKEN_BUDGET);
     config.micLayout = document.getElementById('cfg-mic-layout').value;
     config.userBubbleTheme = USER_BUBBLE_THEMES[config.userBubbleTheme] ? config.userBubbleTheme : 'ocean';
+    config.markdownRenderMode = document.getElementById('cfg-markdown-render-mode')?.value || 'balanced';
     config.chatFontSize = Math.max(12, Math.min(24, parseInt(config.chatFontSize, 10) || 16));
 
     // Update visibility immediately
@@ -6197,6 +6212,7 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
             finalizeStreamingTTS(speechBuffer); // Pass final speech buffer
         }
         if (historyContent && !deferToServerChatSession && !streamRestartRequested && !localStreamOwnershipReleased) {
+            finalizeMessageContent(elementId, historyContent);
             setAssistantActionBarReady(elementId);
         }
         if (activeLocalAssistantId === elementId) {
@@ -7278,6 +7294,20 @@ function ensureStreamingMarkdownHosts(bubble) {
     return { markdownBody, committedHost, pendingHost };
 }
 
+function renderStreamingPreviewIntoHost(host, text) {
+    if (!host) return;
+    const normalized = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    host.dataset.markdownSource = normalized;
+    host.classList.toggle('is-stream-preview', !!normalized.trim());
+    host.textContent = normalized;
+}
+
+function getMarkdownRenderMode() {
+    const mode = String(config.markdownRenderMode || 'balanced').trim();
+    if (mode === 'fast' || mode === 'final') return mode;
+    return 'balanced';
+}
+
 function splitStreamingMarkdown(text) {
     const normalized = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     if (!normalized) {
@@ -7425,6 +7455,7 @@ function renderMarkdownIntoHost(host, markdownText) {
 
 function pulseMessageRender(el) {
     if (!el) return;
+    if (getMarkdownRenderMode() !== 'fast') return;
     const targets = [el, el.querySelector('.markdown-body')].filter(Boolean);
     targets.forEach((target) => {
         target.classList.remove('is-stream-updated');
@@ -7537,10 +7568,18 @@ function finalizeMessageContent(id, text) {
     const { committedHost, pendingHost } = ensureStreamingMarkdownHosts(bubble);
     if (!committedHost || !pendingHost) return;
 
+    if (el._pendingRenderState?.timerId) {
+        clearTimeout(el._pendingRenderState.timerId);
+    }
+    el._pendingRenderState = null;
+
     const cleanText = sanitizeAssistantRenderText(text);
 
     renderMarkdownIntoHost(committedHost, cleanText);
     pendingHost.innerHTML = '';
+    pendingHost.textContent = '';
+    pendingHost.dataset.markdownSource = '';
+    pendingHost.classList.remove('is-stream-preview');
     el._streamRenderState = {
         committedText: cleanText,
         pendingText: ''
@@ -7565,23 +7604,54 @@ function updateSyncedMessageContent(id, text, options = {}) {
 
     const previousCommittedText = String(el._streamRenderState?.committedText || '');
     const cleanText = sanitizeAssistantRenderText(text);
-    renderMarkdownIntoHost(committedHost, cleanText);
-    pendingHost.innerHTML = '';
+    const renderMode = getMarkdownRenderMode();
+    if (renderMode === 'final') {
+        renderStreamingPreviewIntoHost(committedHost, cleanText);
+        renderStreamingPreviewIntoHost(pendingHost, '');
+        el._streamRenderState = {
+            committedText: cleanText,
+            pendingText: ''
+        };
+
+        const responseCard = el.querySelector('.assistant-response-card');
+        const actionBar = el.querySelector('.message-actions');
+        if (responseCard) responseCard.hidden = !cleanText.trim();
+        if (actionBar && actionBar.classList.contains('is-ready')) {
+            actionBar.hidden = !cleanText.trim();
+        }
+        syncAssistantMessageShellState(el);
+        scrollToBottom(wasNearBottom);
+        return;
+    }
+    let committedText = '';
+    let pendingText = '';
+
+    if (renderMode === 'fast') {
+        committedText = cleanText;
+        if (committedText !== previousCommittedText) {
+            renderMarkdownIntoHost(committedHost, committedText);
+        }
+        renderStreamingPreviewIntoHost(pendingHost, '');
+    } else {
+        pendingText = cleanText;
+        renderStreamingPreviewIntoHost(committedHost, '');
+        schedulePendingMarkdownRender(el, pendingHost, pendingText);
+    }
     el._streamRenderState = {
-        committedText: cleanText,
-        pendingText: ''
+        committedText,
+        pendingText
     };
 
     const responseCard = el.querySelector('.assistant-response-card');
     const actionBar = el.querySelector('.message-actions');
-    const hasVisibleContent = !!cleanText.trim();
+    const hasVisibleContent = !!(committedText.trim() || pendingText.trim());
     if (responseCard) responseCard.hidden = !hasVisibleContent;
     if (actionBar && actionBar.classList.contains('is-ready')) {
         actionBar.hidden = !hasVisibleContent;
     }
     syncAssistantMessageShellState(el);
 
-    const shouldPulse = animate && !previousCommittedText.trim() && !!cleanText.trim();
+    const shouldPulse = animate && !previousCommittedText.trim() && hasVisibleContent;
     if (shouldPulse) {
         pulseMessageRender(el.querySelector('.assistant-response-card'));
     }
@@ -7604,18 +7674,31 @@ function getSpeakableTextFromMarkdownHost(host) {
 function schedulePendingMarkdownRender(el, pendingHost, pendingText) {
     if (!el || !pendingHost) return;
     if (!el._pendingRenderState) {
-        el._pendingRenderState = { scheduled: false, text: '' };
+        el._pendingRenderState = { scheduled: false, text: '', timerId: null };
     }
 
     el._pendingRenderState.text = pendingText;
+    const renderMode = getMarkdownRenderMode();
+    const throttleMs = renderMode === 'balanced' ? 96 : 0;
+
     if (el._pendingRenderState.scheduled) return;
 
-    el._pendingRenderState.scheduled = true;
-    requestAnimationFrame(() => {
+    const runRender = () => {
         if (!el._pendingRenderState) return;
         el._pendingRenderState.scheduled = false;
-        renderMarkdownIntoHost(pendingHost, el._pendingRenderState.text || '');
-    });
+        el._pendingRenderState.timerId = null;
+        renderStreamingPreviewIntoHost(pendingHost, el._pendingRenderState.text || '');
+    };
+
+    el._pendingRenderState.scheduled = true;
+    if (throttleMs > 0) {
+        el._pendingRenderState.timerId = setTimeout(() => {
+            requestAnimationFrame(runRender);
+        }, throttleMs);
+        return;
+    }
+
+    requestAnimationFrame(runRender);
 }
 
 function updateMessageContent(id, text) {
@@ -7629,16 +7712,50 @@ function updateMessageContent(id, text) {
     // Filter out common special tokens that might leak during streaming
     let cleanText = sanitizeAssistantRenderText(text);
     const previousCommittedText = String(el._streamRenderState?.committedText || '');
-    renderMarkdownIntoHost(committedHost, cleanText);
-    pendingHost.innerHTML = '';
+    const renderMode = getMarkdownRenderMode();
+    if (renderMode === 'final') {
+        el._streamRenderState = {
+            committedText: cleanText,
+            pendingText: ''
+        };
+        const responseCard = el.querySelector('.assistant-response-card');
+        const actionBar = el.querySelector('.message-actions');
+        if (responseCard) responseCard.hidden = !cleanText.trim();
+        if (actionBar) {
+            if (el.id && !actionBar.classList.contains('is-ready')) {
+                actionBar.hidden = true;
+            } else {
+                actionBar.hidden = !cleanText.trim();
+            }
+        }
+        renderStreamingPreviewIntoHost(committedHost, cleanText);
+        renderStreamingPreviewIntoHost(pendingHost, '');
+        syncAssistantMessageShellState(el);
+        scrollToBottom(wasNearBottom);
+        return;
+    }
+    let committedText = '';
+    let pendingText = '';
+
+    if (renderMode === 'fast') {
+        committedText = cleanText;
+        if (committedText !== previousCommittedText) {
+            renderMarkdownIntoHost(committedHost, committedText);
+        }
+        renderStreamingPreviewIntoHost(pendingHost, '');
+    } else {
+        pendingText = cleanText;
+        renderStreamingPreviewIntoHost(committedHost, '');
+        schedulePendingMarkdownRender(el, pendingHost, pendingText);
+    }
     el._streamRenderState = {
-        committedText: cleanText,
-        pendingText: ''
+        committedText,
+        pendingText
     };
 
     const responseCard = el.querySelector('.assistant-response-card');
     const actionBar = el.querySelector('.message-actions');
-    const hasVisibleContent = !!cleanText.trim();
+    const hasVisibleContent = !!(committedText.trim() || pendingText.trim());
     if (responseCard) responseCard.hidden = !hasVisibleContent;
     if (actionBar) {
         if (el.id && !actionBar.classList.contains('is-ready')) {

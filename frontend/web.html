@@ -191,6 +191,15 @@
                         <p class="setting-desc" data-i18n="setting.userBubbleTheme.desc">Choose the gradient preset for your message bubbles.</p>
                         <div id="user-bubble-theme-options" class="theme-swatch-grid" role="radiogroup" aria-label="User bubble theme"></div>
                     </div>
+                    <div class="setting-item">
+                        <label data-i18n="setting.markdownRenderMode.label">Markdown Rendering Mode</label>
+                        <p class="setting-desc" data-i18n="setting.markdownRenderMode.desc">Choose how aggressively markdown is rendered while the response is still streaming.</p>
+                        <select id="cfg-markdown-render-mode">
+                            <option value="fast" data-i18n="setting.markdownRenderMode.option.fast">Fast Rendering</option>
+                            <option value="balanced" data-i18n="setting.markdownRenderMode.option.balanced">Slightly Delayed Rendering</option>
+                            <option value="final" data-i18n="setting.markdownRenderMode.option.final">Render After Completion</option>
+                        </select>
+                    </div>
                 </div>
 
                 <!-- Voice Input Section -->
