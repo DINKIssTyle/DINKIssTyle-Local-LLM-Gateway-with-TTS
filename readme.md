@@ -12,7 +12,11 @@ Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
 **DINKIssTyle Local LLM Gateway**는 개인 정보 보호와 지능형 기능을 결합한 **최첨단 로컬 LLM 웹 챗봇**입니다. 단순히 로컬 LLM(LM Studio, Ollama 등)의 API를 중계하는 게이트웨이를 넘어, 독자적인 **MCP(Model Context Protocol)** 툴킷과 **고성능 TTS**를 통합하여 인터넷 연결 없이도 강력한 개인 비서 경험을 제공합니다.
 
 <p align="center">
-  <img src="manual/imgs/overview_01.png" alt="overview" width="2109px">
+  <img src="manual/imgs/1.png" alt="overview" width="100%">
+  <img src="manual/imgs/2.png" alt="overview" width="100%">
+  <img src="manual/imgs/3.png" alt="overview" width="100%">
+  <img src="manual/imgs/4.png" alt="overview" width="100%">
+  <img src="manual/imgs/5.png" alt="overview" width="100%">
 </p>
 
 ## 핵심 가치 (Core Values)
