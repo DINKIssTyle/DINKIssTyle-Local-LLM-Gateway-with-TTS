@@ -14,7 +14,7 @@ const LM_STUDIO_REPEAT_RECOVERY_TEMPERATURE_DELTA = 0.15;
 
 let config = {
     apiEndpoint: 'http://127.0.0.1:1234',
-    model: 'qwen/qwen3-vl-30b',
+    model: 'qwen/qwen3.5-35b-a3b',
     secondaryModel: '',
     hideThink: false,       // Default: False
     temperature: 0.7,      // Default: 0.7
@@ -25,8 +25,8 @@ let config = {
     enableMCP: true,       // Default: True
     enableMemory: false,   // Default: False
     ttsLang: 'ko',
-    chunkSize: 200,        // Default: 200 (Smart Chunking)
-    systemPrompt: 'You are a helpful AI assistant.',
+    chunkSize: 100,        // Default: 100 (Smart Chunking)
+    systemPrompt: 'You are a helpful AI assistant. Ensure all your replies follow the specified Remark structure without exception.',
     ttsEngine: 'supertonic', // 'supertonic' or 'os'
     ttsVoice: 'F1',        // Default: F1
     ttsSpeed: 1.1,         // Default: 1.1
@@ -48,8 +48,8 @@ let config = {
     statefulTokenBudget: DEFAULT_STATEFUL_TOKEN_BUDGET,
     micLayout: 'none', // 'none', 'left', 'right', 'bottom', 'inline'
     chatFontSize: 16,
-    userBubbleTheme: 'ocean',
-    markdownRenderMode: 'balanced',
+    userBubbleTheme: 'ocean', // Options: 'ocean', 'lime', 'sunset', 'amber', 'magenta'
+    markdownRenderMode: 'fast', // Options: 'fast', 'balanced', 'final'
     hapticsEnabled: true
 };
 
@@ -6376,6 +6376,25 @@ function createMessageElement(msg) {
                     </button>
                 </div>
             </div>`;
+    }
+
+    if (msg.role === 'assistant' && textContent.trim()) {
+        const cleanText = sanitizeAssistantRenderText(textContent);
+        const committedHost = div.querySelector('.assistant-response-card .markdown-committed');
+        const pendingHost = div.querySelector('.assistant-response-card .markdown-pending');
+        if (committedHost) {
+            renderMarkdownIntoHost(committedHost, cleanText);
+        }
+        if (pendingHost) {
+            pendingHost.innerHTML = '';
+            pendingHost.textContent = '';
+            pendingHost.dataset.markdownSource = '';
+            pendingHost.classList.remove('is-stream-preview');
+        }
+        div._streamRenderState = {
+            committedText: cleanText,
+            pendingText: ''
+        };
     }
 
     return div;
