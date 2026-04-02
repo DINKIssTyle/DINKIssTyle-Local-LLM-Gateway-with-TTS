@@ -11,6 +11,7 @@ const DEFAULT_STATEFUL_CHAR_BUDGET = 32000;
 const DEFAULT_STATEFUL_TOKEN_BUDGET = 30000;
 const LM_STUDIO_REPEAT_RECOVERY_PENALTY = 1.15;
 const LM_STUDIO_REPEAT_RECOVERY_TEMPERATURE_DELTA = 0.15;
+const DEFAULT_REASONING_OPTIONS = ['off', 'low', 'medium', 'high', 'on'];
 
 let config = {
     apiEndpoint: 'http://127.0.0.1:1234',
@@ -43,6 +44,9 @@ let config = {
     apiToken: '',
     llmMode: 'standard', // 'standard' or 'stateful'
     disableStateful: false, // LM Studio specific
+    reasoning: '',
+    showReasoningControl: true,
+    forceShowReasoningControl: false,
     statefulTurnLimit: DEFAULT_STATEFUL_TURN_LIMIT,
     statefulCharBudget: DEFAULT_STATEFUL_CHAR_BUDGET,
     statefulTokenBudget: DEFAULT_STATEFUL_TOKEN_BUDGET,
@@ -52,6 +56,9 @@ let config = {
     markdownRenderMode: 'fast', // Options: 'fast', 'balanced', 'final'
     hapticsEnabled: true
 };
+
+let availableModels = [];
+let availableModelInfoById = new Map();
 
 const USER_BUBBLE_THEMES = {
     ocean: {
@@ -346,6 +353,10 @@ const translations = {
         'setting.enableMCP.desc': 'Model Context Protocol 기능(웹 검색, 브라우징)을 활성화합니다.',
         'setting.enableMemory.label': '개인 메모리 활성화',
         'setting.enableMemory.desc': 'LLM이 사용자 정보를 파일에 기록하고 기억할 수 있게 합니다.',
+        'setting.showReasoningControl.label': 'Reasoning control 표시',
+        'setting.showReasoningControl.desc': '선택한 모델이 reasoning을 지원할 때 입력창 위에 reasoning control 바를 표시합니다.',
+        'setting.forceShowReasoningControl.label': 'Reasoning control 강제 표시',
+        'setting.forceShowReasoningControl.desc': '모델 메타데이터에 reasoning 정보가 없어도 control 바를 강제로 표시합니다.',
         'setting.statefulTurnLimit.label': 'Stateful Turn Limit',
         'setting.statefulTurnLimit.desc': '(기본값: 8) LM Studio 모드에서 몇 턴까지 유지한 뒤 대화 문맥을 요약하고 새 체인으로 이어갈지 지정합니다.',
         'setting.statefulCharBudget.label': 'Stateful Character Budget',
@@ -455,6 +466,7 @@ const translations = {
         'input.placeholder.sttA': '지금 말하세요...',
         'input.placeholder.sttB': '듣는 중...',
         'input.placeholder.restoring': '이전 대화 복원 중...',
+        'reasoning.auto': 'Reasoning Auto',
         'progress.restoringHistory': '이전 대화 복원 중',
         'restore.skeletonTitle': '이전 대화를 불러오는 중입니다.',
         'restore.skeletonBody': '서버에 저장된 대화와 상태를 복원하고 있습니다.',
@@ -557,6 +569,10 @@ const translations = {
         'setting.enableMCP.desc': 'Enable integration with Model Context Protocol (web search, browsing)',
         'setting.enableMemory.label': 'Enable Personal Memory',
         'setting.enableMemory.desc': 'Allow LLM to remember personal details in a local file.',
+        'setting.showReasoningControl.label': 'Show reasoning control',
+        'setting.showReasoningControl.desc': 'Show the reasoning control above the composer when the selected model supports reasoning.',
+        'setting.forceShowReasoningControl.label': 'Force show reasoning control',
+        'setting.forceShowReasoningControl.desc': 'Show the control even when the model metadata does not report reasoning support.',
         'setting.statefulTurnLimit.label': 'Stateful Turn Limit',
         'setting.statefulTurnLimit.desc': '(Default: 8) Choose how many turns LM Studio keeps before compacting the conversation into a summary and starting a fresh chain.',
         'setting.statefulCharBudget.label': 'Stateful Character Budget',
@@ -665,6 +681,7 @@ const translations = {
         'input.placeholder.sttA': 'Speak now...',
         'input.placeholder.sttB': 'Listening...',
         'input.placeholder.restoring': 'Restoring previous conversation...',
+        'reasoning.auto': 'Reasoning Auto',
         'progress.restoringHistory': 'Restoring previous conversation',
         'background.serverChatContinuing': 'Resuming server response...',
         'restore.skeletonTitle': 'Restoring previous conversation.',
@@ -993,8 +1010,9 @@ function applyTranslations() {
 
 function setLanguage(lang) {
     config.language = lang;
-    localStorage.setItem('appConfig', JSON.stringify(config));
+    persistClientConfig();
     applyTranslations();
+    renderReasoningControl();
 }
 
 // ============================================================================
@@ -1134,27 +1152,31 @@ async function fetchModels() {
             console.warn('[Models] Unexpected format:', data);
         }
 
+        const normalizedModels = models.map((model) => normalizeModelInfo(model)).filter(Boolean);
+        setAvailableModels(models);
+
         // Clear existing options
         select.innerHTML = '';
         if (secondarySelect) {
             secondarySelect.innerHTML = '<option value="">Use primary model</option>';
         }
 
-        if (models.length === 0) {
+        if (normalizedModels.length === 0) {
             select.innerHTML = '<option value="">No models available</option>';
+            renderReasoningControl();
             return;
         }
 
         // Populate with models
-        models.forEach(model => {
+        normalizedModels.forEach(model => {
             const option = document.createElement('option');
             option.value = model.id;
-            option.textContent = model.id;
+            option.textContent = model.displayName;
             select.appendChild(option);
             if (secondarySelect) {
                 const secondaryOption = document.createElement('option');
                 secondaryOption.value = model.id;
-                secondaryOption.textContent = model.id;
+                secondaryOption.textContent = model.displayName;
                 secondarySelect.appendChild(secondaryOption);
             }
         });
@@ -1162,9 +1184,9 @@ async function fetchModels() {
         // Select current config value if it exists
         if (config.model && Array.from(select.options).some(opt => opt.value === config.model)) {
             select.value = config.model;
-        } else if (models.length > 0) {
-            select.value = models[0].id;
-            config.model = models[0].id;
+        } else if (normalizedModels.length > 0) {
+            select.value = normalizedModels[0].id;
+            config.model = normalizedModels[0].id;
         }
         if (secondarySelect) {
             if (config.secondaryModel && Array.from(secondarySelect.options).some(opt => opt.value === config.secondaryModel)) {
@@ -1173,10 +1195,13 @@ async function fetchModels() {
                 secondarySelect.value = '';
             }
         }
+        renderReasoningControl();
     } catch (err) {
         console.error('[Models] Failed to fetch:', err);
         // Show specific error in dropdown
         select.innerHTML = `<option value="">Error: ${err.message}</option>`;
+        setAvailableModels([]);
+        renderReasoningControl();
 
         // Also add a manual input option
         const manualOption = document.createElement('option');
@@ -2048,6 +2073,8 @@ const previewContainer = document.getElementById('preview-container');
 const chatProgressDock = document.getElementById('chat-progress-dock');
 const inputArea = document.getElementById('input-area');
 const inputContainer = document.querySelector('#input-area .input-container');
+const reasoningControlBar = document.getElementById('reasoning-control-bar');
+const composerReasoningSelect = document.getElementById('composer-reasoning-select');
 const inlineMicBtn = document.getElementById('inline-mic-btn');
 const statefulBudgetIndicator = document.getElementById('stateful-budget-indicator');
 const savedLibraryView = document.getElementById('saved-library-view');
@@ -2107,6 +2134,7 @@ function updateViewportMetrics() {
     root.style.setProperty('--app-height', `${Math.round(visibleHeight + offsetTop)}px`);
     root.style.setProperty('--viewport-bottom-offset', `${Math.round(occupiedBottom)}px`);
     document.body.classList.toggle('keyboard-open', keyboardLikelyOpen);
+    updateComposerLayoutMetrics();
     updateScrollToBottomButton();
 }
 
@@ -3056,6 +3084,9 @@ function loadConfig() {
 
     config.ttsEngine = config.ttsEngine === 'os' ? 'os' : 'supertonic';
     config.temperature = normalizeTemperatureValue(config.temperature, 0.7);
+    config.reasoning = normalizeReasoningValue(config.reasoning);
+    config.showReasoningControl = config.showReasoningControl !== false;
+    config.forceShowReasoningControl = config.forceShowReasoningControl === true;
     config.hapticsEnabled = config.hapticsEnabled !== false;
     config.osTtsRate = Number(config.osTtsRate) > 0 ? Number(config.osTtsRate) : 1.0;
     config.osTtsPitch = Number(config.osTtsPitch) >= 0 ? Number(config.osTtsPitch) : 1.0;
@@ -3067,6 +3098,8 @@ function loadConfig() {
     const secondaryModelEl = document.getElementById('cfg-secondary-model');
     if (secondaryModelEl) secondaryModelEl.value = config.secondaryModel || '';
     document.getElementById('cfg-hide-think').checked = config.hideThink;
+    document.getElementById('cfg-show-reasoning-control').checked = config.showReasoningControl;
+    document.getElementById('cfg-force-show-reasoning-control').checked = config.forceShowReasoningControl;
     document.getElementById('cfg-temp').value = config.temperature;
     document.getElementById('cfg-max-tokens').value = config.maxTokens;
     document.getElementById('cfg-history').value = config.historyCount;
@@ -3075,6 +3108,7 @@ function loadConfig() {
     document.getElementById('cfg-llm-mode').value = config.llmMode || 'standard';
     document.getElementById('cfg-disable-stateful').checked = config.disableStateful || false;
     updateSettingsVisibility(); // Update UI visibility based on mode
+    renderReasoningControl();
     document.getElementById('cfg-enable-tts').checked = config.enableTTS;
     // Load MCP setting
     const mcpEl = document.getElementById('cfg-enable-mcp');
@@ -3142,6 +3176,7 @@ function loadConfig() {
     }
 
     applyChatFontSize();
+    updateComposerLayoutMetrics();
 
     // Apply i18n translations
     // Apply i18n translations
@@ -3226,7 +3261,7 @@ function setupSettingsListeners() {
     });
 
     // Selects & Inputs: save on change
-    const autoSaveIds = ['cfg-api', 'cfg-temp', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-os-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-disable-stateful', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model', 'cfg-tts-engine', 'cfg-markdown-render-mode', 'cfg-enable-haptics'];
+    const autoSaveIds = ['cfg-api', 'cfg-temp', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-os-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-disable-stateful', 'cfg-show-reasoning-control', 'cfg-force-show-reasoning-control', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model', 'cfg-tts-engine', 'cfg-markdown-render-mode', 'cfg-enable-haptics'];
     autoSaveIds.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.onchange = () => saveConfig(false);
@@ -3235,6 +3270,14 @@ function setupSettingsListeners() {
     if (tempEl) {
         tempEl.oninput = () => {
             config.temperature = normalizeTemperatureValue(tempEl.value, 0.7);
+        };
+    }
+
+    if (composerReasoningSelect) {
+        composerReasoningSelect.onchange = () => {
+            config.reasoning = normalizeReasoningValue(composerReasoningSelect.value);
+            persistClientConfig();
+            renderReasoningControl();
         };
     }
 
@@ -3392,6 +3435,8 @@ function saveConfig(closeModal = true) {
     config.model = document.getElementById('cfg-model').value.trim();
     config.secondaryModel = document.getElementById('cfg-secondary-model')?.value?.trim() || '';
     config.hideThink = document.getElementById('cfg-hide-think').checked;
+    config.showReasoningControl = document.getElementById('cfg-show-reasoning-control').checked;
+    config.forceShowReasoningControl = document.getElementById('cfg-force-show-reasoning-control').checked;
     config.temperature = normalizeTemperatureValue(document.getElementById('cfg-temp').value, 0.7);
     config.maxTokens = parseInt(document.getElementById('cfg-max-tokens').value);
     config.historyCount = parseInt(document.getElementById('cfg-history').value);
@@ -3422,6 +3467,7 @@ function saveConfig(closeModal = true) {
 
     config.llmMode = document.getElementById('cfg-llm-mode').value;
     config.disableStateful = document.getElementById('cfg-disable-stateful').checked;
+    config.reasoning = normalizeReasoningValue(config.reasoning);
     config.statefulTurnLimit = Math.max(1, parseInt(document.getElementById('cfg-stateful-turn-limit')?.value, 10) || DEFAULT_STATEFUL_TURN_LIMIT);
     config.statefulCharBudget = Math.max(1000, parseInt(document.getElementById('cfg-stateful-char-budget')?.value, 10) || DEFAULT_STATEFUL_CHAR_BUDGET);
     config.statefulTokenBudget = Math.max(1000, parseInt(document.getElementById('cfg-stateful-token-budget')?.value, 10) || DEFAULT_STATEFUL_TOKEN_BUDGET);
@@ -3438,6 +3484,7 @@ function saveConfig(closeModal = true) {
     applyUserBubbleTheme();
     applyChatFontSize();
     syncHapticsPreference();
+    renderReasoningControl();
 
     // Reload dictionary since language changes
     loadTTSDictionary(getEffectiveTTSDictionaryLang());
@@ -3458,7 +3505,7 @@ function saveConfig(closeModal = true) {
         config.osTtsVoiceLang = selectedVoice?.lang || '';
     }
 
-    localStorage.setItem('appConfig', JSON.stringify(config));
+    persistClientConfig();
 
     // Sync configs to server
     if (window.go && window.go.main && window.go.core.App) {
@@ -5081,6 +5128,7 @@ function autoResizeInput() {
     messageInput.style.height = 'auto';
     messageInput.style.height = Math.min(messageInput.scrollHeight, 150) + 'px';
     messageInput.style.overflowY = messageInput.scrollHeight > 150 ? 'auto' : 'hidden';
+    updateComposerLayoutMetrics();
 }
 
 function handleImageUpload(input) {
@@ -5371,6 +5419,203 @@ function normalizeTemperatureValue(value, fallback = 0.7) {
     return clampNumber(numeric, 0, 2);
 }
 
+function normalizeReasoningValue(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    return DEFAULT_REASONING_OPTIONS.includes(normalized) ? normalized : '';
+}
+
+function normalizeReasoningOptions(values) {
+    if (!Array.isArray(values)) return [];
+    const normalizedValues = values
+        .map((value) => normalizeReasoningValue(value))
+        .filter(Boolean);
+    return [...new Set(normalizedValues)];
+}
+
+function parseReasoningCapability(rawCapability) {
+    if (rawCapability === null || rawCapability === undefined || rawCapability === false) {
+        return { supportsReasoning: false, reasoningOptions: [] };
+    }
+
+    if (rawCapability === true) {
+        return {
+            supportsReasoning: true,
+            reasoningOptions: [...DEFAULT_REASONING_OPTIONS]
+        };
+    }
+
+    if (typeof rawCapability === 'string') {
+        const normalized = normalizeReasoningValue(rawCapability);
+        if (normalized) {
+            return {
+                supportsReasoning: true,
+                reasoningOptions: normalized === 'on' || normalized === 'off'
+                    ? [...DEFAULT_REASONING_OPTIONS]
+                    : [normalized]
+            };
+        }
+        const truthy = ['true', 'supported', 'enabled', 'yes', 'available'];
+        if (truthy.includes(rawCapability.trim().toLowerCase())) {
+            return {
+                supportsReasoning: true,
+                reasoningOptions: [...DEFAULT_REASONING_OPTIONS]
+            };
+        }
+        return { supportsReasoning: false, reasoningOptions: [] };
+    }
+
+    if (Array.isArray(rawCapability)) {
+        const options = normalizeReasoningOptions(rawCapability);
+        return {
+            supportsReasoning: options.length > 0,
+            reasoningOptions: options
+        };
+    }
+
+    if (typeof rawCapability === 'object') {
+        const options = normalizeReasoningOptions(
+            rawCapability.options
+            || rawCapability.values
+            || rawCapability.levels
+            || rawCapability.supported_values
+            || rawCapability.allowed
+        );
+        const supportedFlag = rawCapability.supported
+            ?? rawCapability.enabled
+            ?? rawCapability.available
+            ?? rawCapability.reasoning;
+        const supportsReasoning = supportedFlag === true || options.length > 0;
+        return {
+            supportsReasoning,
+            reasoningOptions: supportsReasoning
+                ? (options.length > 0 ? options : [...DEFAULT_REASONING_OPTIONS])
+                : []
+        };
+    }
+
+    return { supportsReasoning: false, reasoningOptions: [] };
+}
+
+function normalizeModelInfo(model) {
+    if (!model || typeof model !== 'object') return null;
+    const id = String(model.id || model.key || model.name || '').trim();
+    if (!id) return null;
+
+    const reasoningCapability = parseReasoningCapability(
+        model.reasoning
+        ?? model.capabilities?.reasoning
+        ?? model.metadata?.reasoning
+        ?? model.model_info?.reasoning
+    );
+
+    return {
+        id,
+        displayName: String(model.display_name || model.displayName || model.name || id).trim() || id,
+        supportsReasoning: reasoningCapability.supportsReasoning,
+        reasoningOptions: reasoningCapability.reasoningOptions
+    };
+}
+
+function setAvailableModels(models) {
+    availableModels = Array.isArray(models)
+        ? models.map((model) => normalizeModelInfo(model)).filter(Boolean)
+        : [];
+    availableModelInfoById = new Map(availableModels.map((model) => [model.id, model]));
+}
+
+function getSelectedModelInfo() {
+    return availableModelInfoById.get(String(config.model || '').trim()) || null;
+}
+
+function shouldShowReasoningControl() {
+    if (!config.showReasoningControl) return false;
+    const selectedModelInfo = getSelectedModelInfo();
+    return !!(selectedModelInfo?.supportsReasoning || config.forceShowReasoningControl);
+}
+
+function getReasoningOptionsForCurrentModel() {
+    const selectedModelInfo = getSelectedModelInfo();
+    if (selectedModelInfo?.supportsReasoning && selectedModelInfo.reasoningOptions.length > 0) {
+        return selectedModelInfo.reasoningOptions;
+    }
+    if (config.forceShowReasoningControl) {
+        return [...DEFAULT_REASONING_OPTIONS];
+    }
+    return [];
+}
+
+function validateReasoningSelection() {
+    const normalizedValue = normalizeReasoningValue(config.reasoning);
+    if (!shouldShowReasoningControl()) {
+        config.reasoning = '';
+        return;
+    }
+
+    const options = getReasoningOptionsForCurrentModel();
+    config.reasoning = options.includes(normalizedValue) ? normalizedValue : '';
+}
+
+function persistClientConfig() {
+    localStorage.setItem('appConfig', JSON.stringify(config));
+}
+
+function updateComposerLayoutMetrics() {
+    const root = document.documentElement;
+    if (!root) return;
+
+    const inputAreaHeight = inputArea ? Math.ceil(inputArea.getBoundingClientRect().height) : 0;
+    const reasoningHeight = (!reasoningControlBar || reasoningControlBar.hidden)
+        ? 0
+        : Math.ceil(reasoningControlBar.getBoundingClientRect().height);
+
+    root.style.setProperty('--input-area-height', `${Math.max(88, inputAreaHeight)}px`);
+    root.style.setProperty('--reasoning-control-height', `${Math.max(0, reasoningHeight)}px`);
+}
+
+function renderReasoningControl() {
+    if (!reasoningControlBar || !composerReasoningSelect) return;
+
+    const previousReasoningValue = config.reasoning;
+    validateReasoningSelection();
+    if (previousReasoningValue !== config.reasoning) {
+        persistClientConfig();
+    }
+    const shouldShow = shouldShowReasoningControl();
+    reasoningControlBar.hidden = !shouldShow;
+
+    if (shouldShow) {
+        const options = getReasoningOptionsForCurrentModel();
+        composerReasoningSelect.innerHTML = '';
+
+        const autoOption = document.createElement('option');
+        autoOption.value = '';
+        autoOption.textContent = t('reasoning.auto');
+        composerReasoningSelect.appendChild(autoOption);
+
+        options.forEach((value) => {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = `Reasoning ${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+            composerReasoningSelect.appendChild(option);
+        });
+
+        composerReasoningSelect.value = config.reasoning || '';
+    } else {
+        composerReasoningSelect.innerHTML = `<option value="">${t('reasoning.auto')}</option>`;
+        composerReasoningSelect.value = '';
+    }
+
+    updateComposerLayoutMetrics();
+    updateScrollToBottomButton();
+}
+
+function getEffectiveReasoningSelection() {
+    if (!shouldShowReasoningControl()) return '';
+    const normalized = normalizeReasoningValue(config.reasoning);
+    const options = getReasoningOptionsForCurrentModel();
+    return options.includes(normalized) ? normalized : '';
+}
+
 function getConfiguredTemperature() {
     const tempInput = document.getElementById('cfg-temp');
     if (tempInput) {
@@ -5392,6 +5637,7 @@ function buildRepeatRecoveryOverrides() {
 function buildChatPayload({ text, currentImage, temperatureOverride = null, repeatPenaltyOverride = null } = {}) {
     const systemMsg = { role: 'system', content: config.systemPrompt };
     const configuredTemperature = getConfiguredTemperature();
+    const reasoningSelection = getEffectiveReasoningSelection();
     const hasTemperatureOverride = temperatureOverride !== null
         && temperatureOverride !== undefined
         && Number.isFinite(Number(temperatureOverride));
@@ -5432,6 +5678,9 @@ function buildChatPayload({ text, currentImage, temperatureOverride = null, repe
         if (lastResponseId) {
             payload.previous_response_id = lastResponseId;
         }
+        if (reasoningSelection) {
+            payload.reasoning = reasoningSelection;
+        }
         return payload;
     }
 
@@ -5455,13 +5704,19 @@ function buildChatPayload({ text, currentImage, temperatureOverride = null, repe
         return { role: m.role, content };
     });
 
-    return {
+    payload = {
         model: config.model,
         messages: [systemMsg, ...payloadHistory],
         temperature: resolvedTemperature,
         max_tokens: config.maxTokens,
         stream: true
     };
+
+    if (reasoningSelection) {
+        payload.reasoning_effort = reasoningSelection;
+    }
+
+    return payload;
 }
 
 async function ensureStatefulContextBudget(nextUserText = '') {
@@ -7966,8 +8221,11 @@ function scrollActiveMessageIntoView() {
     const containerRect = chatMessages.getBoundingClientRect();
     const targetRect = target.getBoundingClientRect();
     const inputRect = inputArea ? inputArea.getBoundingClientRect() : null;
+    const reasoningHeight = (!reasoningControlBar || reasoningControlBar.hidden)
+        ? 0
+        : reasoningControlBar.getBoundingClientRect().height;
     const occlusion = inputRect ? Math.max(0, containerRect.bottom - inputRect.top) : 0;
-    const desiredBottom = containerRect.bottom - occlusion - 16;
+    const desiredBottom = containerRect.bottom - occlusion - Math.max(16, reasoningHeight > 0 ? 28 : 16);
     const delta = targetRect.bottom - desiredBottom;
 
     if (delta > 0) {

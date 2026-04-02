@@ -153,6 +153,22 @@
                         <p class="setting-desc" data-i18n="setting.hideThink.desc">LLM이 생각하는 과정을 채팅창에 보여주지 않습니다.</p>
                     </div>
 
+                    <div class="setting-item">
+                        <div class="setting-toggle" onclick="toggleSwitch('cfg-show-reasoning-control')">
+                            <span data-i18n="setting.showReasoningControl.label">Show reasoning control</span>
+                            <input type="checkbox" id="cfg-show-reasoning-control" checked>
+                        </div>
+                        <p class="setting-desc" data-i18n="setting.showReasoningControl.desc">모델이 reasoning을 지원할 때 입력창 위에 reasoning control 바를 표시합니다.</p>
+                    </div>
+
+                    <div class="setting-item">
+                        <div class="setting-toggle" onclick="toggleSwitch('cfg-force-show-reasoning-control')">
+                            <span data-i18n="setting.forceShowReasoningControl.label">Force show reasoning control</span>
+                            <input type="checkbox" id="cfg-force-show-reasoning-control">
+                        </div>
+                        <p class="setting-desc" data-i18n="setting.forceShowReasoningControl.desc">모델 메타데이터에 reasoning 정보가 없어도 control 바를 강제로 표시합니다.</p>
+                    </div>
+
                 </div>
 
                 <!-- LLM Extra Settings (System Prompt, etc.) -->
@@ -540,6 +556,12 @@
         </div>
 
         <div id="input-area">
+            <div id="reasoning-control-bar" class="reasoning-control-bar" hidden>
+                <span class="material-icons-round reasoning-control-icon" aria-hidden="true">psychology</span>
+                <select id="composer-reasoning-select" class="reasoning-control-select" aria-label="Reasoning control">
+                    <option value="">Reasoning Auto</option>
+                </select>
+            </div>
             <div class="input-container">
                 <span class="composer-progress-shimmer" aria-hidden="true">
                     <span class="composer-progress-shimmer__beam"></span>

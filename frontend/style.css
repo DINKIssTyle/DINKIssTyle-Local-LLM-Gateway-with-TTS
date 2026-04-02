@@ -41,6 +41,8 @@
   --app-height: 100vh;
   --viewport-bottom-offset: 0px;
   --input-bottom-gap: 12px;
+  --input-area-height: 108px;
+  --reasoning-control-height: 0px;
   --chat-header-height: calc(60px + env(safe-area-inset-top, 0px));
 }
 
@@ -244,7 +246,7 @@ body.keyboard-open #chat-header {
 .scroll-to-bottom-btn {
   position: absolute;
   left: 50%;
-  bottom: calc(112px + env(safe-area-inset-bottom, 0px) + var(--viewport-bottom-offset));
+  bottom: calc(var(--input-area-height) + 12px + env(safe-area-inset-bottom, 0px) + var(--viewport-bottom-offset));
   transform: translate(-50%, 18px) scale(0.92);
   width: 54px;
   height: 54px;
@@ -834,6 +836,58 @@ body.keyboard-open #chat-header {
   background-color: transparent !important;
   background-image: none !important;
   margin-bottom: 0;
+}
+
+.reasoning-control-bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  margin: 0 auto 10px;
+  padding: 0;
+  width: 100%;
+}
+
+.reasoning-control-bar[hidden] {
+  display: none !important;
+}
+
+.reasoning-control-icon {
+  position: absolute;
+  left: 50%;
+  transform: translateX(calc(-50% - 116px));
+  color: #9daec3;
+  font-size: 24px;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+
+.reasoning-control-select {
+  min-width: 168px;
+  max-width: min(64vw, 220px);
+  height: 34px;
+  padding: 0 34px 0 12px;
+  border-radius: 10px;
+  border: 1px solid #8b949e;
+  background: linear-gradient(180deg, rgba(21, 21, 21, 0.98), rgba(10, 10, 10, 0.98));
+  color: #efe4cf;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  outline: none;
+  box-shadow:
+    0 8px 18px rgba(0, 0, 0, 0.22),
+    0 0 0 1px rgba(210, 153, 34, 0.08) inset;
+  appearance: auto;
+}
+
+.reasoning-control-select:hover,
+.reasoning-control-select:focus-visible {
+  border-color: #9daec3;
+  box-shadow:
+    0 12px 28px rgba(0, 0, 0, 0.28),
+    0 0 0 3px rgba(139, 148, 158, 0.18);
 }
 
 .input-container {
@@ -1937,7 +1991,7 @@ body.keyboard-open .saved-library-view {
 }
 
 body.keyboard-open .scroll-to-bottom-btn {
-  bottom: calc(88px + env(safe-area-inset-bottom, 0px) + var(--viewport-bottom-offset));
+  bottom: calc(max(88px, var(--input-area-height)) + env(safe-area-inset-bottom, 0px) + var(--viewport-bottom-offset));
 }
 
 .saved-library-view.is-open {
