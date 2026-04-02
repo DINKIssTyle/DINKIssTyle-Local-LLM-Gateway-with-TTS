@@ -5564,12 +5564,8 @@ function updateComposerLayoutMetrics() {
     if (!root) return;
 
     const inputAreaHeight = inputArea ? Math.ceil(inputArea.getBoundingClientRect().height) : 0;
-    const reasoningHeight = (!reasoningControlBar || reasoningControlBar.hidden)
-        ? 0
-        : Math.ceil(reasoningControlBar.getBoundingClientRect().height);
-
     root.style.setProperty('--input-area-height', `${Math.max(88, inputAreaHeight)}px`);
-    root.style.setProperty('--reasoning-control-height', `${Math.max(0, reasoningHeight)}px`);
+    root.style.setProperty('--reasoning-control-height', '0px');
 }
 
 function renderReasoningControl() {
@@ -8136,6 +8132,10 @@ function updateScrollToBottomButton() {
 
     scrollToBottomBtn.classList.toggle('is-visible', shouldShow);
     scrollToBottomBtn.setAttribute('aria-hidden', shouldShow ? 'false' : 'true');
+    if (reasoningControlBar && !reasoningControlBar.hidden) {
+        reasoningControlBar.classList.toggle('is-visible', !shouldShow);
+        reasoningControlBar.setAttribute('aria-hidden', shouldShow ? 'true' : 'false');
+    }
 }
 
 function jumpToLatestMessages() {
