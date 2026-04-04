@@ -43,6 +43,7 @@
   --input-bottom-gap: 12px;
   --input-area-height: 108px;
   --reasoning-control-height: 0px;
+  --reasoning-control-overlap: 12px;
   --chat-header-height: calc(60px + env(safe-area-inset-top, 0px));
 }
 
@@ -842,7 +843,7 @@ body.keyboard-open #chat-header {
 .reasoning-control-bar {
   position: absolute;
   left: 50%;
-  bottom: calc(80px + env(safe-area-inset-bottom, 0px) + var(--viewport-bottom-offset));
+  bottom: calc(var(--input-area-height) + var(--input-bottom-gap) + env(safe-area-inset-bottom, 0px) + var(--viewport-bottom-offset) - var(--reasoning-control-overlap));
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -861,7 +862,7 @@ body.keyboard-open #chat-header {
   transition:
     opacity 0.18s ease,
     transform 0.18s ease;
-  z-index: 25;
+  z-index: 19;
 }
 
 .reasoning-control-bar[hidden] {
@@ -887,7 +888,7 @@ body.keyboard-open #chat-header {
   min-width: 168px;
   max-width: 165px;
   height: 20px;
-  padding: 0 34px 0 12px;
+  padding: 0 24px;
   border-radius: 10px;
   border: none;
   background: linear-gradient(180deg, rgba(21, 21, 21, 0.98), rgba(10, 10, 10, 0.98));
@@ -895,6 +896,8 @@ body.keyboard-open #chat-header {
   font-family: inherit;
   font-size: 13px;
   font-weight: 500;
+  text-align: center;
+  text-align-last: center;
   outline: none;
   box-shadow: none;
   appearance: auto;

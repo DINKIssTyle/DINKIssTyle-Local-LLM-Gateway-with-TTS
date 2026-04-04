@@ -466,7 +466,7 @@ const translations = {
         'input.placeholder.sttA': '지금 말하세요...',
         'input.placeholder.sttB': '듣는 중...',
         'input.placeholder.restoring': '이전 대화 복원 중...',
-        'reasoning.auto': 'Reasoning Auto',
+        'reasoning.auto': 'Auto',
         'progress.restoringHistory': '이전 대화 복원 중',
         'restore.skeletonTitle': '이전 대화를 불러오는 중입니다.',
         'restore.skeletonBody': '서버에 저장된 대화와 상태를 복원하고 있습니다.',
@@ -681,7 +681,7 @@ const translations = {
         'input.placeholder.sttA': 'Speak now...',
         'input.placeholder.sttB': 'Listening...',
         'input.placeholder.restoring': 'Restoring previous conversation...',
-        'reasoning.auto': 'Reasoning Auto',
+        'reasoning.auto': 'Auto',
         'progress.restoringHistory': 'Restoring previous conversation',
         'background.serverChatContinuing': 'Resuming server response...',
         'restore.skeletonTitle': 'Restoring previous conversation.',
@@ -1508,7 +1508,10 @@ function openSavedTurnModal(id) {
     savedTurnModal.dataset.responseText = item.response_text || '';
     document.getElementById('saved-turn-modal-prompt').textContent = item.prompt_text || '';
     const responseHost = document.getElementById('saved-turn-modal-response');
-    responseHost.innerHTML = renderInitialAssistantMarkdown(item.response_text || '');
+    if (responseHost) {
+        responseHost.innerHTML = '';
+        renderMarkdownIntoHost(responseHost, item.response_text || '');
+    }
     setSavedTurnTitleEditMode(false);
     renderSavedTurnInlineTitle(item.title || '');
     savedTurnModal.classList.add('active');
@@ -5591,7 +5594,7 @@ function renderReasoningControl() {
         options.forEach((value) => {
             const option = document.createElement('option');
             option.value = value;
-            option.textContent = `Reasoning ${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+            option.textContent = `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
             composerReasoningSelect.appendChild(option);
         });
 
@@ -6817,17 +6820,39 @@ function setAssistantActionBarReady(elementId) {
     const { msgEl } = getAssistantMessageParts(elementId);
     const actionBar = msgEl?.querySelector('.message-actions');
     if (!actionBar) return;
-    if (actionBar.classList.contains('is-ready') && !actionBar.hidden) return;
+    const responseCard = msgEl?.querySelector('.assistant-response-card');
+    const hasVisibleContent = !responseCard?.hidden;
+    if (!hasVisibleContent) return;
+    if (actionBar.classList.contains('is-ready') && !actionBar.hidden) {
+        attachStreamingAudioButtonToMessage(msgEl);
+        return;
+    }
+
     actionBar.hidden = false;
+    actionBar.classList.add('is-pending');
+
+    const finishReadyState = () => {
+        if (!actionBar.isConnected) return;
+        actionBar.hidden = false;
+        actionBar.classList.add('is-ready');
+        actionBar.classList.remove('is-pending');
+        delete actionBar.dataset.readyScheduled;
+        attachStreamingAudioButtonToMessage(msgEl);
+        cleanupTrailingEmptyAssistantMessages();
+    };
+
+    if (actionBar.dataset.readyScheduled === 'true') {
+        finishReadyState();
+        return;
+    }
+
+    actionBar.dataset.readyScheduled = 'true';
     requestAnimationFrame(() => {
-        actionBar.classList.add('is-pending');
-        requestAnimationFrame(() => {
-            actionBar.classList.add('is-ready');
-            actionBar.classList.remove('is-pending');
-            attachStreamingAudioButtonToMessage(msgEl);
-            cleanupTrailingEmptyAssistantMessages();
-        });
+        finishReadyState();
     });
+    setTimeout(() => {
+        finishReadyState();
+    }, 120);
 }
 
 function renderProgressDock(label, percent = null, mode = 'prompt-processing', indeterminate = false) {
