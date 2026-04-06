@@ -1927,26 +1927,38 @@ function getTurnDataFromAssistantButton(btn) {
 
     const userEl = document.querySelector(`.message.user[data-turn-id="${turnId}"] .message-bubble`);
     const responseEl = messageEl.querySelector('.markdown-body');
+    const committedResponseEl = responseEl?.querySelector('.markdown-committed');
+    const pendingResponseEl = responseEl?.querySelector('.markdown-pending');
     const userMessage = messages.find((entry) => entry?.role === 'user' && entry?.turnId === turnId);
     const assistantMessage = [...messages].reverse().find((entry) => entry?.role === 'assistant' && entry?.turnId === turnId);
 
     const promptText = (userEl?.innerText || userMessage?.content || '').trim();
-    const responseText = (responseEl?.innerText || assistantMessage?.content || '').trim();
+    const responseMarkdownSource = (
+        committedResponseEl?.dataset?.markdownSource
+        || responseEl?.dataset?.markdownSource
+        || messageEl?._streamRenderState?.committedText
+        || assistantMessage?.content
+        || pendingResponseEl?.dataset?.markdownSource
+        || responseEl?.innerText
+        || ''
+    ).trim();
     console.log('[SavedTurn] Extracted turn data candidates', {
         turnId,
         hasUserElement: !!userEl,
         hasResponseElement: !!responseEl,
+        hasCommittedMarkdownSource: !!committedResponseEl?.dataset?.markdownSource,
+        hasStreamingCommittedText: !!messageEl?._streamRenderState?.committedText,
         userMessageLen: (userMessage?.content || '').trim().length,
         assistantMessageLen: (assistantMessage?.content || '').trim().length,
         promptLen: promptText.length,
-        responseLen: responseText.length,
-        responsePreview: responseText.slice(0, 120)
+        responseLen: responseMarkdownSource.length,
+        responsePreview: responseMarkdownSource.slice(0, 120)
     });
-    if (!promptText || !responseText) {
+    if (!promptText || !responseMarkdownSource) {
         console.warn('[SavedTurn] Turn data incomplete', {
             turnId,
             promptText,
-            responseText,
+            responseText: responseMarkdownSource,
             userHtml: userEl?.outerHTML || null,
             responseHtml: responseEl?.outerHTML || null
         });
@@ -1954,7 +1966,7 @@ function getTurnDataFromAssistantButton(btn) {
     }
     return {
         promptText,
-        responseText
+        responseText: responseMarkdownSource
     };
 }
 
