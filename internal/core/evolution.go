@@ -2,7 +2,7 @@ package core
 
 import (
 	"bytes"
-	"dinkisstyle-chat/internal/mcp"
+	"dinkisstyle-chat/internal/promptkit"
 	"encoding/json"
 	"io"
 	"log"
@@ -57,7 +57,7 @@ func (a *App) LearnToolPattern(modelID string, sampleLine string) {
 	log.Printf("[Self-Evolution] 🧬 Analyzing potential missed tool call for model %s: %s", modelID, sampleLine)
 
 	// Construct the prompt
-	prompt := mcp.EvolutionPromptTemplate(sampleLine)
+	prompt := promptkit.EvolutionPromptTemplate(sampleLine)
 
 	// Send request to the configured LLM endpoint
 	// We use the SAME endpoint the user is using, assuming it can handle concurrent requests or queue them.

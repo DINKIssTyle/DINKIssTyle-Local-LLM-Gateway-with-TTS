@@ -15,7 +15,9 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"database/sql"
+	"dinkisstyle-chat/internal/chatharness"
 	"dinkisstyle-chat/internal/mcp"
+	"dinkisstyle-chat/internal/promptkit"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -31,7 +33,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -2622,16 +2623,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		})
 	}
 
-	// Sanitize endpoint: Remove trailing slash and optional /v1 suffix if user included it
-	endpoint := strings.TrimRight(endpointRaw, "/")
-	endpoint = strings.TrimSuffix(endpoint, "/v1")
-	token := strings.TrimSpace(tokenRaw)
-
-	// Sanitize token: Remove "Bearer " prefix if user pasted it
-	if strings.HasPrefix(strings.ToLower(token), "bearer ") {
-		token = strings.TrimSpace(token[7:])
-	}
-
 	var reqMap map[string]interface{}
 	// Always unmarshal body into reqMap to prevent nil panics later in the turn loop
 	json.Unmarshal(body, &reqMap)
@@ -2650,232 +2641,68 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		procCtx = ctx
 	}
 
-	// Inject MCP integration if enabled AND NOT IN STANDARD MODE
-	// Standard Mode (OpenAI compliant) with 'integrations' field might trigger strict auth in LM Studio.
-	if enableMCP && llmMode != "standard" {
-		if reqMap != nil {
-			// Optimization for LM Studio Stateful mode:
-			// If we are in stateful mode and have a previous_response_id, we can skip redundant injections
-			// because LM Studio remembers the context (system_prompt, integrations, etc.) in the chat thread.
-			isStatefulTurn := false
-			if llmMode == "stateful" {
-				if pid, ok := reqMap["previous_response_id"].(string); ok && pid != "" {
-					isStatefulTurn = true
-					log.Println("[handleChat] Detected follow-up stateful turn, skipping redundant system prompt (maintaining tools)")
-				}
-			}
+	proceduralHint := ""
+	if hint, recipeVersion, err := getProceduralHint(procCtx); err != nil {
+		log.Printf("[ProceduralMemory] failed to load procedural hint: %v", err)
+	} else if hint != "" {
+		proceduralHint = hint
+		if procCtx != nil {
+			procCtx.RecipeVersion = recipeVersion
+		}
+	}
 
-			if enableMCP {
-				targetMCP := "mcp/dinkisstyle-gateway"
-				var integrations []string
-				if existing, ok := reqMap["integrations"].([]interface{}); ok {
-					for _, v := range existing {
-						if str, ok := v.(string); ok {
-							integrations = append(integrations, str)
+	memorySnapshot := ""
+	autoContext := ""
+	if enableMemory {
+		memorySnapshot = mcp.GetMemorySnapshot(userID)
+		if messages, ok := reqMap["messages"].([]interface{}); ok && len(messages) > 0 {
+			for i := len(messages) - 1; i >= 0; i-- {
+				if m, ok := messages[i].(map[string]interface{}); ok {
+					if role, ok := m["role"].(string); ok && role == "user" {
+						if content, ok := m["content"].(string); ok {
+							autoContext = compactText(mcp.AutoSearchMemory(userID, content), 1200)
+							break
 						}
 					}
 				}
-
-				hasMCP := false
-				for _, v := range integrations {
-					if v == targetMCP {
-						hasMCP = true
-						break
-					}
-				}
-
-				if !hasMCP {
-					integrations = append(integrations, targetMCP)
-					reqMap["integrations"] = integrations
-					// Important: internal body update will happen after system prompt injection
-				}
-			}
-
-			// EXTRA SAFEGUARD: Inject System Prompt instruction for cleaner Tool Calls
-			// Qwen/VL models often mess up XML tags (nested or unclosed).
-			if !isStatefulTurn {
-				useNativeToolCalling := enableMCP
-				var envLines []string
-				envLines = append(envLines, fmt.Sprintf("- Operating System: %s", runtime.GOOS))
-				envLines = append(envLines, fmt.Sprintf("- Architecture: %s", runtime.GOARCH))
-				if runtime.GOOS == "windows" {
-					if shell := strings.TrimSpace(os.Getenv("ComSpec")); shell != "" {
-						envLines = append(envLines, fmt.Sprintf("- Preferred Shell: %s", shell))
-					}
-				} else {
-					if shell := strings.TrimSpace(os.Getenv("SHELL")); shell != "" {
-						envLines = append(envLines, fmt.Sprintf("- Preferred Shell: %s", shell))
-					}
-				}
-				var envInfo string
-				if cwd, err := os.Getwd(); err == nil {
-					envLines = append(envLines, fmt.Sprintf("- Current Working Directory: %s", cwd))
-				}
-				if len(envLines) > 0 {
-					envInfo = strings.Join(envLines, "\n") + "\n"
-				}
-
-				// We use a marker to detect if we already injected instructions
-				instrMarker := "### TOOL CALL GUIDELINES ###"
-				currentModelID, _ := reqMap["model"].(string)
-				extraInstr := mcp.SystemPromptToolUsage(envInfo, currentModelID, useNativeToolCalling)
-				if hint, recipeVersion, err := getProceduralHint(procCtx); err != nil {
-					log.Printf("[ProceduralMemory] failed to load procedural hint: %v", err)
-				} else if hint != "" {
-					extraInstr += hint
-					if procCtx != nil {
-						procCtx.RecipeVersion = recipeVersion
-					}
-				}
-
-				if enableMemory {
-					// 1. Memory Snapshot: 10 most recent summaries
-					snapshot := mcp.GetMemorySnapshot(userID)
-
-					// 2. Auto-RAG: Proactively search for full context based on the current user request
-					var autoContext string
-					if messages, ok := reqMap["messages"].([]interface{}); ok && len(messages) > 0 {
-						// Find the last user message
-						for i := len(messages) - 1; i >= 0; i-- {
-							if m, ok := messages[i].(map[string]interface{}); ok {
-								if role, ok := m["role"].(string); ok && role == "user" {
-									if content, ok := m["content"].(string); ok {
-										autoContext = compactText(mcp.AutoSearchMemory(userID, content), 1200)
-										break
-									}
-								}
-							}
-						}
-					}
-
-					extraInstr += mcp.SystemPromptMemoryTemplate("", snapshot, autoContext)
-				}
-
-				foundSystem := false
-				// Case A: Standard mode (OpenAI style)
-				if messages, ok := reqMap["messages"].([]interface{}); ok {
-					// 🚀 AGGRESSIVE SLIDING WINDOW & TRUNCATION
-					// 1. First, truncate any individual message that is too long
-					maxIndividualLen := 10000
-					for i, msg := range messages {
-						if m, ok := msg.(map[string]interface{}); ok {
-							if content, ok := m["content"].(string); ok && len(content) > maxIndividualLen {
-								m["content"] = content[:maxIndividualLen] + "\n... (content truncated for context optimization)"
-								messages[i] = m
-							}
-						}
-					}
-
-					// 2. Limit total character count and number of messages
-					maxTotalChars := 15000
-					maxCount := 10
-
-					currentTotal := 0
-					var truncated []interface{}
-
-					// Preserve system message if it exists at index 0
-					var systemMsg interface{}
-					if len(messages) > 0 {
-						if m, ok := messages[0].(map[string]interface{}); ok {
-							if role, ok := m["role"].(string); ok && role == "system" {
-								systemMsg = messages[0]
-								if content, ok := m["content"].(string); ok {
-									currentTotal += len(content)
-								}
-							}
-						}
-					}
-
-					// Build history from most recent, preserving space for system message
-					for i := len(messages) - 1; i >= 0; i-- {
-						if messages[i] == systemMsg {
-							continue
-						}
-						msg := messages[i]
-						if m, ok := msg.(map[string]interface{}); ok {
-							if content, ok := m["content"].(string); ok {
-								if currentTotal+len(content) > maxTotalChars || len(truncated) >= maxCount {
-									break
-								}
-								currentTotal += len(content)
-								truncated = append([]interface{}{msg}, truncated...)
-							}
-						}
-					}
-
-					if systemMsg != nil {
-						truncated = append([]interface{}{systemMsg}, truncated...)
-					}
-
-					messages = truncated
-					reqMap["messages"] = messages
-
-					for i, msg := range messages {
-						if m, ok := msg.(map[string]interface{}); ok {
-							if role, ok := m["role"].(string); ok && role == "system" {
-								content, _ := m["content"].(string)
-								// Prevent duplicate injection
-								if !strings.Contains(content, instrMarker) {
-									m["content"] = content + extraInstr
-									messages[i] = m
-								}
-								foundSystem = true
-								break
-							}
-						}
-					}
-					if !foundSystem {
-						newMsg := map[string]interface{}{
-							"role":    "system",
-							"content": "You are a helpful assistant." + extraInstr,
-						}
-						reqMap["messages"] = append([]interface{}{newMsg}, messages...)
-						foundSystem = true
-					}
-				}
-
-				// Case B: Stateful mode (LM Studio style)
-				// LM Studio might append system_prompt every turn if we keep sending it.
-				if sp, ok := reqMap["system_prompt"].(string); ok {
-					// Prevent duplicate injection
-					if !strings.Contains(sp, instrMarker) {
-						// Check if this turn has previous state.
-						// If it does, we might want to ONLY send the extra instructions if something changed,
-						// but for now, we'll just ensure we don't duplicate the marker.
-						reqMap["system_prompt"] = sp + extraInstr
-					}
-					foundSystem = true
-				}
-
-				if foundSystem {
-					log.Println("[handleChat] Injected or deduplicated System Prompt instructions")
-				}
-			}
-
-			// Final Body update if we changed anything
-			if newBody, err := json.Marshal(reqMap); err == nil {
-				body = newBody
 			}
 		}
-	} else {
+	}
+
+	preparedRequest, err := chatharness.PrepareRequest(chatharness.RequestInput{
+		Body:           body,
+		EndpointRaw:    endpointRaw,
+		TokenRaw:       tokenRaw,
+		LLMMode:        llmMode,
+		EnableMCP:      enableMCP,
+		EnableMemory:   enableMemory,
+		ProceduralHint: proceduralHint,
+		MemorySnapshot: memorySnapshot,
+		ActiveContext:  autoContext,
+	})
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to prepare chat request: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if preparedRequest.IsStatefulFollowup {
+		log.Println("[handleChat] Detected follow-up stateful turn, skipping redundant system prompt (maintaining tools)")
+	}
+	if preparedRequest.InjectedPrompt {
+		log.Println("[handleChat] Injected or deduplicated System Prompt instructions")
+	}
+	if !enableMCP || llmMode == "standard" {
 		log.Printf("[handleChat] MCP injection skipped (EnableMCP=%v, Mode=%s)", enableMCP, llmMode)
 	}
 
-	// Set the LLM URL based on mode
-	if llmMode == "stateful" {
-		llmURL = endpoint + "/api/v1/chat"
-	} else {
-		llmURL = endpoint + "/v1/chat/completions"
-	}
+	body = preparedRequest.Body
+	reqMap = preparedRequest.ReqMap
+	initialUserInputText = preparedRequest.InitialUserInputText
+	endpoint := preparedRequest.Endpoint
+	token := preparedRequest.Token
+	llmURL = preparedRequest.UpstreamURL
+	modelID := preparedRequest.ModelID
 	log.Printf("[handleChat] User: %s, Mode: %s, Endpoint: %s, URL: %s", userID, llmMode, endpoint, llmURL)
-
-	// Determine Model ID for Tool Pattern Lookup
-	var modelID string
-	var tmpModel struct {
-		Model string `json:"model"`
-	}
-	json.Unmarshal(body, &tmpModel)
-	modelID = tmpModel.Model
 	AddDebugTrace("chat", "request.prepared", "Prepared upstream LLM request", map[string]interface{}{
 		"user":           userID,
 		"mode":           llmMode,
@@ -2918,12 +2745,12 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		sessionStatus         = "failed"
 		sessionLastResponseID string
 		sessionUIStateJSON    = "{}"
-		sessionUISnapshot     = chatSessionUISnapshot{ToolCards: map[string]chatSessionToolCardSnapshot{}, Messages: []chatSessionMessageSnapshot{}}
+		sessionUISnapshot     = chatharness.SessionUISnapshot{ToolCards: map[string]chatharness.SessionToolCardSnapshot{}, Messages: []chatharness.SessionMessageSnapshot{}}
 	)
 	if strings.TrimSpace(userID) != "" {
 		if existingSession, existingErr := mcp.GetCurrentChatSession(userID); existingErr == nil {
 			sessionUIStateJSON = existingSession.UIStateJSON
-			sessionUISnapshot = parseChatSessionUISnapshot(existingSession.UIStateJSON)
+			sessionUISnapshot = chatharness.ParseUISnapshot(existingSession.UIStateJSON)
 			statefulSummaryText = existingSession.SummaryText
 			if llmMode == "stateful" && statefulResetReason == "" {
 				statefulTurnCountValue = existingSession.TurnCount
@@ -2952,7 +2779,30 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				projectedTokens >= serverStatefulTokenBudgetValue ||
 				statefulLastInputTokensValue >= serverStatefulTokenBudgetValue
 			if shouldCompact {
-				statefulSummaryText = summarizeChatSessionForReset(statefulSummaryText, sessionUISnapshot)
+				statefulSummaryText = summarizeChatSessionForReset(statefulSummaryText, chatSessionUISnapshot{
+					ToolCards:    map[string]chatSessionToolCardSnapshot{},
+					Messages:     nil,
+					LastEventSeq: sessionUISnapshot.LastEventSeq,
+				})
+				if len(sessionUISnapshot.Messages) > 0 {
+					converted := make([]chatSessionMessageSnapshot, 0, len(sessionUISnapshot.Messages))
+					for _, msg := range sessionUISnapshot.Messages {
+						converted = append(converted, chatSessionMessageSnapshot{
+							TurnID:                  msg.TurnID,
+							UserContent:             msg.UserContent,
+							AssistantContent:        msg.AssistantContent,
+							ReasoningContent:        msg.ReasoningContent,
+							ReasoningDurationMS:     msg.ReasoningDurationMS,
+							ReasoningAccumulatedMS:  msg.ReasoningAccumulatedMS,
+							ReasoningCurrentPhaseMS: msg.ReasoningCurrentPhaseMS,
+						})
+					}
+					statefulSummaryText = summarizeChatSessionForReset(statefulSummaryText, chatSessionUISnapshot{
+						ToolCards:    map[string]chatSessionToolCardSnapshot{},
+						Messages:     converted,
+						LastEventSeq: sessionUISnapshot.LastEventSeq,
+					})
+				}
 				statefulResetReason = "auto_summary_reset"
 				statefulResetCountValue += 1
 				sessionLastResponseID = ""
@@ -3027,65 +2877,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		}
 	}
 
-	appendChatEvent := func(role, eventType string, payload interface{}) {
-		if !chatSessionOK {
-			return
-		}
-		jsonPayload := "{}"
-		if payload != nil {
-			if bytes, err := json.Marshal(payload); err == nil {
-				jsonPayload = string(bytes)
-			}
-		}
-		eventEntry, err := mcp.AppendChatEvent(userID, chatSession.ID, role, eventType, "", clientTurnID, jsonPayload)
-		if err != nil {
-			log.Printf("[chat-session] failed to append %s event for %s: %v", eventType, userID, err)
-		} else if eventEntry.EventSeq > sessionUISnapshot.LastEventSeq {
-			sessionUISnapshot.LastEventSeq = eventEntry.EventSeq
-		}
-		if eventType == "message.created" || eventType == "message.delta" || eventType == "reasoning.start" || eventType == "reasoning.delta" || eventType == "reasoning.end" || eventType == "chat.end" || eventType == "request.complete" {
-			updateChatSessionMessageSnapshot(&sessionUISnapshot, clientTurnID, role, eventType, payload)
-		}
-		if strings.HasPrefix(eventType, "tool_call.") {
-			updateChatSessionToolSnapshot(&sessionUISnapshot, clientTurnID, eventType, payload)
-		}
-		if eventType == "message.created" || eventType == "message.delta" || eventType == "reasoning.start" || eventType == "reasoning.delta" || eventType == "reasoning.end" || eventType == "chat.end" || eventType == "request.complete" || strings.HasPrefix(eventType, "tool_call.") {
-			sessionUIStateJSON = encodeChatSessionUISnapshot(sessionUISnapshot)
-			chatSession.UIStateJSON = sessionUIStateJSON
-			if _, err := mcp.UpsertChatSession(mcp.ChatSessionEntry{
-				UserID:           userID,
-				SessionKey:       "default",
-				Status:           "running",
-				LLMMode:          llmMode,
-				ModelID:          modelID,
-				LastResponseID:   sessionLastResponseID,
-				SummaryText:      statefulSummaryText,
-				TurnCount:        statefulTurnCountValue,
-				EstimatedChars:   statefulEstimatedCharsValue,
-				LastInputTokens:  statefulLastInputTokensValue,
-				LastOutputTokens: statefulLastOutputTokensValue,
-				PeakInputTokens:  statefulPeakInputTokensValue,
-				TokenBudget:      statefulTokenBudgetValue,
-				RiskScore:        statefulRiskScoreValue,
-				RiskLevel:        statefulRiskLevelValue,
-				LastResetReason:  statefulResetReason,
-				UIStateJSON:      sessionUIStateJSON,
-			}); err != nil {
-				log.Printf("[chat-session] failed to persist ui state for %s: %v", userID, err)
-			}
-		}
-	}
-
-	defer func() {
-		if !chatSessionOK {
-			return
-		}
-		if chatCtx.Err() == context.Canceled && sessionStatus != "idle" {
-			sessionStatus = "cancelled"
-		}
-		if _, err := mcp.UpsertChatSession(mcp.ChatSessionEntry{
-			UserID:           userID,
-			SessionKey:       "default",
+	buildSessionState := func() chatharness.SessionPersistState {
+		return chatharness.SessionPersistState{
 			Status:           sessionStatus,
 			LLMMode:          llmMode,
 			ModelID:          modelID,
@@ -3101,9 +2894,25 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			RiskLevel:        statefulRiskLevelValue,
 			LastResetReason:  statefulResetReason,
 			UIStateJSON:      sessionUIStateJSON,
-		}); err != nil {
-			log.Printf("[chat-session] failed to finalize current session for %s: %v", userID, err)
 		}
+	}
+
+	sessionTracker := chatharness.NewSessionTracker(userID, clientTurnID, chatSession, chatSessionOK, sessionUISnapshot, sessionUIStateJSON)
+
+	appendChatEvent := func(role, eventType string, payload interface{}) {
+		sessionTracker.AppendEvent(buildSessionState(), role, eventType, payload)
+		sessionUISnapshot = sessionTracker.Snapshot
+		sessionUIStateJSON = sessionTracker.UIStateJSON
+	}
+
+	defer func() {
+		if !chatSessionOK {
+			return
+		}
+		if chatCtx.Err() == context.Canceled && sessionStatus != "idle" {
+			sessionStatus = "cancelled"
+		}
+		sessionTracker.Finalize(buildSessionState())
 	}()
 
 	appendChatEvent("system", "request.prepared", map[string]interface{}{
@@ -3134,27 +2943,21 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		appendChatEvent("user", "message.created", map[string]interface{}{"content": inputStr})
 	}
 
-	// Set SSE headers ONCE before turn loop
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
+	emitter, err := chatharness.NewSSEEmitter(w)
+	if err != nil {
 		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
 		return
 	}
+	emitter.SetupHeaders()
 	emitStreamChunk = func(payload string) {
 		if !clientStreaming {
 			return
 		}
-		if _, writeErr := fmt.Fprintf(w, "%s\n\n", payload); writeErr != nil {
+		if writeErr := emitter.EmitRaw(payload); writeErr != nil {
 			clientStreaming = false
 			log.Printf("[handleChat] Client stream detached for %s: %v", userID, writeErr)
 			return
 		}
-		flusher.Flush()
 	}
 
 	// Shared turn-state variables
@@ -3314,18 +3117,18 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				strings.Contains(errorMsg, "exceeds the available context size") ||
 				strings.Contains(errorMsg, "too many tokens") {
 				log.Printf("[handleChat] LM Studio Context Limit Reached. Informing user.")
-				sendSSEError(w, flusher, "LM_STUDIO_CONTEXT_ERROR: Context limit reached. Please clear the chat or use a larger context model.")
+				emitter.SendError("LM_STUDIO_CONTEXT_ERROR: Context limit reached. Please clear the chat or use a larger context model.")
 				return
 			}
 
 			// Check for Non-Vision Model Error
 			if strings.Contains(errorMsg, "does not support image inputs") {
 				log.Printf("[handleChat] Non-Vision Model Error detected. Informing user.")
-				sendSSEError(w, flusher, "LM_STUDIO_VISION_ERROR: Model does not support images.")
+				emitter.SendError("LM_STUDIO_VISION_ERROR: Model does not support images.")
 				return
 			}
 
-			sendSSEError(w, flusher, fmt.Sprintf("LLM error: %s", errorMsg))
+			emitter.SendError(fmt.Sprintf("LLM error: %s", errorMsg))
 			return
 		}
 		AddDebugTrace("chat", "turn.response", "Upstream stream opened", map[string]interface{}{
@@ -3535,8 +3338,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 							nativeToolSignatureCounts[toolSig]++
 							if normalizedTool == "execute_command" {
 								nativeExecuteCommandCount++
-								commandText := extractExecuteCommandFromArgsJSON(argsJSON)
-								commandFamily := executeCommandBudgetFamily(commandText)
+								commandText := chatharness.ExtractExecuteCommandFromArgsJSON(argsJSON)
+								commandFamily := chatharness.ExecuteCommandBudgetFamily(commandText)
 								if commandFamily != "" {
 									nativeExecuteCommandFamilyCounts[commandFamily]++
 								}
@@ -3837,7 +3640,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 							log.Printf("[handleChat] Detected potential JSON start. Switching to buffering mode.")
 							isBuffering = true
 							buffer = content
-							flusher.Flush()
 							continue
 						}
 
@@ -3859,7 +3661,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 								toolPattern = map[string]string{"format": "command-r"}
 								toolRegex = regexp.MustCompile(`(?s)(<\|channel\|>.*?<\|message\|>)\s*(\{[\s\S]*\})`)
 							}
-							flusher.Flush()
 							continue
 						}
 
@@ -4036,8 +3837,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			executeCommandText := ""
 			executeCommandFamily := ""
 			if lastToolName == "execute_command" {
-				executeCommandText = extractExecuteCommandFromArgsJSON(lastToolArgsStr)
-				executeCommandFamily = executeCommandBudgetFamily(executeCommandText)
+				executeCommandText = chatharness.ExtractExecuteCommandFromArgsJSON(lastToolArgsStr)
+				executeCommandFamily = chatharness.ExecuteCommandBudgetFamily(executeCommandText)
 				if executeCommandFamily != "" {
 					executeCommandFamilyCounts[executeCommandFamily]++
 				}
@@ -4151,44 +3952,19 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			appendChatEvent("assistant", fmt.Sprintf("%v", toolResultEvt["type"]), toolResultEvt)
 			emitStreamChunk(fmt.Sprintf("data: %s", string(resBytes)))
 
-			// 2. Prepare Follow-up Request
-			// We feed the result back as a hidden user message or a tool response if the model supports it.
-			// For consistency across modes, we'll use a simulated message.
-
-			if llmMode == "stateful" {
-				// Stateful: use previous_response_id of the JUST FINISHED assistant turn
-				if lastResponseID == "" {
-					log.Printf("[handleChat] WARNING: No lastResponseID captured for turn %d. Multi-turn might break.", turn)
-				}
-				reqMap = map[string]interface{}{
-					"model":                modelID,
-					"input":                compactToolResult(lastToolName, result),
-					"previous_response_id": lastResponseID,
-					"stream":               true,
-				}
-			} else {
-				// Standard: Append Assistant turn and Tool Result turn
-				msgs, _ := reqMap["messages"].([]interface{})
-				// Add what the assistant just said (the tool call) - use the saved buffer
-				msgs = append(msgs, map[string]interface{}{
-					"role":    "assistant",
-					"content": compactText(lastSavedBufferForTurn, 400),
-				})
-				// Add the result
-				msgs = append(msgs, map[string]interface{}{
-					"role":    "user",
-					"content": compactToolResult(lastToolName, result),
-				})
-				reqMap["messages"] = msgs
+			if llmMode == "stateful" && lastResponseID == "" {
+				log.Printf("[handleChat] WARNING: No lastResponseID captured for turn %d. Multi-turn might break.", turn)
 			}
-
-			// Reinject integrations for the next turn
-			if enableMCP {
-				reqMap["integrations"] = []string{"mcp/dinkisstyle-gateway"}
-			}
-
-			// Update body for next turn
-			body, _ = json.Marshal(reqMap)
+			reqMap, body, _ = chatharness.PrepareToolFollowupRequest(chatharness.ToolFollowupInput{
+				LLMMode:             llmMode,
+				ModelID:             modelID,
+				LastResponseID:      lastResponseID,
+				ToolName:            lastToolName,
+				ToolResult:          result,
+				LastAssistantBuffer: lastSavedBufferForTurn,
+				ReqMap:              reqMap,
+				EnableMCP:           enableMCP,
+			})
 			AddDebugTrace("chat", "turn.followup", "Prepared follow-up turn with tool result", map[string]interface{}{
 				"turn":       turn,
 				"tool":       lastToolName,
@@ -4217,128 +3993,25 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			"snippet": compactText(badContentCapture, 180),
 		})
 
-		// Prepare Correction Request
-		correctionPrompt := mcp.SelfCorrectionPromptTemplate(badContentCapture)
-		var correctionReq map[string]interface{}
-
-		// Determine if we are in stateful mode or standard mode
-		// We need to re-parse body or re-use reqMap if available.
-		// Since reqMap was local to an if block earlier, we might not have it here.
-		// We will reconstruct a minimal valid request based on llmMode.
-
-		if llmMode == "stateful" {
-			// Stateful: just send input and previous_response_id
-			// We need the response ID from the JUST FINISHED stream.
-			// It was in the 'chat.end' event: "response_id": "resp_..."
-			// However, capturing it from the stream is hard without parsing every chunk JSON.
-			// Fallback: Just send a new message with the SAME previous_response_id as the original request,
-			// effectively branching or continuing.
-			// But original 'reqMap' is not in scope here. We need to parse 'body' again or lift 'reqMap' scope.
-			// Since parsing is cheap, let's re-parse 'body' to get previous_id.
-			var tempMap map[string]interface{}
-			if err := json.Unmarshal(body, &tempMap); err == nil {
-				// Use the lastResponseID from the just-completed turn if available
-				// This chains the correction AFTER the bad response.
-				correctionReq = map[string]interface{}{
-					"model":       modelID,
-					"input":       correctionPrompt, // Just the prompt
-					"stream":      true,
-					"temperature": 0.1,
-				}
-
-				if enableMCP {
-					correctionReq["integrations"] = []string{"mcp/dinkisstyle-gateway"}
-				}
-
-				if lastResponseID != "" {
-					correctionReq["previous_response_id"] = lastResponseID
-				} else {
-					// Fallback: fork from original parent
-					if pid, ok := tempMap["previous_response_id"].(string); ok && pid != "" {
-						correctionReq["previous_response_id"] = pid
-					}
-				}
-			}
-		} else {
-			// Standard/Stateless: Use a minimal correction request instead of replaying the full conversation.
-			correctionReq = map[string]interface{}{
-				"model": modelID,
-				"messages": []map[string]string{
-					{"role": "system", "content": "Return only the corrected tool call or plain answer."},
-					{"role": "user", "content": correctionPrompt},
-				},
-				"stream":      true,
-				"temperature": 0.1,
-			}
-			if enableMCP {
-				correctionReq["integrations"] = []string{"mcp/dinkisstyle-gateway"}
-			}
-		}
-
-		if correctionReq != nil {
-			jsonPayload, _ := json.Marshal(correctionReq)
-
-			// Use 'url' which is defined in handleChat scope (we need to verify this variable name)
-			// Looking at code, 'url' variable holds the endpoint.
-			// If 'url' is not available, we reconstruct it:
-			targetURL := app.llmEndpoint
-			if !strings.HasSuffix(targetURL, "/v1/chat/completions") && !strings.HasSuffix(targetURL, "/api/v1/chat") {
-				// Basic fix, though precise path depends on mode.
-				// Ideally we use a variable that holds the valid endpoint used earlier.
-				// Let's assume 'app.llmEndpoint' + appropriate suffix if needed, or better:
-				// The variable 'url' IS usually defined in handleChat. Let's check previous context.
-				// In `handleChat`:
-				// url := app.llmEndpoint
-				// So we can use 'url'.
-			}
-			// Force valid URL for safety if 'url' is not in scope of this block (it should be)
-			// Actually, to be safe against scope issues, we use 'app.llmEndpoint' and fix path.
-			reqUrl := app.llmEndpoint
-			if llmMode == "stateful" && !strings.Contains(reqUrl, "chat") {
-				reqUrl = strings.TrimSuffix(reqUrl, "/") + "/api/v1/chat"
-			} else if !strings.Contains(reqUrl, "chat") {
-				reqUrl = strings.TrimSuffix(reqUrl, "/") + "/v1/chat/completions"
-			}
-
-			req, _ := http.NewRequest("POST", reqUrl, bytes.NewBuffer(jsonPayload))
-			req.Header.Set("Content-Type", "application/json")
-			if app.llmApiToken != "" {
-				req.Header.Set("Authorization", "Bearer "+app.llmApiToken)
-			}
-
-			client := &http.Client{Timeout: 60 * time.Second}
-			resp, err := client.Do(req)
-			if err == nil {
-				defer resp.Body.Close()
-				correctionScanner := bufio.NewScanner(resp.Body)
-				for correctionScanner.Scan() {
-					line := correctionScanner.Text()
-					if strings.HasPrefix(line, "data: ") {
-						dataStr := strings.TrimPrefix(line, "data: ")
-						if dataStr != "[DONE]" {
-							var chunk map[string]interface{}
-							if err := json.Unmarshal([]byte(dataStr), &chunk); err == nil {
-								if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
-									if choice, ok := choices[0].(map[string]interface{}); ok {
-										if delta, ok := choice["delta"].(map[string]interface{}); ok {
-											if c, ok := delta["content"].(string); ok {
-												fullResponse += c
-											}
-										}
-									}
-								}
-							}
-						}
-						fmt.Fprintf(w, "%s\n\n", line)
-						flusher.Flush()
-					}
-				}
-			} else {
-				log.Printf("[handleChat] Self-Correction Request Failed: %v", err)
-				AddDebugTrace("chat", "self_correction.error", "Self-correction request failed", map[string]interface{}{
-					"error": err.Error(),
-				})
-			}
+		correctionPrompt := promptkit.SelfCorrectionPromptTemplate(badContentCapture)
+		if err := chatharness.ExecuteSelfCorrection(chatharness.SelfCorrectionInput{
+			Body:           body,
+			Endpoint:       app.llmEndpoint,
+			APIToken:       app.llmApiToken,
+			LLMMode:        llmMode,
+			ModelID:        modelID,
+			EnableMCP:      enableMCP,
+			LastResponseID: lastResponseID,
+			Prompt:         correctionPrompt,
+		}, func(line string) error {
+			return emitter.EmitRaw(line)
+		}, func(content string) {
+			fullResponse += content
+		}); err != nil {
+			log.Printf("[handleChat] Self-Correction Request Failed: %v", err)
+			AddDebugTrace("chat", "self_correction.error", "Self-correction request failed", map[string]interface{}{
+				"error": err.Error(),
+			})
 		}
 	}
 

@@ -1,4 +1,4 @@
-package mcp
+package promptkit
 
 import (
 	"fmt"
@@ -6,11 +6,142 @@ import (
 	"time"
 )
 
-// SystemPromptToolUsage returns the guidelines for tool usage to be injected into the system prompt.
-// SystemPromptToolUsage: server.go에서 모델에게 도구 사용 가이드라인(TOOL CALL GUIDELINES)을 제공할 때 사용됩니다.
-func SystemPromptToolUsage(envInfo string, modelID string, useNativeIntegrations bool) string {
+const toolGuidelineMarker = "### TOOL CALL GUIDELINES ###"
+
+type RuntimeInstructionsInput struct {
+	EnvironmentInfo       string
+	ModelID               string
+	UseNativeIntegrations bool
+	ProceduralHint        string
+	MemorySnapshot        string
+	ActiveContext         string
+}
+
+func ToolGuidelineMarker() string {
+	return toolGuidelineMarker
+}
+
+func BuildRuntimeInstructions(input RuntimeInstructionsInput) string {
+	extraInstr := buildToolUsage(input.EnvironmentInfo, input.ModelID, input.UseNativeIntegrations)
+	if input.ProceduralHint != "" {
+		extraInstr += input.ProceduralHint
+	}
+	if input.MemorySnapshot != "" || input.ActiveContext != "" {
+		extraInstr += buildMemoryTemplate("", input.MemorySnapshot, input.ActiveContext)
+	}
+	return extraInstr
+}
+
+func InjectPrompt(reqMap map[string]interface{}, extraInstr string) bool {
+	if len(reqMap) == 0 || strings.TrimSpace(extraInstr) == "" {
+		return false
+	}
+
+	foundSystem := false
+	if messages, ok := reqMap["messages"].([]interface{}); ok {
+		messages = truncateMessages(messages)
+		reqMap["messages"] = messages
+
+		for i, msg := range messages {
+			m, ok := msg.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			role, _ := m["role"].(string)
+			if role != "system" {
+				continue
+			}
+			content, _ := m["content"].(string)
+			if !strings.Contains(content, toolGuidelineMarker) {
+				m["content"] = content + extraInstr
+				messages[i] = m
+			}
+			foundSystem = true
+			break
+		}
+		if !foundSystem {
+			newMsg := map[string]interface{}{
+				"role":    "system",
+				"content": "You are a helpful assistant." + extraInstr,
+			}
+			reqMap["messages"] = append([]interface{}{newMsg}, messages...)
+			foundSystem = true
+		}
+	}
+
+	if sp, ok := reqMap["system_prompt"].(string); ok {
+		if !strings.Contains(sp, toolGuidelineMarker) {
+			reqMap["system_prompt"] = sp + extraInstr
+		}
+		foundSystem = true
+	}
+
+	return foundSystem
+}
+
+func truncateMessages(messages []interface{}) []interface{} {
+	const maxIndividualLen = 10000
+	const maxTotalChars = 15000
+	const maxCount = 10
+
+	for i, msg := range messages {
+		m, ok := msg.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		content, ok := m["content"].(string)
+		if !ok || len(content) <= maxIndividualLen {
+			continue
+		}
+		m["content"] = content[:maxIndividualLen] + "\n... (content truncated for context optimization)"
+		messages[i] = m
+	}
+
+	currentTotal := 0
+	var truncated []interface{}
+	systemIndex := -1
+
+	if len(messages) > 0 {
+		if m, ok := messages[0].(map[string]interface{}); ok {
+			if role, ok := m["role"].(string); ok && role == "system" {
+				systemIndex = 0
+				if content, ok := m["content"].(string); ok {
+					currentTotal += len(content)
+				}
+			}
+		}
+	}
+
+	for i := len(messages) - 1; i >= 0; i-- {
+		if i == systemIndex {
+			continue
+		}
+		msg := messages[i]
+		m, ok := msg.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		content, ok := m["content"].(string)
+		if !ok {
+			continue
+		}
+		if currentTotal+len(content) > maxTotalChars || len(truncated) >= maxCount {
+			break
+		}
+		currentTotal += len(content)
+		truncated = append([]interface{}{msg}, truncated...)
+	}
+
+	if systemIndex >= 0 {
+		truncated = append([]interface{}{messages[systemIndex]}, truncated...)
+	}
+
+	return truncated
+}
+
+func buildToolUsage(envInfo string, modelID string, useNativeIntegrations bool) string {
 	lowerModelID := strings.ToLower(strings.TrimSpace(modelID))
-	lines := []string{"", "", "### TOOL CALL GUIDELINES ###"}
+	lines := []string{"", "", toolGuidelineMarker}
 
 	if useNativeIntegrations {
 		lines = append(lines,
@@ -59,9 +190,7 @@ func SystemPromptToolUsage(envInfo string, modelID string, useNativeIntegrations
 	return strings.Join(lines, "\n")
 }
 
-// SystemPromptMemoryTemplate returns the template for injecting user memory using the 3-layer model.
-// SystemPromptMemoryTemplate: 채팅 컨텍스트에 3계층 메모리 구조를 주입합니다.
-func SystemPromptMemoryTemplate(staticMemory string, userProfile string, activeContext string) string {
+func buildMemoryTemplate(staticMemory string, userProfile string, activeContext string) string {
 	return fmt.Sprintf(`
 ### MEMORY CONTEXT ###
 
@@ -82,46 +211,4 @@ MEMORY & SEARCH RULES:
 5. Do not guess past details.
 6. Do not create tool calls to save memory; saving happens automatically.
 `, staticMemory, userProfile, activeContext)
-}
-
-// EvolutionPromptTemplate returns the prompt used for self-evolution (regex generation).
-// It expects the sample line that failed parsing.
-// EvolutionPromptTemplate: evolution.go에서 새로운 도구 호출 패턴을 학습하기 위한 정규식 생성용 프롬프트로 사용됩니다.
-func EvolutionPromptTemplate(sampleLine string) string {
-	return fmt.Sprintf(`You are an expert at Go Regular Expressions and LLM Tool Calling patterns.
-I have a log from an LLM that appears to be a tool call, but my current parser missed it.
-The sample content is: "%s"
-
-Please generate a single Go-compatible Regular Expression (regexp) to capture:
-- Group 1: The Tool Name (e.g., search_web, personal_memory)
-- Group 2: The JSON Arguments or parameters block.
-
-REQUIREMENTS:
-1. Return ONLY the regex string. Do not wrap in markdown or code blocks.
-2. The regex must be robust (use (?s) if it spans multiple lines).
-3. If no tool call found, return "NONE".`, sampleLine)
-}
-
-// SelfCorrectionPromptTemplate returns the prompt to ask the model to fix its tool call format.
-// SelfCorrectionPromptTemplate: 도구 호출 형식 오류 시 즉각 수정을 요청합니다.
-func SelfCorrectionPromptTemplate(badContent string) string {
-	return fmt.Sprintf(`
-Return only one valid <tool_call> block.
-Do not explain anything.
-Do not include markdown.
-
-Malformed output:
-%s
-
-Valid example:
-<tool_call>{"name":"search_web","arguments":{"query":"weather in Seoul"}}</tool_call>
-`, badContent[:min(len(badContent), 100)])
-}
-
-// mcp/prompts.go 내부에서 에러 메시지 길이를 제한하기 위해 사용되는 유틸리티 함수입니다.
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

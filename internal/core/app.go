@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"dinkisstyle-chat/internal/mcp"
+	"dinkisstyle-chat/internal/promptkit"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -1623,39 +1624,11 @@ func (a *App) ShowAbout() {
 	}
 }
 
-// SystemPrompt represents a single system prompt preset
-type SystemPrompt struct {
-	Title  string `json:"title"`
-	Prompt string `json:"prompt"`
-}
+type SystemPrompt = promptkit.SystemPrompt
 
 // GetSystemPrompts returns the list of system prompt presets from system_prompts.json
 func (a *App) GetSystemPrompts() []SystemPrompt {
-	promptsFile := filepath.Join(GetAppDataDir(), "system_prompts.json")
-
-	// Create default if missing
-	if _, err := os.Stat(promptsFile); os.IsNotExist(err) {
-		defaultPrompts := []SystemPrompt{
-			{Title: "Default", Prompt: "You are a helpful AI assistant."},
-		}
-		if data, err := json.MarshalIndent(defaultPrompts, "", "  "); err == nil {
-			os.WriteFile(promptsFile, data, 0644)
-		}
-	}
-
-	content, err := os.ReadFile(promptsFile)
-	if err != nil {
-		fmt.Printf("[Prompts] Failed to read system_prompts.json: %v\n", err)
-		return []SystemPrompt{{Title: "Default", Prompt: "You are a helpful AI assistant."}}
-	}
-
-	var prompts []SystemPrompt
-	if err := json.Unmarshal(content, &prompts); err != nil {
-		fmt.Printf("[Prompts] Failed to parse system_prompts.json: %v\n", err)
-		return []SystemPrompt{{Title: "Default", Prompt: "You are a helpful AI assistant."}}
-	}
-
-	return prompts
+	return promptkit.LoadSystemPrompts(GetAppDataDir())
 }
 
 // Show makes the window visible

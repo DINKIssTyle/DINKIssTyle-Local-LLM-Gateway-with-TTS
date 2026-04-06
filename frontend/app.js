@@ -5280,8 +5280,12 @@ function clearContext() {
     updateStatefulBudgetIndicator();
 }
 
-function buildStatefulSystemPrompt() {
-    let prompt = config.systemPrompt || 'You are a helpful AI assistant.';
+function getBaseSystemPrompt() {
+    return (config.systemPrompt || 'You are a helpful AI assistant.').trim() || 'You are a helpful AI assistant.';
+}
+
+function buildClientStatefulPrompt() {
+    let prompt = getBaseSystemPrompt();
     if (statefulSummary) {
         prompt += `\n\n### Conversation Summary ###\n${statefulSummary}\n\nUse this summary as compressed context from earlier turns.`;
     }
@@ -5646,7 +5650,7 @@ function buildRepeatRecoveryOverrides() {
 }
 
 function buildChatPayload({ text, currentImage, temperatureOverride = null, repeatPenaltyOverride = null } = {}) {
-    const systemMsg = { role: 'system', content: config.systemPrompt };
+    const systemMsg = { role: 'system', content: getBaseSystemPrompt() };
     const configuredTemperature = getConfiguredTemperature();
     const reasoningSelection = getEffectiveReasoningSelection();
     const hasTemperatureOverride = temperatureOverride !== null
@@ -5670,7 +5674,9 @@ function buildChatPayload({ text, currentImage, temperatureOverride = null, repe
         payload = {
             model: config.model,
             input: inputData,
-            system_prompt: buildStatefulSystemPrompt(),
+            // The client sends only the user's base prompt and local summary.
+            // Runtime tool/memory instructions are injected on the server.
+            system_prompt: buildClientStatefulPrompt(),
             temperature: resolvedTemperature,
             stream: true
         };
@@ -5825,10 +5831,6 @@ async function sendMessage() {
     activeLocalAssistantId = assistantId;
     assistantTurnIdMap.set(assistantId, turnId);
     stopChatSessionPolling();
-
-    // Build API Payload
-    // Always start with a system prompt to define behavior and anchor the context
-    const systemMsg = { role: 'system', content: config.systemPrompt };
 
     // Trim old messages if history exceeds limit (user+assistant pairs)
     const maxMessages = (parseInt(config.historyCount) || 10) * 2;

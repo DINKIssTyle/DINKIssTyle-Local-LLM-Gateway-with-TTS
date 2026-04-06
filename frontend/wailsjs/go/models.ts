@@ -72,6 +72,11 @@ export namespace core {
 	        this.osPitch = source["osPitch"];
 	    }
 	}
+
+}
+
+export namespace promptkit {
+	
 	export class SystemPrompt {
 	    title: string;
 	    prompt: string;
