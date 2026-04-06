@@ -31,6 +31,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -857,10 +858,43 @@ func parseSavedTurnTitleFromJSON(raw string) string {
 func compactToolResult(toolName, result string) string {
 	result = strings.TrimSpace(result)
 	if result == "" {
-		return fmt.Sprintf("Tool Result (%s): [empty]", toolName)
+		return fmt.Sprintf("Tool Result (%s): [empty]\nUse this result to answer the user directly. Do not repeat the same tool call unless the user explicitly asked for a refresh.", toolName)
 	}
 
-	return fmt.Sprintf("Tool Result (%s):\n%s", toolName, compactText(result, 1200))
+	return fmt.Sprintf("Tool Result (%s):\n%s\n\nUse this result to answer the user directly. Do not repeat the same or near-identical tool call unless the user explicitly asked for a refresh.", toolName, compactText(result, 1200))
+}
+
+func extractExecuteCommandFromArgsJSON(argsJSON string) string {
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(argsJSON), &payload); err != nil {
+		return ""
+	}
+	command, _ := payload["command"].(string)
+	return strings.TrimSpace(command)
+}
+
+func executeCommandBudgetFamily(command string) string {
+	normalized := strings.ToLower(strings.TrimSpace(command))
+	if normalized == "" {
+		return ""
+	}
+
+	switch {
+	case strings.Contains(normalized, "physmem"), strings.Contains(normalized, "vm_stat"), strings.Contains(normalized, "pages free"), strings.Contains(normalized, "pages active"), strings.Contains(normalized, "pages inactive"), strings.Contains(normalized, "rss"), strings.Contains(normalized, "memory_usage"):
+		return "memory"
+	case strings.Contains(normalized, "pwd"), strings.Contains(normalized, "cwd"), strings.Contains(normalized, "current directory"), strings.Contains(normalized, "current working directory"):
+		return "path"
+	case strings.Contains(normalized, "whoami"), strings.Contains(normalized, "id"):
+		return "identity"
+	case strings.Contains(normalized, "date"), strings.Contains(normalized, "time"):
+		return "time"
+	}
+
+	fields := strings.Fields(normalized)
+	if len(fields) == 0 {
+		return normalized
+	}
+	return fields[0]
 }
 
 // getActiveCertPaths returns the paths to the active certificate and key pair.
@@ -2660,14 +2694,31 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			// EXTRA SAFEGUARD: Inject System Prompt instruction for cleaner Tool Calls
 			// Qwen/VL models often mess up XML tags (nested or unclosed).
 			if !isStatefulTurn {
+				useNativeToolCalling := enableMCP
+				var envLines []string
+				envLines = append(envLines, fmt.Sprintf("- Operating System: %s", runtime.GOOS))
+				envLines = append(envLines, fmt.Sprintf("- Architecture: %s", runtime.GOARCH))
+				if runtime.GOOS == "windows" {
+					if shell := strings.TrimSpace(os.Getenv("ComSpec")); shell != "" {
+						envLines = append(envLines, fmt.Sprintf("- Preferred Shell: %s", shell))
+					}
+				} else {
+					if shell := strings.TrimSpace(os.Getenv("SHELL")); shell != "" {
+						envLines = append(envLines, fmt.Sprintf("- Preferred Shell: %s", shell))
+					}
+				}
 				var envInfo string
 				if cwd, err := os.Getwd(); err == nil {
-					envInfo = fmt.Sprintf("- Current Working Directory: %s\n", cwd)
+					envLines = append(envLines, fmt.Sprintf("- Current Working Directory: %s", cwd))
+				}
+				if len(envLines) > 0 {
+					envInfo = strings.Join(envLines, "\n") + "\n"
 				}
 
 				// We use a marker to detect if we already injected instructions
 				instrMarker := "### TOOL CALL GUIDELINES ###"
-				extraInstr := mcp.SystemPromptToolUsage(envInfo)
+				currentModelID, _ := reqMap["model"].(string)
+				extraInstr := mcp.SystemPromptToolUsage(envInfo, currentModelID, useNativeToolCalling)
 				if hint, recipeVersion, err := getProceduralHint(procCtx); err != nil {
 					log.Printf("[ProceduralMemory] failed to load procedural hint: %v", err)
 				} else if hint != "" {
@@ -3117,6 +3168,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	reasoningAccumulatedMs := int64(0)
 	toolUsageCounts := make(map[string]int)
 	toolSignatureCounts := make(map[string]int)
+	executeCommandFamilyCounts := make(map[string]int)
 	previousResponseRetryUsed := false
 	discardStatefulResponseIDForTurn := false
 
@@ -3149,6 +3201,11 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	for turn := 0; turn < 10; turn++ {
 		turnStart := time.Now()
 		toolExecutedThisTurn := false
+		nativeToolLoopDetected := false
+		nativeToolLoopMessage := ""
+		nativeExecuteCommandCount := 0
+		nativeExecuteCommandFamilyCounts := make(map[string]int)
+		nativeToolSignatureCounts := make(map[string]int)
 		var lastToolName string
 		var lastToolArgsStr string
 		var lastSavedBufferForTurn string
@@ -3458,6 +3515,61 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 							} else {
 								emitStreamChunk(line)
 							}
+							continue
+						} else if msgType == "tool_call.arguments" {
+							eventPayload := map[string]interface{}{}
+							for key, value := range chunk {
+								eventPayload[key] = value
+							}
+
+							toolName, _ := chunk["tool"].(string)
+							argsJSON := "{}"
+							if args, ok := chunk["arguments"]; ok {
+								if bytes, err := json.Marshal(args); err == nil && len(bytes) > 0 {
+									argsJSON = string(bytes)
+								}
+							}
+
+							normalizedTool := strings.TrimSpace(toolName)
+							toolSig := normalizedTool + ":" + compactText(strings.TrimSpace(argsJSON), 240)
+							nativeToolSignatureCounts[toolSig]++
+							if normalizedTool == "execute_command" {
+								nativeExecuteCommandCount++
+								commandText := extractExecuteCommandFromArgsJSON(argsJSON)
+								commandFamily := executeCommandBudgetFamily(commandText)
+								if commandFamily != "" {
+									nativeExecuteCommandFamilyCounts[commandFamily]++
+								}
+								if nativeExecuteCommandCount > 5 {
+									nativeToolLoopDetected = true
+									nativeToolLoopMessage = "execute_command already ran many times in this answer. Use the latest command results you already received and answer the user directly."
+								} else if commandFamily != "" && nativeExecuteCommandFamilyCounts[commandFamily] > 3 {
+									nativeToolLoopDetected = true
+									nativeToolLoopMessage = fmt.Sprintf("Too many execute_command calls were used for the same task family (%s). Use the latest command results you already received and answer the user directly.", commandFamily)
+								}
+								if nativeToolLoopDetected {
+									appendChatEvent("assistant", "tool_call.failure", map[string]interface{}{
+										"type":   "tool_call.failure",
+										"tool":   normalizedTool,
+										"reason": nativeToolLoopMessage,
+									})
+									AddDebugTrace("chat", "tool.loop", "Stopped native execute_command due to tool budget", map[string]interface{}{
+										"turn":    turn,
+										"tool":    normalizedTool,
+										"family":  commandFamily,
+										"command": compactText(commandText, 180),
+										"count":   nativeExecuteCommandCount,
+									})
+									break
+								}
+							}
+
+							appendChatEvent("assistant", msgType, eventPayload)
+							emitStreamChunk(line)
+							continue
+						} else if msgType == "tool_call.name" || msgType == "tool_call.start" || msgType == "tool_call.success" || msgType == "tool_call.failure" {
+							appendChatEvent("assistant", msgType, chunk)
+							emitStreamChunk(line)
 							continue
 						} else if msgType == "chat.end" || msgType == "message.end" {
 							log.Printf("[handleChat-DEBUG] Custom End Signal Received: %s", msgType)
@@ -3826,6 +3938,16 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			log.Printf("[handleChat] Stream scanner error: %v", err)
 		}
 
+		if nativeToolLoopDetected {
+			AddDebugTrace("chat", "turn.complete", "Turn stopped due to native tool loop", map[string]interface{}{
+				"turn":           turn,
+				"elapsed_ms":     time.Since(turnStart).Milliseconds(),
+				"reason":         compactText(nativeToolLoopMessage, 200),
+				"response_chars": len(fullResponse),
+			})
+			break
+		}
+
 		// 🛠️ Structured Output Support (JSON)
 		// Check if buffer looks like a complete JSON object from a Structured Output model
 		// Pattern: {"thought": "...", "tool_name": "...", "tool_arguments": ...}
@@ -3911,6 +4033,15 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			toolUsageCounts[lastToolName]++
 			toolSig := lastToolName + ":" + compactText(strings.TrimSpace(lastToolArgsStr), 240)
 			toolSignatureCounts[toolSig]++
+			executeCommandText := ""
+			executeCommandFamily := ""
+			if lastToolName == "execute_command" {
+				executeCommandText = extractExecuteCommandFromArgsJSON(lastToolArgsStr)
+				executeCommandFamily = executeCommandBudgetFamily(executeCommandText)
+				if executeCommandFamily != "" {
+					executeCommandFamilyCounts[executeCommandFamily]++
+				}
+			}
 
 			var result string
 			var err error
@@ -3938,6 +4069,32 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 					"turn":  turn,
 					"tool":  lastToolName,
 					"count": toolUsageCounts[lastToolName],
+				})
+			} else if lastToolName == "execute_command" && toolUsageCounts[lastToolName] > 5 {
+				result = "execute_command already ran many times in this answer. Stop gathering more shell output and answer the user directly from the latest useful results."
+				toolSkipped = true
+				if procCtx != nil {
+					procCtx.FallbackUsed = true
+					procCtx.RepeatedBlocked = true
+				}
+				AddDebugTrace("chat", "tool.skipped", "Skipped execute_command due to overall budget", map[string]interface{}{
+					"turn":  turn,
+					"tool":  lastToolName,
+					"count": toolUsageCounts[lastToolName],
+				})
+			} else if lastToolName == "execute_command" && executeCommandFamily != "" && executeCommandFamilyCounts[executeCommandFamily] > 3 {
+				result = fmt.Sprintf("Too many execute_command calls were used for the same task family (%s). Use the latest command results you already have and answer the user directly.", executeCommandFamily)
+				toolSkipped = true
+				if procCtx != nil {
+					procCtx.FallbackUsed = true
+					procCtx.RepeatedBlocked = true
+				}
+				AddDebugTrace("chat", "tool.skipped", "Skipped execute_command due to family budget", map[string]interface{}{
+					"turn":    turn,
+					"tool":    lastToolName,
+					"family":  executeCommandFamily,
+					"command": compactText(executeCommandText, 180),
+					"count":   executeCommandFamilyCounts[executeCommandFamily],
 				})
 			} else if toolSignatureCounts[toolSig] > 1 {
 				result = fmt.Sprintf("Duplicate tool call prevented for %s with near-identical arguments. Use existing buffered evidence and continue answering.", lastToolName)

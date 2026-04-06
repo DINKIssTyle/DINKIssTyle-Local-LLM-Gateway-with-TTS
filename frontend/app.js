@@ -27,7 +27,7 @@ let config = {
     enableMemory: false,   // Default: False
     ttsLang: 'ko',
     chunkSize: 100,        // Default: 100 (Smart Chunking)
-    systemPrompt: 'You are a helpful AI assistant. Ensure all your replies follow the specified Remark structure without exception.',
+    systemPrompt: 'You are a helpful AI assistant.',
     ttsEngine: 'supertonic', // 'supertonic' or 'os'
     ttsVoice: 'F1',        // Default: F1
     ttsSpeed: 1.1,         // Default: 1.1
@@ -5605,7 +5605,19 @@ function renderReasoningControl() {
     }
 
     updateComposerLayoutMetrics();
+    updateReasoningControlVisibility();
     updateScrollToBottomButton();
+}
+
+function updateReasoningControlVisibility() {
+    if (!reasoningControlBar) return;
+
+    const scrollButtonVisible = !!scrollToBottomBtn?.classList.contains('is-visible');
+    const shouldReveal = !reasoningControlBar.hidden && !scrollButtonVisible && !isGenerating;
+
+    reasoningControlBar.classList.toggle('is-visible', shouldReveal);
+    reasoningControlBar.classList.toggle('is-suppressed', !shouldReveal);
+    reasoningControlBar.setAttribute('aria-hidden', shouldReveal ? 'false' : 'true');
 }
 
 function getEffectiveReasoningSelection() {
@@ -5960,6 +5972,7 @@ function updateSendButtonState() {
     }
 
     inputContainer?.classList.toggle('is-generating', isGenerating);
+    updateReasoningControlVisibility();
     updateComposerBackgroundTaskUI();
 
     // Also update giant mic icon if layout is active
@@ -8157,10 +8170,7 @@ function updateScrollToBottomButton() {
 
     scrollToBottomBtn.classList.toggle('is-visible', shouldShow);
     scrollToBottomBtn.setAttribute('aria-hidden', shouldShow ? 'false' : 'true');
-    if (reasoningControlBar && !reasoningControlBar.hidden) {
-        reasoningControlBar.classList.toggle('is-visible', !shouldShow);
-        reasoningControlBar.setAttribute('aria-hidden', shouldShow ? 'true' : 'false');
-    }
+    updateReasoningControlVisibility();
 }
 
 function jumpToLatestMessages() {
