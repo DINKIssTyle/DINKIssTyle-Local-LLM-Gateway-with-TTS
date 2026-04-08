@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"database/sql"
 	"os"
 	"strings"
 	"testing"
@@ -119,6 +120,14 @@ func TestMemoryChunkTableExists(t *testing.T) {
 	if tableName != "memory_chunks" {
 		t.Fatalf("expected memory_chunks table, got %q", tableName)
 	}
+
+	var ftsTable string
+	if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_chunks_fts'`).Scan(&ftsTable); err != nil {
+		t.Fatalf("failed to find memory_chunks_fts table: %v", err)
+	}
+	if ftsTable != "memory_chunks_fts" {
+		t.Fatalf("expected memory_chunks_fts table, got %q", ftsTable)
+	}
 }
 
 func TestInsertMemoryCreatesChunks(t *testing.T) {
@@ -152,6 +161,38 @@ func TestInsertMemoryCreatesChunks(t *testing.T) {
 	}
 	if chunkCount < 2 {
 		t.Fatalf("expected multiple chunks, got %d", chunkCount)
+	}
+
+	var ftsCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM memory_chunks_fts`).Scan(&ftsCount); err != nil {
+		t.Fatalf("failed to count memory fts rows: %v", err)
+	}
+	if ftsCount != chunkCount {
+		t.Fatalf("expected fts rows to match chunk count, got fts=%d chunks=%d", ftsCount, chunkCount)
+	}
+
+	var embeddingCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM memory_chunk_embeddings WHERE embedding_model = ?`, webEmbeddingModel).Scan(&embeddingCount); err != nil {
+		t.Fatalf("failed to count memory embeddings: %v", err)
+	}
+	if embeddingCount != chunkCount {
+		t.Fatalf("expected embeddings for every memory chunk, got embeddings=%d chunks=%d", embeddingCount, chunkCount)
+	}
+
+	var tier string
+	var importance float64
+	var pinned int
+	if err := db.QueryRow(`SELECT memory_tier, importance_score, pinned FROM memories WHERE id = ?`, id).Scan(&tier, &importance, &pinned); err != nil {
+		t.Fatalf("failed to read memory retention fields: %v", err)
+	}
+	if tier == "" {
+		t.Fatalf("expected memory tier to be set")
+	}
+	if importance <= 0 {
+		t.Fatalf("expected positive importance score, got %f", importance)
+	}
+	if pinned != 0 {
+		t.Fatalf("expected raw interaction memory to be unpinned")
 	}
 }
 
@@ -221,6 +262,187 @@ func TestIncrementMemoryChunkHitCount(t *testing.T) {
 	}
 	if hitCount != 1 {
 		t.Fatalf("expected chunk hit count 1, got %d", hitCount)
+	}
+}
+
+func TestRetentionMaintenancePrunesOldEphemeralMemoryAndLogs(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "memory_retention_*.db")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	dbPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(dbPath)
+
+	if err := InitDB(dbPath); err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer CloseDB()
+
+	oldTime := time.Now().UTC().AddDate(0, 0, -(retentionEphemeralMemoryDays + 10))
+	result, err := db.Exec(`
+		INSERT INTO memories (
+			user_id, full_text, hit_count, created_at, memory_type, last_accessed_at, importance_score, pinned, memory_tier
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"retention_user",
+		"temporary raw interaction that should fade away",
+		0,
+		oldTime,
+		"raw_interaction",
+		oldTime,
+		0.20,
+		0,
+		memoryTierEphemeral,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert retention test memory: %v", err)
+	}
+	memoryID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("failed to get retention test memory id: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO request_executions (user_id, intent_key, raw_query, normalized_query, tool_chain_json, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		"retention_user", "test", "raw", "raw", "[]", oldTime); err != nil {
+		t.Fatalf("failed to insert old request execution: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO chat_sessions (user_id, session_key) VALUES (?, ?)`, "retention_user", "default"); err != nil {
+		t.Fatalf("failed to insert chat session: %v", err)
+	}
+	var sessionID int64
+	if err := db.QueryRow(`SELECT id FROM chat_sessions WHERE user_id = ? AND session_key = ?`, "retention_user", "default").Scan(&sessionID); err != nil {
+		t.Fatalf("failed to read chat session id: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO chat_events (session_id, user_id, event_seq, role, event_type, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		sessionID, "retention_user", 1, "user", "message.created", oldTime); err != nil {
+		t.Fatalf("failed to insert old chat event: %v", err)
+	}
+
+	if err := runRetentionMaintenance(time.Now().UTC()); err != nil {
+		t.Fatalf("runRetentionMaintenance failed: %v", err)
+	}
+
+	var remainingMemories int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM memories WHERE id = ?`, memoryID).Scan(&remainingMemories); err != nil {
+		t.Fatalf("failed to count retained memory: %v", err)
+	}
+	if remainingMemories != 0 {
+		t.Fatalf("expected old ephemeral memory to be pruned")
+	}
+
+	var remainingExecutions int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM request_executions`).Scan(&remainingExecutions); err != nil {
+		t.Fatalf("failed to count request executions: %v", err)
+	}
+	if remainingExecutions != 0 {
+		t.Fatalf("expected old request executions to be pruned")
+	}
+
+	var remainingEvents int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM chat_events`).Scan(&remainingEvents); err != nil {
+		t.Fatalf("failed to count chat events: %v", err)
+	}
+	if remainingEvents != 0 {
+		t.Fatalf("expected old chat events to be pruned")
+	}
+}
+
+func TestInitDBMigratesLegacyMemoriesRetentionColumns(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "legacy_memories_*.db")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	dbPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(dbPath)
+
+	legacyDB, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("failed to open legacy db: %v", err)
+	}
+	if _, err := legacyDB.Exec(`
+		CREATE TABLE memories (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id TEXT NOT NULL,
+			full_text TEXT NOT NULL,
+			hit_count INTEGER DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			memory_type TEXT DEFAULT 'raw_interaction'
+		);
+	`); err != nil {
+		_ = legacyDB.Close()
+		t.Fatalf("failed to create legacy memories table: %v", err)
+	}
+	oldTime := time.Now().UTC().AddDate(0, 0, -5)
+	if _, err := legacyDB.Exec(`
+		INSERT INTO memories (user_id, full_text, hit_count, created_at, memory_type)
+		VALUES (?, ?, ?, ?, ?)`,
+		"legacy_user",
+		"my name is Dinki and I prefer concise responses",
+		3,
+		oldTime,
+		"raw_interaction",
+	); err != nil {
+		_ = legacyDB.Close()
+		t.Fatalf("failed to seed legacy memory: %v", err)
+	}
+	if err := legacyDB.Close(); err != nil {
+		t.Fatalf("failed to close legacy db: %v", err)
+	}
+
+	if err := InitDB(dbPath); err != nil {
+		t.Fatalf("InitDB failed on legacy schema: %v", err)
+	}
+	defer CloseDB()
+
+	rows, err := db.Query(`PRAGMA table_info(memories)`)
+	if err != nil {
+		t.Fatalf("failed to inspect migrated memories schema: %v", err)
+	}
+	defer rows.Close()
+
+	columns := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name string
+		var colType string
+		var notNull int
+		var dflt sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			t.Fatalf("failed to scan migrated schema row: %v", err)
+		}
+		columns[name] = true
+	}
+
+	for _, name := range []string{"last_accessed_at", "importance_score", "pinned", "memory_tier"} {
+		if !columns[name] {
+			t.Fatalf("expected migrated column %q to exist", name)
+		}
+	}
+
+	var lastAccessedRaw string
+	var importance float64
+	var pinned int
+	var tier string
+	if err := db.QueryRow(`
+		SELECT COALESCE(last_accessed_at, created_at), COALESCE(importance_score, 0), COALESCE(pinned, 0), COALESCE(memory_tier, '')
+		FROM memories
+		WHERE user_id = ?`,
+		"legacy_user",
+	).Scan(&lastAccessedRaw, &importance, &pinned, &tier); err != nil {
+		t.Fatalf("failed to read migrated legacy memory: %v", err)
+	}
+	if parseSQLiteTime(lastAccessedRaw, time.Time{}).IsZero() {
+		t.Fatalf("expected last_accessed_at to be backfilled")
+	}
+	if importance <= 0 {
+		t.Fatalf("expected importance to be backfilled, got %v", importance)
+	}
+	if tier == "" {
+		t.Fatalf("expected memory tier to be backfilled")
+	}
+	if pinned != 0 && pinned != 1 {
+		t.Fatalf("unexpected pinned value %d", pinned)
 	}
 }
 

@@ -1,6 +1,6 @@
 {
-    "name": "DKST LLM Chat Server",
-    "short_name": "DKST Chat Server",
+    "name": "DKST LLM Chat",
+    "short_name": "DKST Chat",
     "description": "Local LLM Gateway with TTS Web Client",
     "start_url": "/index.html",
     "display": "standalone",

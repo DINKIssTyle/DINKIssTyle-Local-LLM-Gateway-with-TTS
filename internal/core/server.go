@@ -1357,18 +1357,19 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	mux.HandleFunc("/api/config", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			var newCfg struct {
-				TTSThreads          int              `json:"tts_threads"`
-				ApiEndpoint         string           `json:"api_endpoint"`
-				ApiToken            *string          `json:"api_token"`
-				SecondaryModel      *string          `json:"secondary_model"`
-				LLMMode             string           `json:"llm_mode"`
-				EnableTTS           *bool            `json:"enable_tts"`
-				EnableMCP           *bool            `json:"enable_mcp"`
-				EnableMemory        *bool            `json:"enable_memory"`
-				StatefulTurnLimit   *int             `json:"stateful_turn_limit"`
-				StatefulCharBudget  *int             `json:"stateful_char_budget"`
-				StatefulTokenBudget *int             `json:"stateful_token_budget"`
-				TTSConfig           *ServerTTSConfig `json:"tts_config"`
+				TTSThreads          int                   `json:"tts_threads"`
+				ApiEndpoint         string                `json:"api_endpoint"`
+				ApiToken            *string               `json:"api_token"`
+				SecondaryModel      *string               `json:"secondary_model"`
+				LLMMode             string                `json:"llm_mode"`
+				EnableTTS           *bool                 `json:"enable_tts"`
+				EnableMCP           *bool                 `json:"enable_mcp"`
+				EnableMemory        *bool                 `json:"enable_memory"`
+				StatefulTurnLimit   *int                  `json:"stateful_turn_limit"`
+				StatefulCharBudget  *int                  `json:"stateful_char_budget"`
+				StatefulTokenBudget *int                  `json:"stateful_token_budget"`
+				TTSConfig           *ServerTTSConfig      `json:"tts_config"`
+				EmbeddingConfig     *EmbeddingModelConfig `json:"embedding_config"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&newCfg); err == nil {
 				// Check for authenticated user
@@ -1453,6 +1454,13 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 						*user.Settings.TTSConfig = *newCfg.TTSConfig
 						updated = true
 					}
+					if newCfg.EmbeddingConfig != nil {
+						if user.Settings.EmbeddingConfig == nil {
+							user.Settings.EmbeddingConfig = &EmbeddingModelConfig{}
+						}
+						*user.Settings.EmbeddingConfig = normalizeEmbeddingConfig(*newCfg.EmbeddingConfig)
+						updated = true
+					}
 					// Handle TTS Config partial updates if needed, for now simplistic
 					if newCfg.TTSThreads > 0 {
 						if user.Settings.TTSConfig == nil {
@@ -1505,6 +1513,9 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 						if newCfg.TTSConfig != nil {
 							app.SetServerTTSConfig(*newCfg.TTSConfig)
 						}
+						if newCfg.EmbeddingConfig != nil {
+							app.SetEmbeddingModelConfig(*newCfg.EmbeddingConfig)
+						}
 					}
 				}
 			}
@@ -1525,6 +1536,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 			"stateful_char_budget":  32000,
 			"stateful_token_budget": 30000,
 			"tts_config":            ttsConfig,
+			"embedding_config":      currentEmbeddingModelConfig(),
 			"has_token":             app.llmApiToken != "",
 		}
 
@@ -1565,6 +1577,9 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 				}
 				if user.Settings.TTSConfig != nil {
 					resp["tts_config"] = *user.Settings.TTSConfig
+				}
+				if user.Settings.EmbeddingConfig != nil {
+					resp["embedding_config"] = *user.Settings.EmbeddingConfig
 				}
 				if user.Settings.ApiToken != nil && *user.Settings.ApiToken != "" {
 					resp["has_token"] = true

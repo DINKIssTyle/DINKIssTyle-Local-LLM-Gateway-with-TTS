@@ -35,6 +35,9 @@ let config = {
     ttsFormat: 'wav',      // Default: wav
     ttsSteps: 5,           // Default: 5
     ttsThreads: 2,         // Default: 2
+    enableEmbeddings: false,
+    embeddingProvider: 'local',
+    embeddingModelId: 'multilingual-e5-small',
     osTtsVoiceURI: '',
     osTtsVoiceName: '',
     osTtsVoiceLang: '',
@@ -288,6 +291,7 @@ const translations = {
         'section.appearance': '채팅 외형',
         'section.voiceInput': '음성 입력',
         'section.tts': 'TTS 엔진',
+        'section.embedding': '임베딩 검색',
         // Server
         'server.stopped': '서버: 중지됨',
         'server.running': '서버: 실행중',
@@ -302,6 +306,8 @@ const translations = {
         'action.close': '닫기',
         'action.cancel': '취소',
         'action.reload': '새로고침',
+        'action.manageModels': '모델 관리',
+        'action.refreshModels': '상태 새로고침',
         'action.clearContext': '문맥 초기화',
         'library.searchPlaceholder': '저장된 대화를 검색하세요...',
         'library.empty': '저장된 대화가 없습니다.',
@@ -444,6 +450,23 @@ const translations = {
         'setting.format.label': '재생 형식',
         'setting.format.desc': 'MP3는 WAV를 변환하여 재생합니다.',
         'setting.format.note': 'WAV형식을 사용하면 모바일에서 화면이 꺼져도 백그라운드 재생을 계속할 수 있습니다.',
+        'setting.enableEmbeddings.label': '임베딩 검색 활성화',
+        'setting.enableEmbeddings.desc': 'FTS5와 함께 로컬 임베딩 유사도 검색을 사용합니다. 실제 모델 연결이 준비될 때 품질이 더 좋아집니다.',
+        'setting.embeddingModel.label': '임베딩 모델',
+        'setting.embeddingModel.desc': '로컬 임베딩 모델을 선택합니다.',
+        'modal.models.title': '모델 관리',
+        'setting.modelsRoot.label': '모델 저장 폴더',
+        'action.downloadModel': '다운로드',
+        'action.redownloadModel': '다시 다운로드',
+        'action.exportManifest': '매니페스트',
+        'status.downloading': '다운로드 중',
+        'models.loading': '불러오는 중...',
+        'models.empty': '관리되는 모델이 없습니다.',
+        'models.loadFailed': '모델 상태를 불러오지 못했습니다.',
+        'models.downloadStarted': '모델 다운로드를 시작했습니다.',
+        'models.downloadFinished': '모델 다운로드가 완료되었습니다.',
+        'models.downloadFailed': '모델 다운로드에 실패했습니다.',
+        'models.progressBytes': '{downloaded} / {total}',
         // Advanced
         'section.advanced': '고급 설정',
         'setting.cert.label': 'HTTPS 인증서',
@@ -502,6 +525,7 @@ const translations = {
         'section.appearance': 'Chat Appearance',
         'section.voiceInput': 'Voice Input',
         'section.tts': 'TTS Engine',
+        'section.embedding': 'Embedding Retrieval',
         // Server
         'server.stopped': 'Server: Stopped',
         'server.running': 'Server: Running',
@@ -518,6 +542,8 @@ const translations = {
         'action.close': 'Close',
         'action.cancel': 'Cancel',
         'action.reload': 'Reload',
+        'action.manageModels': 'Manage Models',
+        'action.refreshModels': 'Refresh Status',
         'action.clearContext': 'Reset Context',
         'library.searchPlaceholder': 'Search saved turns...',
         'library.empty': 'No saved turns yet.',
@@ -659,6 +685,23 @@ const translations = {
         'setting.format.label': 'Audio Format',
         'setting.format.desc': 'MP3 is converted from WAV.',
         'setting.format.note': 'Using WAV helps mobile devices keep background playback running even when the screen turns off.',
+        'setting.enableEmbeddings.label': 'Enable embedding retrieval',
+        'setting.enableEmbeddings.desc': 'Use local embedding similarity together with FTS5. Retrieval quality improves further when the real embedding runtime is connected.',
+        'setting.embeddingModel.label': 'Embedding Model',
+        'setting.embeddingModel.desc': 'Choose the local embedding model.',
+        'modal.models.title': 'Model Manager',
+        'setting.modelsRoot.label': 'Model Storage Folder',
+        'action.downloadModel': 'Download',
+        'action.redownloadModel': 'Redownload',
+        'action.exportManifest': 'Manifest',
+        'status.downloading': 'Downloading',
+        'models.loading': 'Loading...',
+        'models.empty': 'No managed models available.',
+        'models.loadFailed': 'Failed to load model status.',
+        'models.downloadStarted': 'Model download started.',
+        'models.downloadFinished': 'Model download completed.',
+        'models.downloadFailed': 'Model download failed.',
+        'models.progressBytes': '{downloaded} / {total}',
         // Advanced
         'section.advanced': 'Advanced Settings',
         'setting.cert.label': 'HTTPS Certificate',
@@ -1226,6 +1269,20 @@ function openSettingsModal() {
 
 function closeSettingsModal() {
     document.getElementById('settings-modal').classList.remove('active');
+}
+
+function formatBytes(value) {
+    const bytes = Number(value || 0);
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let size = bytes;
+    let unitIndex = 0;
+    while (size >= 1024 && unitIndex < units.length - 1) {
+        size /= 1024;
+        unitIndex += 1;
+    }
+    const digits = size >= 100 ? 0 : size >= 10 ? 1 : 2;
+    return `${size.toFixed(digits)} ${units[unitIndex]}`;
 }
 
 function generateTurnId() {
@@ -3144,6 +3201,8 @@ function loadConfig() {
     document.getElementById('cfg-auto-tts').checked = config.autoTTS || false;
     document.getElementById('cfg-tts-engine').value = config.ttsEngine || 'supertonic';
     document.getElementById('cfg-tts-lang').value = config.ttsLang;
+    document.getElementById('cfg-enable-embeddings').checked = config.enableEmbeddings || false;
+    document.getElementById('cfg-embedding-model').value = config.embeddingModelId || 'multilingual-e5-small';
     document.getElementById('cfg-chunk-size').value = config.chunkSize || 300;
     document.getElementById('cfg-system-prompt').value = config.systemPrompt || 'You are a helpful AI assistant.';
     if (config.ttsVoice) document.getElementById('cfg-tts-voice').value = String(config.ttsVoice).replace(/\.json$/i, '');
@@ -3276,7 +3335,7 @@ function setupSettingsListeners() {
     });
 
     // Selects & Inputs: save on change
-    const autoSaveIds = ['cfg-api', 'cfg-temp', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-os-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-disable-stateful', 'cfg-show-reasoning-control', 'cfg-force-show-reasoning-control', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model', 'cfg-tts-engine', 'cfg-markdown-render-mode', 'cfg-enable-haptics'];
+    const autoSaveIds = ['cfg-api', 'cfg-temp', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-os-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-disable-stateful', 'cfg-show-reasoning-control', 'cfg-force-show-reasoning-control', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model', 'cfg-tts-engine', 'cfg-markdown-render-mode', 'cfg-enable-haptics', 'cfg-embedding-model'];
     autoSaveIds.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.onchange = () => saveConfig(false);
@@ -3468,6 +3527,9 @@ function saveConfig(closeModal = true) {
     config.autoTTS = document.getElementById('cfg-auto-tts').checked;
     config.ttsEngine = document.getElementById('cfg-tts-engine').value || 'supertonic';
     config.ttsLang = document.getElementById('cfg-tts-lang').value;
+    config.enableEmbeddings = document.getElementById('cfg-enable-embeddings').checked;
+    config.embeddingProvider = 'local';
+    config.embeddingModelId = document.getElementById('cfg-embedding-model').value || 'multilingual-e5-small';
 
     // API Token handling - skip if element not present (web.html removed it)
     const apiTokenEl = document.getElementById('cfg-api-token');
@@ -3540,6 +3602,11 @@ function saveConfig(closeModal = true) {
             osRate: config.osTtsRate,
             osPitch: config.osTtsPitch
         }).catch(console.error);
+        window.go.core.App.SetEmbeddingModelConfig({
+            provider: config.embeddingProvider,
+            modelId: config.embeddingModelId,
+            enabled: config.enableEmbeddings
+        }).catch(console.error);
 
         // This is separate from saveConfig in app.go, but SetTTSThreads triggers reload
         if (config.ttsThreads && config.ttsEngine === 'supertonic') {
@@ -3560,6 +3627,11 @@ function saveConfig(closeModal = true) {
         stateful_char_budget: config.statefulCharBudget,
         stateful_token_budget: config.statefulTokenBudget,
         tts_threads: config.ttsThreads,
+        embedding_config: {
+            provider: config.embeddingProvider,
+            modelId: config.embeddingModelId,
+            enabled: config.enableEmbeddings
+        },
         tts_config: {
             engine: config.ttsEngine,
             voiceStyle: config.ttsVoice,
@@ -4801,6 +4873,16 @@ async function syncServerConfig() {
                     osTTSVoiceSelect.value = config.osTtsVoiceURI;
                 }
                 updateTTSSettingsVisibility();
+            }
+            if (serverCfg.embedding_config) {
+                const embeddingCfg = serverCfg.embedding_config;
+                config.embeddingProvider = embeddingCfg.provider || 'local';
+                config.embeddingModelId = embeddingCfg.modelId || 'multilingual-e5-small';
+                config.enableEmbeddings = embeddingCfg.enabled === true;
+                const enabledEl = document.getElementById('cfg-enable-embeddings');
+                if (enabledEl) enabledEl.checked = config.enableEmbeddings;
+                const modelEl = document.getElementById('cfg-embedding-model');
+                if (modelEl) modelEl.value = config.embeddingModelId;
             }
             if (serverCfg.enable_mcp !== undefined) {
                 config.enableMCP = serverCfg.enable_mcp;

@@ -69,6 +69,7 @@ type AppConfig struct {
 	LLMMode           string                       `json:"llmMode"`
 	EnableTTS         bool                         `json:"enableTTS"`
 	TTS               ServerTTSConfig              `json:"tts"`
+	Embedding         EmbeddingModelConfig         `json:"embedding"`
 	StartOnBoot       bool                         `json:"startOnBoot"`
 	MinimizeToTray    bool                         `json:"minimizeToTray"`
 	AutoStartServer   bool                         `json:"autoStartServer"`
@@ -317,6 +318,7 @@ func (a *App) loadConfig() {
 		OSRate:     1.0,
 		OSPitch:    1.0,
 	}
+	embeddingConfig = defaultEmbeddingConfig()
 
 	cfgPath := GetResourcePath(configFile)
 	fmt.Printf("Loading config from: %s\n", cfgPath)
@@ -377,6 +379,8 @@ func (a *App) loadConfig() {
 	if cfg.TTS.OSPitch > 0 {
 		ttsConfig.OSPitch = cfg.TTS.OSPitch
 	}
+	embeddingConfig = normalizeEmbeddingConfig(cfg.Embedding)
+	applyEmbeddingRuntimeConfig()
 }
 
 func (a *App) saveConfig() {
@@ -399,6 +403,7 @@ func (a *App) saveConfig() {
 	cfg.DebugTraceEnabled = a.enableDebugTrace
 	cfg.CertDomain = a.certDomain
 	cfg.TTS = ttsConfig
+	cfg.Embedding = currentEmbeddingModelConfig()
 	cfg.ToolPatterns = a.toolPatterns
 
 	data, err = json.MarshalIndent(cfg, "", "  ")
@@ -802,6 +807,7 @@ func (a *App) saveStartupSetting(key string, value bool) {
 	cfg.LLMApiToken = a.llmApiToken
 	cfg.EnableTTS = a.enableTTS
 	cfg.TTS = ttsConfig
+	cfg.Embedding = currentEmbeddingModelConfig()
 
 	newData, _ := json.MarshalIndent(cfg, "", "  ")
 	os.WriteFile(cfgPath, newData, 0644)

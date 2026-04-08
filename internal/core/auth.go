@@ -26,20 +26,21 @@ import (
 
 // UserSettings holds user-specific overrides
 type UserSettings struct {
-	ApiEndpoint           *string          `json:"api_endpoint,omitempty"`
-	ApiToken              *string          `json:"api_token,omitempty"`
-	SecondaryModel        *string          `json:"secondary_model,omitempty"`
-	LLMMode               *string          `json:"llm_mode,omitempty"`
-	EnableTTS             *bool            `json:"enable_tts,omitempty"`
-	EnableMCP             *bool            `json:"enable_mcp,omitempty"`
-	EnableMemory          *bool            `json:"enable_memory,omitempty"`
-	StatefulTurnLimit     *int             `json:"stateful_turn_limit,omitempty"`
-	StatefulCharBudget    *int             `json:"stateful_char_budget,omitempty"`
-	StatefulTokenBudget   *int             `json:"stateful_token_budget,omitempty"`
-	TTSConfig             *ServerTTSConfig `json:"tts_config,omitempty"`
-	DisabledTools         []string         `json:"disabled_tools,omitempty"`
-	DisallowedCommands    []string         `json:"disallowed_commands,omitempty"`
-	DisallowedDirectories []string         `json:"disallowed_directories,omitempty"`
+	ApiEndpoint           *string               `json:"api_endpoint,omitempty"`
+	ApiToken              *string               `json:"api_token,omitempty"`
+	SecondaryModel        *string               `json:"secondary_model,omitempty"`
+	LLMMode               *string               `json:"llm_mode,omitempty"`
+	EnableTTS             *bool                 `json:"enable_tts,omitempty"`
+	EnableMCP             *bool                 `json:"enable_mcp,omitempty"`
+	EnableMemory          *bool                 `json:"enable_memory,omitempty"`
+	StatefulTurnLimit     *int                  `json:"stateful_turn_limit,omitempty"`
+	StatefulCharBudget    *int                  `json:"stateful_char_budget,omitempty"`
+	StatefulTokenBudget   *int                  `json:"stateful_token_budget,omitempty"`
+	TTSConfig             *ServerTTSConfig      `json:"tts_config,omitempty"`
+	EmbeddingConfig       *EmbeddingModelConfig `json:"embedding_config,omitempty"`
+	DisabledTools         []string              `json:"disabled_tools,omitempty"`
+	DisallowedCommands    []string              `json:"disallowed_commands,omitempty"`
+	DisallowedDirectories []string              `json:"disallowed_directories,omitempty"`
 }
 
 // User represents a user account

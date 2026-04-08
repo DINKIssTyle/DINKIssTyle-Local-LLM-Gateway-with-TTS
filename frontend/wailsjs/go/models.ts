@@ -24,6 +24,22 @@ export namespace core {
 	        this.payload = source["payload"];
 	    }
 	}
+	export class EmbeddingModelConfig {
+	    provider: string;
+	    modelId: string;
+	    enabled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new EmbeddingModelConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.provider = source["provider"];
+	        this.modelId = source["modelId"];
+	        this.enabled = source["enabled"];
+	    }
+	}
 	export class HealthCheckResult {
 	    llmStatus: string;
 	    llmMessage: string;
@@ -42,6 +58,90 @@ export namespace core {
 	        this.ttsStatus = source["ttsStatus"];
 	        this.ttsMessage = source["ttsMessage"];
 	        this.serverModel = source["serverModel"];
+	    }
+	}
+	export class ManagedModelDownloadState {
+	    key: string;
+	    kind: string;
+	    modelId: string;
+	    displayName: string;
+	    active: boolean;
+	    finished: boolean;
+	    success: boolean;
+	    status: string;
+	    message: string;
+	    currentFile: string;
+	    filesCompleted: number;
+	    filesTotal: number;
+	    bytesDownloaded: number;
+	    bytesTotal: number;
+	    progressPct: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ManagedModelDownloadState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.kind = source["kind"];
+	        this.modelId = source["modelId"];
+	        this.displayName = source["displayName"];
+	        this.active = source["active"];
+	        this.finished = source["finished"];
+	        this.success = source["success"];
+	        this.status = source["status"];
+	        this.message = source["message"];
+	        this.currentFile = source["currentFile"];
+	        this.filesCompleted = source["filesCompleted"];
+	        this.filesTotal = source["filesTotal"];
+	        this.bytesDownloaded = source["bytesDownloaded"];
+	        this.bytesTotal = source["bytesTotal"];
+	        this.progressPct = source["progressPct"];
+	    }
+	}
+	export class ManagedModelStatus {
+	    key: string;
+	    kind: string;
+	    displayName: string;
+	    provider: string;
+	    modelId: string;
+	    backend?: string;
+	    installed: boolean;
+	    active: boolean;
+	    status: string;
+	    message: string;
+	    installDir: string;
+	    downloadUrl?: string;
+	    canDownload: boolean;
+	    downloading: boolean;
+	    currentFile?: string;
+	    progressPct?: number;
+	    progressText?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ManagedModelStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.kind = source["kind"];
+	        this.displayName = source["displayName"];
+	        this.provider = source["provider"];
+	        this.modelId = source["modelId"];
+	        this.backend = source["backend"];
+	        this.installed = source["installed"];
+	        this.active = source["active"];
+	        this.status = source["status"];
+	        this.message = source["message"];
+	        this.installDir = source["installDir"];
+	        this.downloadUrl = source["downloadUrl"];
+	        this.canDownload = source["canDownload"];
+	        this.downloading = source["downloading"];
+	        this.currentFile = source["currentFile"];
+	        this.progressPct = source["progressPct"];
+	        this.progressText = source["progressText"];
 	    }
 	}
 	export class ServerTTSConfig {
