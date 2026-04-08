@@ -83,7 +83,7 @@ func buildResponse(req *JSONRPCRequest, userID string, enableMemory bool, disabl
 			},
 			"serverInfo": map[string]string{
 				"name":    "DKST Local Gateway",
-				"version": "1.0.0",
+				"version": "3.0.0",
 			},
 		}
 

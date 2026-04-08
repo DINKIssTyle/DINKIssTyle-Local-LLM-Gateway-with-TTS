@@ -1011,7 +1011,8 @@
                 <div class="user-list" id="user-list"></div>
             </div>
             <div class="modal-footer" style="display: flex; gap: 8px; justify-content: space-between;">
-                <button class="btn" style="background: var(--border-color);" onclick="closeAccountManagementModal()">Close</button>
+                <button class="btn" style="background: var(--border-color);"
+                    onclick="closeAccountManagementModal()">Close</button>
                 <button class="btn btn-primary" onclick="addUser()">
                     <span class="material-icons-round">person_add</span>
                     Add Account
@@ -1105,7 +1106,8 @@
             <div class="modal-body">
                 <div class="form-group">
                     <label>Model Storage Folder</label>
-                    <div id="models-root-dir" style="font-size: 12px; color: var(--text-secondary); word-break: break-all;">...</div>
+                    <div id="models-root-dir"
+                        style="font-size: 12px; color: var(--text-secondary); word-break: break-all;">...</div>
                 </div>
                 <div id="managed-models-list" class="managed-models-list"></div>
             </div>
@@ -1133,7 +1135,7 @@
                     <img src="appicon.png" alt="App Icon" style="width: 64px; height: 64px; margin-bottom: 12px;">
                     <div style="font-size: 18px; font-weight: 600; color: var(--text-color); margin-bottom: 4px;">DKST
                         LLM Chat Server</div>
-                    <div style="color: var(--accent-color);">Version 1.0b</div>
+                    <div style="color: var(--accent-color);">Version 3.0</div>
                     <div style="margin-top: 8px;">(C) 2026 DINKI'ssTyle</div>
                 </div>
 
@@ -1203,7 +1205,8 @@
                 <div style="margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border-color);">
                     <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);">Memory Retention</div>
                     <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 12px;">
-                        Account policy. Set days to keep each memory tier for this user. Use <code>0</code> to disable automatic deletion.
+                        Account policy. Set days to keep each memory tier for this user. Use <code>0</code> to disable
+                        automatic deletion.
                     </div>
                     <div class="form-row">
                         <div class="form-group">
@@ -1673,10 +1676,10 @@
                 btn.innerHTML = '<span class="material-icons-round">sync</span> Generating...';
 
                 await window.go.core.App.GenerateCertificate(domain);
-                
+
                 showAlert("Certificate generated successfully!");
                 checkRestartRequired();
-                
+
                 btn.disabled = false;
                 btn.innerHTML = originalContent;
             } catch (e) {

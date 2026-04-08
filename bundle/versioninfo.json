@@ -1,13 +1,13 @@
 {
     "FixedFileInfo": {
         "FileVersion": {
-            "Major": 1,
+            "Major": 3,
             "Minor": 0,
             "Patch": 0,
             "Build": 0
         },
         "ProductVersion": {
-            "Major": 1,
+            "Major": 3,
             "Minor": 0,
             "Patch": 0,
             "Build": 0
@@ -22,13 +22,13 @@
         "Comments": "Local LLM Gateway with TTS",
         "CompanyName": "DINKI'ssTyle",
         "FileDescription": "DKST LLM Chat Server",
-        "FileVersion": "1.0.0",
+        "FileVersion": "3.0.0",
         "InternalName": "DKST LLM Chat Server",
         "LegalCopyright": "Copyright (C) 2026 DINKI'ssTyle. All rights reserved.",
         "OriginalFilename": "DKST LLM Chat Server.exe",
         "PrivateBuild": "",
         "ProductName": "DKST LLM Chat Server",
-        "ProductVersion": "1.0.0",
+        "ProductVersion": "3.0.0",
         "SpecialBuild": ""
     },
     "VarFileInfo": {

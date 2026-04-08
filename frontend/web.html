@@ -9,7 +9,7 @@
     <meta charset="UTF-8">
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
-    <title>DKST LLM Chat Server</title>
+    <title>DKST LLM Chat</title>
 
     <!-- Favicons -->
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -70,7 +70,8 @@
 
                     <div class="setting-item">
                         <label data-i18n="setting.secondaryModel.label">Secondary Model</label>
-                        <p class="setting-desc" data-i18n="setting.secondaryModel.desc">저장된 대화 제목 생성 같은 가벼운 작업에 우선 사용할 보조 모델입니다.</p>
+                        <p class="setting-desc" data-i18n="setting.secondaryModel.desc">저장된 대화 제목 생성 같은 가벼운 작업에 우선 사용할
+                            보조 모델입니다.</p>
                         <select id="cfg-secondary-model">
                             <option value="">Use primary model</option>
                         </select>
@@ -103,12 +104,14 @@
                                 <span data-i18n="setting.enableEmbeddings.label">임베딩 검색 활성화</span>
                                 <input type="checkbox" id="cfg-enable-embeddings">
                             </div>
-                            <p class="setting-desc" data-i18n="setting.enableEmbeddings.desc">FTS5에 더해 로컬 임베딩 기반 유사도 검색을 함께 사용합니다.</p>
+                            <p class="setting-desc" data-i18n="setting.enableEmbeddings.desc">FTS5에 더해 로컬 임베딩 기반 유사도 검색을
+                                함께 사용합니다.</p>
                         </div>
 
                         <div class="setting-item">
                             <label data-i18n="setting.embeddingModel.label">임베딩 모델</label>
-                            <p class="setting-desc" data-i18n="setting.embeddingModel.desc">현재는 multilingual-e5-small 기준으로 관리 UI를 준비합니다.</p>
+                            <p class="setting-desc" data-i18n="setting.embeddingModel.desc">현재는 multilingual-e5-small
+                                기준으로 관리 UI를 준비합니다.</p>
                             <select id="cfg-embedding-model">
                                 <option value="multilingual-e5-small">multilingual-e5-small</option>
                             </select>
@@ -144,15 +147,20 @@
 
                     <div class="setting-item" id="container-stateful-budget" style="display: none;">
                         <label data-i18n="setting.statefulTurnLimit.label">Stateful Turn Limit</label>
-                        <p class="setting-desc" data-i18n="setting.statefulTurnLimit.desc">Maximum conversation turns before the app compacts context into a summary and starts a fresh LM Studio chain.</p>
+                        <p class="setting-desc" data-i18n="setting.statefulTurnLimit.desc">Maximum conversation turns
+                            before the app compacts context into a summary and starts a fresh LM Studio chain.</p>
                         <input type="number" id="cfg-stateful-turn-limit" value="8" min="1" step="1">
 
-                        <label style="margin-top: 12px;" data-i18n="setting.statefulCharBudget.label">Stateful Character Budget</label>
-                        <p class="setting-desc" data-i18n="setting.statefulCharBudget.desc">Approximate total character budget for the active LM Studio context before auto-compaction runs.</p>
+                        <label style="margin-top: 12px;" data-i18n="setting.statefulCharBudget.label">Stateful Character
+                            Budget</label>
+                        <p class="setting-desc" data-i18n="setting.statefulCharBudget.desc">Approximate total character
+                            budget for the active LM Studio context before auto-compaction runs.</p>
                         <input type="number" id="cfg-stateful-char-budget" value="12000" min="1000" step="500">
 
-                        <label style="margin-top: 12px;" data-i18n="setting.statefulTokenBudget.label">Stateful Token Budget</label>
-                        <p class="setting-desc" data-i18n="setting.statefulTokenBudget.desc">Approximate token threshold used as the primary safety limit for automatic context compaction.</p>
+                        <label style="margin-top: 12px;" data-i18n="setting.statefulTokenBudget.label">Stateful Token
+                            Budget</label>
+                        <p class="setting-desc" data-i18n="setting.statefulTokenBudget.desc">Approximate token threshold
+                            used as the primary safety limit for automatic context compaction.</p>
                         <input type="number" id="cfg-stateful-token-budget" value="10000" min="1000" step="500">
                     </div>
 
@@ -175,15 +183,18 @@
                             <span data-i18n="setting.showReasoningControl.label">Show reasoning control</span>
                             <input type="checkbox" id="cfg-show-reasoning-control" checked>
                         </div>
-                        <p class="setting-desc" data-i18n="setting.showReasoningControl.desc">모델이 reasoning을 지원할 때 입력창 위에 reasoning control 바를 표시합니다.</p>
+                        <p class="setting-desc" data-i18n="setting.showReasoningControl.desc">모델이 reasoning을 지원할 때 입력창
+                            위에 reasoning control 바를 표시합니다.</p>
                     </div>
 
                     <div class="setting-item">
                         <div class="setting-toggle" onclick="toggleSwitch('cfg-force-show-reasoning-control')">
-                            <span data-i18n="setting.forceShowReasoningControl.label">Force show reasoning control</span>
+                            <span data-i18n="setting.forceShowReasoningControl.label">Force show reasoning
+                                control</span>
                             <input type="checkbox" id="cfg-force-show-reasoning-control">
                         </div>
-                        <p class="setting-desc" data-i18n="setting.forceShowReasoningControl.desc">모델 메타데이터에 reasoning 정보가 없어도 control 바를 강제로 표시합니다.</p>
+                        <p class="setting-desc" data-i18n="setting.forceShowReasoningControl.desc">모델 메타데이터에 reasoning
+                            정보가 없어도 control 바를 강제로 표시합니다.</p>
                     </div>
 
                 </div>
@@ -221,16 +232,22 @@
                     <div class="setting-section-title" data-i18n="section.appearance">Chat Appearance</div>
                     <div class="setting-item">
                         <label data-i18n="setting.userBubbleTheme.label">User Bubble Style</label>
-                        <p class="setting-desc" data-i18n="setting.userBubbleTheme.desc">Choose the gradient preset for your message bubbles.</p>
-                        <div id="user-bubble-theme-options" class="theme-swatch-grid" role="radiogroup" aria-label="User bubble theme"></div>
+                        <p class="setting-desc" data-i18n="setting.userBubbleTheme.desc">Choose the gradient preset for
+                            your message bubbles.</p>
+                        <div id="user-bubble-theme-options" class="theme-swatch-grid" role="radiogroup"
+                            aria-label="User bubble theme"></div>
                     </div>
                     <div class="setting-item">
                         <label data-i18n="setting.markdownRenderMode.label">Markdown Rendering Mode</label>
-                        <p class="setting-desc" data-i18n="setting.markdownRenderMode.desc">Choose how aggressively markdown is rendered while the response is still streaming.</p>
+                        <p class="setting-desc" data-i18n="setting.markdownRenderMode.desc">Choose how aggressively
+                            markdown is rendered while the response is still streaming.</p>
                         <select id="cfg-markdown-render-mode">
-                            <option value="fast" data-i18n="setting.markdownRenderMode.option.fast">Fast Rendering</option>
-                            <option value="balanced" data-i18n="setting.markdownRenderMode.option.balanced">Slightly Delayed Rendering</option>
-                            <option value="final" data-i18n="setting.markdownRenderMode.option.final">Render After Completion</option>
+                            <option value="fast" data-i18n="setting.markdownRenderMode.option.fast">Fast Rendering
+                            </option>
+                            <option value="balanced" data-i18n="setting.markdownRenderMode.option.balanced">Slightly
+                                Delayed Rendering</option>
+                            <option value="final" data-i18n="setting.markdownRenderMode.option.final">Render After
+                                Completion</option>
                         </select>
                     </div>
                     <div class="setting-item">
@@ -238,7 +255,8 @@
                             <span data-i18n="setting.hapticsEnabled.label">햅틱 활성화</span>
                             <input type="checkbox" id="cfg-enable-haptics" checked>
                         </div>
-                        <p class="setting-desc" data-i18n="setting.hapticsEnabled.desc">지원되는 모바일 기기에서 주요 버튼에 진동 피드백을 줍니다.</p>
+                        <p class="setting-desc" data-i18n="setting.hapticsEnabled.desc">지원되는 모바일 기기에서 주요 버튼에 진동 피드백을
+                            줍니다.</p>
                     </div>
                 </div>
 
@@ -280,9 +298,11 @@
 
                     <div class="setting-item">
                         <label data-i18n="setting.ttsEngine.label">TTS Engine</label>
-                        <p class="setting-desc" data-i18n="setting.ttsEngine.desc">Supertonic 2 또는 운영체제 기본 음성을 선택합니다.</p>
+                        <p class="setting-desc" data-i18n="setting.ttsEngine.desc">Supertonic 2 또는 운영체제 기본 음성을 선택합니다.
+                        </p>
                         <select id="cfg-tts-engine">
-                            <option value="supertonic" data-i18n="setting.ttsEngine.option.supertonic">Supertonic 2</option>
+                            <option value="supertonic" data-i18n="setting.ttsEngine.option.supertonic">Supertonic 2
+                            </option>
                             <option value="os" data-i18n="setting.ttsEngine.option.os">OS TTS</option>
                         </select>
                     </div>
@@ -370,7 +390,8 @@
                     <div class="setting-item" id="container-tts-supertonic-format">
                         <label data-i18n="setting.format.label">Audio Format</label>
                         <p class="setting-desc" data-i18n="setting.format.desc">MP3는 WAV를 변환하여 재생합니다.</p>
-                        <p class="setting-desc" data-i18n="setting.format.note">WAV형식을 사용하면 모바일에서 화면이 꺼져도 백그라운드 재생을 계속할 수 있습니다.</p>
+                        <p class="setting-desc" data-i18n="setting.format.note">WAV형식을 사용하면 모바일에서 화면이 꺼져도 백그라운드 재생을 계속할
+                            수 있습니다.</p>
                         <select id="cfg-tts-format">
                             <option value="wav">WAV (Original)</option>
                             <option value="mp3-high">MP3 (High - 128kbps)</option>
@@ -428,31 +449,20 @@
         <div class="modal saved-turn-modal">
             <div class="modal-header">
                 <div class="saved-turn-modal-title-shell">
-                    <div id="saved-turn-inline-title-view" class="saved-turn-inline-title-view saved-turn-inline-title-view-header" onclick="startEditSavedTurnTitle()"></div>
-                    <div id="saved-turn-inline-title-edit" class="saved-turn-inline-title-edit saved-turn-inline-title-edit-header" hidden>
-                        <input
-                            id="saved-turn-inline-title-input"
-                            class="saved-turn-inline-title-input"
-                            type="text"
-                            maxlength="80"
-                            data-i18n-placeholder="library.titlePlaceholder"
-                            placeholder="Enter a title"
-                        />
+                    <div id="saved-turn-inline-title-view"
+                        class="saved-turn-inline-title-view saved-turn-inline-title-view-header"
+                        onclick="startEditSavedTurnTitle()"></div>
+                    <div id="saved-turn-inline-title-edit"
+                        class="saved-turn-inline-title-edit saved-turn-inline-title-edit-header" hidden>
+                        <input id="saved-turn-inline-title-input" class="saved-turn-inline-title-input" type="text"
+                            maxlength="80" data-i18n-placeholder="library.titlePlaceholder"
+                            placeholder="Enter a title" />
                         <div class="saved-turn-inline-title-actions">
-                            <button
-                                id="saved-turn-inline-title-cancel"
-                                class="saved-turn-inline-title-btn secondary"
-                                type="button"
-                                onclick="cancelEditSavedTurnTitle()"
-                                data-i18n="action.cancel"
-                            >Cancel</button>
-                            <button
-                                id="saved-turn-inline-title-save"
-                                class="saved-turn-inline-title-btn primary"
-                                type="button"
-                                onclick="saveEditedSavedTurnTitle()"
-                                data-i18n="action.save"
-                            >Save</button>
+                            <button id="saved-turn-inline-title-cancel" class="saved-turn-inline-title-btn secondary"
+                                type="button" onclick="cancelEditSavedTurnTitle()"
+                                data-i18n="action.cancel">Cancel</button>
+                            <button id="saved-turn-inline-title-save" class="saved-turn-inline-title-btn primary"
+                                type="button" onclick="saveEditedSavedTurnTitle()" data-i18n="action.save">Save</button>
                         </div>
                     </div>
                 </div>
@@ -478,7 +488,8 @@
                     <div id="saved-turn-modal-response" class="saved-turn-modal-content markdown-body"></div>
                 </section>
                 <div class="saved-turn-modal-footer">
-                    <button class="saved-turn-close-btn" onclick="closeSavedTurnModal()" data-i18n="action.close">Close</button>
+                    <button class="saved-turn-close-btn" onclick="closeSavedTurnModal()"
+                        data-i18n="action.close">Close</button>
                 </div>
             </div>
         </div>
@@ -502,13 +513,8 @@
                     <span class="material-icons-round">local_library</span>
                 </button>
                 <div class="header-model-picker">
-                    <button
-                        id="header-model-trigger"
-                        class="header-model-trigger"
-                        type="button"
-                        onclick="toggleHeaderModelDropdown(event)"
-                        aria-haspopup="listbox"
-                        aria-expanded="false"
+                    <button id="header-model-trigger" class="header-model-trigger" type="button"
+                        onclick="toggleHeaderModelDropdown(event)" aria-haspopup="listbox" aria-expanded="false"
                         title="Select model">
                         <span id="header-model-name" class="header-model-name">Loading...</span>
                         <span class="material-icons-round header-model-trigger-icon">arrow_drop_down</span>
@@ -542,15 +548,8 @@
             <div id="chat-restore-overlay" class="chat-restore-overlay" hidden aria-live="polite"></div>
         </div>
 
-        <button
-            id="scroll-to-bottom-btn"
-            class="scroll-to-bottom-btn"
-            type="button"
-            onclick="jumpToLatestMessages()"
-            title="Scroll to bottom"
-            aria-label="Scroll to bottom"
-            aria-hidden="true"
-        >
+        <button id="scroll-to-bottom-btn" class="scroll-to-bottom-btn" type="button" onclick="jumpToLatestMessages()"
+            title="Scroll to bottom" aria-label="Scroll to bottom" aria-hidden="true">
             <span class="material-icons-round">keyboard_arrow_down</span>
         </button>
 
@@ -563,19 +562,10 @@
         <section id="saved-library-view" class="saved-library-view" hidden>
             <div class="saved-library-header">
                 <div class="saved-library-search-shell">
-                    <input
-                        id="saved-library-search"
-                        type="text"
-                        placeholder="Search saved turns..."
+                    <input id="saved-library-search" type="text" placeholder="Search saved turns..."
                         oninput="handleSavedLibrarySearch(this.value)">
-                    <button
-                        id="saved-library-search-clear"
-                        class="saved-library-search-clear"
-                        type="button"
-                        onclick="clearSavedLibrarySearch()"
-                        title="Clear search"
-                        hidden
-                    >
+                    <button id="saved-library-search-clear" class="saved-library-search-clear" type="button"
+                        onclick="clearSavedLibrarySearch()" title="Clear search" hidden>
                         <span class="material-icons-round">cancel</span>
                     </button>
                 </div>
@@ -603,14 +593,15 @@
                         data-i18n-placeholder="input.placeholder"></textarea>
 
                     <div class="input-actions">
-                        <span id="stateful-budget-indicator" class="stateful-budget-indicator" hidden aria-hidden="true"></span>
+                        <span id="stateful-budget-indicator" class="stateful-budget-indicator" hidden
+                            aria-hidden="true"></span>
                         <input type="file" id="image-upload" accept="image/*" style="display: none"
                             onchange="handleImageUpload(this)">
-                        <button class="icon-btn" onclick="triggerImagePicker()"
-                            title="Upload Image">
+                        <button class="icon-btn" onclick="triggerImagePicker()" title="Upload Image">
                             <span class="material-icons-round">add_photo_alternate</span>
                         </button>
-                        <button class="icon-btn mic-inline-btn" id="inline-mic-btn" onclick="toggleSTT()" title="Voice Input">
+                        <button class="icon-btn mic-inline-btn" id="inline-mic-btn" onclick="toggleSTT()"
+                            title="Voice Input">
                             <span class="material-icons-round">mic</span>
                         </button>
                         <button class="icon-btn send-btn" id="send-btn" title="Send Message" hidden>
