@@ -77,6 +77,11 @@ type AppConfig struct {
 	ToolPatterns      map[string]map[string]string `json:"toolPatterns"`
 }
 
+const (
+	legacyMacAppDataDirName = "DKST LLM Chat"
+	macAppDataDirName       = "DKST LLM Chat Server"
+)
+
 // HealthCheckResult holds the result of system health checks
 type HealthCheckResult struct {
 	LLMStatus   string `json:"llmStatus"`   // "ok", "error"
@@ -90,7 +95,7 @@ var configFile = "config.json"
 
 // GetAppDataDir returns the application data directory
 // Windows: Executable directory
-// Others: ~/Documents/DKST-LLM-Chat
+// Others: ~/Documents/DKST LLM Chat Server
 func GetAppDataDir() string {
 	exePath, err := os.Executable()
 	if err != nil {
@@ -102,17 +107,39 @@ func GetAppDataDir() string {
 		return exeDir
 	}
 
-	// Mac -> ~/Documents/DKST-LLM-Chat
+	// Mac -> ~/Documents/DKST LLM Chat Server
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return exeDir // Fallback
 	}
 
-	docDir := filepath.Join(homeDir, "Documents", "DKST LLM Chat")
+	docDir := filepath.Join(homeDir, "Documents", macAppDataDirName)
+	legacyDir := filepath.Join(homeDir, "Documents", legacyMacAppDataDirName)
+	if err := migrateMacAppDataDir(legacyDir, docDir); err != nil {
+		return exeDir // Fallback
+	}
 	if err := os.MkdirAll(docDir, 0755); err != nil {
 		return exeDir // Fallback
 	}
 	return docDir
+}
+
+func migrateMacAppDataDir(oldDir, newDir string) error {
+	if oldDir == newDir {
+		return nil
+	}
+	if _, err := os.Stat(newDir); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if _, err := os.Stat(oldDir); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	return os.Rename(oldDir, newDir)
 }
 
 // GetResourcePath returns the absolute path for a resource

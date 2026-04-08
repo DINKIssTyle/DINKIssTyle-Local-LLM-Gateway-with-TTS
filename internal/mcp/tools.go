@@ -27,6 +27,11 @@ var (
 	memoryMu sync.Mutex
 )
 
+const (
+	legacyMacMemoryRootName = "DKST LLM Chat"
+	macMemoryRootName       = "DKST LLM Chat Server"
+)
+
 func compactMemoryText(input string, limit int) string {
 	input = strings.TrimSpace(input)
 	if limit <= 0 || len([]rune(input)) <= limit {
@@ -934,7 +939,7 @@ func DeleteMemoryDB(userID string, memoryID int64) (string, error) {
 }
 
 // GetUserMemoryDir returns the memory directory path for a user based on OS.
-// macOS: ~/Documents/DKST LLM Chat/memory/{userID}/
+// macOS: ~/Documents/DKST LLM Chat Server/memory/{userID}/
 // Windows/Linux: {executable_dir}/memory/{userID}/
 func GetUserMemoryDir(userID string) (string, error) {
 	if userID == "" {
@@ -947,7 +952,12 @@ func GetUserMemoryDir(userID string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		baseDir = filepath.Join(home, "Documents", "DKST LLM Chat", "memory")
+		newRoot := filepath.Join(home, "Documents", macMemoryRootName)
+		legacyRoot := filepath.Join(home, "Documents", legacyMacMemoryRootName)
+		if err := migrateLegacyMacMemoryRoot(legacyRoot, newRoot); err != nil {
+			return "", err
+		}
+		baseDir = filepath.Join(newRoot, "memory")
 	} else {
 		// Windows/Linux: Executable directory
 		ex, err := os.Executable()
@@ -958,6 +968,24 @@ func GetUserMemoryDir(userID string) (string, error) {
 	}
 
 	return filepath.Join(baseDir, userID), nil
+}
+
+func migrateLegacyMacMemoryRoot(oldRoot, newRoot string) error {
+	if oldRoot == newRoot {
+		return nil
+	}
+	if _, err := os.Stat(newRoot); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if _, err := os.Stat(oldRoot); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	return os.Rename(oldRoot, newRoot)
 }
 
 // GetUserMemoryFilePath returns the path to a specific memory file for a user.
