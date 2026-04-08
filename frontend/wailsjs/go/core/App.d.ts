@@ -83,6 +83,8 @@ export function LearnToolPattern(arg1:string,arg2:string):Promise<void>;
 
 export function LoadModel(arg1:string):Promise<void>;
 
+export function LogoutAllSessions():Promise<void>;
+
 export function OpenCertFolder():Promise<void>;
 
 export function OpenMemoryFolder(arg1:string):Promise<string>;

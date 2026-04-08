@@ -95,6 +95,26 @@
                         <select id="cfg-context-strategy" onchange="updateSettingsVisibility()"></select>
                     </div>
 
+                    <div class="setting-section">
+                        <div class="setting-section-title" data-i18n="section.embedding">임베딩 검색</div>
+
+                        <div class="setting-item">
+                            <div class="setting-toggle" onclick="toggleSwitch('cfg-enable-embeddings')">
+                                <span data-i18n="setting.enableEmbeddings.label">임베딩 검색 활성화</span>
+                                <input type="checkbox" id="cfg-enable-embeddings">
+                            </div>
+                            <p class="setting-desc" data-i18n="setting.enableEmbeddings.desc">FTS5에 더해 로컬 임베딩 기반 유사도 검색을 함께 사용합니다.</p>
+                        </div>
+
+                        <div class="setting-item">
+                            <label data-i18n="setting.embeddingModel.label">임베딩 모델</label>
+                            <p class="setting-desc" data-i18n="setting.embeddingModel.desc">현재는 multilingual-e5-small 기준으로 관리 UI를 준비합니다.</p>
+                            <select id="cfg-embedding-model">
+                                <option value="multilingual-e5-small">multilingual-e5-small</option>
+                            </select>
+                        </div>
+                    </div>
+
                     <div class="setting-item" id="container-enable-mcp">
                         <div class="setting-toggle"
                             onclick="toggleSwitch('cfg-enable-mcp'); updateSettingsVisibility()">
@@ -361,26 +381,6 @@
 
                 </div>
 
-                <div class="setting-section">
-                    <div class="setting-section-title" data-i18n="section.embedding">임베딩 검색</div>
-
-                    <div class="setting-item">
-                        <div class="setting-toggle" onclick="toggleSwitch('cfg-enable-embeddings')">
-                            <span data-i18n="setting.enableEmbeddings.label">임베딩 검색 활성화</span>
-                            <input type="checkbox" id="cfg-enable-embeddings">
-                        </div>
-                        <p class="setting-desc" data-i18n="setting.enableEmbeddings.desc">FTS5에 더해 로컬 임베딩 기반 유사도 검색을 함께 사용합니다.</p>
-                    </div>
-
-                    <div class="setting-item">
-                        <label data-i18n="setting.embeddingModel.label">임베딩 모델</label>
-                        <p class="setting-desc" data-i18n="setting.embeddingModel.desc">현재는 multilingual-e5-small 기준으로 관리 UI를 준비합니다.</p>
-                        <select id="cfg-embedding-model">
-                            <option value="multilingual-e5-small">multilingual-e5-small</option>
-                        </select>
-                    </div>
-                </div>
-
                 <!-- Advanced Settings Section -->
                 <div class="setting-section">
                     <div class="setting-section-title" data-i18n="section.advanced">Advanced Settings</div>
@@ -413,9 +413,9 @@
                         <span data-i18n="action.save">저장</span>
                     </button>
                 </div>
-                <button class="btn btn-logout" onclick="logout()" style="margin-top: 8px;">
+                <button class="btn btn-logout" onclick="logoutAllSessions()" style="margin-top: 8px;">
                     <span class="material-icons-round">logout</span>
-                    <span data-i18n="action.logout">로그아웃</span>
+                    <span data-i18n="action.logoutAllSessions">모든 위치에서 로그아웃</span>
                 </button>
                 <div class="modal-footer-info">
                     &copy; 2026 DINKI'ssTyle
