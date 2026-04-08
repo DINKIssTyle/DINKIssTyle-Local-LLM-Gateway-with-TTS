@@ -23,6 +23,9 @@ var (
 	db                           *sql.DB
 	memoryRetentionSchemaMu      sync.Mutex
 	memoryRetentionSchemaChecked bool
+	memoryRetentionConfigMu      sync.RWMutex
+	memoryRetentionConfig        = DefaultMemoryRetentionConfig()
+	userMemoryRetentionProvider  func(userID string) (MemoryRetentionConfig, bool)
 )
 
 const (
@@ -40,10 +43,67 @@ const (
 	retentionChatEventsDays        = 14
 	retentionRequestExecutionsDays = 21
 	retentionBackgroundJobsDays    = 7
-	retentionEphemeralMemoryDays   = 14
-	retentionWorkingMemoryDays     = 45
-	retentionCoreMemoryDays        = 180
 )
+
+type MemoryRetentionConfig struct {
+	CoreDays      int `json:"coreDays"`
+	WorkingDays   int `json:"workingDays"`
+	EphemeralDays int `json:"ephemeralDays"`
+}
+
+func DefaultMemoryRetentionConfig() MemoryRetentionConfig {
+	return MemoryRetentionConfig{
+		CoreDays:      0,
+		WorkingDays:   0,
+		EphemeralDays: 14,
+	}
+}
+
+func normalizeMemoryRetentionConfig(cfg MemoryRetentionConfig) MemoryRetentionConfig {
+	defaults := DefaultMemoryRetentionConfig()
+	if cfg.CoreDays < 0 {
+		cfg.CoreDays = defaults.CoreDays
+	}
+	if cfg.WorkingDays < 0 {
+		cfg.WorkingDays = defaults.WorkingDays
+	}
+	if cfg.EphemeralDays < 0 {
+		cfg.EphemeralDays = defaults.EphemeralDays
+	}
+	return cfg
+}
+
+func SetMemoryRetentionConfig(cfg MemoryRetentionConfig) {
+	memoryRetentionConfigMu.Lock()
+	defer memoryRetentionConfigMu.Unlock()
+	memoryRetentionConfig = normalizeMemoryRetentionConfig(cfg)
+}
+
+func GetMemoryRetentionConfig() MemoryRetentionConfig {
+	memoryRetentionConfigMu.RLock()
+	defer memoryRetentionConfigMu.RUnlock()
+	return memoryRetentionConfig
+}
+
+func SetUserMemoryRetentionProvider(provider func(userID string) (MemoryRetentionConfig, bool)) {
+	memoryRetentionConfigMu.Lock()
+	defer memoryRetentionConfigMu.Unlock()
+	userMemoryRetentionProvider = provider
+}
+
+func getMemoryRetentionConfigForUser(userID string) MemoryRetentionConfig {
+	memoryRetentionConfigMu.RLock()
+	provider := userMemoryRetentionProvider
+	fallback := memoryRetentionConfig
+	memoryRetentionConfigMu.RUnlock()
+
+	if provider != nil {
+		if cfg, ok := provider(strings.TrimSpace(userID)); ok {
+			return normalizeMemoryRetentionConfig(cfg)
+		}
+	}
+	return fallback
+}
 
 // InitDB initializes the SQLite database connection and creates necessary tables.
 func InitDB(dbPath string) error {
@@ -291,6 +351,42 @@ func createSchema() error {
 
 	CREATE INDEX IF NOT EXISTS idx_saved_turns_user_title_source
 	ON saved_turns(user_id, title_source, created_at DESC);
+
+	CREATE TABLE IF NOT EXISTS saved_turn_chunks (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		saved_turn_id INTEGER NOT NULL,
+		user_id TEXT NOT NULL,
+		chunk_index INTEGER NOT NULL,
+		chunk_text TEXT NOT NULL,
+		hit_count INTEGER NOT NULL DEFAULT 0,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY(saved_turn_id) REFERENCES saved_turns(id)
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_saved_turn_chunks_turn_id
+	ON saved_turn_chunks(saved_turn_id, chunk_index);
+
+	CREATE INDEX IF NOT EXISTS idx_saved_turn_chunks_user_id
+	ON saved_turn_chunks(user_id, created_at DESC);
+
+	CREATE VIRTUAL TABLE IF NOT EXISTS saved_turn_chunks_fts
+	USING fts5(
+		chunk_text,
+		saved_turn_id UNINDEXED,
+		user_id UNINDEXED,
+		chunk_index UNINDEXED,
+		tokenize = 'unicode61'
+	);
+
+	CREATE TABLE IF NOT EXISTS saved_turn_chunk_embeddings (
+		chunk_id INTEGER PRIMARY KEY,
+		embedding_model TEXT NOT NULL DEFAULT '',
+		embedding_dim INTEGER NOT NULL DEFAULT 0,
+		embedding_blob BLOB,
+		embedding_json TEXT NOT NULL DEFAULT '',
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY(chunk_id) REFERENCES saved_turn_chunks(id)
+	);
 
 	CREATE TABLE IF NOT EXISTS request_patterns (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -755,6 +851,11 @@ func runRetentionMaintenance(now time.Time) error {
 	return nil
 }
 
+// RunRetentionMaintenance executes the SQLite retention cleanup pass using the current UTC time.
+func RunRetentionMaintenance() error {
+	return runRetentionMaintenance(time.Now().UTC())
+}
+
 func pruneExpiredAuthSessions(now time.Time) error {
 	_, err := db.Exec(`DELETE FROM auth_sessions WHERE expires_at <= ?`, now.UTC())
 	if err != nil {
@@ -853,20 +954,31 @@ func shouldForgetMemory(memory MemoryEntry, now time.Time) bool {
 	if memory.Pinned {
 		return false
 	}
+
 	lastTouched := memory.LastAccessedAt
 	if lastTouched.IsZero() {
 		lastTouched = memory.CreatedAt
 	}
 	ageDays := now.Sub(lastTouched).Hours() / 24
 	retentionScore := memory.ImportanceScore + math.Min(float64(memory.HitCount), 8)*0.08
+	retentionCfg := getMemoryRetentionConfigForUser(memory.UserID)
 
 	switch memory.MemoryTier {
 	case memoryTierCore:
-		return ageDays > retentionCoreMemoryDays && retentionScore < 0.75
+		if retentionCfg.CoreDays <= 0 {
+			return false
+		}
+		return ageDays > float64(retentionCfg.CoreDays) && retentionScore < 0.75
 	case memoryTierWorking:
-		return ageDays > retentionWorkingMemoryDays && retentionScore < 0.65
+		if retentionCfg.WorkingDays <= 0 {
+			return false
+		}
+		return ageDays > float64(retentionCfg.WorkingDays) && retentionScore < 0.65
 	default:
-		return ageDays > retentionEphemeralMemoryDays && retentionScore < 0.55
+		if retentionCfg.EphemeralDays <= 0 {
+			return false
+		}
+		return ageDays > float64(retentionCfg.EphemeralDays) && retentionScore < 0.55
 	}
 }
 
@@ -1920,6 +2032,20 @@ func buildSavedTurnFallbackTitle(responseText string) string {
 	return strings.TrimSpace(string(runes[:42])) + "..."
 }
 
+func buildSavedTurnSearchDocument(title, promptText, responseText string) string {
+	var parts []string
+	if strings.TrimSpace(title) != "" {
+		parts = append(parts, "Title: "+strings.TrimSpace(title))
+	}
+	if strings.TrimSpace(promptText) != "" {
+		parts = append(parts, "User: "+strings.TrimSpace(promptText))
+	}
+	if strings.TrimSpace(responseText) != "" {
+		parts = append(parts, "Assistant: "+strings.TrimSpace(responseText))
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
 func SaveSavedTurn(userID, promptText, responseText string) (SavedTurnEntry, error) {
 	var entry SavedTurnEntry
 	if db == nil {
@@ -1943,7 +2069,17 @@ func SaveSavedTurn(userID, promptText, responseText string) (SavedTurnEntry, err
 		user_id, title, title_source, auto_title_failures, prompt_text, response_text, created_at, updated_at
 	) VALUES (?, ?, 'fallback', 0, ?, ?, ?, ?)`
 
-	result, err := db.Exec(query, userID, title, promptText, responseText, now, now)
+	tx, err := db.Begin()
+	if err != nil {
+		return entry, fmt.Errorf("failed to start saved turn insert: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	result, err := tx.Exec(query, userID, title, promptText, responseText, now, now)
 	if err != nil {
 		return entry, fmt.Errorf("failed to save turn: %w", err)
 	}
@@ -1951,6 +2087,12 @@ func SaveSavedTurn(userID, promptText, responseText string) (SavedTurnEntry, err
 	id, err := result.LastInsertId()
 	if err != nil {
 		return entry, fmt.Errorf("failed to fetch saved turn id: %w", err)
+	}
+	if err = rebuildSavedTurnChunksTx(tx, id, userID, title, promptText, responseText, now); err != nil {
+		return entry, err
+	}
+	if err = tx.Commit(); err != nil {
+		return entry, fmt.Errorf("failed to commit saved turn insert: %w", err)
 	}
 
 	return GetSavedTurn(userID, id)
@@ -2043,6 +2185,245 @@ func SearchSavedTurns(userID, queryStr string, limit int) ([]SavedTurnEntry, err
 	return entries, nil
 }
 
+func SearchSavedTurnChunkMatches(userID, queryStr string, limit int) ([]SavedTurnChunkMatch, error) {
+	if db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+
+	trimmed := strings.TrimSpace(queryStr)
+	if trimmed == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	results, err := hybridSearchSavedTurnChunkMatches(userID, trimmed, limit)
+	if err != nil {
+		return nil, err
+	}
+	if len(results) > 0 {
+		return results, nil
+	}
+	return searchSavedTurnChunkMatchesLike(userID, trimmed, limit)
+}
+
+func searchSavedTurnChunkMatchesLike(userID, queryStr string, limit int) ([]SavedTurnChunkMatch, error) {
+	searchPattern := "%" + queryStr + "%"
+	rows, err := db.Query(`
+		SELECT
+			st.id, st.user_id, st.title, st.title_source, st.auto_title_failures, st.prompt_text, st.response_text, st.created_at, st.updated_at,
+			stc.id, stc.chunk_index, stc.chunk_text
+		FROM saved_turn_chunks stc
+		INNER JOIN saved_turns st ON st.id = stc.saved_turn_id
+		WHERE stc.user_id = ? AND stc.chunk_text LIKE ?
+		ORDER BY st.created_at DESC, stc.chunk_index ASC
+		LIMIT ?`, userID, searchPattern, limit)
+	if err != nil {
+		return nil, fmt.Errorf("saved turn chunk like search failed: %w", err)
+	}
+	defer rows.Close()
+
+	var results []SavedTurnChunkMatch
+	for rows.Next() {
+		var match SavedTurnChunkMatch
+		if err := rows.Scan(
+			&match.ID,
+			&match.UserID,
+			&match.Title,
+			&match.TitleSource,
+			&match.AutoTitleFailures,
+			&match.PromptText,
+			&match.ResponseText,
+			&match.CreatedAt,
+			&match.UpdatedAt,
+			&match.ChunkID,
+			&match.ChunkIndex,
+			&match.ChunkText,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan saved turn chunk like match: %w", err)
+		}
+		results = append(results, match)
+	}
+	return results, rows.Err()
+}
+
+func searchSavedTurnChunkMatchesFTS(userID, queryStr string, limit int) ([]SavedTurnChunkMatch, error) {
+	ftsQuery := buildBufferedFTSQuery(queryStr)
+	if strings.TrimSpace(ftsQuery) == "" {
+		return nil, nil
+	}
+	rows, err := db.Query(`
+		SELECT
+			st.id, st.user_id, st.title, st.title_source, st.auto_title_failures, st.prompt_text, st.response_text, st.created_at, st.updated_at,
+			stc.id, stc.chunk_index, stc.chunk_text, bm25(saved_turn_chunks_fts)
+		FROM saved_turn_chunks_fts
+		JOIN saved_turn_chunks stc ON stc.id = saved_turn_chunks_fts.rowid
+		JOIN saved_turns st ON st.id = stc.saved_turn_id
+		WHERE saved_turn_chunks_fts MATCH ?
+		  AND stc.user_id = ?
+		ORDER BY bm25(saved_turn_chunks_fts), st.created_at DESC, stc.chunk_index ASC
+		LIMIT ?
+	`, ftsQuery, userID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("saved turn chunk fts search failed: %w", err)
+	}
+	defer rows.Close()
+
+	var results []SavedTurnChunkMatch
+	for rows.Next() {
+		var match SavedTurnChunkMatch
+		var bm25 float64
+		if err := rows.Scan(
+			&match.ID,
+			&match.UserID,
+			&match.Title,
+			&match.TitleSource,
+			&match.AutoTitleFailures,
+			&match.PromptText,
+			&match.ResponseText,
+			&match.CreatedAt,
+			&match.UpdatedAt,
+			&match.ChunkID,
+			&match.ChunkIndex,
+			&match.ChunkText,
+			&bm25,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan saved turn fts match: %w", err)
+		}
+		match.FTSScore = normalizeFTSScore(bm25)
+		results = append(results, match)
+	}
+	return results, rows.Err()
+}
+
+func searchSavedTurnChunkMatchesVector(userID, queryStr string, limit int) ([]SavedTurnChunkMatch, error) {
+	queryVector, queryModel := buildBufferedEmbedding(queryStr, BufferedEmbeddingUsageQuery)
+	if len(queryVector) == 0 {
+		return nil, nil
+	}
+
+	rows, err := db.Query(`
+		SELECT
+			st.id, st.user_id, st.title, st.title_source, st.auto_title_failures, st.prompt_text, st.response_text, st.created_at, st.updated_at,
+			stc.id, stc.chunk_index, stc.chunk_text, e.embedding_json, e.embedding_model
+		FROM saved_turn_chunks stc
+		JOIN saved_turns st ON st.id = stc.saved_turn_id
+		JOIN saved_turn_chunk_embeddings e ON e.chunk_id = stc.id
+		WHERE stc.user_id = ?
+	`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("saved turn chunk vector search failed: %w", err)
+	}
+	defer rows.Close()
+
+	var ranked []SavedTurnChunkMatch
+	for rows.Next() {
+		var match SavedTurnChunkMatch
+		var embeddingJSON string
+		var embeddingModel string
+		if err := rows.Scan(
+			&match.ID,
+			&match.UserID,
+			&match.Title,
+			&match.TitleSource,
+			&match.AutoTitleFailures,
+			&match.PromptText,
+			&match.ResponseText,
+			&match.CreatedAt,
+			&match.UpdatedAt,
+			&match.ChunkID,
+			&match.ChunkIndex,
+			&match.ChunkText,
+			&embeddingJSON,
+			&embeddingModel,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan saved turn vector match: %w", err)
+		}
+		if strings.TrimSpace(queryModel) != "" && strings.TrimSpace(embeddingModel) != "" && embeddingModel != queryModel {
+			continue
+		}
+		vector, err := parseBufferedEmbeddingJSON(embeddingJSON)
+		if err != nil {
+			continue
+		}
+		score := cosineSimilarity(queryVector, vector)
+		if score <= 0 {
+			continue
+		}
+		match.VectorScore = score
+		ranked = append(ranked, match)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if math.Abs(ranked[i].VectorScore-ranked[j].VectorScore) < 1e-9 {
+			if ranked[i].CreatedAt.Equal(ranked[j].CreatedAt) {
+				return ranked[i].ChunkIndex < ranked[j].ChunkIndex
+			}
+			return ranked[i].CreatedAt.After(ranked[j].CreatedAt)
+		}
+		return ranked[i].VectorScore > ranked[j].VectorScore
+	})
+	if len(ranked) > limit {
+		ranked = ranked[:limit]
+	}
+	return ranked, nil
+}
+
+func hybridSearchSavedTurnChunkMatches(userID, queryStr string, limit int) ([]SavedTurnChunkMatch, error) {
+	ftsLimit := max(limit*3, limit)
+	ftsMatches, err := searchSavedTurnChunkMatchesFTS(userID, queryStr, ftsLimit)
+	if err != nil {
+		ftsMatches = nil
+	}
+	vectorMatches, err := searchSavedTurnChunkMatchesVector(userID, queryStr, ftsLimit)
+	if err != nil {
+		vectorMatches = nil
+	}
+	if len(ftsMatches) == 0 && len(vectorMatches) == 0 {
+		return nil, nil
+	}
+
+	merged := make(map[string]SavedTurnChunkMatch, len(ftsMatches)+len(vectorMatches))
+	for _, match := range ftsMatches {
+		match.HybridScore = match.FTSScore
+		key := fmt.Sprintf("%d:%d", match.ID, match.ChunkIndex)
+		merged[key] = match
+	}
+	for _, match := range vectorMatches {
+		key := fmt.Sprintf("%d:%d", match.ID, match.ChunkIndex)
+		existing, ok := merged[key]
+		if ok {
+			existing.VectorScore = match.VectorScore
+			existing.HybridScore = (existing.FTSScore * 0.65) + (match.VectorScore * 0.35)
+			merged[key] = existing
+			continue
+		}
+		match.HybridScore = match.VectorScore * 0.35
+		merged[key] = match
+	}
+
+	ranked := make([]SavedTurnChunkMatch, 0, len(merged))
+	for _, match := range merged {
+		ranked = append(ranked, match)
+	}
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if math.Abs(ranked[i].HybridScore-ranked[j].HybridScore) < 1e-9 {
+			if ranked[i].CreatedAt.Equal(ranked[j].CreatedAt) {
+				return ranked[i].ChunkIndex < ranked[j].ChunkIndex
+			}
+			return ranked[i].CreatedAt.After(ranked[j].CreatedAt)
+		}
+		return ranked[i].HybridScore > ranked[j].HybridScore
+	})
+	if len(ranked) > limit {
+		ranked = ranked[:limit]
+	}
+	return ranked, nil
+}
+
 func GetSavedTurn(userID string, turnID int64) (SavedTurnEntry, error) {
 	var entry SavedTurnEntry
 	if db == nil {
@@ -2076,8 +2457,21 @@ func DeleteSavedTurn(userID string, turnID int64) error {
 	if db == nil {
 		return fmt.Errorf("database not initialized")
 	}
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to start saved turn delete: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
 
-	res, err := db.Exec(`DELETE FROM saved_turns WHERE id = ? AND user_id = ?`, turnID, userID)
+	if err = deleteSavedTurnChunksTx(tx, turnID, userID); err != nil {
+		return err
+	}
+
+	res, err := tx.Exec(`DELETE FROM saved_turns WHERE id = ? AND user_id = ?`, turnID, userID)
 	if err != nil {
 		return fmt.Errorf("failed to delete saved turn: %w", err)
 	}
@@ -2087,6 +2481,9 @@ func DeleteSavedTurn(userID string, turnID int64) error {
 	}
 	if rowsAffected == 0 {
 		return fmt.Errorf("saved turn not found or not owned by user")
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit saved turn delete: %w", err)
 	}
 	return nil
 }
@@ -2136,10 +2533,21 @@ func UpdateSavedTurnTitle(userID string, turnID int64, title string, titleSource
 		titleSource = "generated"
 	}
 
-	res, err := db.Exec(`
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to start saved turn title update: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	now := time.Now().UTC()
+	res, err := tx.Exec(`
 		UPDATE saved_turns
 		SET title = ?, title_source = ?, auto_title_failures = 0, updated_at = ?
-		WHERE id = ? AND user_id = ?`, title, titleSource, time.Now().UTC(), turnID, userID)
+		WHERE id = ? AND user_id = ?`, title, titleSource, now, turnID, userID)
 	if err != nil {
 		return fmt.Errorf("failed to update saved turn title: %w", err)
 	}
@@ -2149,6 +2557,16 @@ func UpdateSavedTurnTitle(userID string, turnID int64, title string, titleSource
 	}
 	if rowsAffected == 0 {
 		return fmt.Errorf("saved turn not found or not owned by user")
+	}
+	var promptText, responseText string
+	if err = tx.QueryRow(`SELECT prompt_text, response_text FROM saved_turns WHERE id = ? AND user_id = ?`, turnID, userID).Scan(&promptText, &responseText); err != nil {
+		return fmt.Errorf("failed to load saved turn after title update: %w", err)
+	}
+	if err = rebuildSavedTurnChunksTx(tx, turnID, userID, title, promptText, responseText, now); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit saved turn title update: %w", err)
 	}
 	return nil
 }
@@ -2228,6 +2646,82 @@ func InsertMemory(userID, fullText string) (int64, error) {
 	return id, nil
 }
 
+func rebuildSavedTurnChunksTx(tx *sql.Tx, savedTurnID int64, userID, title, promptText, responseText string, createdAt time.Time) error {
+	if err := deleteSavedTurnChunksTx(tx, savedTurnID, userID); err != nil {
+		return err
+	}
+
+	fullText := buildSavedTurnSearchDocument(title, promptText, responseText)
+	chunks := chunkBufferedContent(fullText, memoryChunkSize, memoryChunkOverlap)
+	if len(chunks) == 0 {
+		return nil
+	}
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO saved_turn_chunks (saved_turn_id, user_id, chunk_index, chunk_text, hit_count, created_at)
+		VALUES (?, ?, ?, ?, 0, ?)`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare saved turn chunk insert: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, chunk := range chunks {
+		result, err := stmt.Exec(savedTurnID, userID, chunk.Index, chunk.Text, createdAt)
+		if err != nil {
+			return fmt.Errorf("failed to insert saved turn chunk %d: %w", chunk.Index, err)
+		}
+		chunkID, err := result.LastInsertId()
+		if err != nil {
+			return fmt.Errorf("failed to read saved turn chunk id: %w", err)
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO saved_turn_chunks_fts(rowid, chunk_text, saved_turn_id, user_id, chunk_index)
+			VALUES (?, ?, ?, ?, ?)
+		`, chunkID, chunk.Text, savedTurnID, userID, chunk.Index); err != nil {
+			return fmt.Errorf("failed to index saved turn chunk: %w", err)
+		}
+		if err := upsertSavedTurnChunkEmbeddingTx(tx, chunkID, chunk.Text); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func deleteSavedTurnChunksTx(tx *sql.Tx, savedTurnID int64, userID string) error {
+	rows, err := tx.Query(`SELECT id FROM saved_turn_chunks WHERE saved_turn_id = ? AND user_id = ?`, savedTurnID, userID)
+	if err != nil {
+		return fmt.Errorf("failed to query saved turn chunks for delete: %w", err)
+	}
+	var chunkIDs []int64
+	for rows.Next() {
+		var chunkID int64
+		if scanErr := rows.Scan(&chunkID); scanErr != nil {
+			rows.Close()
+			return fmt.Errorf("failed to scan saved turn chunk id for delete: %w", scanErr)
+		}
+		chunkIDs = append(chunkIDs, chunkID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("failed to iterate saved turn chunk ids for delete: %w", err)
+	}
+	rows.Close()
+
+	for _, chunkID := range chunkIDs {
+		if _, err := tx.Exec(`DELETE FROM saved_turn_chunk_embeddings WHERE chunk_id = ?`, chunkID); err != nil {
+			return fmt.Errorf("failed to delete saved turn chunk embedding: %w", err)
+		}
+		if _, err := tx.Exec(`DELETE FROM saved_turn_chunks_fts WHERE rowid = ?`, chunkID); err != nil {
+			return fmt.Errorf("failed to delete saved turn chunk fts row: %w", err)
+		}
+	}
+	if _, err := tx.Exec(`DELETE FROM saved_turn_chunks WHERE saved_turn_id = ? AND user_id = ?`, savedTurnID, userID); err != nil {
+		return fmt.Errorf("failed to delete saved turn chunks: %w", err)
+	}
+	return nil
+}
+
 func insertMemoryChunksTx(tx *sql.Tx, memoryID int64, userID, fullText string, createdAt time.Time) error {
 	chunks := chunkBufferedContent(fullText, memoryChunkSize, memoryChunkOverlap)
 	if len(chunks) == 0 {
@@ -2292,6 +2786,33 @@ func upsertMemoryChunkEmbeddingTx(tx *sql.Tx, chunkID int64, text string) error 
 	return nil
 }
 
+func upsertSavedTurnChunkEmbeddingTx(tx *sql.Tx, chunkID int64, text string) error {
+	vector, modelName := buildBufferedEmbedding(text, BufferedEmbeddingUsageDocument)
+	if len(vector) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(modelName) == "" {
+		modelName = webEmbeddingModel
+	}
+	embeddingJSON, err := json.Marshal(vector)
+	if err != nil {
+		return fmt.Errorf("failed to marshal saved turn embedding: %w", err)
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO saved_turn_chunk_embeddings (
+			chunk_id, embedding_model, embedding_dim, embedding_json, updated_at
+		) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(chunk_id) DO UPDATE SET
+			embedding_model = excluded.embedding_model,
+			embedding_dim = excluded.embedding_dim,
+			embedding_json = excluded.embedding_json,
+			updated_at = excluded.updated_at
+	`, chunkID, modelName, len(vector), string(embeddingJSON), time.Now().UTC()); err != nil {
+		return fmt.Errorf("failed to store saved turn chunk embedding: %w", err)
+	}
+	return nil
+}
+
 // IncrementHitCount increases the hit counter for a specific memory entry.
 func IncrementHitCount(memoryID int64) error {
 	if db == nil {
@@ -2330,6 +2851,16 @@ type MemoryEntry struct {
 
 type MemoryChunkMatch struct {
 	MemoryEntry
+	ChunkID     int64   `json:"chunk_id"`
+	ChunkIndex  int     `json:"chunk_index"`
+	ChunkText   string  `json:"chunk_text"`
+	FTSScore    float64 `json:"fts_score,omitempty"`
+	VectorScore float64 `json:"vector_score,omitempty"`
+	HybridScore float64 `json:"hybrid_score,omitempty"`
+}
+
+type SavedTurnChunkMatch struct {
+	SavedTurnEntry
 	ChunkID     int64   `json:"chunk_id"`
 	ChunkIndex  int     `json:"chunk_index"`
 	ChunkText   string  `json:"chunk_text"`

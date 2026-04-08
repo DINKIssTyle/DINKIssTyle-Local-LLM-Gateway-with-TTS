@@ -91,7 +91,6 @@
         }
 
         .user-card {
-            flex: 1;
             display: flex;
             flex-direction: column;
             margin-bottom: 0 !important;
@@ -864,13 +863,13 @@
 
             <!-- Right Column -->
             <div class="col right-col">
-                <!-- TTS Engine Settings -->
+                <!-- Additional Assets -->
                 <div class="card">
-                    <div class="card-title">TTS Engine Settings</div>
+                    <div class="card-title">Additional Assets</div>
                     <div class="form-group">
                         <div class="setting-row"
                             style="display: flex; align-items: center; justify-content: space-between; padding: 4px 0;">
-                            <label style="margin:0; font-weight: 500;">Enable TTS</label>
+                            <label style="margin:0; font-weight: 500;">Enable TTS &amp; Vector DB</label>
                             <input type="checkbox" id="enable-tts" style="width: auto;" onchange="toggleEnableTTS()">
                         </div>
                     </div>
@@ -886,10 +885,6 @@
                                 <span id="asset-status-text" style="font-size: 12px;">Checking...</span>
                             </div>
                         </div>
-                        <button id="download-assets-btn" class="btn btn-primary btn-block" style="display: none;"
-                            onclick="downloadAssets()">
-                            <span class="material-icons-round">download</span> Download Assets
-                        </button>
                     </div>
 
                     <div class="inline-actions">
@@ -897,10 +892,6 @@
                             <span class="material-icons-round">inventory_2</span>
                             Model Manager
                         </button>
-                    </div>
-
-                    <div class="footer" style="margin-top: 12px; text-align: left; font-size: 11px;">
-                        Detailed TTS settings are available in the web client.
                     </div>
                 </div>
 
@@ -931,21 +922,17 @@
                             <input type="checkbox" id="enable-debug-trace" style="width: auto;"
                                 onchange="toggleDebugTrace()">
                         </div>
-                        <div style="font-size: 11px; color: var(--text-secondary); margin-top: 8px;">
-                            Collects timing and tool-flow events for chat, MCP tools, and web reading.
-                        </div>
                     </div>
                 </div>
 
-                <!-- User Management -->
+                <!-- Account Management -->
                 <div class="card user-card">
-                    <div class="card-title">User Management</div>
-                    <div class="user-list" id="user-list"></div>
+                    <div class="card-title">Account Management</div>
                     <button class="btn btn-block"
                         style="background: var(--border-color); color: var(--text-color); margin-top: 12px; flex-shrink: 0;"
-                        onclick="addUser()">
-                        <span class="material-icons-round">person_add</span>
-                        Add User
+                        onclick="openAccountManagementModal()">
+                        <span class="material-icons-round">manage_accounts</span>
+                        Manage Accounts
                     </button>
                 </div>
             </div>
@@ -1005,11 +992,33 @@
         </div>
     </div>
 
+    <!-- Account Management Modal -->
+    <div class="modal-overlay" id="account-management-modal">
+        <div class="modal" style="max-width: 520px;">
+            <div class="modal-header">
+                <div class="modal-title">Account Management</div>
+                <button class="icon-btn" onclick="closeAccountManagementModal()">
+                    <span class="material-icons-round">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="user-list" id="user-list"></div>
+            </div>
+            <div class="modal-footer" style="display: flex; gap: 8px; justify-content: space-between;">
+                <button class="btn" style="background: var(--border-color);" onclick="closeAccountManagementModal()">Close</button>
+                <button class="btn btn-primary" onclick="addUser()">
+                    <span class="material-icons-round">person_add</span>
+                    Add Account
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Add User Modal -->
     <div class="modal-overlay" id="add-user-modal">
         <div class="modal" style="max-width: 300px;">
             <div class="modal-header">
-                <div class="modal-title">Add User</div>
+                <div class="modal-title">Add Account</div>
                 <button class="icon-btn" onclick="closeAddUserModal()">
                     <span class="material-icons-round">close</span>
                 </button>
@@ -1033,7 +1042,7 @@
             <div class="modal-footer" style="display: flex; gap: 8px; justify-content: flex-end;">
                 <button class="btn" style="background: var(--border-color);"
                     onclick="closeAddUserModal()">Cancel</button>
-                <button class="btn btn-primary" onclick="submitAddUser()">Add User</button>
+                <button class="btn btn-primary" onclick="submitAddUser()">Add Account</button>
             </div>
         </div>
     </div>
@@ -1136,7 +1145,7 @@
     <div class="modal-overlay" id="edit-user-modal">
         <div class="modal" style="max-width: 400px;">
             <div class="modal-header">
-                <div class="modal-title">Edit User: <span id="edit-user-id-display"></span></div>
+                <div class="modal-title">Edit Account: <span id="edit-user-id-display"></span></div>
                 <button class="icon-btn" onclick="closeEditUserModal()">
                     <span class="material-icons-round">close</span>
                 </button>
@@ -1181,6 +1190,28 @@
                     </div>
                     <div style="font-size: 11px; color: var(--text-secondary); margin-top: -8px;">
                         This API key will be used when this user makes LLM requests.
+                    </div>
+                </div>
+
+                <!-- Memory Retention Section -->
+                <div style="margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border-color);">
+                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);">Memory Retention</div>
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 12px;">
+                        Account policy. Set days to keep each memory tier for this user. Use <code>0</code> to disable automatic deletion.
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Core Days</label>
+                            <input type="number" id="edit-retention-core-days" min="0" step="1" placeholder="0">
+                        </div>
+                        <div class="form-group">
+                            <label>Working Days</label>
+                            <input type="number" id="edit-retention-working-days" min="0" step="1" placeholder="45">
+                        </div>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label>Ephemeral Days</label>
+                        <input type="number" id="edit-retention-ephemeral-days" min="0" step="1" placeholder="14">
                     </div>
                 </div>
 
@@ -1230,16 +1261,29 @@
             const leftCol = document.querySelector('.left-col');
             const rightCol = document.querySelector('.right-col');
             const debugCol = document.querySelector('.debug-col');
-            if (leftCol && rightCol) {
-                // Reset height to auto first to recalculate if needed
-                rightCol.style.height = 'auto';
-                if (debugCol) debugCol.style.height = 'auto';
+            if (!leftCol || !rightCol) {
+                return;
+            }
 
-                // Set right column height to match left column
-                const leftHeight = leftCol.offsetHeight;
-                if (leftHeight > 0) {
-                    rightCol.style.height = leftHeight + 'px';
-                    if (debugCol && debugTraceEnabled) debugCol.style.height = leftHeight + 'px';
+            const leftCards = Array.from(leftCol.querySelectorAll(':scope > .card'));
+            const rightCards = Array.from(rightCol.querySelectorAll(':scope > .card'));
+
+            [...leftCards, ...rightCards].forEach((card) => {
+                card.style.minHeight = '0px';
+            });
+
+            const pairCount = Math.min(leftCards.length, rightCards.length);
+            for (let i = 0; i < pairCount; i++) {
+                const pairHeight = Math.max(leftCards[i].offsetHeight, rightCards[i].offsetHeight);
+                leftCards[i].style.minHeight = pairHeight + 'px';
+                rightCards[i].style.minHeight = pairHeight + 'px';
+            }
+
+            if (debugCol && debugTraceEnabled) {
+                debugCol.style.height = 'auto';
+                const mainHeight = Math.max(leftCol.offsetHeight, rightCol.offsetHeight);
+                if (mainHeight > 0) {
+                    debugCol.style.height = mainHeight + 'px';
                 }
             }
         }
@@ -1294,6 +1338,7 @@
         let debugTracePreviousSize = null;
         let openTracePayloadEntry = null;
         let managedModelsRefreshTimer = null;
+        let statusRefreshTimer = null;
 
         async function init() {
             if (typeof window.go !== 'undefined') {
@@ -1313,6 +1358,10 @@
                     loadStartupSettings();
                     loadAdvancedConfig();
                     await loadDebugTraceConfig();
+                    await updateStatus();
+                    if (statusRefreshTimer === null) {
+                        statusRefreshTimer = window.setInterval(updateStatus, 3000);
+                    }
 
                     // Listen for asset events
                     window.runtime.EventsOn("assets-ready", () => {
@@ -1687,42 +1736,16 @@
         function updateAssetUI(ready) {
             const dot = document.getElementById('asset-status-dot');
             const text = document.getElementById('asset-status-text');
-            const btn = document.getElementById('download-assets-btn');
 
             if (ready) {
                 dot.className = 'status-dot running'; // Re-use running class for green
                 text.textContent = 'Ready';
                 text.style.color = 'var(--success-color)';
-                btn.style.display = 'none';
             } else {
                 dot.className = 'status-dot'; // Default red
-                text.textContent = 'Missing';
+                text.textContent = 'Download required';
                 text.style.color = 'var(--danger-color)';
-                btn.style.display = 'flex';
             }
-        }
-
-        async function downloadAssets() {
-            showConfirm("Download missing assets (~300MB)?\\nThe application window may freeze during download.", async (confirmed) => {
-                if (!confirmed) return;
-
-                const btn = document.getElementById('download-assets-btn');
-                const originalText = btn.innerHTML;
-
-                btn.disabled = true;
-                btn.innerHTML = '<span class="material-icons-round">hourglass_bottom</span> Downloading...';
-
-                try {
-                    await window.go.core.App.DownloadAssets();
-                    showAlert("Assets downloaded successfully!");
-                    checkAssetStatus(); // Refresh status
-                } catch (e) {
-                    showAlert("Download failed: " + e.message);
-                } finally {
-                    btn.disabled = false;
-                    btn.innerHTML = originalText;
-                }
-            });
         }
 
         function openModelManagerModal() {
@@ -1909,6 +1932,7 @@
             const enabled = document.getElementById('enable-tts').checked;
             try {
                 await window.go.core.App.SetEnableTTS(enabled);
+                checkAssetStatus();
             } catch (e) {
                 console.error('Failed to set TTS:', e);
             }
@@ -2003,6 +2027,16 @@
 
 
 
+        async function updateStatus() {
+            if (typeof window.go === 'undefined') return;
+            try {
+                const status = await window.go.core.App.GetServerStatus();
+                updateUI(status.running, status.port);
+            } catch (e) {
+                console.error('Status update failed:', e);
+            }
+        }
+
         function updateUI(running, port) {
             isRunning = running;
             const dot = document.getElementById('status-dot');
@@ -2079,6 +2113,15 @@
             }
         }
 
+        async function openAccountManagementModal() {
+            document.getElementById('account-management-modal').style.display = 'flex';
+            await loadUsers();
+        }
+
+        function closeAccountManagementModal() {
+            document.getElementById('account-management-modal').style.display = 'none';
+        }
+
         // Add User Modal Functions
         function addUser() {
             document.getElementById('new-user-id').value = '';
@@ -2142,7 +2185,7 @@
         }
 
         async function deleteUser(id) {
-            showConfirm(`Delete user "${id}"?`, async (confirmed) => {
+            showConfirm(`Delete account "${id}"?`, async (confirmed) => {
                 if (!confirmed) return;
                 try {
                     await window.go.core.App.DeleteUser(id);
@@ -2195,6 +2238,11 @@
                 // Load API Key (full token)
                 const apiKey = await window.go.core.App.GetUserApiToken(userId);
                 document.getElementById('edit-user-api-key').value = apiKey || '';
+
+                const retention = await window.go.core.App.GetUserMemoryRetentionConfig(userId);
+                document.getElementById('edit-retention-core-days').value = String(retention?.coreDays ?? 0);
+                document.getElementById('edit-retention-working-days').value = String(retention?.workingDays ?? 0);
+                document.getElementById('edit-retention-ephemeral-days').value = String(retention?.ephemeralDays ?? 14);
 
                 // Load Disabled Tools
                 let disabledTools = [];
@@ -2288,6 +2336,14 @@
             const isAdmin = document.getElementById('edit-user-admin').checked;
             const apiKey = document.getElementById('edit-user-api-key').value;
             const newRole = isAdmin ? 'admin' : 'user';
+            const coreDays = parseInt(document.getElementById('edit-retention-core-days').value || '0', 10);
+            const workingDays = parseInt(document.getElementById('edit-retention-working-days').value || '0', 10);
+            const ephemeralDays = parseInt(document.getElementById('edit-retention-ephemeral-days').value || '0', 10);
+
+            if ([coreDays, workingDays, ephemeralDays].some((value) => Number.isNaN(value) || value < 0)) {
+                showAlert('Memory retention days must be zero or a positive integer.');
+                return;
+            }
 
             try {
                 // Update role if changed
@@ -2297,6 +2353,13 @@
 
                 // Update API key
                 await window.go.core.App.SetUserApiToken(userId, apiKey);
+
+                // Update account memory retention policy
+                await window.go.core.App.SetUserMemoryRetentionConfig(userId, {
+                    coreDays: coreDays,
+                    workingDays: workingDays,
+                    ephemeralDays: ephemeralDays,
+                });
 
                 // Update Disabled Tools
                 const toolCheckboxes = document.querySelectorAll('.tool-toggle');

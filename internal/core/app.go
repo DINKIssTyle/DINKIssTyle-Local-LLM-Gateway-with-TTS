@@ -296,6 +296,13 @@ func NewApp(assets embed.FS) *App {
 		authMgr: NewAuthManager(GetResourcePath("users.json")),
 		assets:  assets,
 	}
+	globalApp = a
+	mcp.SetUserMemoryRetentionProvider(func(userID string) (mcp.MemoryRetentionConfig, bool) {
+		if strings.TrimSpace(userID) == "" {
+			return mcp.DefaultMemoryRetentionConfig(), false
+		}
+		return a.authMgr.ResolveUserMemoryRetentionConfig(userID), true
+	})
 	a.loadConfig()
 	setDebugTraceCollectorEnabled(a.enableDebugTrace)
 	mcp.SetTraceHook(func(ev mcp.TraceEvent) {
@@ -421,6 +428,7 @@ func (a *App) saveConfig() {
 func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
 	globalApp = a
+	a.startRetentionMaintenanceLoop()
 
 	// Setup paths for non-Windows
 	a.CheckAndSetupPaths()
@@ -505,6 +513,26 @@ func (a *App) Startup(ctx context.Context) {
 	}
 }
 
+func (a *App) startRetentionMaintenanceLoop() {
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-a.ctx.Done():
+				return
+			case <-ticker.C:
+				if err := mcp.RunRetentionMaintenance(); err != nil {
+					log.Printf("[Retention] scheduled maintenance warning: %v", err)
+				} else {
+					log.Printf("[Retention] scheduled maintenance completed")
+				}
+			}
+		}
+	}()
+}
+
 // Shutdown is called when the app terminates
 func (a *App) Shutdown(ctx context.Context) {
 	fmt.Println("Shutting down application...")
@@ -521,17 +549,40 @@ func (a *App) Quit() {
 // GetServerStatus returns the current server status
 func (a *App) GetServerStatus() map[string]interface{} {
 	a.serverMux.Lock()
-	defer a.serverMux.Unlock()
-	return map[string]interface{}{
-		"running":          a.isRunning,
-		"port":             a.port,
-		"llmEndpoint":      a.llmEndpoint,
-		"llmMode":          a.llmMode,
-		"hasApiToken":      a.llmApiToken != "",
-		"enableTTS":        a.enableTTS,
-		"enableMCP":        a.enableMCP,
-		"enableDebugTrace": a.enableDebugTrace,
+	running := a.isRunning
+	port := a.port
+	llmEndpoint := a.llmEndpoint
+	llmMode := a.llmMode
+	hasAPIToken := a.llmApiToken != ""
+	enableTTS := a.enableTTS
+	enableMCP := a.enableMCP
+	enableDebugTrace := a.enableDebugTrace
+	a.serverMux.Unlock()
+
+	if !running && port != "" && isLocalServerHealthy(port) {
+		running = true
 	}
+
+	return map[string]interface{}{
+		"running":          running,
+		"port":             port,
+		"llmEndpoint":      llmEndpoint,
+		"llmMode":          llmMode,
+		"hasApiToken":      hasAPIToken,
+		"enableTTS":        enableTTS,
+		"enableMCP":        enableMCP,
+		"enableDebugTrace": enableDebugTrace,
+	}
+}
+
+func isLocalServerHealthy(port string) bool {
+	client := &http.Client{Timeout: 1200 * time.Millisecond}
+	resp, err := client.Get("http://127.0.0.1:" + port + "/api/health")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
 }
 
 // SetLLMEndpoint sets the LLM API endpoint
@@ -580,12 +631,18 @@ func (a *App) SetEnableTTS(enabled bool) {
 	a.serverMux.Lock()
 	defer a.serverMux.Unlock()
 	a.enableTTS = enabled
-	if enabled && ttsConfig.Engine == "supertonic" && globalTTS == nil {
-		go func() {
-			if err := InitTTS(GetResourcePath("assets"), ttsConfig.Threads); err != nil {
-				fmt.Printf("Dynamic TTS Init failed: %v\n", err)
-			}
-		}()
+	if enabled {
+		applyEmbeddingRuntimeConfig()
+		if ttsConfig.Engine == "supertonic" && globalTTS == nil {
+			go func() {
+				if err := InitTTS(GetResourcePath("assets"), ttsConfig.Threads); err != nil {
+					fmt.Printf("Dynamic TTS Init failed: %v\n", err)
+				}
+			}()
+		}
+	} else {
+		destroyTTSRuntime()
+		applyEmbeddingRuntimeConfig()
 	}
 	a.saveConfig()
 }
@@ -1177,6 +1234,16 @@ func (a *App) GetUserApiToken(id string) (string, error) {
 	return a.authMgr.GetUserApiToken(id)
 }
 
+// GetUserMemoryRetentionConfig returns the current memory retention policy for a user.
+func (a *App) GetUserMemoryRetentionConfig(id string) (mcp.MemoryRetentionConfig, error) {
+	return a.authMgr.GetUserMemoryRetentionConfig(id)
+}
+
+// SetUserMemoryRetentionConfig updates the memory retention policy for a user.
+func (a *App) SetUserMemoryRetentionConfig(id string, cfg mcp.MemoryRetentionConfig) error {
+	return a.authMgr.SetUserMemoryRetentionConfig(id, cfg)
+}
+
 // SetUserDisabledTools sets the list of disabled tools for a specific user (exposed to Wails)
 func (a *App) SetUserDisabledTools(id string, tools []string) error {
 	return a.authMgr.SetUserDisabledTools(id, tools)
@@ -1311,6 +1378,15 @@ func (a *App) CheckAssets() bool {
 		}
 	}
 	return true
+}
+
+func destroyTTSRuntime() {
+	globalTTSMutex.Lock()
+	defer globalTTSMutex.Unlock()
+	if globalTTS != nil {
+		globalTTS.Destroy()
+		globalTTS = nil
+	}
 }
 
 // CheckHealth performs a system health check (exposed to Wails)

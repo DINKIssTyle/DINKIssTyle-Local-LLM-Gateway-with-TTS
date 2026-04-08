@@ -71,6 +71,21 @@ func originalSavedTurnID(memoryID int64) int64 {
 	return memoryID - savedTurnMemoryOffset
 }
 
+func formatMemoryCandidateSource(candidate memoryCandidate) string {
+	switch {
+	case candidate.SourceType == "saved_turn" && candidate.MatchReason == "saved turn chunk match":
+		return "saved_turn_chunk"
+	case candidate.SourceType == "saved_turn":
+		return "saved_turn"
+	case candidate.SourceType == "memory" && candidate.MatchReason == "chunk match":
+		return "memory_chunk"
+	case candidate.SourceType == "memory":
+		return "memory_fulltext"
+	default:
+		return candidate.SourceType
+	}
+}
+
 // ManageMemory is deprecated. All memory is handled via SQLite (SearchMemoryDB / ReadMemoryDB).
 
 // SearchMemoryDB calls the SQLite db to search memory by keyword
@@ -95,7 +110,7 @@ func SearchMemoryDB(userID, query string) (string, error) {
 			"\n%d. MEMORY ID: %d | SOURCE: %s | DATE: %s | TITLE: %s\n",
 			idx+1,
 			candidate.MemoryID,
-			candidate.SourceType,
+			formatMemoryCandidateSource(candidate),
 			candidate.Date.Format("2006-01-02"),
 			title,
 		))
@@ -121,6 +136,10 @@ func buildMemoryCandidates(userID, query string, limit int) ([]memoryCandidate, 
 	}
 
 	chunkResults, err := SearchMemoryChunkMatches(userID, trimmed, limit*2)
+	if err != nil {
+		return nil, err
+	}
+	savedTurnChunkResults, err := SearchSavedTurnChunkMatches(userID, trimmed, limit*2)
 	if err != nil {
 		return nil, err
 	}
@@ -182,8 +201,32 @@ func buildMemoryCandidates(userID, query string, limit int) ([]memoryCandidate, 
 		}
 		candidateMap[candidate.MemoryID] = candidate
 	}
+	for _, match := range savedTurnChunkResults {
+		memoryID := makeSavedTurnMemoryID(match.ID)
+		candidate := memoryCandidate{
+			MemoryID:    memoryID,
+			BaseID:      match.ID,
+			SourceType:  "saved_turn",
+			MemoryType:  "saved_turn",
+			Title:       strings.TrimSpace(match.Title),
+			Date:        match.CreatedAt,
+			Snippet:     match.ChunkText,
+			MatchReason: "saved turn chunk match",
+			ChunkIndex:  match.ChunkIndex,
+			FTSScore:    match.FTSScore,
+			VectorScore: match.VectorScore,
+			HybridScore: match.HybridScore,
+		}
+		existing, ok := candidateMap[memoryID]
+		if !ok || candidate.HybridScore > existing.HybridScore {
+			candidateMap[memoryID] = candidate
+		}
+	}
 	for _, turn := range savedTurns {
 		memoryID := makeSavedTurnMemoryID(turn.ID)
+		if existing, ok := candidateMap[memoryID]; ok && existing.MatchReason == "saved turn chunk match" {
+			continue
+		}
 		candidateMap[memoryID] = memoryCandidate{
 			MemoryID:    memoryID,
 			BaseID:      turn.ID,
@@ -328,10 +371,6 @@ func AutoSearchMemoryDebugQuery(userID, input string) AutoSearchMemoryDebug {
 		}
 		if candidate.SourceType == "saved_turn" {
 			debug.SavedTurnHits++
-			ctx, err := ReadMemoryContextDB(userID, candidate.MemoryID, -1)
-			if err == nil {
-				rawContextSb.WriteString("\n" + ctx + "\n")
-			}
 			continue
 		}
 		debug.RetrievedMemoriesCount++

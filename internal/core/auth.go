@@ -26,22 +26,23 @@ import (
 
 // UserSettings holds user-specific overrides
 type UserSettings struct {
-	ApiEndpoint           *string               `json:"api_endpoint,omitempty"`
-	ApiToken              *string               `json:"api_token,omitempty"`
-	SecondaryModel        *string               `json:"secondary_model,omitempty"`
-	LLMMode               *string               `json:"llm_mode,omitempty"`
-	ContextStrategy       *string               `json:"context_strategy,omitempty"`
-	EnableTTS             *bool                 `json:"enable_tts,omitempty"`
-	EnableMCP             *bool                 `json:"enable_mcp,omitempty"`
-	EnableMemory          *bool                 `json:"enable_memory,omitempty"`
-	StatefulTurnLimit     *int                  `json:"stateful_turn_limit,omitempty"`
-	StatefulCharBudget    *int                  `json:"stateful_char_budget,omitempty"`
-	StatefulTokenBudget   *int                  `json:"stateful_token_budget,omitempty"`
-	TTSConfig             *ServerTTSConfig      `json:"tts_config,omitempty"`
-	EmbeddingConfig       *EmbeddingModelConfig `json:"embedding_config,omitempty"`
-	DisabledTools         []string              `json:"disabled_tools,omitempty"`
-	DisallowedCommands    []string              `json:"disallowed_commands,omitempty"`
-	DisallowedDirectories []string              `json:"disallowed_directories,omitempty"`
+	ApiEndpoint           *string                    `json:"api_endpoint,omitempty"`
+	ApiToken              *string                    `json:"api_token,omitempty"`
+	SecondaryModel        *string                    `json:"secondary_model,omitempty"`
+	LLMMode               *string                    `json:"llm_mode,omitempty"`
+	ContextStrategy       *string                    `json:"context_strategy,omitempty"`
+	EnableTTS             *bool                      `json:"enable_tts,omitempty"`
+	EnableMCP             *bool                      `json:"enable_mcp,omitempty"`
+	EnableMemory          *bool                      `json:"enable_memory,omitempty"`
+	StatefulTurnLimit     *int                       `json:"stateful_turn_limit,omitempty"`
+	StatefulCharBudget    *int                       `json:"stateful_char_budget,omitempty"`
+	StatefulTokenBudget   *int                       `json:"stateful_token_budget,omitempty"`
+	TTSConfig             *ServerTTSConfig           `json:"tts_config,omitempty"`
+	EmbeddingConfig       *EmbeddingModelConfig      `json:"embedding_config,omitempty"`
+	MemoryRetention       *mcp.MemoryRetentionConfig `json:"memory_retention,omitempty"`
+	DisabledTools         []string                   `json:"disabled_tools,omitempty"`
+	DisallowedCommands    []string                   `json:"disallowed_commands,omitempty"`
+	DisallowedDirectories []string                   `json:"disallowed_directories,omitempty"`
 }
 
 // User represents a user account
@@ -405,6 +406,55 @@ func (am *AuthManager) GetUserApiToken(id string) (string, error) {
 	}
 
 	return *user.Settings.ApiToken, nil
+}
+
+func (am *AuthManager) GetUserMemoryRetentionConfig(id string) (mcp.MemoryRetentionConfig, error) {
+	am.mu.RLock()
+	defer am.mu.RUnlock()
+
+	user, exists := am.users[id]
+	if !exists {
+		return mcp.MemoryRetentionConfig{}, fmt.Errorf("user not found")
+	}
+	if user.Settings.MemoryRetention == nil {
+		return mcp.DefaultMemoryRetentionConfig(), nil
+	}
+	return *user.Settings.MemoryRetention, nil
+}
+
+func (am *AuthManager) ResolveUserMemoryRetentionConfig(id string) mcp.MemoryRetentionConfig {
+	am.mu.RLock()
+	defer am.mu.RUnlock()
+
+	user, exists := am.users[id]
+	if !exists || user.Settings.MemoryRetention == nil {
+		return mcp.DefaultMemoryRetentionConfig()
+	}
+	return *user.Settings.MemoryRetention
+}
+
+func (am *AuthManager) SetUserMemoryRetentionConfig(id string, cfg mcp.MemoryRetentionConfig) error {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+
+	user, exists := am.users[id]
+	if !exists {
+		return fmt.Errorf("user not found")
+	}
+
+	normalized := mcp.DefaultMemoryRetentionConfig()
+	if cfg.CoreDays >= 0 {
+		normalized.CoreDays = cfg.CoreDays
+	}
+	if cfg.WorkingDays >= 0 {
+		normalized.WorkingDays = cfg.WorkingDays
+	}
+	if cfg.EphemeralDays >= 0 {
+		normalized.EphemeralDays = cfg.EphemeralDays
+	}
+	user.Settings.MemoryRetention = &normalized
+
+	return am.saveUsersLocked()
 }
 
 // SetUserDisabledTools sets the list of disabled tools for a specific user

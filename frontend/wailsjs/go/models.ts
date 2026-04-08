@@ -175,6 +175,27 @@ export namespace core {
 
 }
 
+export namespace mcp {
+	
+	export class MemoryRetentionConfig {
+	    coreDays: number;
+	    workingDays: number;
+	    ephemeralDays: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new MemoryRetentionConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.coreDays = source["coreDays"];
+	        this.workingDays = source["workingDays"];
+	        this.ephemeralDays = source["ephemeralDays"];
+	    }
+	}
+
+}
+
 export namespace promptkit {
 	
 	export class SystemPrompt {

@@ -138,6 +138,10 @@ export function GetUserDisallowedDirectories(arg1) {
   return window['go']['core']['App']['GetUserDisallowedDirectories'](arg1);
 }
 
+export function GetUserMemoryRetentionConfig(arg1) {
+  return window['go']['core']['App']['GetUserMemoryRetentionConfig'](arg1);
+}
+
 export function GetUsers() {
   return window['go']['core']['App']['GetUsers']();
 }
@@ -248,6 +252,10 @@ export function SetUserDisallowedCommands(arg1, arg2) {
 
 export function SetUserDisallowedDirectories(arg1, arg2) {
   return window['go']['core']['App']['SetUserDisallowedDirectories'](arg1, arg2);
+}
+
+export function SetUserMemoryRetentionConfig(arg1, arg2) {
+  return window['go']['core']['App']['SetUserMemoryRetentionConfig'](arg1, arg2);
 }
 
 export function Show() {

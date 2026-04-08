@@ -172,7 +172,8 @@ func currentEmbeddingModelConfig() EmbeddingModelConfig {
 func applyEmbeddingRuntimeConfig() {
 	cfg := currentEmbeddingModelConfig()
 	status := getEmbeddingModelStatus(cfg)
-	if status.Installed && cfg.Enabled {
+	assetsEnabled := globalApp == nil || globalApp.enableTTS
+	if assetsEnabled && status.Installed && cfg.Enabled {
 		rt, info, err := loadEmbeddingRuntime(cfg)
 		if err == nil {
 			setEmbeddingRuntime(rt)
