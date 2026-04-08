@@ -284,6 +284,14 @@ func (am *AuthManager) InvalidateSession(token string) {
 	_ = mcp.DeleteAuthSession(hashToken(token))
 }
 
+func (am *AuthManager) InvalidateAllSessions() error {
+	return mcp.DeleteAllAuthSessions()
+}
+
+func (am *AuthManager) InvalidateAllSessionsForUser(id string) error {
+	return mcp.DeleteAuthSessionsByUser(id)
+}
+
 // GetUsers returns list of users (without passwords)
 func (am *AuthManager) GetUsers() []map[string]string {
 	am.mu.RLock()

@@ -158,6 +158,10 @@ export function LoadModel(arg1) {
   return window['go']['core']['App']['LoadModel'](arg1);
 }
 
+export function LogoutAllSessions() {
+  return window['go']['core']['App']['LogoutAllSessions']();
+}
+
 export function OpenCertFolder() {
   return window['go']['core']['App']['OpenCertFolder']();
 }

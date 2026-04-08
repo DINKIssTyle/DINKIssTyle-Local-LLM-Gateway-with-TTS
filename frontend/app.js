@@ -337,6 +337,7 @@ const translations = {
         // Actions
         'action.clearChat': '대화 기록 삭제',
         'action.logout': '로그아웃',
+        'action.logoutAllSessions': '모든 위치에서 로그아웃',
         'action.save': '저장',
         'action.saveTurn': '대화 저장',
         'action.close': '닫기',
@@ -577,6 +578,7 @@ const translations = {
         // Actions
         'action.clearChat': 'Clear Chat History',
         'action.logout': 'Logout',
+        'action.logoutAllSessions': 'Log Out Everywhere',
         'action.save': 'Save Settings',
         'action.saveTurn': 'Save Turn',
         'action.close': 'Close',
@@ -3125,6 +3127,25 @@ async function logout() {
         window.location.href = '/login.html';
     } catch (e) {
         console.error('Logout failed:', e);
+    }
+}
+
+async function logoutAllSessions() {
+    const confirmation = t('action.logoutAllSessions') === '모든 위치에서 로그아웃'
+        ? '이 계정의 모든 로그인 유지 세션을 해제하고, 모든 위치에서 로그아웃할까요?'
+        : 'Log out this account from every device and browser now?';
+    if (!confirm(confirmation)) return;
+
+    try {
+        const response = await fetch('/api/logout-all-sessions', buildSessionFetchOptions({ method: 'POST' }));
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        localStorage.removeItem('sessionToken');
+        window.location.href = '/login.html';
+    } catch (e) {
+        console.error('Logout all sessions failed:', e);
+        alert(`Logout failed: ${e.message}`);
     }
 }
 

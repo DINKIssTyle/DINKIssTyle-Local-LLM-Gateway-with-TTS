@@ -1767,6 +1767,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	// Public endpoints (no auth required)
 	mux.HandleFunc("/api/login", handleLogin(authMgr))
 	mux.HandleFunc("/api/logout", handleLogout(authMgr))
+	mux.HandleFunc("/api/logout-all-sessions", AuthMiddleware(authMgr, handleLogoutAllSessions(authMgr)))
 	mux.HandleFunc("/api/auth/check", handleAuthCheck(authMgr))
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -2183,6 +2184,39 @@ func handleLogout(am *AuthManager) http.HandlerFunc {
 		cookie, err := r.Cookie("session")
 		if err == nil {
 			am.InvalidateSession(cookie.Value)
+		}
+
+		http.SetCookie(w, &http.Cookie{
+			Name:     "session",
+			Value:    "",
+			Path:     "/",
+			MaxAge:   -1,
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+			Secure:   r.TLS != nil,
+		})
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}
+}
+
+func handleLogoutAllSessions(am *AuthManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		if err := am.InvalidateAllSessionsForUser(userID); err != nil {
+			http.Error(w, "Failed to revoke sessions", http.StatusInternalServerError)
+			return
 		}
 
 		http.SetCookie(w, &http.Cookie{

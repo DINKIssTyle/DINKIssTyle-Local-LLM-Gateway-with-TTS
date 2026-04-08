@@ -1209,6 +1209,11 @@ func (a *App) DeleteUser(id string) error {
 	return a.authMgr.DeleteUser(id)
 }
 
+// LogoutAllSessions invalidates every login session stored in SQLite.
+func (a *App) LogoutAllSessions() error {
+	return a.authMgr.InvalidateAllSessions()
+}
+
 // GetUserDetail returns detailed info for a specific user (exposed to Wails)
 func (a *App) GetUserDetail(id string) (map[string]interface{}, error) {
 	return a.authMgr.GetUserDetail(id)

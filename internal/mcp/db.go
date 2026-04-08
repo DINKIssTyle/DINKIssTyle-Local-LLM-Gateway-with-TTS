@@ -1197,6 +1197,18 @@ func DeleteAuthSessionsByUser(userID string) error {
 	return nil
 }
 
+func DeleteAllAuthSessions() error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	_, err := db.Exec(`DELETE FROM auth_sessions`)
+	if err != nil {
+		return fmt.Errorf("failed to delete all auth sessions: %w", err)
+	}
+	return nil
+}
+
 func PurgeExpiredAuthSessions(now time.Time) error {
 	if db == nil {
 		return fmt.Errorf("database not initialized")

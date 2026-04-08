@@ -934,6 +934,12 @@
                         <span class="material-icons-round">manage_accounts</span>
                         Manage Accounts
                     </button>
+                    <button class="btn btn-block"
+                        style="background: rgba(248,81,73,0.18); color: #ffb4ad; margin-top: 10px; flex-shrink: 0;"
+                        onclick="confirmLogoutAllSessions()">
+                        <span class="material-icons-round">logout</span>
+                        Logout All Sessions
+                    </button>
                 </div>
             </div>
 
@@ -2192,6 +2198,18 @@
                     loadUsers();
                 } catch (e) {
                     showAlert('Failed: ' + e.message);
+                }
+            });
+        }
+
+        async function confirmLogoutAllSessions() {
+            showConfirm('Log out every account on every device and browser now?', async (confirmed) => {
+                if (!confirmed) return;
+                try {
+                    await window.go.core.App.LogoutAllSessions();
+                    showAlert('All login sessions have been cleared from SQLite.');
+                } catch (e) {
+                    showAlert('Failed to clear login sessions: ' + (e?.message || e));
                 }
             });
         }
