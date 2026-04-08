@@ -3137,3 +3137,110 @@ body.layout-mic-bottom {
 #giant-mic-btn.gen-active::after {
   content: none;
 }
+
+.managed-models-list {
+  display: grid;
+  gap: 12px;
+}
+
+.managed-model-card {
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  padding: 14px;
+  background: var(--bg-card);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+}
+
+.managed-model-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.managed-model-title {
+  font-weight: 600;
+}
+
+.managed-model-chip {
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+}
+
+.managed-model-chip.ready {
+  color: #0f8c4d;
+  border-color: rgba(15, 140, 77, 0.35);
+  background: rgba(15, 140, 77, 0.08);
+}
+
+.managed-model-chip.missing,
+.managed-model-chip.pending {
+  color: #b56a00;
+  border-color: rgba(181, 106, 0, 0.35);
+  background: rgba(181, 106, 0, 0.08);
+}
+
+.managed-model-chip.downloading {
+  color: #1756d6;
+  border-color: rgba(23, 86, 214, 0.35);
+  background: rgba(23, 86, 214, 0.08);
+}
+
+.managed-model-chip.failed {
+  color: #b42318;
+  border-color: rgba(180, 35, 24, 0.35);
+  background: rgba(180, 35, 24, 0.08);
+}
+
+.managed-model-meta {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.managed-model-progress {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.managed-model-progress-bar {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.managed-model-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #3f85ff, #4dc7ff);
+  transition: width 0.12s ease;
+}
+
+.managed-model-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.managed-model-progress-file {
+  font-size: 12px;
+  color: var(--text-subtle);
+  word-break: break-word;
+}
+
+.managed-model-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}

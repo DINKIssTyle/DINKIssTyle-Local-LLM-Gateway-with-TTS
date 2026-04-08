@@ -30,6 +30,14 @@ export function DownloadAssets() {
   return window['go']['core']['App']['DownloadAssets']();
 }
 
+export function EnsureModelsRootDir() {
+  return window['go']['core']['App']['EnsureModelsRootDir']();
+}
+
+export function ExportEmbeddingModelManifest() {
+  return window['go']['core']['App']['ExportEmbeddingModelManifest']();
+}
+
 export function FetchAndCacheModels() {
   return window['go']['core']['App']['FetchAndCacheModels']();
 }
@@ -58,6 +66,10 @@ export function GetDebugTraceEntries() {
   return window['go']['core']['App']['GetDebugTraceEntries']();
 }
 
+export function GetEmbeddingModelConfig() {
+  return window['go']['core']['App']['GetEmbeddingModelConfig']();
+}
+
 export function GetLLMApiToken() {
   return window['go']['core']['App']['GetLLMApiToken']();
 }
@@ -66,8 +78,20 @@ export function GetLicenseText() {
   return window['go']['core']['App']['GetLicenseText']();
 }
 
+export function GetManagedModelDownloads() {
+  return window['go']['core']['App']['GetManagedModelDownloads']();
+}
+
+export function GetManagedModels() {
+  return window['go']['core']['App']['GetManagedModels']();
+}
+
 export function GetMinimizeToTray() {
   return window['go']['core']['App']['GetMinimizeToTray']();
+}
+
+export function GetModelsRootDir() {
+  return window['go']['core']['App']['GetModelsRootDir']();
 }
 
 export function GetServerStatus() {
@@ -162,6 +186,10 @@ export function SetDebugTraceEnabled(arg1) {
   return window['go']['core']['App']['SetDebugTraceEnabled'](arg1);
 }
 
+export function SetEmbeddingModelConfig(arg1) {
+  return window['go']['core']['App']['SetEmbeddingModelConfig'](arg1);
+}
+
 export function SetEnableMCP(arg1) {
   return window['go']['core']['App']['SetEnableMCP'](arg1);
 }
@@ -232,6 +260,10 @@ export function ShowAbout() {
 
 export function Shutdown(arg1) {
   return window['go']['core']['App']['Shutdown'](arg1);
+}
+
+export function StartManagedModelDownload(arg1) {
+  return window['go']['core']['App']['StartManagedModelDownload'](arg1);
 }
 
 export function StartMemoryWorker() {

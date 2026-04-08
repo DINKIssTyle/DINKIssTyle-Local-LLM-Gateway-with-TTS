@@ -18,6 +18,10 @@ export function DeleteUser(arg1:string):Promise<void>;
 
 export function DownloadAssets():Promise<void>;
 
+export function EnsureModelsRootDir():Promise<string>;
+
+export function ExportEmbeddingModelManifest():Promise<string>;
+
 export function FetchAndCacheModels():Promise<Array<number>>;
 
 export function GenerateCertificate(arg1:string):Promise<void>;
@@ -32,11 +36,19 @@ export function GetDebugTraceEnabled():Promise<boolean>;
 
 export function GetDebugTraceEntries():Promise<Array<core.DebugTraceEntry>>;
 
+export function GetEmbeddingModelConfig():Promise<core.EmbeddingModelConfig>;
+
 export function GetLLMApiToken():Promise<string>;
 
 export function GetLicenseText():Promise<string>;
 
+export function GetManagedModelDownloads():Promise<Array<core.ManagedModelDownloadState>>;
+
+export function GetManagedModels():Promise<Array<core.ManagedModelStatus>>;
+
 export function GetMinimizeToTray():Promise<boolean>;
+
+export function GetModelsRootDir():Promise<string>;
 
 export function GetServerStatus():Promise<Record<string, any>>;
 
@@ -84,6 +96,8 @@ export function SetCertDomain(arg1:string):Promise<void>;
 
 export function SetDebugTraceEnabled(arg1:boolean):Promise<void>;
 
+export function SetEmbeddingModelConfig(arg1:core.EmbeddingModelConfig):Promise<void>;
+
 export function SetEnableMCP(arg1:boolean):Promise<void>;
 
 export function SetEnableTTS(arg1:boolean):Promise<void>;
@@ -119,6 +133,8 @@ export function Show():Promise<void>;
 export function ShowAbout():Promise<void>;
 
 export function Shutdown(arg1:context.Context):Promise<void>;
+
+export function StartManagedModelDownload(arg1:string):Promise<void>;
 
 export function StartMemoryWorker():Promise<void>;
 

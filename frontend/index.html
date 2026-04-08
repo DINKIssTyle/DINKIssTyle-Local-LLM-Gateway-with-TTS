@@ -8,7 +8,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DKST LLM Chat Server</title>
+    <meta name="application-name" content="DKST LLM Chat">
+    <meta name="apple-mobile-web-app-title" content="DKST LLM Chat">
+    <title>DKST LLM Chat</title>
 
     <!-- Favicons -->
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -516,6 +518,14 @@
             justify-content: center;
         }
 
+        #model-manager-modal {
+            z-index: 120;
+        }
+
+        #confirm-modal {
+            z-index: 140;
+        }
+
         .modal {
             background: var(--card-bg);
             border: 1px solid var(--border-color);
@@ -539,6 +549,119 @@
         .modal-title {
             font-weight: 600;
             font-size: 16px;
+        }
+
+        .managed-models-list {
+            display: grid;
+            gap: 12px;
+        }
+
+        .managed-model-card {
+            border: 1px solid var(--border-color);
+            border-radius: 14px;
+            padding: 14px;
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .managed-model-header {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .managed-model-title {
+            font-weight: 600;
+            color: var(--text-color);
+        }
+
+        .managed-model-chip {
+            font-size: 12px;
+            padding: 4px 8px;
+            border-radius: 999px;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+        }
+
+        .managed-model-chip.ready {
+            color: #0f8c4d;
+            border-color: rgba(15, 140, 77, 0.35);
+            background: rgba(15, 140, 77, 0.08);
+        }
+
+        .managed-model-chip.installed {
+            color: #1f6feb;
+            border-color: rgba(31, 111, 235, 0.35);
+            background: rgba(31, 111, 235, 0.08);
+        }
+
+        .managed-model-chip.missing,
+        .managed-model-chip.pending {
+            color: #b56a00;
+            border-color: rgba(181, 106, 0, 0.35);
+            background: rgba(181, 106, 0, 0.08);
+        }
+
+        .managed-model-chip.downloading {
+            color: #1756d6;
+            border-color: rgba(23, 86, 214, 0.35);
+            background: rgba(23, 86, 214, 0.08);
+        }
+
+        .managed-model-chip.failed {
+            color: #b42318;
+            border-color: rgba(180, 35, 24, 0.35);
+            background: rgba(180, 35, 24, 0.08);
+        }
+
+        .managed-model-meta {
+            font-size: 13px;
+            line-height: 1.5;
+            color: var(--text-secondary);
+        }
+
+        .managed-model-progress {
+            margin-top: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .managed-model-progress-bar {
+            width: 100%;
+            height: 8px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.08);
+            overflow: hidden;
+        }
+
+        .managed-model-progress-fill {
+            height: 100%;
+            border-radius: inherit;
+            background: linear-gradient(90deg, #3f85ff, #4dc7ff);
+            transition: width 0.12s ease;
+        }
+
+        .managed-model-progress-meta {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .managed-model-progress-file {
+            font-size: 12px;
+            color: var(--text-secondary);
+            word-break: break-word;
+        }
+
+        .managed-model-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+            flex-wrap: wrap;
         }
 
         .modal-body {
@@ -650,7 +773,7 @@
     <div class="controller">
         <div class="header">
             <span class="material-icons-round">dns</span>
-            <h1>DKST LLM Chat Server</h1>
+            <h1>DKST LLM Chat</h1>
         </div>
 
         <!-- Restart Required Banner -->
@@ -766,6 +889,13 @@
                         <button id="download-assets-btn" class="btn btn-primary btn-block" style="display: none;"
                             onclick="downloadAssets()">
                             <span class="material-icons-round">download</span> Download Assets
+                        </button>
+                    </div>
+
+                    <div class="inline-actions">
+                        <button class="btn btn-secondary btn-block" onclick="openModelManagerModal()">
+                            <span class="material-icons-round">inventory_2</span>
+                            Model Manager
                         </button>
                     </div>
 
@@ -944,6 +1074,32 @@
                     Copy Payload
                 </button>
                 <button class="btn btn-primary" onclick="closeTracePayloadModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- About Modal -->
+    <div class="modal-overlay" id="model-manager-modal">
+        <div class="modal" style="max-width: 720px;">
+            <div class="modal-header">
+                <div class="modal-title">Model Manager</div>
+                <button class="icon-btn" onclick="closeModelManagerModal()">
+                    <span class="material-icons-round">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Model Storage Folder</label>
+                    <div id="models-root-dir" style="font-size: 12px; color: var(--text-secondary); word-break: break-all;">...</div>
+                </div>
+                <div id="managed-models-list" class="managed-models-list"></div>
+            </div>
+            <div class="modal-footer" style="display: flex; gap: 8px; justify-content: flex-end;">
+                <button class="btn btn-secondary btn-compact" onclick="refreshManagedModels()">
+                    <span class="material-icons-round">refresh</span>
+                    Refresh
+                </button>
+                <button class="btn btn-primary" onclick="closeModelManagerModal()">Close</button>
             </div>
         </div>
     </div>
@@ -1137,6 +1293,7 @@
         let debugTraceAutoExpanded = false;
         let debugTracePreviousSize = null;
         let openTracePayloadEntry = null;
+        let managedModelsRefreshTimer = null;
 
         async function init() {
             if (typeof window.go !== 'undefined') {
@@ -1177,6 +1334,21 @@
                     window.runtime.EventsOn("debug-trace-cleared", () => {
                         debugTraceEntries = [];
                         renderDebugTrace();
+                    });
+
+                    window.runtime.EventsOn("managed-model-download", (state) => {
+                        applyManagedModelDownloadState(state);
+                    });
+
+                    window.runtime.EventsOn("managed-model-download-finished", (state) => {
+                        const ok = !!state?.success;
+                        if (ok) {
+                            showAlert('Model download completed.');
+                        } else {
+                            showAlert('Model download failed: ' + (state?.message || 'Unknown error'));
+                        }
+                        refreshManagedModels();
+                        checkAssetStatus();
                     });
                 } catch (e) {
                     console.error('Init failed:', e);
@@ -1551,6 +1723,186 @@
                     btn.innerHTML = originalText;
                 }
             });
+        }
+
+        function openModelManagerModal() {
+            document.getElementById('model-manager-modal').style.display = 'flex';
+            refreshManagedModels();
+        }
+
+        function closeModelManagerModal() {
+            document.getElementById('model-manager-modal').style.display = 'none';
+        }
+
+        function scheduleManagedModelsRefresh() {
+            if (managedModelsRefreshTimer) {
+                clearTimeout(managedModelsRefreshTimer);
+            }
+            managedModelsRefreshTimer = setTimeout(() => {
+                managedModelsRefreshTimer = null;
+                const modal = document.getElementById('model-manager-modal');
+                if (!modal || modal.style.display === 'none' || modal.style.display === '') return;
+                refreshManagedModels();
+            }, 120);
+        }
+
+        function managedModelDomKey(key) {
+            return String(key || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+        }
+
+        function applyManagedModelDownloadState(state) {
+            const domKey = managedModelDomKey(state?.key || '');
+            if (!domKey) return;
+
+            const chipEl = document.getElementById(`managed-model-chip-${domKey}`);
+            const messageEl = document.getElementById(`managed-model-message-${domKey}`);
+            const progressEl = document.getElementById(`managed-model-progress-${domKey}`);
+            const fillEl = document.getElementById(`managed-model-progress-fill-${domKey}`);
+            const textEl = document.getElementById(`managed-model-progress-text-${domKey}`);
+            const pctEl = document.getElementById(`managed-model-progress-pct-${domKey}`);
+            const fileEl = document.getElementById(`managed-model-progress-file-${domKey}`);
+            const buttonEl = document.getElementById(`managed-model-download-btn-${domKey}`);
+            const buttonIconEl = document.getElementById(`managed-model-download-icon-${domKey}`);
+
+            const progressPct = Number(state?.progressPct || 0);
+            const active = !!state?.active;
+            const status = active ? 'downloading' : (state?.success ? 'ready' : 'failed');
+
+            if (chipEl) {
+                chipEl.className = `managed-model-chip ${status}`;
+                chipEl.textContent = status;
+            }
+            if (messageEl) {
+                messageEl.textContent = String(state?.message || '');
+            }
+            if (progressEl) {
+                progressEl.style.display = active || progressPct > 0 ? '' : 'none';
+            }
+            if (fillEl) {
+                fillEl.style.width = `${Math.max(0, Math.min(progressPct, 100))}%`;
+            }
+            if (textEl) {
+                textEl.textContent = String(state?.message || 'Downloading...');
+            }
+            if (pctEl) {
+                pctEl.textContent = `${Math.round(progressPct)}%`;
+            }
+            if (fileEl) {
+                fileEl.textContent = String(state?.currentFile || '');
+                fileEl.style.display = state?.currentFile ? '' : 'none';
+            }
+            if (buttonEl) {
+                buttonEl.disabled = active;
+            }
+            if (buttonIconEl) {
+                buttonIconEl.textContent = active ? 'downloading' : 'download';
+            }
+        }
+
+        async function refreshManagedModels() {
+            const listEl = document.getElementById('managed-models-list');
+            const rootEl = document.getElementById('models-root-dir');
+            if (listEl) {
+                listEl.innerHTML = '<div style="color: var(--text-secondary); font-size: 13px;">Loading...</div>';
+            }
+
+            try {
+                const [modelsRoot, managedModels] = await Promise.all([
+                    window.go?.core?.App?.GetModelsRootDir?.() ?? '',
+                    window.go?.core?.App?.GetManagedModels?.() ?? []
+                ]);
+
+                if (rootEl) {
+                    rootEl.textContent = modelsRoot || 'Not available';
+                }
+
+                if (!listEl) return;
+                const items = Array.isArray(managedModels) ? managedModels : [];
+                if (!items.length) {
+                    listEl.innerHTML = '<div style="color: var(--text-secondary); font-size: 13px;">No managed models available.</div>';
+                    return;
+                }
+
+                listEl.innerHTML = items.map((item) => {
+                    const status = escapeHtml(String(item.status || 'unknown'));
+                    const displayName = escapeHtml(String(item.displayName || item.modelId || item.key || 'Model'));
+                    const installDir = escapeHtml(String(item.installDir || ''));
+                    const message = escapeHtml(String(item.message || ''));
+                    const provider = escapeHtml(String(item.provider || ''));
+                    const modelId = escapeHtml(String(item.modelId || ''));
+                    const backend = escapeHtml(String(item.backend || ''));
+                    const progressPct = Number(item.progressPct || 0);
+                    const downloading = !!item.downloading;
+                    const currentFile = escapeHtml(String(item.currentFile || ''));
+                    const progressText = escapeHtml(String(item.progressText || ''));
+                    const canDownload = !!item.canDownload;
+                    const buttonLabel = item.installed ? 'Redownload' : 'Download';
+                    const modelKey = escapeHtml(String(item.key || ''));
+                    const domKey = managedModelDomKey(String(item.key || ''));
+                    return `
+                        <div class="managed-model-card" id="managed-model-card-${domKey}">
+                            <div class="managed-model-header">
+                                <div class="managed-model-title">${displayName}</div>
+                                <span class="managed-model-chip ${status}" id="managed-model-chip-${domKey}">${status}</span>
+                            </div>
+                            <div class="managed-model-meta">
+                                <div><strong>Provider:</strong> ${provider}</div>
+                                <div><strong>Model ID:</strong> ${modelId}</div>
+                                ${backend ? `<div><strong>Backend:</strong> ${backend}</div>` : ''}
+                                <div><strong>Install Dir:</strong> ${installDir}</div>
+                                <div><strong>State:</strong> <span id="managed-model-message-${domKey}">${message}</span></div>
+                            </div>
+                            <div class="managed-model-progress" id="managed-model-progress-${domKey}" style="${downloading || progressPct > 0 ? '' : 'display:none;'}">
+                                    <div class="managed-model-progress-bar">
+                                        <div class="managed-model-progress-fill" id="managed-model-progress-fill-${domKey}" style="width: ${Math.max(0, Math.min(progressPct, 100))}%;"></div>
+                                    </div>
+                                    <div class="managed-model-progress-meta">
+                                        <span id="managed-model-progress-text-${domKey}">${progressText || 'Downloading...'}</span>
+                                        <span id="managed-model-progress-pct-${domKey}">${Math.round(progressPct)}%</span>
+                                    </div>
+                                    <div class="managed-model-progress-file" id="managed-model-progress-file-${domKey}" style="${currentFile ? '' : 'display:none;'}">${currentFile}</div>
+                                </div>
+                            <div class="managed-model-actions">
+                                ${canDownload ? `
+                                    <button class="btn btn-primary btn-compact" id="managed-model-download-btn-${domKey}" data-model-key="${modelKey}" onclick="startManagedModelDownload(this.dataset.modelKey)" ${downloading ? 'disabled' : ''}>
+                                        <span class="material-icons-round" id="managed-model-download-icon-${domKey}">${downloading ? 'downloading' : 'download'}</span>
+                                        ${buttonLabel}
+                                    </button>
+                                ` : ''}
+                                ${item.kind === 'embedding' ? `
+                                    <button class="btn btn-secondary btn-compact" onclick="exportEmbeddingManifest()">
+                                        <span class="material-icons-round">description</span>
+                                        Manifest
+                                    </button>
+                                ` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } catch (e) {
+                if (listEl) {
+                    listEl.innerHTML = '<div style="color: var(--danger-color); font-size: 13px;">Failed to load model status.</div>';
+                }
+            }
+        }
+
+        async function startManagedModelDownload(key) {
+            try {
+                await window.go.core.App.StartManagedModelDownload(String(key || ''));
+                refreshManagedModels();
+            } catch (e) {
+                showAlert('Failed to start download: ' + (e?.message || e));
+            }
+        }
+
+        async function exportEmbeddingManifest() {
+            try {
+                const path = await window.go.core.App.ExportEmbeddingModelManifest();
+                showAlert('Manifest saved: ' + path);
+                refreshManagedModels();
+            } catch (e) {
+                showAlert('Manifest export failed: ' + (e?.message || e));
+            }
         }
 
         async function toggleEnableTTS() {

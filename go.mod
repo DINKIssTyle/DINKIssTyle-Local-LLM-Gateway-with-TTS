@@ -10,7 +10,7 @@ require (
 	github.com/go-audio/wav v1.1.0
 	github.com/sjzar/go-lame v0.0.9
 	github.com/wailsapp/wails/v2 v2.11.0
-	github.com/yalue/onnxruntime_go v1.9.0
+	github.com/yalue/onnxruntime_go v1.25.0
 	golang.org/x/crypto v0.33.0
 	golang.org/x/sys v0.40.0
 	golang.org/x/text v0.22.0
