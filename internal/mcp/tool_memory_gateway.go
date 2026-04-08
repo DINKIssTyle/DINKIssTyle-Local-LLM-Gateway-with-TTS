@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 )
@@ -16,428 +17,352 @@ import (
 const (
 	legacyMacMemoryRootName = "DKST LLM Chat"
 	macMemoryRootName       = "DKST LLM Chat Server"
+	savedTurnMemoryOffset   = int64(1_000_000_000)
 )
+
+type MemorySnapshotDebug struct {
+	Text           string  `json:"text"`
+	MemoryCount    int     `json:"memory_count"`
+	SavedTurnCount int     `json:"saved_turn_count"`
+	MemoryIDs      []int64 `json:"memory_ids,omitempty"`
+	SavedTurnIDs   []int64 `json:"saved_turn_ids,omitempty"`
+}
+
+type AutoSearchMemoryDebug struct {
+	Context                string   `json:"context"`
+	Keywords               []string `json:"keywords,omitempty"`
+	ChunkMatchCount        int      `json:"chunk_match_count"`
+	RetrievedMemoriesCount int      `json:"retrieved_memories_count"`
+	SavedTurnHits          int      `json:"saved_turn_hits"`
+	UsedSynthesis          bool     `json:"used_synthesis"`
+	RawContext             string   `json:"raw_context,omitempty"`
+	SynthesizedContext     string   `json:"synthesized_context,omitempty"`
+}
+
+type memoryChunkContext struct {
+	Index int
+	Text  string
+}
+
+type memoryCandidate struct {
+	MemoryID    int64
+	BaseID      int64
+	SourceType  string
+	MemoryType  string
+	Title       string
+	Date        time.Time
+	Snippet     string
+	MatchReason string
+	ChunkIndex  int
+	FTSScore    float64
+	VectorScore float64
+	HybridScore float64
+}
+
+func isSavedTurnMemoryID(memoryID int64) bool {
+	return memoryID >= savedTurnMemoryOffset
+}
+
+func makeSavedTurnMemoryID(turnID int64) int64 {
+	return savedTurnMemoryOffset + turnID
+}
+
+func originalSavedTurnID(memoryID int64) int64 {
+	return memoryID - savedTurnMemoryOffset
+}
 
 // ManageMemory is deprecated. All memory is handled via SQLite (SearchMemoryDB / ReadMemoryDB).
 
 // SearchMemoryDB calls the SQLite db to search memory by keyword
 func SearchMemoryDB(userID, query string) (string, error) {
 	log.Printf("[MCP] SearchMemoryDB: User=%s, Query=%s", userID, query)
-	rewrittenQuery := rewriteMemoryQuery(query)
-	searchQueries := buildSearchQueries(query, rewrittenQuery)
-	chunkResults, err := SearchMemoryChunkMatchesMultiQuery(userID, searchQueries, 10)
+	candidates, err := buildMemoryCandidates(userID, query, 8)
 	if err != nil {
-		return "", fmt.Errorf("chunk search failed: %v", err)
+		return "", fmt.Errorf("memory candidate search failed: %v", err)
 	}
-	results, err := SearchMemoriesMultiQuery(userID, searchQueries)
-	if err != nil {
-		return "", fmt.Errorf("db search failed: %v", err)
-	}
-	savedTurns, err := searchSavedTurnsMultiQuery(userID, searchQueries)
-	if err != nil {
-		return "", fmt.Errorf("saved turn search failed: %v", err)
-	}
-
-	if len(chunkResults) == 0 && len(results) == 0 && len(savedTurns) == 0 {
+	if len(candidates) == 0 {
 		return "No relevant memories found.", nil
 	}
 
 	var sb strings.Builder
-	sb.WriteString("Found records:\n")
-	if rewrittenQuery != query {
-		sb.WriteString(fmt.Sprintf("(query rewritten from %q to %q)\n", query, rewrittenQuery))
-	}
-	if len(searchQueries) > 0 {
-		sb.WriteString(fmt.Sprintf("(search terms: %s)\n", strings.Join(searchQueries, ", ")))
-	}
-	if len(chunkResults) > 0 {
-		for _, r := range chunkResults {
-			memoryType := strings.TrimSpace(r.MemoryType)
-			if memoryType == "" {
-				memoryType = "raw_interaction"
-			}
-			sb.WriteString(fmt.Sprintf("\n--- MEMORY ID: %d | DATE: %s | TYPE: %s | CHUNK: %d | SCORES: %s ---\n", r.ID, r.CreatedAt.Format("2006-01-02"), memoryType, r.ChunkIndex+1, formatRetrievalScoreLine(r.FTSScore, r.VectorScore, r.HybridScore)))
-			sb.WriteString(fmt.Sprintf("RELEVANT EXCERPT:\n%s\n", r.ChunkText))
-			_ = IncrementMemoryChunkHitCount(r.ChunkID)
-			_ = IncrementHitCount(r.ID)
+	sb.WriteString("Memory candidates:\n")
+	for idx, candidate := range candidates {
+		title := strings.TrimSpace(candidate.Title)
+		if title == "" {
+			title = candidate.MemoryType
 		}
-	}
-	if len(results) > 0 {
-		sb.WriteString("\n(Full memory matches)\n")
-	}
-	for _, r := range results {
-		memoryType := strings.TrimSpace(r.MemoryType)
-		if memoryType == "" {
-			memoryType = "raw_interaction"
+		sb.WriteString(fmt.Sprintf(
+			"\n%d. MEMORY ID: %d | SOURCE: %s | DATE: %s | TITLE: %s\n",
+			idx+1,
+			candidate.MemoryID,
+			candidate.SourceType,
+			candidate.Date.Format("2006-01-02"),
+			title,
+		))
+		sb.WriteString(fmt.Sprintf("   MATCH: %s\n", candidate.MatchReason))
+		if candidate.ChunkIndex >= 0 {
+			sb.WriteString(fmt.Sprintf("   CHUNK INDEX: %d\n", candidate.ChunkIndex))
 		}
-		sb.WriteString(fmt.Sprintf("\n--- MEMORY ID: %d | DATE: %s | TYPE: %s ---\n", r.ID, r.CreatedAt.Format("2006-01-02"), memoryType))
-		sb.WriteString(fmt.Sprintf("FULL TEXT:\n%s\n", compactMemoryText(r.FullText, 500)))
-	}
-	for _, turn := range savedTurns {
-		sb.WriteString(fmt.Sprintf("\n--- SAVED TURN ID: %d | DATE: %s | TITLE: %s ---\n", turn.ID, turn.CreatedAt.Format("2006-01-02"), turn.Title))
-		sb.WriteString(fmt.Sprintf("USER PROMPT:\n%s\n", turn.PromptText))
-		sb.WriteString(fmt.Sprintf("ASSISTANT RESPONSE:\n%s\n", turn.ResponseText))
+		if scoreLine := formatRetrievalScoreLine(candidate.FTSScore, candidate.VectorScore, candidate.HybridScore); scoreLine != "" {
+			sb.WriteString(fmt.Sprintf("   SCORES: %s\n", scoreLine))
+		}
+		sb.WriteString(fmt.Sprintf("   SNIPPET: %s\n", compactMemoryText(candidate.Snippet, 280)))
 	}
 	return sb.String(), nil
 }
 
-func searchSavedTurnsMultiQuery(userID string, queryStrs []string) ([]SavedTurnEntry, error) {
-	seen := make(map[int64]bool)
-	var merged []SavedTurnEntry
-	for _, queryStr := range queryStrs {
-		trimmed := strings.TrimSpace(queryStr)
-		if trimmed == "" {
+func buildMemoryCandidates(userID, query string, limit int) ([]memoryCandidate, error) {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 8
+	}
+
+	chunkResults, err := SearchMemoryChunkMatches(userID, trimmed, limit*2)
+	if err != nil {
+		return nil, err
+	}
+	fullResults, err := SearchMemories(userID, trimmed)
+	if err != nil {
+		return nil, err
+	}
+	savedTurns, err := SearchSavedTurns(userID, trimmed, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	candidateMap := make(map[int64]memoryCandidate)
+	for _, match := range chunkResults {
+		memoryType := strings.TrimSpace(match.MemoryType)
+		if memoryType == "" {
+			memoryType = "raw_interaction"
+		}
+		candidate := memoryCandidate{
+			MemoryID:    match.ID,
+			BaseID:      match.ID,
+			SourceType:  "memory",
+			MemoryType:  memoryType,
+			Date:        match.CreatedAt,
+			Snippet:     match.ChunkText,
+			MatchReason: "chunk match",
+			ChunkIndex:  match.ChunkIndex,
+			FTSScore:    match.FTSScore,
+			VectorScore: match.VectorScore,
+			HybridScore: match.HybridScore,
+		}
+		existing, ok := candidateMap[candidate.MemoryID]
+		if !ok || candidate.HybridScore > existing.HybridScore {
+			candidateMap[candidate.MemoryID] = candidate
+		}
+	}
+	for _, memory := range fullResults {
+		memoryType := strings.TrimSpace(memory.MemoryType)
+		if memoryType == "" {
+			memoryType = "raw_interaction"
+		}
+		candidate := memoryCandidate{
+			MemoryID:    memory.ID,
+			BaseID:      memory.ID,
+			SourceType:  "memory",
+			MemoryType:  memoryType,
+			Date:        memory.CreatedAt,
+			Snippet:     memory.FullText,
+			MatchReason: "full text match",
+			ChunkIndex:  -1,
+			HybridScore: float64(memory.HitCount) * 0.01,
+		}
+		if existing, ok := candidateMap[candidate.MemoryID]; ok {
+			if existing.Snippet == "" {
+				existing.Snippet = candidate.Snippet
+			}
+			candidateMap[candidate.MemoryID] = existing
 			continue
 		}
-		results, err := SearchSavedTurns(userID, trimmed, 10)
-		if err != nil {
-			return nil, err
-		}
-		for _, result := range results {
-			if seen[result.ID] {
-				continue
-			}
-			seen[result.ID] = true
-			merged = append(merged, result)
-			if len(merged) >= 10 {
-				return merged, nil
-			}
+		candidateMap[candidate.MemoryID] = candidate
+	}
+	for _, turn := range savedTurns {
+		memoryID := makeSavedTurnMemoryID(turn.ID)
+		candidateMap[memoryID] = memoryCandidate{
+			MemoryID:    memoryID,
+			BaseID:      turn.ID,
+			SourceType:  "saved_turn",
+			MemoryType:  "saved_turn",
+			Title:       strings.TrimSpace(turn.Title),
+			Date:        turn.CreatedAt,
+			Snippet:     strings.TrimSpace(turn.PromptText + "\n" + turn.ResponseText),
+			MatchReason: "saved turn match",
+			ChunkIndex:  -1,
 		}
 	}
-	return merged, nil
+
+	candidates := make([]memoryCandidate, 0, len(candidateMap))
+	for _, candidate := range candidateMap {
+		candidates = append(candidates, candidate)
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].SourceType != candidates[j].SourceType && candidates[i].HybridScore == candidates[j].HybridScore {
+			return candidates[i].SourceType == "memory"
+		}
+		if candidates[i].HybridScore == candidates[j].HybridScore {
+			return candidates[i].Date.After(candidates[j].Date)
+		}
+		return candidates[i].HybridScore > candidates[j].HybridScore
+	})
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	return candidates, nil
 }
 
-func rewriteMemoryQuery(input string) string {
-	trimmed := strings.TrimSpace(input)
-	if trimmed == "" {
-		return ""
+func loadMemoryChunkContext(memoryID int64, centerIndex int) []memoryChunkContext {
+	if db == nil {
+		return nil
 	}
-
-	lower := strings.ToLower(trimmed)
-	if strings.Contains(trimmed, "내 이름") || strings.Contains(trimmed, "제 이름") || strings.Contains(lower, "my name") || strings.Contains(lower, "who am i") {
-		return "내 이름은 제 이름은 사용자 이름 이름은 user name my name call me"
-	}
-
-	if len([]rune(trimmed)) < 12 {
-		return trimmed
-	}
-
-	prompt := fmt.Sprintf(`Rewrite the user's message into a short memory search query.
-
-Rules:
-- Keep only stable entities, names, preferences, dates, or technical topics.
-- Resolve vague references like "that project" into a searchable phrase if possible.
-- Output a single plain text query only.
-- If rewriting would not help, return the original message unchanged.
-
-User message:
-%s`, trimmed)
-
-	type message struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}
-
-	payload := map[string]interface{}{
-		"model": "local-model",
-		"messages": []message{
-			{Role: "system", Content: "You rewrite user messages into concise memory retrieval queries. Output plain text only."},
-			{Role: "user", Content: prompt},
-		},
-		"temperature": 0.0,
-	}
-
-	reqBody, _ := json.Marshal(payload)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, "POST", "http://127.0.0.1:1234/v1/chat/completions", strings.NewReader(string(reqBody)))
+	rows, err := db.Query(`
+		SELECT chunk_index, chunk_text
+		FROM memory_chunks
+		WHERE memory_id = ? AND chunk_index BETWEEN ? AND ?
+		ORDER BY chunk_index ASC
+	`, memoryID, max(centerIndex-1, 0), centerIndex+1)
 	if err != nil {
-		return trimmed
+		return nil
 	}
-	req.Header.Set("Content-Type", "application/json")
+	defer rows.Close()
 
-	resp, err := (&http.Client{}).Do(req)
-	if err != nil {
-		return trimmed
+	var items []memoryChunkContext
+	for rows.Next() {
+		var item memoryChunkContext
+		if err := rows.Scan(&item.Index, &item.Text); err != nil {
+			return nil
+		}
+		items = append(items, item)
 	}
-	defer resp.Body.Close()
-
-	var resData struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&resData); err != nil {
-		return trimmed
-	}
-	if len(resData.Choices) == 0 {
-		return trimmed
-	}
-
-	rewritten := strings.TrimSpace(resData.Choices[0].Message.Content)
-	rewritten = strings.Trim(rewritten, "\"'`")
-	if rewritten == "" {
-		return trimmed
-	}
-	return compactMemoryText(rewritten, 120)
+	return items
 }
 
-func buildSearchQueries(originalQuery, rewrittenQuery string) []string {
-	var queries []string
-	seen := map[string]bool{}
+func formatMemoryChunkContext(match MemoryChunkMatch) string {
+	contextChunks := loadMemoryChunkContext(match.ID, match.ChunkIndex)
+	if len(contextChunks) == 0 {
+		return compactMemoryText(match.ChunkText, 400)
+	}
 
-	add := func(value string) {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			return
+	parts := make([]string, 0, len(contextChunks))
+	for _, chunk := range contextChunks {
+		label := fmt.Sprintf("Chunk %d", chunk.Index+1)
+		if chunk.Index == match.ChunkIndex {
+			label += " [match]"
 		}
-		key := strings.ToLower(value)
-		if seen[key] {
-			return
-		}
-		seen[key] = true
-		queries = append(queries, value)
+		parts = append(parts, fmt.Sprintf("%s: %s", label, compactMemoryText(chunk.Text, 260)))
 	}
-
-	add(originalQuery)
-	add(rewrittenQuery)
-	for _, keyword := range ExtractKeywords(rewrittenQuery) {
-		add(keyword)
-	}
-	for _, keyword := range ExtractKeywords(originalQuery) {
-		add(keyword)
-	}
-	if strings.Contains(originalQuery, "이름") || strings.Contains(rewrittenQuery, "이름") {
-		add("내 이름은")
-		add("제 이름은")
-		add("사용자 이름")
-		add("이름은")
-		add("user name")
-		add("my name")
-	}
-
-	return queries
+	return strings.Join(parts, "\n")
 }
 
 // GetMemorySnapshot returns a formatted string of the most recent memories for system prompt injection.
 func GetMemorySnapshot(userID string) string {
+	debug := GetMemorySnapshotDebug(userID)
+	return debug.Text
+}
+
+func GetMemorySnapshotDebug(userID string) MemorySnapshotDebug {
 	results, err := SearchMemoriesByRecent(userID, 5)
 	if err != nil {
 		log.Printf("[MCP] Failed to get memory snapshot: %v", err)
-		return "No recent memories found."
+		return MemorySnapshotDebug{Text: "No recent memories found."}
 	}
 	savedTurns, savedErr := ListSavedTurns(userID, 5)
 	if savedErr != nil {
 		log.Printf("[MCP] Failed to get saved turn snapshot: %v", savedErr)
 	}
 	if len(results) == 0 && len(savedTurns) == 0 {
-		return "No recent memories found."
+		return MemorySnapshotDebug{Text: "No recent memories found."}
 	}
 
 	var sb strings.Builder
+	debug := MemorySnapshotDebug{
+		MemoryCount:    len(results),
+		SavedTurnCount: len(savedTurns),
+		MemoryIDs:      make([]int64, 0, len(results)),
+		SavedTurnIDs:   make([]int64, 0, len(savedTurns)),
+	}
 	for _, r := range results {
 		sb.WriteString(fmt.Sprintf("- [%s] %s\n", r.CreatedAt.Format("2006-01-02"), compactMemoryText(r.FullText, 120)))
+		debug.MemoryIDs = append(debug.MemoryIDs, r.ID)
 	}
 	for _, turn := range savedTurns {
 		sb.WriteString(fmt.Sprintf("- [%s] Saved turn: %s\n", turn.CreatedAt.Format("2006-01-02"), compactMemoryText(turn.Title, 120)))
+		debug.SavedTurnIDs = append(debug.SavedTurnIDs, turn.ID)
 	}
-	return sb.String()
-}
-
-// ExtractKeywords provides keyword extraction from user message
-// by stripping common Korean particles (조사) and stopwords.
-func ExtractKeywords(input string) []string {
-	inputLower := strings.ToLower(input)
-
-	// Remove common punctuation
-	replacer := strings.NewReplacer(",", " ", ".", " ", "?", " ", "!", " ", "\"", " ", "'", " ", "(", " ", ")", " ", "-", " ")
-	clean := replacer.Replace(inputLower)
-	words := strings.Fields(clean)
-
-	var keywords []string
-
-	// Words to completely ignore
-	stopwords := map[string]bool{
-		"그리고": true, "그래서": true, "하지만": true, "알려줘": true, "해줘": true,
-		"뭐야": true, "어때": true, "어디": true, "누구": true, "어떻게": true, "왜": true,
-		"the": true, "a": true, "an": true, "and": true, "or": true, "but": true,
-		"in": true, "on": true, "at": true, "to": true, "for": true, "of": true,
-		"with": true, "about": true, "like": true, "this": true, "that": true,
-		"tell": true, "me": true, "what": true, "who": true, "when": true,
-		"where": true, "why": true, "how": true,
-	}
-
-	// Suffixes (particles/조사) to strip from the end of words
-	particles := []string{
-		"이라고", "이라는", "에서는", "로부터", "까지도", "마저도", "조차도",
-		"에서", "부터", "까지", "으로", "보다", "처럼", "만큼", "마다", "이랑", "하고",
-		"은", "는", "이", "가", "을", "를", "에", "도", "로", "와", "과", "의", "만", "요", "다",
-	}
-
-	for _, w := range words {
-		if stopwords[w] {
-			continue
-		}
-
-		// Strip particles
-		cleanedWord := w
-		for _, p := range particles {
-			if strings.HasSuffix(cleanedWord, p) {
-				potential := strings.TrimSuffix(cleanedWord, p)
-				if len([]rune(potential)) >= 1 {
-					cleanedWord = potential
-					break
-				}
-			}
-		}
-
-		// Priority keywords (relations, etc) - if they are part of a word, keep them
-		priorities := []string{"아내", "배우자", "아들", "딸", "부모", "아버지", "어머니", "생일", "전화번호", "주소", "이름"}
-		for _, p := range priorities {
-			if strings.Contains(w, p) {
-				keywords = append(keywords, p)
-			}
-		}
-
-		// Only add if it's meaningful length
-		if len([]rune(cleanedWord)) >= 1 {
-			if len(cleanedWord) == 1 && stopwords[cleanedWord] {
-				continue
-			}
-			keywords = append(keywords, cleanedWord)
-		}
-	}
-
-	// Dedup keywords
-	uniqueMap := make(map[string]bool)
-	var finalKeywords []string
-	for _, k := range keywords {
-		if !uniqueMap[k] {
-			finalKeywords = append(finalKeywords, k)
-			uniqueMap[k] = true
-		}
-	}
-
-	return finalKeywords
+	debug.Text = sb.String()
+	return debug
 }
 
 // AutoSearchMemory searches for the most relevant memories using extracted keywords
 // and returns their full text to be injected proactively into the system prompt.
 func AutoSearchMemory(userID, input string) string {
-	keywords := ExtractKeywords(input)
-	log.Printf("[MCP] AutoSearchMemory: Input=%q, Keywords=%v", input, keywords)
-	if len(keywords) == 0 {
-		return ""
+	debug := AutoSearchMemoryDebugQuery(userID, input)
+	return debug.Context
+}
+
+func AutoSearchMemoryDebugQuery(userID, input string) AutoSearchMemoryDebug {
+	trimmed := strings.TrimSpace(input)
+	log.Printf("[MCP] AutoSearchMemory: Input=%q", trimmed)
+	if trimmed == "" {
+		return AutoSearchMemoryDebug{}
 	}
-
-	var chunkResults []MemoryChunkMatch
-	seenChunkKeys := make(map[string]bool)
-	var savedTurnResults []MemoryEntry
-	seenSavedTurnIDs := make(map[int64]bool)
-
-	// Step 1: Search with top 3 keywords (Priority)
-	searchWords := keywords
-	if len(searchWords) > 3 {
-		searchWords = searchWords[:3]
-	}
-
-	runSearch := func(words []string) {
-		for _, kw := range words {
-			results, err := SearchMemoryChunkMatches(userID, kw, 5)
-			if err == nil {
-				if len(results) > 0 {
-					log.Printf("[MCP] AutoSearchMemory: Keyword %q found %d chunk results", kw, len(results))
-				}
-				for _, r := range results {
-					key := fmt.Sprintf("%d:%d", r.ID, r.ChunkIndex)
-					if !seenChunkKeys[key] {
-						chunkResults = append(chunkResults, r)
-						seenChunkKeys[key] = true
-					}
-				}
-			}
-
-			savedTurns, err := SearchSavedTurns(userID, kw, 5)
-			if err == nil {
-				for _, turn := range savedTurns {
-					savedID := turn.ID + 1_000_000_000
-					if seenSavedTurnIDs[savedID] {
-						continue
-					}
-					savedTurnResults = append(savedTurnResults, MemoryEntry{
-						ID:         savedID,
-						UserID:     turn.UserID,
-						FullText:   fmt.Sprintf("User Prompt:\n%s\n\nAssistant Response:\n%s", turn.PromptText, turn.ResponseText),
-						HitCount:   0,
-						CreatedAt:  turn.CreatedAt,
-						MemoryType: "saved_turn",
-					})
-					seenSavedTurnIDs[savedID] = true
-				}
-			}
-		}
-	}
-
-	runSearch(searchWords)
-
-	// Step 2: Retry with remaining keywords if no results found
-	if len(chunkResults) == 0 && len(savedTurnResults) == 0 && len(keywords) > 3 {
-		log.Printf("[MCP] AutoSearchMemory: No results in Step 1. Retrying with next keywords.")
-		nextWords := keywords[3:]
-		if len(nextWords) > 5 {
-			nextWords = nextWords[:5]
-		}
-		runSearch(nextWords)
-	}
-
-	if len(chunkResults) == 0 && len(savedTurnResults) == 0 {
-		return ""
+	candidates, err := buildMemoryCandidates(userID, trimmed, 5)
+	if err != nil || len(candidates) == 0 {
+		return AutoSearchMemoryDebug{}
 	}
 
 	var rawContextSb strings.Builder
-	chunkLimit := 3
-	if len(chunkResults) < chunkLimit {
-		chunkLimit = len(chunkResults)
+	debug := AutoSearchMemoryDebug{
+		Keywords:               []string{trimmed},
+		RetrievedMemoriesCount: 0,
+		SavedTurnHits:          0,
 	}
-	for i := 0; i < chunkLimit; i++ {
-		r := chunkResults[i]
-		memoryType := strings.TrimSpace(r.MemoryType)
-		if memoryType == "" {
-			memoryType = "raw_interaction"
+	for i, candidate := range candidates {
+		if i >= 4 {
+			break
 		}
-		rawContextSb.WriteString(fmt.Sprintf("\n--- MEMORY ID: %d | DATE: %s | TYPE: %s | CHUNK: %d ---\n", r.ID, r.CreatedAt.Format("2006-01-02"), memoryType, r.ChunkIndex+1))
-		rawContextSb.WriteString(fmt.Sprintf("Relevant excerpt: %s\n", compactMemoryText(r.ChunkText, 400)))
-		_ = IncrementMemoryChunkHitCount(r.ChunkID)
-		_ = IncrementHitCount(r.ID)
-	}
-
-	savedLimit := 2
-	if len(savedTurnResults) < savedLimit {
-		savedLimit = len(savedTurnResults)
-	}
-	for i := 0; i < savedLimit; i++ {
-		r := savedTurnResults[i]
-		rawContextSb.WriteString(fmt.Sprintf("\n--- SAVED TURN ID: %d | DATE: %s | TYPE: %s ---\n", r.ID-1_000_000_000, r.CreatedAt.Format("2006-01-02"), r.MemoryType))
-		rawContextSb.WriteString(fmt.Sprintf("Content: %s\n", compactMemoryText(r.FullText, 400)))
+		if candidate.SourceType == "saved_turn" {
+			debug.SavedTurnHits++
+			ctx, err := ReadMemoryContextDB(userID, candidate.MemoryID, -1)
+			if err == nil {
+				rawContextSb.WriteString("\n" + ctx + "\n")
+			}
+			continue
+		}
+		debug.RetrievedMemoriesCount++
+		if candidate.ChunkIndex >= 0 {
+			debug.ChunkMatchCount++
+		}
+		ctx, err := ReadMemoryContextDB(userID, candidate.MemoryID, candidate.ChunkIndex)
+		if err == nil {
+			rawContextSb.WriteString("\n" + ctx + "\n")
+		}
 	}
 
 	rawContext := rawContextSb.String()
+	debug.RawContext = rawContext
 
 	// Perform server-side memory synthesis
-	syn, err := SynthesizeMemoryContext(userID, input, rawContext)
+	syn, err := SynthesizeMemoryContext(userID, trimmed, rawContext)
 	if err != nil {
 		log.Printf("[MCP] Synthesize failed, falling back to compact context: %v", err)
-		return "\n[PROACTIVE MEMORY RETRIEVAL]\n" + rawContext
+		debug.Context = "\n[PROACTIVE MEMORY RETRIEVAL]\n" + rawContext
+		return debug
 	}
 
 	if strings.TrimSpace(syn) == "" || strings.TrimSpace(syn) == "NO_RELEVANT_INFO" {
-		return ""
+		return debug
 	}
 
-	return "\n[PROACTIVE MEMORY RETRIEVAL (Synthesized)]\n" + syn
+	debug.UsedSynthesis = true
+	debug.SynthesizedContext = syn
+	debug.Context = "\n[PROACTIVE MEMORY RETRIEVAL (Synthesized)]\n" + syn
+	return debug
 }
 
 // SynthesizeMemoryContext makes a quick LLM call to extract only the facts relevant to the query
@@ -451,6 +376,8 @@ Your task is to extract ONLY the exact facts, quotes, or statements from the raw
 DO NOT answer the user's message. 
 DO NOT converse.
 DO NOT add any conversational filler.
+DO NOT output XML tags, HTML tags, markdown code fences, or any tool-call format.
+DO NOT mention tools, commands, functions, JSON schemas, or how to search.
 If nothing in the logs is relevant, output "NO_RELEVANT_INFO".
 
 Raw Logs:
@@ -465,7 +392,7 @@ Raw Logs:
 		// Using a standard identifier, the local server should route it to the active model
 		"model": "local-model",
 		"messages": []Message{
-			{Role: "system", Content: "Extract facts concisely. No chat. No markdown unless necessary."},
+			{Role: "system", Content: "Extract facts concisely. No chat. No markdown unless necessary. Never emit XML tags, tool calls, commands, or JSON."},
 			{Role: "user", Content: prompt},
 		},
 		"temperature": 0.1,
@@ -513,6 +440,14 @@ Raw Logs:
 // ReadMemoryDB calls the SQLite db to read full text of a specific memory ID
 func ReadMemoryDB(userID string, memoryID int64) (string, error) {
 	log.Printf("[MCP] ReadMemoryDB: User=%s, ID=%d", userID, memoryID)
+	if isSavedTurnMemoryID(memoryID) {
+		turn, err := GetSavedTurn(userID, originalSavedTurnID(memoryID))
+		if err != nil {
+			return "", fmt.Errorf("saved turn read failed: %v", err)
+		}
+		return fmt.Sprintf("Memory ID: %d\nSource: saved_turn\nDate: %s\nTitle: %s\n\n--- User Prompt ---\n%s\n\n--- Assistant Response ---\n%s",
+			memoryID, turn.CreatedAt.Format("2006-01-02 15:04"), turn.Title, turn.PromptText, turn.ResponseText), nil
+	}
 	mem, err := ReadMemory(userID, memoryID)
 	if err != nil {
 		return "", fmt.Errorf("db read failed: %v", err)
@@ -522,9 +457,54 @@ func ReadMemoryDB(userID string, memoryID int64) (string, error) {
 		mem.ID, mem.CreatedAt.Format("2006-01-02 15:04"), mem.MemoryType, mem.FullText), nil
 }
 
+func ReadMemoryContextDB(userID string, memoryID int64, chunkIndex int) (string, error) {
+	log.Printf("[MCP] ReadMemoryContextDB: User=%s, ID=%d, Chunk=%d", userID, memoryID, chunkIndex)
+	if isSavedTurnMemoryID(memoryID) {
+		turn, err := GetSavedTurn(userID, originalSavedTurnID(memoryID))
+		if err != nil {
+			return "", fmt.Errorf("saved turn context read failed: %v", err)
+		}
+		return fmt.Sprintf("Memory ID: %d\nSource: saved_turn\nDate: %s\nTitle: %s\n\n--- Prompt ---\n%s\n\n--- Response ---\n%s",
+			memoryID, turn.CreatedAt.Format("2006-01-02 15:04"), turn.Title, compactMemoryText(turn.PromptText, 900), compactMemoryText(turn.ResponseText, 1400)), nil
+	}
+
+	mem, err := ReadMemory(userID, memoryID)
+	if err != nil {
+		return "", fmt.Errorf("memory context read failed: %v", err)
+	}
+	if chunkIndex < 0 {
+		chunkIndex = 0
+	}
+	contextChunks := loadMemoryChunkContext(memoryID, chunkIndex)
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Memory ID: %d\nDate: %s\nType: %s\n", mem.ID, mem.CreatedAt.Format("2006-01-02 15:04"), mem.MemoryType))
+	sb.WriteString("\n--- Nearby Context ---\n")
+	if len(contextChunks) == 0 {
+		sb.WriteString(compactMemoryText(mem.FullText, 1800))
+		return sb.String(), nil
+	}
+	for _, chunk := range contextChunks {
+		label := fmt.Sprintf("Chunk %d", chunk.Index+1)
+		if chunk.Index == chunkIndex {
+			label += " [focus]"
+		}
+		sb.WriteString(fmt.Sprintf("%s:\n%s\n\n", label, compactMemoryText(chunk.Text, 900)))
+	}
+	sb.WriteString("--- Full Memory Summary ---\n")
+	sb.WriteString(compactMemoryText(mem.FullText, 1200))
+	return strings.TrimSpace(sb.String()), nil
+}
+
 // DeleteMemoryDB removes a specific memory entry.
 func DeleteMemoryDB(userID string, memoryID int64) (string, error) {
 	log.Printf("[MCP] DeleteMemoryDB: User=%s, ID=%d", userID, memoryID)
+	if isSavedTurnMemoryID(memoryID) {
+		err := DeleteSavedTurn(userID, originalSavedTurnID(memoryID))
+		if err != nil {
+			return "", fmt.Errorf("saved turn delete failed: %v", err)
+		}
+		return fmt.Sprintf("Successfully deleted saved turn Memory ID: %d", memoryID), nil
+	}
 	err := DeleteMemory(userID, memoryID)
 	if err != nil {
 		return "", fmt.Errorf("db delete failed: %v", err)
@@ -657,24 +637,4 @@ func WriteUserDocument(userID, filename, content string) error {
 	}
 
 	return os.WriteFile(filePath, []byte(content), 0644)
-}
-
-// DetermineCategory analyzes content and determines if it's personal or work-related
-func DetermineCategory(content string) string {
-	contentLower := strings.ToLower(content)
-
-	workKeywords := []string{
-		"project", "프로젝트", "work", "업무", "회사", "company", "job", "직장",
-		"task", "deadline", "마감", "meeting", "회의", "client", "고객",
-		"code", "코드", "programming", "프로그래밍", "development", "개발",
-		"report", "보고서", "presentation", "발표", "team", "팀",
-	}
-
-	for _, kw := range workKeywords {
-		if strings.Contains(contentLower, kw) {
-			return "work"
-		}
-	}
-
-	return "personal"
 }

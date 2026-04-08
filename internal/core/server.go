@@ -82,6 +82,291 @@ func compactText(input string, limit int) string {
 	return strings.TrimSpace(string(runes[:limit])) + "... (truncated)"
 }
 
+func normalizeRelaxedToolArgsJSON(raw string) (string, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", false
+	}
+
+	trimmed = strings.NewReplacer(
+		`<|"|>`, `"`,
+		`<|'|>`, `'`,
+	).Replace(trimmed)
+
+	keyPattern := regexp.MustCompile(`([{\[,]\s*)([A-Za-z_][A-Za-z0-9_]*)\s*:`)
+	trimmed = keyPattern.ReplaceAllString(trimmed, `$1"$2":`)
+
+	var parsed interface{}
+	if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
+		return "", false
+	}
+	bytes, err := json.Marshal(parsed)
+	if err != nil {
+		return "", false
+	}
+	return string(bytes), true
+}
+
+func normalizeBufferedToolMatch(toolName string, toolArgsStr string) (string, string, interface{}, bool) {
+	toolName = strings.TrimSpace(toolName)
+	toolArgsStr = strings.TrimSpace(toolArgsStr)
+
+	if toolArgsStr != "" && !json.Valid([]byte(toolArgsStr)) {
+		if normalized, ok := normalizeRelaxedToolArgsJSON(toolArgsStr); ok {
+			toolArgsStr = normalized
+		}
+	}
+
+	var wrapper struct {
+		Name      string      `json:"name"`
+		Arguments interface{} `json:"arguments"`
+	}
+	if err := json.Unmarshal([]byte(toolArgsStr), &wrapper); err == nil {
+		if strings.TrimSpace(wrapper.Name) != "" && wrapper.Arguments != nil {
+			return strings.TrimSpace(wrapper.Name), toolArgsStr, wrapper.Arguments, true
+		}
+	}
+
+	var args interface{}
+	if err := json.Unmarshal([]byte(toolArgsStr), &args); err == nil {
+		return toolName, toolArgsStr, args, false
+	}
+	return toolName, toolArgsStr, nil, false
+}
+
+func parseXMLLikeToolCall(raw string) (string, string, interface{}, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", "", nil, false
+	}
+
+	for {
+		wrapperMatch := regexp.MustCompile(`(?s)^<tool_call>\s*([\s\S]*?)\s*</tool_call>\s*$`).FindStringSubmatch(trimmed)
+		if len(wrapperMatch) < 2 {
+			break
+		}
+		unwrapped := strings.TrimSpace(wrapperMatch[1])
+		if unwrapped == "" || unwrapped == trimmed {
+			break
+		}
+		trimmed = unwrapped
+	}
+
+	toolOpen := regexp.MustCompile(`(?s)<([a-zA-Z_][a-zA-Z0-9_]*)\b[^>]*>`)
+	openMatch := toolOpen.FindStringSubmatch(trimmed)
+	if len(openMatch) < 2 {
+		return "", "", nil, false
+	}
+
+	toolName := strings.TrimSpace(openMatch[1])
+	switch toolName {
+	case "tool_call", "remark", "think", "arg_key", "arg_value":
+		return "", "", nil, false
+	}
+
+	closeTag := fmt.Sprintf("</%s>", toolName)
+	closeIdx := strings.LastIndex(strings.ToLower(trimmed), strings.ToLower(closeTag))
+	if closeIdx < 0 {
+		return "", "", nil, false
+	}
+
+	bodyStart := strings.Index(trimmed, ">")
+	if bodyStart < 0 || bodyStart >= closeIdx {
+		return "", "", nil, false
+	}
+	body := trimmed[bodyStart+1 : closeIdx]
+
+	argPattern := regexp.MustCompile(`(?s)<arg_key>\s*([^<]+?)\s*</arg_key>\s*<arg_value>\s*([\s\S]*?)\s*</arg_value>`)
+	argMatches := argPattern.FindAllStringSubmatch(body, -1)
+	args := map[string]interface{}{}
+	for _, match := range argMatches {
+		if len(match) < 3 {
+			continue
+		}
+		key := strings.TrimSpace(match[1])
+		value := strings.TrimSpace(match[2])
+		if key == "" {
+			continue
+		}
+		args[key] = value
+	}
+
+	if len(args) == 0 {
+		tagArgPattern := regexp.MustCompile(`(?s)<([a-zA-Z_][a-zA-Z0-9_]*)>\s*([\s\S]*?)\s*</\1>`)
+		tagMatches := tagArgPattern.FindAllStringSubmatch(body, -1)
+		for _, match := range tagMatches {
+			if len(match) < 3 {
+				continue
+			}
+			key := strings.TrimSpace(match[1])
+			value := strings.TrimSpace(match[2])
+			if key == "" || value == "" {
+				continue
+			}
+			switch key {
+			case "tool_call", "remark", "think":
+				continue
+			}
+			args[key] = value
+		}
+	}
+	if len(args) == 0 {
+		return "", "", nil, false
+	}
+
+	argBytes, err := json.Marshal(args)
+	if err != nil {
+		return "", "", nil, false
+	}
+	return toolName, string(argBytes), args, false
+}
+
+func buildImplicitToolArgs(toolName string, explicitText string, userText string) (string, interface{}, bool) {
+	trimmedExplicit := strings.TrimSpace(explicitText)
+	trimmedUser := strings.TrimSpace(userText)
+	queryText := trimmedExplicit
+	if queryText == "" {
+		queryText = trimmedUser
+	}
+	switch strings.TrimSpace(toolName) {
+	case "search_memory", "search_web", "naver_search", "namu_wiki":
+		if queryText == "" {
+			return "", nil, false
+		}
+		args := map[string]interface{}{"query": queryText}
+		argBytes, err := json.Marshal(args)
+		if err != nil {
+			return "", nil, false
+		}
+		return string(argBytes), args, true
+	case "read_buffered_source":
+		if queryText == "" {
+			args := map[string]interface{}{}
+			argBytes, err := json.Marshal(args)
+			if err != nil {
+				return "", nil, false
+			}
+			return string(argBytes), args, true
+		}
+		args := map[string]interface{}{"query": queryText}
+		argBytes, err := json.Marshal(args)
+		if err != nil {
+			return "", nil, false
+		}
+		return string(argBytes), args, true
+	case "get_current_time", "get_current_location":
+		args := map[string]interface{}{}
+		argBytes, err := json.Marshal(args)
+		if err != nil {
+			return "", nil, false
+		}
+		return string(argBytes), args, true
+	default:
+		return "", nil, false
+	}
+}
+
+func parseBareToolCallTag(raw string, userText string) (string, string, interface{}, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", "", nil, false
+	}
+	match := regexp.MustCompile(`(?s)<tool_call>\s*([\s\S]*?)\s*</tool_call>`).FindStringSubmatch(trimmed)
+	if len(match) < 2 {
+		return "", "", nil, false
+	}
+	inner := strings.TrimSpace(match[1])
+	if inner == "" {
+		return "", "", nil, false
+	}
+
+	toolName := ""
+	explicitQuery := ""
+	if explicit := regexp.MustCompile(`(?s)^([a-zA-Z_][a-zA-Z0-9_]*)(?:\s*[:=]\s*|\s+query\s*[:=]\s*)(.+)$`).FindStringSubmatch(inner); len(explicit) >= 3 {
+		toolName = strings.TrimSpace(explicit[1])
+		explicitQuery = strings.TrimSpace(explicit[2])
+	} else if compact := regexp.MustCompile(`(?s)^(search_memory|search_web|naver_search|namu_wiki|read_buffered_source)\s*query\s*[:=]\s*(.+)$`).FindStringSubmatch(inner); len(compact) >= 3 {
+		toolName = strings.TrimSpace(compact[1])
+		explicitQuery = strings.TrimSpace(compact[2])
+	} else {
+		toolName = inner
+	}
+	if toolName == "" {
+		return "", "", nil, false
+	}
+	argsJSON, args, ok := buildImplicitToolArgs(toolName, explicitQuery, userText)
+	if !ok {
+		return "", "", nil, false
+	}
+	return toolName, argsJSON, args, true
+}
+
+func looksLikeToolMarkup(raw string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(raw))
+	if trimmed == "" {
+		return false
+	}
+	markers := []string{
+		"<tool_call",
+		"<execute_command",
+		"<search_memory",
+		"<read_memory",
+		"<read_memory_context",
+		"<read_buffered_source",
+		"<search_web",
+		"<naver_search",
+		"<namu_wiki",
+		"<arg_key",
+		"<arg_value",
+		"<query>",
+		"<source_id>",
+	}
+	for _, marker := range markers {
+		if strings.Contains(trimmed, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeModelChannelMarkup(raw string) string {
+	replacer := strings.NewReplacer(
+		"<|channel>", "<|channel|>",
+		"<channel|>", "<|channel|>",
+	)
+	return replacer.Replace(raw)
+}
+
+func sanitizeLeakedModelChannelContent(raw string) (string, bool) {
+	normalized := normalizeModelChannelMarkup(raw)
+	if !strings.Contains(normalized, "<|channel|>") {
+		return raw, false
+	}
+
+	cleaned := normalized
+	thoughtBlock := regexp.MustCompile(`(?is)<\|channel\|>\s*thought\b[\s\S]*?(?=(<\|channel\|>\s*(?:final|assistant|response)\b)|$)`)
+	cleaned = thoughtBlock.ReplaceAllString(cleaned, "")
+
+	channelMarkers := regexp.MustCompile(`(?is)<\|channel\|>\s*(?:thought|final|assistant|response)\b`)
+	cleaned = channelMarkers.ReplaceAllString(cleaned, "")
+	cleaned = strings.ReplaceAll(cleaned, "<|message|>", "")
+	cleaned = strings.ReplaceAll(cleaned, "<|end|>", "")
+	cleaned = strings.TrimSpace(cleaned)
+
+	return cleaned, cleaned != strings.TrimSpace(raw)
+}
+
+func looksLikeChannelToolMarkup(raw string) bool {
+	normalized := normalizeModelChannelMarkup(strings.ToLower(strings.TrimSpace(raw)))
+	if !strings.Contains(normalized, "<|channel|>") {
+		return false
+	}
+	if strings.Contains(normalized, "<|tool_code|>") || strings.Contains(normalized, "to=") {
+		return true
+	}
+	return strings.Contains(normalized, "{") && strings.Contains(normalized, "}")
+}
+
 func buildAssistantContentHash(input string) string {
 	sum := sha256.Sum256([]byte(input))
 	return hex.EncodeToString(sum[:8])
@@ -127,6 +412,32 @@ type savedTurnTitleOptions struct {
 	APIToken       string
 	Temperature    float64
 	LLMMode        string
+}
+
+func defaultContextStrategyForMode(mode string) string {
+	if strings.EqualFold(strings.TrimSpace(mode), "stateful") {
+		return "stateful"
+	}
+	return "history"
+}
+
+func normalizeContextStrategyForMode(mode, raw string) string {
+	mode = strings.TrimSpace(strings.ToLower(mode))
+	strategy := strings.TrimSpace(strings.ToLower(raw))
+	if mode == "stateful" {
+		switch strategy {
+		case "retrieval", "stateful", "none":
+			return strategy
+		default:
+			return "stateful"
+		}
+	}
+	switch strategy {
+	case "retrieval", "history", "none":
+		return strategy
+	default:
+		return "history"
+	}
 }
 
 type chatSessionToolHistorySnapshot struct {
@@ -394,6 +705,145 @@ func summarizeChatSessionForReset(existingSummary string, snapshot chatSessionUI
 		summary = summary[len(summary)-1800:]
 	}
 	return strings.TrimSpace(summary)
+}
+
+func buildRecentContextFromSnapshot(snapshot chatSessionUISnapshot, maxTurns int) (string, int) {
+	if maxTurns <= 0 {
+		maxTurns = 4
+	}
+	entries := make([]string, 0, maxTurns*2)
+	turns := 0
+	for i := len(snapshot.Messages) - 1; i >= 0 && turns < maxTurns; i-- {
+		msg := snapshot.Messages[i]
+		userText := cleanContentForStatefulSummaryServer(msg.UserContent)
+		assistantText := cleanContentForStatefulSummaryServer(msg.AssistantContent)
+		if userText == "" && assistantText == "" {
+			continue
+		}
+		chunk := make([]string, 0, 3)
+		if userText != "" {
+			chunk = append(chunk, fmt.Sprintf("User: %s", compactText(userText, 420)))
+		}
+		if assistantText != "" {
+			chunk = append(chunk, fmt.Sprintf("Assistant: %s", compactText(assistantText, 520)))
+		}
+		if len(chunk) == 0 {
+			continue
+		}
+		turns++
+		entries = append([]string{fmt.Sprintf("Turn -%d\n%s", turns, strings.Join(chunk, "\n"))}, entries...)
+	}
+	return strings.TrimSpace(strings.Join(entries, "\n\n")), turns
+}
+
+func buildRecentContextFromEvents(userID string, entry mcp.ChatSessionEntry, maxTurns int) (string, int) {
+	if entry.ID <= 0 {
+		return "", 0
+	}
+	events, err := mcp.ListChatEvents(userID, entry.ID, 0, 400)
+	if err != nil || len(events) == 0 {
+		return "", 0
+	}
+
+	type turnSnapshot struct {
+		user      string
+		assistant string
+	}
+	byTurn := make(map[string]*turnSnapshot)
+	order := make([]string, 0, len(events))
+	ensureTurn := func(turnID string) *turnSnapshot {
+		key := strings.TrimSpace(turnID)
+		if key == "" {
+			return nil
+		}
+		if existing, ok := byTurn[key]; ok {
+			return existing
+		}
+		next := &turnSnapshot{}
+		byTurn[key] = next
+		order = append(order, key)
+		return next
+	}
+
+	for _, event := range events {
+		var payload map[string]interface{}
+		if err := json.Unmarshal([]byte(strings.TrimSpace(event.PayloadJSON)), &payload); err != nil {
+			payload = map[string]interface{}{}
+		}
+		turnID := strings.TrimSpace(event.TurnID)
+		if turnID == "" {
+			if raw, ok := payload["turn_id"].(string); ok {
+				turnID = strings.TrimSpace(raw)
+			}
+		}
+		turn := ensureTurn(turnID)
+		if turn == nil {
+			continue
+		}
+		switch event.EventType {
+		case "message.created":
+			if event.Role == "user" {
+				if content, ok := payload["content"].(string); ok && strings.TrimSpace(content) != "" {
+					turn.user = strings.TrimSpace(content)
+				}
+			}
+		case "message.delta":
+			if fullContent, ok := payload["full_content"].(string); ok && strings.TrimSpace(fullContent) != "" {
+				turn.assistant = strings.TrimSpace(fullContent)
+			} else if content, ok := payload["content"].(string); ok && strings.TrimSpace(content) != "" {
+				turn.assistant = strings.TrimSpace(turn.assistant + content)
+			}
+		case "request.complete":
+			if content, ok := payload["final_assistant_content"].(string); ok && strings.TrimSpace(content) != "" {
+				turn.assistant = strings.TrimSpace(content)
+			}
+		}
+	}
+
+	if maxTurns <= 0 {
+		maxTurns = 4
+	}
+	entries := make([]string, 0, maxTurns*2)
+	turns := 0
+	for i := len(order) - 1; i >= 0 && turns < maxTurns; i-- {
+		turn := byTurn[order[i]]
+		if turn == nil {
+			continue
+		}
+		userText := cleanContentForStatefulSummaryServer(turn.user)
+		assistantText := cleanContentForStatefulSummaryServer(turn.assistant)
+		if userText == "" && assistantText == "" {
+			continue
+		}
+		chunk := make([]string, 0, 2)
+		if userText != "" {
+			chunk = append(chunk, fmt.Sprintf("User: %s", compactText(userText, 420)))
+		}
+		if assistantText != "" {
+			chunk = append(chunk, fmt.Sprintf("Assistant: %s", compactText(assistantText, 520)))
+		}
+		if len(chunk) == 0 {
+			continue
+		}
+		turns++
+		entries = append([]string{fmt.Sprintf("Turn -%d\n%s", turns, strings.Join(chunk, "\n"))}, entries...)
+	}
+	return strings.TrimSpace(strings.Join(entries, "\n\n")), turns
+}
+
+func getRecentConversationContext(userID string) (string, int, string) {
+	entry, err := mcp.GetCurrentChatSession(userID)
+	if err != nil {
+		return "", 0, ""
+	}
+	snapshot := parseChatSessionUISnapshot(entry.UIStateJSON)
+	if text, turns := buildRecentContextFromSnapshot(snapshot, 4); strings.TrimSpace(text) != "" {
+		return compactText(text, 2200), turns, "ui_snapshot"
+	}
+	if text, turns := buildRecentContextFromEvents(userID, entry, 4); strings.TrimSpace(text) != "" {
+		return compactText(text, 2200), turns, "chat_events"
+	}
+	return "", 0, ""
 }
 
 func computeServerStatefulRisk(turnCount, estimatedChars, lastInputTokens int, nextUserText string, turnLimit, charBudget, tokenBudget int) (float64, string) {
@@ -1362,6 +1812,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 				ApiToken            *string               `json:"api_token"`
 				SecondaryModel      *string               `json:"secondary_model"`
 				LLMMode             string                `json:"llm_mode"`
+				ContextStrategy     *string               `json:"context_strategy"`
 				EnableTTS           *bool                 `json:"enable_tts"`
 				EnableMCP           *bool                 `json:"enable_mcp"`
 				EnableMemory        *bool                 `json:"enable_memory"`
@@ -1407,12 +1858,26 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 						user.Settings.LLMMode = &newCfg.LLMMode
 						updated = true
 					}
+					if newCfg.ContextStrategy != nil {
+						value := normalizeContextStrategyForMode(newCfg.LLMMode, *newCfg.ContextStrategy)
+						if newCfg.LLMMode == "" && user.Settings.LLMMode != nil {
+							value = normalizeContextStrategyForMode(*user.Settings.LLMMode, *newCfg.ContextStrategy)
+						}
+						user.Settings.ContextStrategy = &value
+						updated = true
+					}
 					if newCfg.EnableTTS != nil {
 						user.Settings.EnableTTS = newCfg.EnableTTS
 						updated = true
 					}
 					if newCfg.EnableMCP != nil {
-						user.Settings.EnableMCP = newCfg.EnableMCP
+						allowMCP := *newCfg.EnableMCP
+						if mode := strings.TrimSpace(strings.ToLower(newCfg.LLMMode)); mode != "" && mode != "stateful" {
+							allowMCP = false
+						} else if newCfg.LLMMode == "" && user.Settings.LLMMode != nil && strings.TrimSpace(strings.ToLower(*user.Settings.LLMMode)) != "stateful" {
+							allowMCP = false
+						}
+						user.Settings.EnableMCP = &allowMCP
 						updated = true
 					}
 					if newCfg.EnableMemory != nil {
@@ -1505,7 +1970,13 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 							app.SetEnableTTS(*newCfg.EnableTTS)
 						}
 						if newCfg.EnableMCP != nil {
-							app.SetEnableMCP(*newCfg.EnableMCP)
+							allowMCP := *newCfg.EnableMCP
+							if strings.TrimSpace(strings.ToLower(newCfg.LLMMode)) != "" && strings.TrimSpace(strings.ToLower(newCfg.LLMMode)) != "stateful" {
+								allowMCP = false
+							} else if strings.TrimSpace(strings.ToLower(newCfg.LLMMode)) == "" && strings.TrimSpace(strings.ToLower(app.llmMode)) != "stateful" {
+								allowMCP = false
+							}
+							app.SetEnableMCP(allowMCP)
 						}
 						if newCfg.EnableMemory != nil {
 							// Global memory toggle is removed, handled per-user
@@ -1528,6 +1999,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 		resp := map[string]interface{}{
 			"llm_endpoint":          app.llmEndpoint,
 			"llm_mode":              app.llmMode,
+			"context_strategy":      defaultContextStrategyForMode(app.llmMode),
 			"secondary_model":       "",
 			"enable_tts":            app.enableTTS,
 			"enable_mcp":            app.enableMCP,
@@ -1553,6 +2025,11 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 				}
 				if user.Settings.LLMMode != nil {
 					resp["llm_mode"] = *user.Settings.LLMMode
+					resp["context_strategy"] = defaultContextStrategyForMode(*user.Settings.LLMMode)
+				}
+				if user.Settings.ContextStrategy != nil {
+					modeValue, _ := resp["llm_mode"].(string)
+					resp["context_strategy"] = normalizeContextStrategyForMode(modeValue, *user.Settings.ContextStrategy)
 				}
 				if user.Settings.SecondaryModel != nil {
 					resp["secondary_model"] = *user.Settings.SecondaryModel
@@ -1588,6 +2065,10 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 				// If the user wants to clear it, they send empty string.
 				// But we assume if they set it, they know it.
 			}
+		}
+
+		if modeValue, ok := resp["llm_mode"].(string); ok && strings.TrimSpace(strings.ToLower(modeValue)) != "stateful" {
+			resp["enable_mcp"] = false
 		}
 
 		json.NewEncoder(w).Encode(resp)
@@ -2525,6 +3006,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	endpointRaw := app.llmEndpoint
 	tokenRaw := app.llmApiToken
 	llmMode := app.llmMode
+	contextStrategy := defaultContextStrategyForMode(llmMode)
 	enableMCP := app.enableMCP
 	enableMemory := false // Default to false (Secure by default for unauthenticated)
 
@@ -2541,6 +3023,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	// Extract Client Location
 	locationInfo = r.Header.Get("X-User-Location")
 	clientTurnID := strings.TrimSpace(r.Header.Get("X-Client-Turn-Id"))
+	requestContextStrategy := strings.TrimSpace(r.Header.Get("X-Context-Strategy"))
 	statefulTurnCount := strings.TrimSpace(r.Header.Get("X-Stateful-Turn-Count"))
 	statefulEstChars := strings.TrimSpace(r.Header.Get("X-Stateful-Est-Chars"))
 	statefulSummaryChars := strings.TrimSpace(r.Header.Get("X-Stateful-Summary-Chars"))
@@ -2576,6 +3059,10 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			if user.Settings.LLMMode != nil {
 				llmMode = *user.Settings.LLMMode
 			}
+			contextStrategy = defaultContextStrategyForMode(llmMode)
+			if user.Settings.ContextStrategy != nil {
+				contextStrategy = normalizeContextStrategyForMode(llmMode, *user.Settings.ContextStrategy)
+			}
 			if user.Settings.EnableMCP != nil {
 				enableMCP = *user.Settings.EnableMCP
 			}
@@ -2604,6 +3091,12 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			}
 		}
 	}
+	if requestContextStrategy != "" {
+		contextStrategy = normalizeContextStrategyForMode(llmMode, requestContextStrategy)
+	}
+	if strings.TrimSpace(strings.ToLower(llmMode)) != "stateful" {
+		enableMCP = false
+	}
 
 	// Set MCP Context for this user interaction
 	// This ensures that when LM Studio calls back to MCP, it has the correct context
@@ -2616,6 +3109,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		"disallowed_cmds":     len(disallowedCmds),
 		"disallowed_dirs":     len(disallowedDirs),
 		"location":            compactText(locationInfo, 80),
+		"context_strategy":    contextStrategy,
 		"stateful_turns":      statefulTurnCount,
 		"stateful_chars":      statefulEstChars,
 		"summary_chars":       statefulSummaryChars,
@@ -2668,14 +3162,22 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 	memorySnapshot := ""
 	autoContext := ""
-	if enableMemory {
-		memorySnapshot = mcp.GetMemorySnapshot(userID)
+	recentContext := ""
+	recentContextTurns := 0
+	recentContextSource := ""
+	memorySnapshotDebug := mcp.MemorySnapshotDebug{}
+	autoContextDebug := mcp.AutoSearchMemoryDebug{}
+	if enableMemory && contextStrategy == "retrieval" {
+		recentContext, recentContextTurns, recentContextSource = getRecentConversationContext(userID)
+		memorySnapshotDebug = mcp.GetMemorySnapshotDebug(userID)
+		memorySnapshot = memorySnapshotDebug.Text
 		if messages, ok := reqMap["messages"].([]interface{}); ok && len(messages) > 0 {
 			for i := len(messages) - 1; i >= 0; i-- {
 				if m, ok := messages[i].(map[string]interface{}); ok {
 					if role, ok := m["role"].(string); ok && role == "user" {
 						if content, ok := m["content"].(string); ok {
-							autoContext = compactText(mcp.AutoSearchMemory(userID, content), 1200)
+							autoContextDebug = mcp.AutoSearchMemoryDebugQuery(userID, content)
+							autoContext = compactText(autoContextDebug.Context, 1200)
 							break
 						}
 					}
@@ -2683,17 +3185,56 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			}
 		}
 	}
+	if contextStrategy == "retrieval" {
+		AddDebugTrace("chat", "context.retrieval", "Collected retrieval context for prompt injection", map[string]interface{}{
+			"user":                     userID,
+			"mode":                     llmMode,
+			"memory_enabled":           enableMemory,
+			"mcp_enabled":              enableMCP,
+			"recent_context_chars":     len([]rune(strings.TrimSpace(recentContext))),
+			"recent_context_empty":     strings.TrimSpace(recentContext) == "",
+			"recent_context_preview":   compactText(recentContext, 420),
+			"recent_context_turns":     recentContextTurns,
+			"recent_context_source":    recentContextSource,
+			"memory_snapshot_chars":    len([]rune(strings.TrimSpace(memorySnapshot))),
+			"active_context_chars":     len([]rune(strings.TrimSpace(autoContext))),
+			"memory_snapshot_empty":    strings.TrimSpace(memorySnapshot) == "",
+			"active_context_empty":     strings.TrimSpace(autoContext) == "",
+			"memory_snapshot_preview":  compactText(memorySnapshot, 320),
+			"active_context_preview":   compactText(autoContext, 320),
+			"recent_memories_count":    memorySnapshotDebug.MemoryCount,
+			"recent_saved_turns_count": memorySnapshotDebug.SavedTurnCount,
+			"retrieved_memories_count": autoContextDebug.RetrievedMemoriesCount,
+			"saved_turn_hits":          autoContextDebug.SavedTurnHits,
+			"chunk_match_count":        autoContextDebug.ChunkMatchCount,
+			"used_synthesis":           autoContextDebug.UsedSynthesis,
+			"__payload": map[string]interface{}{
+				"kind":                  "retrieval_context",
+				"context_strategy":      contextStrategy,
+				"recent_context":        recentContext,
+				"memory_snapshot":       memorySnapshot,
+				"active_context":        autoContext,
+				"memory_snapshot_debug": memorySnapshotDebug,
+				"active_context_debug":  autoContextDebug,
+				"recent_context_turns":  recentContextTurns,
+				"recent_context_source": recentContextSource,
+			},
+		})
+	}
 
 	preparedRequest, err := chatharness.PrepareRequest(chatharness.RequestInput{
-		Body:           body,
-		EndpointRaw:    endpointRaw,
-		TokenRaw:       tokenRaw,
-		LLMMode:        llmMode,
-		EnableMCP:      enableMCP,
-		EnableMemory:   enableMemory,
-		ProceduralHint: proceduralHint,
-		MemorySnapshot: memorySnapshot,
-		ActiveContext:  autoContext,
+		Body:              body,
+		EndpointRaw:       endpointRaw,
+		TokenRaw:          tokenRaw,
+		LLMMode:           llmMode,
+		ContextStrategy:   contextStrategy,
+		EnableMCP:         enableMCP,
+		EnableMemory:      enableMemory,
+		ProceduralHint:    proceduralHint,
+		RecentContext:     recentContext,
+		MemorySnapshot:    memorySnapshot,
+		ActiveContext:     autoContext,
+		RetrievalInjected: strings.TrimSpace(recentContext) != "" || strings.TrimSpace(memorySnapshot) != "" || strings.TrimSpace(autoContext) != "",
 	})
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to prepare chat request: %v", err), http.StatusInternalServerError)
@@ -2707,7 +3248,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		log.Println("[handleChat] Injected or deduplicated System Prompt instructions")
 	}
 	if !enableMCP || llmMode == "standard" {
-		log.Printf("[handleChat] MCP injection skipped (EnableMCP=%v, Mode=%s)", enableMCP, llmMode)
+		log.Printf("[handleChat] MCP integration limited (EnableMCP=%v, Mode=%s, ContextStrategy=%s)", enableMCP, llmMode, contextStrategy)
 	}
 
 	body = preparedRequest.Body
@@ -2719,11 +3260,27 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	modelID := preparedRequest.ModelID
 	log.Printf("[handleChat] User: %s, Mode: %s, Endpoint: %s, URL: %s", userID, llmMode, endpoint, llmURL)
 	AddDebugTrace("chat", "request.prepared", "Prepared upstream LLM request", map[string]interface{}{
-		"user":           userID,
-		"mode":           llmMode,
-		"model":          modelID,
-		"url":            llmURL,
-		"body_bytes":     len(body),
+		"user":                     userID,
+		"mode":                     llmMode,
+		"context_strategy":         contextStrategy,
+		"model":                    modelID,
+		"url":                      llmURL,
+		"body_bytes":               len(body),
+		"injected_prompt":          preparedRequest.InjectedPrompt,
+		"stateful_followup":        preparedRequest.IsStatefulFollowup,
+		"memory_snapshot_chars":    len([]rune(strings.TrimSpace(memorySnapshot))),
+		"active_context_chars":     len([]rune(strings.TrimSpace(autoContext))),
+		"memory_snapshot_preview":  compactText(memorySnapshot, 220),
+		"active_context_preview":   compactText(autoContext, 220),
+		"retrieved_memories_count": autoContextDebug.RetrievedMemoriesCount,
+		"saved_turn_hits":          autoContextDebug.SavedTurnHits,
+		"chunk_match_count":        autoContextDebug.ChunkMatchCount,
+		"__payload": map[string]interface{}{
+			"kind":             "prepared_request_context",
+			"context_strategy": contextStrategy,
+			"memory_snapshot":  memorySnapshot,
+			"active_context":   autoContext,
+		},
 		"stateful_turns": statefulTurnCount,
 		"stateful_chars": statefulEstChars,
 		"input_tokens":   statefulInputTokens,
@@ -3496,19 +4053,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 								}
 							}
 
-							// Smart Parsing: Check if G2 is actually a wrapper object with "name" and "arguments"
-							var wrapper struct {
-								Name      string      `json:"name"`
-								Arguments interface{} `json:"arguments"`
-							}
-
-							isWrapper := false
-							if err := json.Unmarshal([]byte(toolArgsStr), &wrapper); err == nil {
-								if wrapper.Name != "" && wrapper.Arguments != nil {
-									toolName = wrapper.Name
-									isWrapper = true
-									log.Printf("[handleChat] Detected Wrapper JSON format. Extracted Tool: %s", toolName)
-								}
+							toolName, toolArgsStr, parsedArgs, isWrapper := normalizeBufferedToolMatch(toolName, toolArgsStr)
+							if isWrapper {
+								log.Printf("[handleChat] Detected Wrapper JSON format. Extracted Tool: %s", toolName)
 							}
 
 							log.Printf("[handleChat] Custom Tool Pattern Matched! Tool: %s", toolName)
@@ -3532,24 +4079,96 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 								argsEvt := map[string]interface{}{
 									"type":      "tool_call.arguments",
 									"tool":      toolName,
-									"arguments": wrapper.Arguments,
+									"arguments": parsedArgs,
 								}
 								argsBytes, _ := json.Marshal(argsEvt)
 								appendChatEvent("assistant", "tool_call.arguments", argsEvt)
 								emitStreamChunk(fmt.Sprintf("data: %s", string(argsBytes)))
 							} else {
-								appendChatEvent("assistant", "tool_call.arguments", map[string]interface{}{
-									"type":      "tool_call.arguments",
-									"tool":      toolName,
-									"arguments": toolArgsStr,
-								})
-								emitStreamChunk(fmt.Sprintf("data: {\"type\": \"tool_call.arguments\", \"tool\": \"%s\", \"arguments\": %s}", toolName, toolArgsStr))
+								argsEvt := map[string]interface{}{
+									"type": "tool_call.arguments",
+									"tool": toolName,
+								}
+								if parsedArgs != nil {
+									argsEvt["arguments"] = parsedArgs
+									argsBytes, _ := json.Marshal(argsEvt)
+									appendChatEvent("assistant", "tool_call.arguments", argsEvt)
+									emitStreamChunk(fmt.Sprintf("data: %s", string(argsBytes)))
+								} else {
+									argsEvt["arguments"] = toolArgsStr
+									appendChatEvent("assistant", "tool_call.arguments", argsEvt)
+									emitStreamChunk(fmt.Sprintf("data: {\"type\": \"tool_call.arguments\", \"tool\": \"%s\", \"arguments\": %s}", toolName, toolArgsStr))
+								}
 							}
 
 							// 3. Clear Buffer & Stop Buffering
 							buffer = ""
 							isBuffering = false
 							continue // Tool call handled, move to next line
+						}
+
+						if parsedTool, parsedArgsJSON, parsedArgs, ok := parseXMLLikeToolCall(buffer); ok {
+							toolName = parsedTool
+							toolArgsStr = parsedArgsJSON
+
+							log.Printf("[handleChat] XML-like Tool Pattern Matched! Tool: %s", toolName)
+
+							toolExecutedThisTurn = true
+							lastToolName = toolName
+							lastToolArgsStr = toolArgsStr
+
+							startEvt := map[string]string{
+								"type": "tool_call.start",
+								"tool": toolName,
+							}
+							startBytes, _ := json.Marshal(startEvt)
+							appendChatEvent("assistant", "tool_call.start", startEvt)
+							emitStreamChunk(fmt.Sprintf("data: %s", string(startBytes)))
+
+							argsEvt := map[string]interface{}{
+								"type":      "tool_call.arguments",
+								"tool":      toolName,
+								"arguments": parsedArgs,
+							}
+							argsBytes, _ := json.Marshal(argsEvt)
+							appendChatEvent("assistant", "tool_call.arguments", argsEvt)
+							emitStreamChunk(fmt.Sprintf("data: %s", string(argsBytes)))
+
+							buffer = ""
+							isBuffering = false
+							continue
+						}
+
+						if parsedTool, parsedArgsJSON, parsedArgs, ok := parseBareToolCallTag(buffer, initialUserInputText); ok {
+							toolName = parsedTool
+							toolArgsStr = parsedArgsJSON
+
+							log.Printf("[handleChat] Bare <tool_call> Pattern Matched! Tool: %s", toolName)
+
+							toolExecutedThisTurn = true
+							lastToolName = toolName
+							lastToolArgsStr = toolArgsStr
+
+							startEvt := map[string]string{
+								"type": "tool_call.start",
+								"tool": toolName,
+							}
+							startBytes, _ := json.Marshal(startEvt)
+							appendChatEvent("assistant", "tool_call.start", startEvt)
+							emitStreamChunk(fmt.Sprintf("data: %s", string(startBytes)))
+
+							argsEvt := map[string]interface{}{
+								"type":      "tool_call.arguments",
+								"tool":      toolName,
+								"arguments": parsedArgs,
+							}
+							argsBytes, _ := json.Marshal(argsEvt)
+							appendChatEvent("assistant", "tool_call.arguments", argsEvt)
+							emitStreamChunk(fmt.Sprintf("data: %s", string(argsBytes)))
+
+							buffer = ""
+							isBuffering = false
+							continue
 						}
 
 						// If buffer too long, assume no match and flush
@@ -3563,19 +4182,25 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 								badContentCapture = buffer
 							}
 
-							// Flush buffer as regular content
-							payload := map[string]interface{}{
-								"choices": []interface{}{
-									map[string]interface{}{
-										"delta": map[string]string{
-											"content": buffer,
+							if looksLikeToolMarkup(buffer) {
+								AddDebugTrace("chat", "tool.quarantine", "Suppressed oversized raw tool markup buffer", map[string]interface{}{
+									"snippet": compactText(buffer, 220),
+								})
+							} else {
+								// Flush buffer as regular content
+								payload := map[string]interface{}{
+									"choices": []interface{}{
+										map[string]interface{}{
+											"delta": map[string]string{
+												"content": buffer,
+											},
 										},
 									},
-								},
+								}
+								jsonBytes, _ := json.Marshal(payload)
+								emitStreamChunk(fmt.Sprintf("data: %s", string(jsonBytes)))
+								fullResponse += buffer // Add to full response
 							}
-							jsonBytes, _ := json.Marshal(payload)
-							emitStreamChunk(fmt.Sprintf("data: %s", string(jsonBytes)))
-							fullResponse += buffer // Add to full response
 							buffer = ""
 						}
 						continue // Buffering logic handled, move to next line
@@ -3609,6 +4234,15 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 									})
 								}
 								if c, ok := delta["content"].(string); ok {
+									if cleaned, changed := sanitizeLeakedModelChannelContent(c); changed {
+										if strings.TrimSpace(cleaned) == "" {
+											continue
+										}
+										c = cleaned
+										AddDebugTrace("chat", "channel.quarantine", "Stripped leaked model channel markup from assistant content", map[string]interface{}{
+											"snippet": compactText(c, 220),
+										})
+									}
 									if reasoningActive {
 										totalReasoningMs := reasoningAccumulatedMs + time.Since(reasoningStartedAt).Milliseconds()
 										appendChatEvent("assistant", "reasoning.end", map[string]interface{}{
@@ -3649,6 +4283,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 								}
 							}
 						}
+						if cleaned, changed := sanitizeLeakedModelChannelContent(content); changed {
+							content = cleaned
+						}
 
 						// 🛠️ Structured Output Support: Force buffering if start of JSON object is detected
 						if !isBuffering && len(fullResponse) < 50 && strings.HasPrefix(strings.TrimSpace(content), "{") {
@@ -3659,7 +4296,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 						}
 
 						// 🧪 Special Handling for Command-R / GPT-OSS Format (<|channel|>)
-						if !isBuffering && (strings.Contains(content, "<|channel|>") || strings.Contains(content, "<|tool_code|>") || strings.Contains(content, "<tool_call>")) {
+						if !isBuffering && (looksLikeChannelToolMarkup(content) || strings.Contains(content, "<|tool_code|>") || strings.Contains(content, "<tool_call>") || strings.Contains(content, "<execute_command") || strings.Contains(content, "<search_memory") || strings.Contains(content, "<read_memory") || strings.Contains(content, "<read_memory_context") || strings.Contains(content, "<read_buffered_source")) {
 							log.Printf("[handleChat] Detected Command-R/GPT-OSS/Qwen Tool Call Pattern. Switching to buffering mode.")
 							isBuffering = true
 							buffer = content
@@ -3667,8 +4304,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 							if strings.Contains(content, "<tool_call>") {
 								// Qwen Style: <tool_call>{JSON}</tool_call>
 								toolPattern = map[string]string{"format": "qwen"}
-								// Regex: Group 1 (Dummy/Name) + Group 2 (JSON)
-								toolRegex = regexp.MustCompile(`(?s)(<tool_call>)\s*(\{[\s\S]*?\})\s*</tool_call>`)
+								// Regex: optional explicit tool name + JSON/relaxed-JSON arguments object
+								toolRegex = regexp.MustCompile(`(?s)<tool_call>\s*(?:([a-zA-Z0-9_]+)\s*)?(\{[\s\S]*?\})\s*</tool_call>\s*\{?`)
 							} else {
 								// Command-R / GPT-OSS Style
 								// Define a regex that captures the prefix as Group 1 (ignored) and the JSON as Group 2
@@ -3811,9 +4448,20 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 		// 🛠️ FINAL BUFFER FLUSH: If we were buffering and the stream ended, flush what's left.
 		if isBuffering && len(buffer) > 0 {
-			log.Printf("[handleChat] Final buffer flush triggered (Stream End)")
-			emitCanonicalAssistantDelta(buffer)
-			lastSavedBufferForTurn = buffer // Save for history before clearing
+			if looksLikeToolMarkup(buffer) {
+				log.Printf("[handleChat] Final buffer flush suppressed raw tool markup")
+				needsCorrection = true
+				if badContentCapture == "" {
+					badContentCapture = buffer
+				}
+				AddDebugTrace("chat", "tool.quarantine", "Suppressed raw tool markup at stream end", map[string]interface{}{
+					"snippet": compactText(buffer, 220),
+				})
+			} else {
+				log.Printf("[handleChat] Final buffer flush triggered (Stream End)")
+				emitCanonicalAssistantDelta(buffer)
+				lastSavedBufferForTurn = buffer // Save for history before clearing
+			}
 			buffer = ""
 		} else if len(partialTagBuffer) > 0 {
 			// Flush partial tag buffer if stream ends

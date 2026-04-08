@@ -89,13 +89,10 @@
 
 
 
-                    <div class="setting-item" id="container-disable-stateful" style="display: none;">
-                        <div class="setting-toggle" onclick="toggleSwitch('cfg-disable-stateful')">
-                            <span data-i18n="setting.disableStateful.label">Disable Stateful Storage</span>
-                            <input type="checkbox" id="cfg-disable-stateful">
-                        </div>
-                        <p class="setting-desc" data-i18n="setting.disableStateful.desc">대화 내용을 서버에 저장하지 않습니다 (LM
-                            Studio).</p>
+                    <div class="setting-item" id="container-context-strategy">
+                        <label data-i18n="setting.contextStrategy.label">Background / Context Memory</label>
+                        <p class="setting-desc" data-i18n="setting.contextStrategy.desc">모드에 따라 문맥 유지 방식을 선택합니다.</p>
+                        <select id="cfg-context-strategy" onchange="updateSettingsVisibility()"></select>
                     </div>
 
                     <div class="setting-item" id="container-enable-mcp">
@@ -139,7 +136,7 @@
                         <input type="number" id="cfg-stateful-token-budget" value="10000" min="1000" step="500">
                     </div>
 
-                    <div class="setting-item" id="container-history">
+                    <div class="setting-item" id="container-history" style="display: none;">
                         <label data-i18n="setting.history.label">History Count</label>
                         <p class="setting-desc" data-i18n="setting.history.desc">(기본값: 10) 대화 기억 횟수</p>
                         <input type="number" id="cfg-history" value="10">
@@ -504,7 +501,20 @@
                 <button class="icon-btn header-library-btn" onclick="toggleSavedLibrary()" title="Saved Library">
                     <span class="material-icons-round">local_library</span>
                 </button>
-                <span id="header-model-name" class="header-model-name">Loading...</span>
+                <div class="header-model-picker">
+                    <button
+                        id="header-model-trigger"
+                        class="header-model-trigger"
+                        type="button"
+                        onclick="toggleHeaderModelDropdown(event)"
+                        aria-haspopup="listbox"
+                        aria-expanded="false"
+                        title="Select model">
+                        <span id="header-model-name" class="header-model-name">Loading...</span>
+                        <span class="material-icons-round header-model-trigger-icon">arrow_drop_down</span>
+                    </button>
+                    <div id="header-model-dropdown" class="header-model-dropdown" hidden></div>
+                </div>
             </div>
             <div class="chat-header-actions">
                 <div class="font-size-controls" aria-label="Text size controls">

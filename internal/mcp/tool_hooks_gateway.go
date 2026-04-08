@@ -11,6 +11,9 @@ func init() {
 		ReadMemory: func(userID string, memoryID int64) (string, error) {
 			return ReadMemoryDB(userID, memoryID)
 		},
+		ReadMemoryContext: func(userID string, memoryID int64, chunkIndex int) (string, error) {
+			return ReadMemoryContextDB(userID, memoryID, chunkIndex)
+		},
 		DeleteMemory: func(userID string, memoryID int64) (string, error) {
 			return DeleteMemoryDB(userID, memoryID)
 		},

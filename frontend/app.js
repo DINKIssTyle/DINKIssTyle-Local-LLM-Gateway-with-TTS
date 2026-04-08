@@ -46,7 +46,7 @@ let config = {
     language: 'ko', // UI language
     apiToken: '',
     llmMode: 'standard', // 'standard' or 'stateful'
-    disableStateful: false, // LM Studio specific
+    contextStrategy: 'history', // LM Studio: retrieval/stateful/none, OpenAI: retrieval/history/none
     reasoning: '',
     showReasoningControl: true,
     forceShowReasoningControl: false,
@@ -59,6 +59,42 @@ let config = {
     markdownRenderMode: 'fast', // Options: 'fast', 'balanced', 'final'
     hapticsEnabled: true
 };
+
+function getDefaultContextStrategyForMode(mode) {
+    return mode === 'stateful' ? 'stateful' : 'history';
+}
+
+function normalizeContextStrategyForMode(mode, strategy) {
+    const normalizedMode = String(mode || '').trim().toLowerCase() === 'stateful' ? 'stateful' : 'standard';
+    const normalizedStrategy = String(strategy || '').trim().toLowerCase();
+    const allowed = normalizedMode === 'stateful'
+        ? ['retrieval', 'stateful', 'none']
+        : ['retrieval', 'history', 'none'];
+    return allowed.includes(normalizedStrategy)
+        ? normalizedStrategy
+        : getDefaultContextStrategyForMode(normalizedMode);
+}
+
+function getNormalizedContextStrategy() {
+    config.contextStrategy = normalizeContextStrategyForMode(config.llmMode, config.contextStrategy);
+    return config.contextStrategy;
+}
+
+function usesStatefulConversationContext() {
+    return config.llmMode === 'stateful' && getNormalizedContextStrategy() === 'stateful';
+}
+
+function usesHistoryConversationContext() {
+    return config.llmMode !== 'stateful' && getNormalizedContextStrategy() === 'history';
+}
+
+function usesRetrievalConversationContext() {
+    return getNormalizedContextStrategy() === 'retrieval';
+}
+
+function enforceMCPPolicyForMode(mode) {
+    return mode === 'stateful' ? !!config.enableMCP : false;
+}
 
 let availableModels = [];
 let availableModelInfoById = new Map();
@@ -353,8 +389,12 @@ const translations = {
         'setting.llmMode.desc': 'OpenAI 호환 모드 또는 LM Studio 모드를 선택하세요.',
         'setting.llmMode.option.standard': 'OpenAI 호환',
         'setting.llmMode.option.stateful': 'LM Studio',
-        'setting.disableStateful.label': '서버 저장 비활성화 (Stateful)',
-        'setting.disableStateful.desc': '대화 내용을 서버에 저장하지 않습니다 (LM Studio).',
+        'setting.contextStrategy.label': '배경 / 문맥 기억 방법',
+        'setting.contextStrategy.desc': '모드에 따라 문맥 유지 방식을 선택합니다.',
+        'setting.contextStrategy.option.retrieval': 'FTS5 + Vector',
+        'setting.contextStrategy.option.stateful': 'Stateful',
+        'setting.contextStrategy.option.none': '사용 안 함',
+        'setting.contextStrategy.option.history': 'History',
         'setting.enableMCP.label': 'MCP 기능 활성화',
         'setting.enableMCP.desc': 'Model Context Protocol 기능(웹 검색, 브라우징)을 활성화합니다.',
         'setting.enableMemory.label': '개인 메모리 활성화',
@@ -589,8 +629,12 @@ const translations = {
         'setting.llmMode.desc': 'Select between OpenAI Compatible or LM Studio',
         'setting.llmMode.option.standard': 'OpenAI Compatible',
         'setting.llmMode.option.stateful': 'LM Studio',
-        'setting.disableStateful.label': 'Disable Stateful Storage',
-        'setting.disableStateful.desc': 'Do not store conversation on server (LM Studio).',
+        'setting.contextStrategy.label': 'Background / Context Memory',
+        'setting.contextStrategy.desc': 'Choose how the app keeps conversational context for the current connection mode.',
+        'setting.contextStrategy.option.retrieval': 'FTS5 + Vector',
+        'setting.contextStrategy.option.stateful': 'Stateful',
+        'setting.contextStrategy.option.none': 'Disabled',
+        'setting.contextStrategy.option.history': 'History',
         'setting.enableMCP.label': 'Enable MCP Features',
         'setting.enableMCP.desc': 'Enable integration with Model Context Protocol (web search, browsing)',
         'setting.enableMemory.label': 'Enable Personal Memory',
@@ -1047,6 +1091,7 @@ function applyTranslations() {
     if (savedLibrarySearchInput) {
         savedLibrarySearchInput.placeholder = t('library.searchPlaceholder');
     }
+    renderContextStrategyOptions();
     updateMessageInputPlaceholder();
     renderSavedLibraryList();
 }
@@ -1120,6 +1165,9 @@ document.addEventListener('click', (event) => {
     if (button instanceof HTMLElement) {
         scheduleHeaderIconButtonBlur(button);
     }
+    if (event.target instanceof Element && !event.target.closest('.header-model-picker')) {
+        closeHeaderModelDropdown();
+    }
 }, true);
 
 document.addEventListener('touchend', (event) => {
@@ -1129,7 +1177,16 @@ document.addEventListener('touchend', (event) => {
     if (touch instanceof HTMLElement) {
         scheduleHeaderIconButtonBlur(touch);
     }
+    if (event.target instanceof Element && !event.target.closest('.header-model-picker')) {
+        closeHeaderModelDropdown();
+    }
 }, { passive: true, capture: true });
+
+document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+        closeHeaderModelDropdown();
+    }
+});
 
 async function requestWakeLock() {
     if ('wakeLock' in navigator) {
@@ -1238,6 +1295,8 @@ async function fetchModels() {
                 secondarySelect.value = '';
             }
         }
+        updateHeaderModelDisplay();
+        renderHeaderModelDropdown();
         renderReasoningControl();
     } catch (err) {
         console.error('[Models] Failed to fetch:', err);
@@ -1258,6 +1317,8 @@ async function fetchModels() {
             secondarySelect.appendChild(manualSecondary);
             secondarySelect.value = config.secondaryModel;
         }
+        updateHeaderModelDisplay();
+        renderHeaderModelDropdown();
     }
 }
 
@@ -3162,6 +3223,8 @@ function loadConfig() {
     config.hapticsEnabled = config.hapticsEnabled !== false;
     config.osTtsRate = Number(config.osTtsRate) > 0 ? Number(config.osTtsRate) : 1.0;
     config.osTtsPitch = Number(config.osTtsPitch) >= 0 ? Number(config.osTtsPitch) : 1.0;
+    config.contextStrategy = normalizeContextStrategyForMode(config.llmMode, config.contextStrategy);
+    config.enableMCP = enforceMCPPolicyForMode(config.llmMode);
 
     // Update UI
     const cfgApi = document.getElementById('cfg-api');
@@ -3178,13 +3241,13 @@ function loadConfig() {
     const apiTokenEl = document.getElementById('cfg-api-token');
     if (apiTokenEl) apiTokenEl.value = config.apiToken || '';
     document.getElementById('cfg-llm-mode').value = config.llmMode || 'standard';
-    document.getElementById('cfg-disable-stateful').checked = config.disableStateful || false;
+    renderContextStrategyOptions();
+    document.getElementById('cfg-context-strategy').value = config.contextStrategy;
+    const mcpEl = document.getElementById('cfg-enable-mcp');
+    if (mcpEl) mcpEl.checked = config.enableMCP || false;
     updateSettingsVisibility(); // Update UI visibility based on mode
     renderReasoningControl();
     document.getElementById('cfg-enable-tts').checked = config.enableTTS;
-    // Load MCP setting
-    const mcpEl = document.getElementById('cfg-enable-mcp');
-    if (mcpEl) mcpEl.checked = config.enableMCP || false;
 
     // Load Memory Setting
     const memEl = document.getElementById('setting-enable-memory');
@@ -3244,10 +3307,8 @@ function loadConfig() {
     document.getElementById('cfg-lang').value = config.language || 'ko';
 
     // Update header with model name
-    const headerModelName = document.getElementById('header-model-name');
-    if (headerModelName) {
-        headerModelName.textContent = config.model || 'No Model Set';
-    }
+    updateHeaderModelDisplay();
+    renderHeaderModelDropdown();
 
     applyChatFontSize();
     updateComposerLayoutMetrics();
@@ -3270,43 +3331,56 @@ function updateSettingsVisibility() {
     const mode = document.getElementById('cfg-llm-mode').value;
     const tokenContainer = document.getElementById('container-api-token');
     const historyContainer = document.getElementById('container-history');
-    const disableStatefulContainer = document.getElementById('container-disable-stateful');
+    const contextStrategyContainer = document.getElementById('container-context-strategy');
     const mcpContainer = document.getElementById('container-enable-mcp');
     const memContainer = document.getElementById('container-enable-memory');
     const statefulBudgetContainer = document.getElementById('container-stateful-budget');
+    config.llmMode = mode;
+    renderContextStrategyOptions();
+    config.contextStrategy = normalizeContextStrategyForMode(mode, document.getElementById('cfg-context-strategy')?.value || config.contextStrategy);
+    config.enableMCP = enforceMCPPolicyForMode(mode);
+    const contextStrategyEl = document.getElementById('cfg-context-strategy');
+    if (contextStrategyEl) {
+        contextStrategyEl.value = config.contextStrategy;
+    }
 
-    // Default (Standard/OpenAI Compatible)
-    let showToken = true; // User requested API Token visible in BOTH modes
-    let showHistory = true;
-    let showDisableStateful = false;
-    let showMCP = false; // Hidden in OpenAI mode per request
-    let fullText = '';
-    let readingBuffer = '';
-    let lastResponseId = null;
-    let ttsReceived = false;
-    let lastToolCallHtml = ''; // Track last tool call HTML to update in-place
-
-    if (mode === 'stateful') {
-        // LM Studio Mode
-        showToken = true;
-        showHistory = false; // LM Studio handles history via response_id
-        showDisableStateful = true;
-        showMCP = true; // Show MCP only in LM Studio/Stateful mode? 
-        // User said: "OpenAI 호환 모드일 때 Enable MCP Features 는 안보여야 합니다."
-        // So we default showMCP = false for standard, true for stateful.
-    } else {
-        // Standard mode -> MCP Hidden, but Token Visible
+    const showToken = true;
+    const showHistory = usesHistoryConversationContext();
+    const showMCP = mode === 'stateful';
+    const showStatefulBudget = usesStatefulConversationContext();
+    const mcpEl = document.getElementById('cfg-enable-mcp');
+    if (mcpEl) {
+        mcpEl.checked = config.enableMCP;
     }
 
     if (tokenContainer) tokenContainer.style.display = showToken ? 'block' : 'none';
     if (historyContainer) historyContainer.style.display = showHistory ? 'block' : 'none';
-    if (disableStatefulContainer) disableStatefulContainer.style.display = showDisableStateful ? 'block' : 'none';
+    if (contextStrategyContainer) contextStrategyContainer.style.display = 'block';
     if (mcpContainer) mcpContainer.style.display = showMCP ? 'block' : 'none';
-    if (statefulBudgetContainer) statefulBudgetContainer.style.display = mode === 'stateful' ? 'block' : 'none';
+    if (statefulBudgetContainer) statefulBudgetContainer.style.display = showStatefulBudget ? 'block' : 'none';
 
-    // Memory setting is visible only when MCP is both supported (LM Studio mode) and enabled
-    const mcpEnabled = document.getElementById('cfg-enable-mcp').checked;
-    if (memContainer) memContainer.style.display = (showMCP && mcpEnabled) ? 'block' : 'none';
+    if (memContainer) memContainer.style.display = usesRetrievalConversationContext() ? 'block' : 'none';
+}
+
+function renderContextStrategyOptions() {
+    const select = document.getElementById('cfg-context-strategy');
+    if (!select) return;
+    const mode = document.getElementById('cfg-llm-mode')?.value || config.llmMode || 'standard';
+    const normalizedMode = mode === 'stateful' ? 'stateful' : 'standard';
+    const options = normalizedMode === 'stateful'
+        ? [
+            { value: 'retrieval', label: t('setting.contextStrategy.option.retrieval') },
+            { value: 'stateful', label: t('setting.contextStrategy.option.stateful') },
+            { value: 'none', label: t('setting.contextStrategy.option.none') }
+        ]
+        : [
+            { value: 'retrieval', label: t('setting.contextStrategy.option.retrieval') },
+            { value: 'history', label: t('setting.contextStrategy.option.history') },
+            { value: 'none', label: t('setting.contextStrategy.option.none') }
+        ];
+    const currentValue = normalizeContextStrategyForMode(normalizedMode, select.value || config.contextStrategy);
+    select.innerHTML = options.map((option) => `<option value="${option.value}">${option.label}</option>`).join('');
+    select.value = currentValue;
 }
 
 function setupSettingsListeners() {
@@ -3335,7 +3409,7 @@ function setupSettingsListeners() {
     });
 
     // Selects & Inputs: save on change
-    const autoSaveIds = ['cfg-api', 'cfg-temp', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-os-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-disable-stateful', 'cfg-show-reasoning-control', 'cfg-force-show-reasoning-control', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model', 'cfg-tts-engine', 'cfg-markdown-render-mode', 'cfg-enable-haptics', 'cfg-embedding-model'];
+    const autoSaveIds = ['cfg-api', 'cfg-temp', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-os-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-context-strategy', 'cfg-show-reasoning-control', 'cfg-force-show-reasoning-control', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model', 'cfg-tts-engine', 'cfg-markdown-render-mode', 'cfg-enable-haptics', 'cfg-embedding-model'];
     autoSaveIds.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.onchange = () => saveConfig(false);
@@ -3543,7 +3617,8 @@ function saveConfig(closeModal = true) {
     }
 
     config.llmMode = document.getElementById('cfg-llm-mode').value;
-    config.disableStateful = document.getElementById('cfg-disable-stateful').checked;
+    config.contextStrategy = normalizeContextStrategyForMode(config.llmMode, document.getElementById('cfg-context-strategy')?.value);
+    config.enableMCP = enforceMCPPolicyForMode(config.llmMode);
     config.reasoning = normalizeReasoningValue(config.reasoning);
     config.statefulTurnLimit = Math.max(1, parseInt(document.getElementById('cfg-stateful-turn-limit')?.value, 10) || DEFAULT_STATEFUL_TURN_LIMIT);
     config.statefulCharBudget = Math.max(1000, parseInt(document.getElementById('cfg-stateful-char-budget')?.value, 10) || DEFAULT_STATEFUL_CHAR_BUDGET);
@@ -3620,6 +3695,7 @@ function saveConfig(closeModal = true) {
         api_endpoint: config.apiEndpoint,
         secondary_model: config.secondaryModel,
         llm_mode: config.llmMode,
+        context_strategy: config.contextStrategy,
         enable_tts: config.enableTTS,
         enable_mcp: config.enableMCP,
         enable_memory: config.enableMemory,
@@ -3669,10 +3745,8 @@ function saveConfig(closeModal = true) {
 
 
     // Update header model name
-    const headerModelName = document.getElementById('header-model-name');
-    if (headerModelName) {
-        headerModelName.textContent = config.model || 'No Model Set';
-    }
+    updateHeaderModelDisplay();
+    renderHeaderModelDropdown();
 
     // Trigger explicit model load via backend
     if (config.model && config.apiEndpoint && config.apiEndpoint.includes('localhost')) {
@@ -4824,9 +4898,15 @@ async function syncServerConfig() {
                 const cfgMode = document.getElementById('cfg-llm-mode');
                 if (cfgMode) {
                     cfgMode.value = config.llmMode;
-                    updateSettingsVisibility();
                 }
             }
+            config.contextStrategy = normalizeContextStrategyForMode(config.llmMode, serverCfg.context_strategy || config.contextStrategy);
+            renderContextStrategyOptions();
+            const contextStrategyEl = document.getElementById('cfg-context-strategy');
+            if (contextStrategyEl) {
+                contextStrategyEl.value = config.contextStrategy;
+            }
+            updateSettingsVisibility();
             if (serverCfg.secondary_model !== undefined) {
                 config.secondaryModel = String(serverCfg.secondary_model || '').trim();
                 const el = document.getElementById('cfg-secondary-model');
@@ -4885,7 +4965,7 @@ async function syncServerConfig() {
                 if (modelEl) modelEl.value = config.embeddingModelId;
             }
             if (serverCfg.enable_mcp !== undefined) {
-                config.enableMCP = serverCfg.enable_mcp;
+                config.enableMCP = serverCfg.llm_mode === 'stateful' ? serverCfg.enable_mcp : false;
                 const mcpEl = document.getElementById('cfg-enable-mcp');
                 if (mcpEl) mcpEl.checked = config.enableMCP;
             }
@@ -4896,6 +4976,8 @@ async function syncServerConfig() {
                 const memControls = document.getElementById('memory-controls');
                 if (memControls) memControls.style.display = config.enableMemory ? 'block' : 'none';
             }
+            updateHeaderModelDisplay();
+            renderHeaderModelDropdown();
             if (serverCfg.stateful_turn_limit !== undefined) {
                 config.statefulTurnLimit = Math.max(1, Number(serverCfg.stateful_turn_limit) || DEFAULT_STATEFUL_TURN_LIMIT);
                 const el = document.getElementById('cfg-stateful-turn-limit');
@@ -5380,7 +5462,7 @@ function getBaseSystemPrompt() {
 
 function buildClientStatefulPrompt() {
     let prompt = getBaseSystemPrompt();
-    if (statefulSummary) {
+    if (usesStatefulConversationContext() && statefulSummary) {
         prompt += `\n\n### Conversation Summary ###\n${statefulSummary}\n\nUse this summary as compressed context from earlier turns.`;
     }
     return prompt;
@@ -5457,7 +5539,7 @@ function updateStatefulBudgetIndicator(nextUserText = '') {
         return;
     }
 
-    const shouldShow = config.llmMode === 'stateful' && !config.disableStateful;
+    const shouldShow = usesStatefulConversationContext();
     if (!shouldShow) {
         statefulBudgetIndicator.hidden = true;
         return;
@@ -5484,7 +5566,7 @@ function updateStatefulBudgetIndicator(nextUserText = '') {
 }
 
 function shouldResetStatefulContext(nextUserText = '') {
-    if (config.llmMode !== 'stateful' || config.disableStateful) {
+    if (!usesStatefulConversationContext()) {
         return { shouldReset: false, reasons: [], risk: getStatefulRiskMetrics(nextUserText) };
     }
     const risk = getStatefulRiskMetrics(nextUserText);
@@ -5624,6 +5706,94 @@ function setAvailableModels(models) {
     availableModelInfoById = new Map(availableModels.map((model) => [model.id, model]));
 }
 
+function getHeaderModelTrigger() {
+    return document.getElementById('header-model-trigger');
+}
+
+function getHeaderModelDropdown() {
+    return document.getElementById('header-model-dropdown');
+}
+
+function updateHeaderModelDisplay() {
+    const headerModelName = document.getElementById('header-model-name');
+    if (!headerModelName) return;
+    const selectedModel = availableModelInfoById.get(String(config.model || '').trim());
+    headerModelName.textContent = selectedModel?.displayName || config.model || 'No Model Set';
+}
+
+function renderHeaderModelDropdown() {
+    const dropdown = getHeaderModelDropdown();
+    if (!dropdown) return;
+
+    if (!availableModels.length) {
+        dropdown.innerHTML = '<div class="header-model-dropdown-item" aria-disabled="true"><span class="header-model-dropdown-label">No models available</span></div>';
+        return;
+    }
+
+    dropdown.innerHTML = availableModels.map((model) => {
+        const selected = model.id === String(config.model || '').trim();
+        return `
+            <button
+                class="header-model-dropdown-item${selected ? ' is-selected' : ''}"
+                type="button"
+                onclick="selectHeaderModel(this.dataset.modelId)"
+                data-model-id="${escapeAttr(model.id)}">
+                <span class="header-model-dropdown-label">${escapeHtml(model.displayName || model.id)}</span>
+                <span class="material-icons-round header-model-dropdown-check"${selected ? '' : ' hidden'}>check</span>
+            </button>
+        `;
+    }).join('');
+}
+
+function closeHeaderModelDropdown() {
+    const trigger = getHeaderModelTrigger();
+    const dropdown = getHeaderModelDropdown();
+    if (trigger) trigger.setAttribute('aria-expanded', 'false');
+    if (dropdown) dropdown.hidden = true;
+}
+
+async function toggleHeaderModelDropdown(event) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+    const trigger = getHeaderModelTrigger();
+    const dropdown = getHeaderModelDropdown();
+    if (!trigger || !dropdown) return;
+    const shouldOpen = dropdown.hidden;
+    if (shouldOpen) {
+        if (!availableModels.length) {
+            await fetchModels();
+        }
+        renderHeaderModelDropdown();
+    }
+    dropdown.hidden = !shouldOpen;
+    trigger.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
+}
+
+function selectHeaderModel(modelId) {
+    const nextModel = String(modelId || '').trim();
+    if (!nextModel) return;
+    config.model = nextModel;
+    const cfgModel = document.getElementById('cfg-model');
+    if (cfgModel) {
+        const matchingOption = Array.from(cfgModel.options).find((option) => option.value === nextModel);
+        if (matchingOption) {
+            cfgModel.value = nextModel;
+        } else {
+            const option = document.createElement('option');
+            option.value = nextModel;
+            option.textContent = nextModel;
+            cfgModel.appendChild(option);
+            cfgModel.value = nextModel;
+        }
+    }
+    updateHeaderModelDisplay();
+    renderHeaderModelDropdown();
+    closeHeaderModelDropdown();
+    saveConfig(false);
+}
+
 function getSelectedModelInfo() {
     return availableModelInfoById.get(String(config.model || '').trim()) || null;
 }
@@ -5754,6 +5924,7 @@ function buildChatPayload({ text, currentImage, temperatureOverride = null, repe
         ? Number(temperatureOverride)
         : configuredTemperature;
     let payload = {};
+    const contextStrategy = getNormalizedContextStrategy();
 
     if (config.llmMode === 'stateful') {
         let inputData = text;
@@ -5782,11 +5953,11 @@ function buildChatPayload({ text, currentImage, temperatureOverride = null, repe
             payload.repeat_penalty = Number(repeatPenaltyOverride);
         }
 
-        if (config.disableStateful) {
+        if (contextStrategy !== 'stateful') {
             payload.store = false;
         }
 
-        if (lastResponseId) {
+        if (contextStrategy === 'stateful' && lastResponseId) {
             payload.previous_response_id = lastResponseId;
         }
         if (reasoningSelection) {
@@ -5795,7 +5966,11 @@ function buildChatPayload({ text, currentImage, temperatureOverride = null, repe
         return payload;
     }
 
-    const payloadHistory = messages.map(m => {
+    const messageSource = contextStrategy === 'history'
+        ? messages.slice(-((parseInt(config.historyCount, 10) || 10) * 2))
+        : messages.slice(-1);
+
+    const payloadHistory = messageSource.map(m => {
         if (m.image) {
             const visionContent = [];
             if (m.content) {
@@ -5901,7 +6076,7 @@ async function sendMessage() {
     shouldAutoScroll = true;
     holdAutoScrollAtBottom(600);
     messages.push(userMsg);
-    if (config.llmMode === 'stateful') {
+    if (usesStatefulConversationContext()) {
         statefulEstimatedChars += text.length;
         updateStatefulBudgetIndicator();
     }
@@ -5925,13 +6100,6 @@ async function sendMessage() {
     activeLocalAssistantId = assistantId;
     assistantTurnIdMap.set(assistantId, turnId);
     stopChatSessionPolling();
-
-    // Trim old messages if history exceeds limit (user+assistant pairs)
-    const maxMessages = (parseInt(config.historyCount) || 10) * 2;
-    if (messages.length > maxMessages) {
-        // Remove oldest messages, keeping recent ones
-        messages = messages.slice(-maxMessages);
-    }
 
     let assistantContent = '';
     try {
@@ -6126,6 +6294,7 @@ async function streamResponse(payload, elementId, turnId = '', streamOptions = {
     if (pendingStatefulResetReason) {
         headers['X-Stateful-Reset-Reason'] = pendingStatefulResetReason;
     }
+    headers['X-Context-Strategy'] = getNormalizedContextStrategy();
 
     // Use the Go server's API endpoint
     const response = await fetch('/api/chat', {

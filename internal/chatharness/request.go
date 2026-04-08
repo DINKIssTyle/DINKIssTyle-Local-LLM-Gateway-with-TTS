@@ -11,15 +11,18 @@ import (
 )
 
 type RequestInput struct {
-	Body           []byte
-	EndpointRaw    string
-	TokenRaw       string
-	LLMMode        string
-	EnableMCP      bool
-	EnableMemory   bool
-	ProceduralHint string
-	MemorySnapshot string
-	ActiveContext  string
+	Body              []byte
+	EndpointRaw       string
+	TokenRaw          string
+	LLMMode           string
+	ContextStrategy   string
+	EnableMCP         bool
+	EnableMemory      bool
+	ProceduralHint    string
+	RecentContext     string
+	MemorySnapshot    string
+	ActiveContext     string
+	RetrievalInjected bool
 }
 
 type PreparedRequest struct {
@@ -40,6 +43,7 @@ func PrepareRequest(input RequestInput) (PreparedRequest, error) {
 		Endpoint: sanitizeEndpoint(input.EndpointRaw),
 		Token:    sanitizeToken(input.TokenRaw),
 	}
+	contextStrategy := normalizeContextStrategy(input.LLMMode, input.ContextStrategy)
 
 	var reqMap map[string]interface{}
 	if err := json.Unmarshal(input.Body, &reqMap); err != nil {
@@ -49,19 +53,26 @@ func PrepareRequest(input RequestInput) (PreparedRequest, error) {
 
 	prepared.ReqMap = reqMap
 	prepared.InitialUserInputText = extractChatInputText(reqMap)
-	prepared.IsStatefulFollowup = isStatefulFollowup(input.LLMMode, reqMap)
+	prepared.IsStatefulFollowup = isStatefulFollowup(input.LLMMode, contextStrategy, reqMap)
 
-	if input.EnableMCP && input.LLMMode != "standard" {
-		ensureMCPIntegration(reqMap)
+	useNativeIntegrations := input.EnableMCP && strings.TrimSpace(strings.ToLower(input.LLMMode)) == "stateful"
+	includeRetrievalMemory := contextStrategy == "retrieval"
+	shouldInjectRuntime := useNativeIntegrations || includeRetrievalMemory || strings.TrimSpace(input.ProceduralHint) != ""
 
+	if shouldInjectRuntime {
+		if useNativeIntegrations {
+			ensureMCPIntegration(reqMap)
+		}
 		if !prepared.IsStatefulFollowup {
 			extraInstr := promptkit.BuildRuntimeInstructions(promptkit.RuntimeInstructionsInput{
 				EnvironmentInfo:       buildEnvironmentInfo(),
 				ModelID:               extractModelID(reqMap),
-				UseNativeIntegrations: input.EnableMCP,
+				UseNativeIntegrations: useNativeIntegrations,
 				ProceduralHint:        input.ProceduralHint,
-				MemorySnapshot:        input.MemorySnapshot,
-				ActiveContext:         input.ActiveContext,
+				RecentContext:         conditionalContextValue(includeRetrievalMemory, input.RecentContext),
+				MemorySnapshot:        conditionalContextValue(includeRetrievalMemory, input.MemorySnapshot),
+				ActiveContext:         conditionalContextValue(includeRetrievalMemory, input.ActiveContext),
+				RetrievalInjected:     includeRetrievalMemory && input.RetrievalInjected,
 			})
 			prepared.InjectedPrompt = promptkit.InjectPrompt(reqMap, extraInstr)
 		}
@@ -98,12 +109,38 @@ func buildUpstreamURL(endpoint string, llmMode string) string {
 	return endpoint + "/v1/chat/completions"
 }
 
-func isStatefulFollowup(llmMode string, reqMap map[string]interface{}) bool {
-	if llmMode != "stateful" || reqMap == nil {
+func isStatefulFollowup(llmMode string, contextStrategy string, reqMap map[string]interface{}) bool {
+	if llmMode != "stateful" || contextStrategy != "stateful" || reqMap == nil {
 		return false
 	}
 	pid, _ := reqMap["previous_response_id"].(string)
 	return strings.TrimSpace(pid) != ""
+}
+
+func normalizeContextStrategy(llmMode string, raw string) string {
+	mode := strings.TrimSpace(strings.ToLower(llmMode))
+	strategy := strings.TrimSpace(strings.ToLower(raw))
+	if mode == "stateful" {
+		switch strategy {
+		case "retrieval", "stateful", "none":
+			return strategy
+		default:
+			return "stateful"
+		}
+	}
+	switch strategy {
+	case "retrieval", "history", "none":
+		return strategy
+	default:
+		return "history"
+	}
+}
+
+func conditionalContextValue(enabled bool, value string) string {
+	if !enabled {
+		return ""
+	}
+	return value
 }
 
 func ensureMCPIntegration(reqMap map[string]interface{}) {

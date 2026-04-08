@@ -12,6 +12,7 @@ read_buffered_source = enable
 get_current_time = enable
 search_memory = enable
 read_memory = enable
+read_memory_context = enable
 delete_memory = enable
 naver_search = enable
 namu_wiki = enable

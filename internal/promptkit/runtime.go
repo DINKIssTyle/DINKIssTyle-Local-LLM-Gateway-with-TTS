@@ -13,8 +13,10 @@ type RuntimeInstructionsInput struct {
 	ModelID               string
 	UseNativeIntegrations bool
 	ProceduralHint        string
+	RecentContext         string
 	MemorySnapshot        string
 	ActiveContext         string
+	RetrievalInjected     bool
 }
 
 func ToolGuidelineMarker() string {
@@ -26,8 +28,8 @@ func BuildRuntimeInstructions(input RuntimeInstructionsInput) string {
 	if input.ProceduralHint != "" {
 		extraInstr += input.ProceduralHint
 	}
-	if input.MemorySnapshot != "" || input.ActiveContext != "" {
-		extraInstr += buildMemoryTemplate("", input.MemorySnapshot, input.ActiveContext)
+	if input.RecentContext != "" || input.MemorySnapshot != "" || input.ActiveContext != "" {
+		extraInstr += buildMemoryTemplate("", input.RecentContext, input.MemorySnapshot, input.ActiveContext, input.RetrievalInjected)
 	}
 	return extraInstr
 }
@@ -156,7 +158,9 @@ func buildToolUsage(envInfo string, modelID string, useNativeIntegrations bool) 
 			"9. Avoid repeating the same search_web or read_web_page call with near-identical inputs in one answer, but one refined follow-up search is acceptable if it materially improves evidence quality.",
 			"10. If read_web_page fails or times out, do not retry the exact same page immediately. Prefer answering from the buffered search evidence, or read a different relevant source if that would clearly improve quality.",
 			"11. For execute_command, use the provided ENVIRONMENT INFO to choose OS-appropriate commands. Do not call execute_command only to discover the OS or shell when ENVIRONMENT INFO already tells you.",
-			"12. After execute_command returns enough information, answer the user directly. Do not repeat the same or near-identical command in the same answer unless the user explicitly asked to re-run or refresh it.",
+			"12. Never use execute_command to imitate built-in tools such as search_memory, search_web, read_memory, read_memory_context, read_web_page, or read_buffered_source. Call the real tool directly.",
+			"13. After execute_command returns enough information, answer the user directly. Do not repeat the same or near-identical command in the same answer unless the user explicitly asked to re-run or refresh it.",
+			"14. MEMORY-THEN-WEB RULE: If the user asks about prior chats, personal facts, preferences, or earlier reasons, search memory first. If memory is insufficient and the question is still a factual/public information question, then search the web.",
 		)
 	} else {
 		lines = append(lines,
@@ -169,7 +173,9 @@ func buildToolUsage(envInfo string, modelID string, useNativeIntegrations bool) 
 			"7. Avoid repeating the same search_web or read_web_page call with near-identical inputs in one answer, but one refined follow-up search is acceptable if it materially improves evidence quality.",
 			"8. If read_web_page fails or times out, do not retry the exact same page immediately. Prefer answering from the buffered search evidence, or read a different relevant source if that would clearly improve quality.",
 			"9. For execute_command, use the provided ENVIRONMENT INFO to choose OS-appropriate commands. Do not call execute_command only to discover the OS or shell when ENVIRONMENT INFO already tells you.",
-			"10. After execute_command returns enough information, answer the user directly. Do not repeat the same or near-identical command in the same answer unless the user explicitly asked to re-run or refresh it.",
+			"10. Never use execute_command to imitate built-in tools such as search_memory, search_web, read_memory, read_memory_context, read_web_page, or read_buffered_source. Call the real tool directly.",
+			"11. After execute_command returns enough information, answer the user directly. Do not repeat the same or near-identical command in the same answer unless the user explicitly asked to re-run or refresh it.",
+			"12. MEMORY-THEN-WEB RULE: If the user asks about prior chats, personal facts, preferences, or earlier reasons, search memory first. If memory is insufficient and the question is still a factual/public information question, then search the web.",
 		)
 	}
 
@@ -190,11 +196,42 @@ func buildToolUsage(envInfo string, modelID string, useNativeIntegrations bool) 
 	return strings.Join(lines, "\n")
 }
 
-func buildMemoryTemplate(staticMemory string, userProfile string, activeContext string) string {
+func buildMemoryTemplate(staticMemory string, recentContext string, userProfile string, activeContext string, retrievalInjected bool) string {
+	rules := []string{
+		"1. Treat RECENT CONTEXT as the primary source for continuity about the latest few turns.",
+		"2. Treat USER PROFILE as summary only.",
+		"3. If the user explicitly asks you to search memory, recall prior chats, or find what was said before, you MUST use 'search_memory' before answering.",
+		"4. If past details are missing or uncertain, use 'search_memory' instead of saying you do not know.",
+		"5. After 'search_memory', prefer 'read_memory_context' for the best candidate before relying on it. Use 'read_memory' only when you need the full original text.",
+		"6. 'read_memory' and 'read_memory_context' require 'memory_id'. Never use 'source_id', 'query', or 'question' with memory tools.",
+		"7. If memory search still does not answer the question and the remaining question is about factual/public knowledge, use web search next instead of stopping at 'I do not know'.",
+		"8. Only 'read_buffered_source' uses 'source_id' for web evidence.",
+		"9. Try alternative names, relationships, or synonyms if the first search fails.",
+		"10. Do not guess past details.",
+		"11. Do not create tool calls to save memory; saving happens automatically.",
+	}
+	if retrievalInjected && strings.TrimSpace(activeContext) != "" {
+		rules = []string{
+			"1. Treat RECENT CONTEXT as the primary source for continuity about the latest few turns.",
+			"2. ACTIVE CONTEXT was already retrieved for this turn. Prefer answering from RECENT CONTEXT plus ACTIVE CONTEXT when they are sufficient.",
+			"3. Treat USER PROFILE as summary only.",
+			"4. If the user explicitly asks you to search memory, recall prior chats, or find what was said before, you MUST use 'search_memory' before answering.",
+			"5. Use 'search_memory' whenever RECENT CONTEXT and ACTIVE CONTEXT are clearly insufficient or contradictory. Do not simply say you do not know without trying memory search first.",
+			"6. If you must inspect memory further, prefer 'read_memory_context' after 'search_memory'. Use 'read_memory' only for the full original text.",
+			"7. 'read_memory' and 'read_memory_context' require 'memory_id'. Never use 'source_id', 'query', or 'question' with memory tools.",
+			"8. If memory search still does not answer the question and the remaining question is about factual/public knowledge, use web search next instead of stopping at 'I do not know'.",
+			"9. Only 'read_buffered_source' uses 'source_id' for web evidence.",
+			"10. Do not guess past details.",
+			"11. Do not create tool calls to save memory; saving happens automatically.",
+		}
+	}
 	return fmt.Sprintf(`
 ### MEMORY CONTEXT ###
 
 #### STATIC MEMORY
+%s
+
+#### RECENT CONTEXT
 %s
 
 #### USER PROFILE
@@ -204,11 +241,6 @@ func buildMemoryTemplate(staticMemory string, userProfile string, activeContext 
 %s
 
 MEMORY & SEARCH RULES:
-1. Treat USER PROFILE as summary only.
-2. If past details are missing or uncertain, use 'search_memory'.
-3. After 'search_memory', call 'read_memory' for the most relevant result before relying on it.
-4. Try alternative names, relationships, or synonyms if the first search fails.
-5. Do not guess past details.
-6. Do not create tool calls to save memory; saving happens automatically.
-`, staticMemory, userProfile, activeContext)
+%s
+`, staticMemory, recentContext, userProfile, activeContext, strings.Join(rules, "\n"))
 }

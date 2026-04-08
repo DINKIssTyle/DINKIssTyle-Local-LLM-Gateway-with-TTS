@@ -54,6 +54,7 @@ type ToolHooks struct {
 	Trace                   func(source, stage, message string, details map[string]interface{})
 	SearchMemory            func(userID, query string) (string, error)
 	ReadMemory              func(userID string, memoryID int64) (string, error)
+	ReadMemoryContext       func(userID string, memoryID int64, chunkIndex int) (string, error)
 	DeleteMemory            func(userID string, memoryID int64) (string, error)
 	BufferWebResult         func(userID, toolName, query, pageURL, title, content string) (string, error)
 	BufferWebFallback       func(userID, failedTool, target string, err error) string
@@ -205,7 +206,7 @@ func GetToolList() []Tool {
 		},
 		{
 			Name:        "search_memory",
-			Description: "Search the user's long-term SQLite memory using full-text matching. Results may include raw chat memories and saved turns. Use this whenever the user asks about their personal info, prior chats, preferences, or past facts.",
+			Description: "Search the user's long-term SQLite memory and return candidate memories or saved turns. Use this only when the current prompt context is clearly insufficient for questions about prior chats, personal facts, preferences, or earlier reasons. Then inspect the best candidate with read_memory_context or read_memory before answering.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -219,13 +220,31 @@ func GetToolList() []Tool {
 		},
 		{
 			Name:        "read_memory",
-			Description: "Read the full transcription/context of a specific memory by its ID. You MUST call this IMMEDIATELY after 'search_memory' to understand the actual details of the memory.",
+			Description: "Read the full stored content of a specific memory or saved turn by its ID. Use this after search_memory only when the nearby context is not enough and you need the original full text.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"memory_id": map[string]interface{}{
 						"type":        "integer",
-						"description": "The numeric ID of the memory to read.",
+						"description": "The numeric ID of the memory candidate to read.",
+					},
+				},
+				"required": []string{"memory_id"},
+			},
+		},
+		{
+			Name:        "read_memory_context",
+			Description: "Read the surrounding context for a specific memory candidate. Prefer this after search_memory when you need nearby excerpts or saved-turn context before answering.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"memory_id": map[string]interface{}{
+						"type":        "integer",
+						"description": "The numeric ID of the memory candidate to inspect.",
+					},
+					"chunk_index": map[string]interface{}{
+						"type":        "integer",
+						"description": "Optional chunk index from search_memory when you want the exact matched neighborhood.",
 					},
 				},
 				"required": []string{"memory_id"},
@@ -306,7 +325,7 @@ func GetToolList() []Tool {
 		},
 		{
 			Name:        "execute_command",
-			Description: "Execute a shell command on the host (with restrictions). Use this to run system commands.",
+			Description: "Execute a shell command on the host (with restrictions). Use this only for real shell/system tasks. Do not use it to imitate built-in tools such as search_memory, search_web, read_memory, read_memory_context, read_web_page, or read_buffered_source.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -415,6 +434,14 @@ func runReadMemoryHook(userID string, memoryID int64) (string, error) {
 	return hooks.ReadMemory(userID, memoryID)
 }
 
+func runReadMemoryContextHook(userID string, memoryID int64, chunkIndex int) (string, error) {
+	hooks := getToolHooks()
+	if hooks.ReadMemoryContext == nil {
+		return "", fmt.Errorf("memory context read is not supported")
+	}
+	return hooks.ReadMemoryContext(userID, memoryID, chunkIndex)
+}
+
 func runDeleteMemoryHook(userID string, memoryID int64) (string, error) {
 	hooks := getToolHooks()
 	if hooks.DeleteMemory == nil {
@@ -439,6 +466,126 @@ func defaultChallengeWaitIterations(timeout time.Duration) int {
 	return defaultChallengeWaitIterations(timeout)
 }
 
+func normalizeRelaxedArgsJSON(raw []byte) []byte {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || json.Valid([]byte(trimmed)) {
+		return []byte(trimmed)
+	}
+
+	trimmed = strings.NewReplacer(
+		`<|"|>`, `"`,
+		`<|'|>`, `'`,
+	).Replace(trimmed)
+
+	keyPattern := regexp.MustCompile(`([{\[,]\s*)([A-Za-z_][A-Za-z0-9_]*)\s*:`)
+	trimmed = keyPattern.ReplaceAllString(trimmed, `$1"$2":`)
+
+	var parsed interface{}
+	if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
+		return raw
+	}
+	bytes, err := json.Marshal(parsed)
+	if err != nil {
+		return raw
+	}
+	return bytes
+}
+
+func rewriteExecuteCommandToolProxy(argumentsJSON []byte) (string, []byte) {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(argumentsJSON, &raw); err != nil || raw == nil {
+		return "execute_command", argumentsJSON
+	}
+	command, _ := raw["command"].(string)
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return "execute_command", argumentsJSON
+	}
+
+	lower := strings.ToLower(command)
+	buildQueryArgs := func(query string) (string, []byte, bool) {
+		query = strings.TrimSpace(strings.Trim(query, `"'`))
+		if query == "" {
+			return "", nil, false
+		}
+		payload, err := json.Marshal(map[string]interface{}{"query": query})
+		if err != nil {
+			return "", nil, false
+		}
+		return "search_memory", payload, true
+	}
+
+	if strings.HasPrefix(lower, "search_memory ") || lower == "search_memory" {
+		if match := regexp.MustCompile(`(?i)--query\s+("([^"]+)"|'([^']+)'|([^\s]+))`).FindStringSubmatch(command); len(match) > 0 {
+			for _, candidate := range match[2:] {
+				if tool, payload, ok := buildQueryArgs(candidate); ok {
+					return tool, payload
+				}
+			}
+		}
+		if idx := strings.Index(strings.ToLower(command), "search_memory"); idx >= 0 {
+			rest := strings.TrimSpace(command[idx+len("search_memory"):])
+			if tool, payload, ok := buildQueryArgs(rest); ok {
+				return tool, payload
+			}
+		}
+	}
+
+	return "execute_command", argumentsJSON
+}
+
+func normalizeToolArguments(toolName string, argumentsJSON []byte) (string, []byte) {
+	argumentsJSON = normalizeRelaxedArgsJSON(argumentsJSON)
+	if toolName == "execute_command" {
+		toolName, argumentsJSON = rewriteExecuteCommandToolProxy(argumentsJSON)
+		argumentsJSON = normalizeRelaxedArgsJSON(argumentsJSON)
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(argumentsJSON, &raw); err != nil || raw == nil {
+		return toolName, argumentsJSON
+	}
+
+	readString := func(keys ...string) string {
+		for _, key := range keys {
+			value, ok := raw[key]
+			if !ok || value == nil {
+				continue
+			}
+			switch typed := value.(type) {
+			case string:
+				trimmed := strings.TrimSpace(typed)
+				if trimmed != "" {
+					return trimmed
+				}
+			}
+		}
+		return ""
+	}
+
+	switch toolName {
+	case "read_buffered_source":
+		if strings.TrimSpace(readString("query")) == "" {
+			if question := readString("question", "text"); question != "" {
+				raw["query"] = question
+			}
+		}
+	case "read_memory", "read_memory_context":
+		if _, ok := raw["memory_id"]; !ok {
+			if query := readString("query", "question", "text"); query != "" {
+				fallback := map[string]interface{}{"query": query}
+				if bytes, err := json.Marshal(fallback); err == nil {
+					return "search_memory", bytes
+				}
+			}
+		}
+	}
+
+	if bytes, err := json.Marshal(raw); err == nil {
+		return toolName, bytes
+	}
+	return toolName, argumentsJSON
+}
+
 func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, enableMemory bool, disabledTools []string) (string, error) {
 	start := time.Now()
 	ctx := GetContext()
@@ -453,6 +600,7 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 	}
 
 	log.Printf("[MCP] ExecuteToolByName: %s (User: %s, Memory: %v, Loc: %s)", toolName, userID, enableMemory, ctx.LocationInfo)
+	toolName, argumentsJSON = normalizeToolArguments(toolName, argumentsJSON)
 	if !isToolConfiguredEnabled(toolName) {
 		return "", fmt.Errorf("tool '%s' is disabled by app config", toolName)
 	}
@@ -548,6 +696,21 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 			return "", fmt.Errorf("invalid arguments for read_memory: %v", err)
 		}
 		result, err := runReadMemoryHook(userID, args.MemoryID)
+		emitToolResultTrace(toolName, start, result, err)
+		return result, err
+
+	case "read_memory_context":
+		if !enableMemory {
+			return "", fmt.Errorf("memory feature is disabled by user settings")
+		}
+		var args struct {
+			MemoryID   int64 `json:"memory_id"`
+			ChunkIndex int   `json:"chunk_index"`
+		}
+		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
+			return "", fmt.Errorf("invalid arguments for read_memory_context: %v", err)
+		}
+		result, err := runReadMemoryContextHook(userID, args.MemoryID, args.ChunkIndex)
 		emitToolResultTrace(toolName, start, result, err)
 		return result, err
 
