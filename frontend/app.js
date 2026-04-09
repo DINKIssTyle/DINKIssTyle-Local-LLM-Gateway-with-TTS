@@ -2397,7 +2397,7 @@ function updateMediaSessionMetadata(text) {
             artist: "DKST Chat",
             album: "Local LLM Gateway",
             artwork: [
-                { src: 'apple-touch-icon.png', sizes: '180x180', type: 'image/png' }
+                { src: 'public/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }
             ]
         });
 
@@ -2663,10 +2663,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             relinquishLocalStreamOwnership('document-hidden');
             cancelComposerBackgroundTasks('document-hidden');
             clearReconnectWatchdog();
+            clearForegroundSyncTimers();
         } else {
             scheduleSavedTitleRefresh(800);
-            armReconnectWatchdog();
-            refreshSessionStateFromServer().catch(console.warn);
+            scheduleForegroundSessionRefresh('visibility-visible');
         }
     });
 
@@ -2675,13 +2675,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     window.addEventListener('pageshow', () => {
-        armReconnectWatchdog();
-        refreshSessionStateFromServer().catch(console.warn);
+        scheduleForegroundSessionRefresh('pageshow');
     });
 
     window.addEventListener('focus', () => {
-        armReconnectWatchdog();
-        refreshSessionStateFromServer().catch(console.warn);
+        scheduleForegroundSessionRefresh('focus');
+    });
+
+    window.addEventListener('online', () => {
+        scheduleForegroundSessionRefresh('online');
     });
 });
 
@@ -2712,6 +2714,7 @@ let pendingSessionRefresh = false;
 let currentChatSessionSyncPromise = null;
 let pendingCurrentChatSessionSync = false;
 let localStreamOwnershipReleased = false;
+let foregroundSyncTimers = [];
 let savedTurns = [];
 let savedLibraryQuery = '';
 let savedLibraryLoaded = false;
@@ -2776,6 +2779,33 @@ function clearReconnectWatchdog() {
     if (!reconnectWatchdogTimer) return;
     clearTimeout(reconnectWatchdogTimer);
     reconnectWatchdogTimer = null;
+}
+
+function clearForegroundSyncTimers() {
+    if (!foregroundSyncTimers.length) return;
+    foregroundSyncTimers.forEach((timerId) => clearTimeout(timerId));
+    foregroundSyncTimers = [];
+}
+
+function scheduleForegroundSessionRefresh(reason = 'foreground') {
+    if (document.hidden) return;
+
+    clearForegroundSyncTimers();
+    armReconnectWatchdog();
+
+    const delays = [0, 900, 2600];
+    foregroundSyncTimers = delays.map((delay, index) => window.setTimeout(async () => {
+        if (document.hidden) return;
+        try {
+            await refreshSessionStateFromServer();
+        } catch (error) {
+            console.warn(`[ChatSession] Foreground sync failed (${reason}, retry ${index + 1}/${delays.length}):`, error);
+        } finally {
+            if (index === delays.length - 1) {
+                foregroundSyncTimers = [];
+            }
+        }
+    }, delay));
 }
 
 function showReconnectNoticeCard() {
@@ -4843,6 +4873,7 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
     }
     scrollToBottom(true);
     requestAnimationFrame(() => {
+        reconcileVisibleAssistantActionBars();
         chatMessages?.classList.remove('is-session-hydrating');
     });
 }
@@ -7181,6 +7212,21 @@ function setAssistantActionBarReady(elementId) {
     }, 120);
 }
 
+function reconcileAssistantActionBarForMessage(msgEl) {
+    if (!msgEl || !msgEl.classList?.contains('assistant') || !msgEl.id) return;
+    const responseCard = msgEl.querySelector('.assistant-response-card');
+    const actionBar = msgEl.querySelector('.message-actions');
+    if (!responseCard || !actionBar || responseCard.hidden) return;
+    setAssistantActionBarReady(msgEl.id);
+}
+
+function reconcileVisibleAssistantActionBars() {
+    if (!chatMessages) return;
+    chatMessages.querySelectorAll('.message.assistant').forEach((msgEl) => {
+        reconcileAssistantActionBarForMessage(msgEl);
+    });
+}
+
 function renderProgressDock(label, percent = null, mode = 'prompt-processing', indeterminate = false) {
     if (!chatProgressDock) return;
     if (progressDockHideTimer) {
@@ -8274,6 +8320,9 @@ function finalizeMessageContent(id, text) {
     if (responseCard) responseCard.hidden = !hasVisibleContent;
     if (actionBar) actionBar.hidden = !hasVisibleContent;
     syncAssistantMessageShellState(el);
+    if (hasVisibleContent) {
+        reconcileAssistantActionBarForMessage(el);
+    }
 }
 
 function updateSyncedMessageContent(id, text, options = {}) {
@@ -8333,6 +8382,9 @@ function updateSyncedMessageContent(id, text, options = {}) {
         actionBar.hidden = !hasVisibleContent;
     }
     syncAssistantMessageShellState(el);
+    if (hasVisibleContent) {
+        reconcileAssistantActionBarForMessage(el);
+    }
 
     const shouldPulse = animate && !previousCommittedText.trim() && hasVisibleContent;
     if (shouldPulse) {

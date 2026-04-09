@@ -306,9 +306,6 @@ func (am *AuthManager) DeleteUser(id string) error {
 	defer am.mu.Unlock()
 
 	delete(am.users, id)
-	if err := mcp.DeleteLastSession(id); err != nil {
-		return err
-	}
 	if err := mcp.DeleteAuthSessionsByUser(id); err != nil {
 		return err
 	}

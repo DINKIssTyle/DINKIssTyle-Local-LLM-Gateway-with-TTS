@@ -40,8 +40,9 @@ const (
 )
 
 const (
-	retentionChatEventsDays     = 14
-	retentionBackgroundJobsDays = 7
+	retentionChatEventsLongDays   = 14
+	retentionChatEventsShortHours = 1
+	retentionBackgroundJobsDays   = 7
 )
 
 type MemoryRetentionConfig struct {
@@ -268,14 +269,6 @@ func createSchema() error {
 	CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id);
 	CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires_at ON auth_sessions(expires_at);
 
-	CREATE TABLE IF NOT EXISTS last_sessions (
-		user_id TEXT PRIMARY KEY,
-		last_user_message TEXT NOT NULL,
-		last_assistant_message TEXT NOT NULL,
-		mode TEXT NOT NULL DEFAULT '',
-		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-	);
-
 	CREATE TABLE IF NOT EXISTS chat_sessions (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		user_id TEXT NOT NULL,
@@ -443,6 +436,9 @@ func createSchema() error {
 		return err
 	}
 	if err := migrateMemoryRetentionSchema(); err != nil {
+		return err
+	}
+	if err := dropDeprecatedLastSessionsTable(); err != nil {
 		return err
 	}
 	if err := dropDeprecatedProceduralMemoryTables(); err != nil {
@@ -1034,6 +1030,16 @@ func dropDeprecatedProceduralMemoryTables() error {
 	return nil
 }
 
+func dropDeprecatedLastSessionsTable() error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	if _, err := db.Exec(`DROP TABLE IF EXISTS last_sessions`); err != nil {
+		return fmt.Errorf("failed to remove deprecated last_sessions table: %w", err)
+	}
+	return nil
+}
+
 func pruneExpiredAuthSessions(now time.Time) error {
 	_, err := db.Exec(`DELETE FROM auth_sessions WHERE expires_at <= ?`, now.UTC())
 	if err != nil {
@@ -1055,8 +1061,13 @@ func pruneOldBackgroundJobs(now time.Time) error {
 }
 
 func pruneOldChatEvents(now time.Time) error {
-	cutoff := now.AddDate(0, 0, -retentionChatEventsDays).UTC()
-	_, err := db.Exec(`DELETE FROM chat_events WHERE created_at < ?`, cutoff)
+	shortCutoff := now.Add(-time.Duration(retentionChatEventsShortHours) * time.Hour).UTC()
+	longCutoff := now.AddDate(0, 0, -retentionChatEventsLongDays).UTC()
+	_, err := db.Exec(`
+		DELETE FROM chat_events
+		WHERE (event_type IN ('message.delta', 'reasoning.start', 'reasoning.delta', 'reasoning.end', 'message.end') AND created_at < ?)
+		   OR (event_type NOT IN ('message.delta', 'reasoning.start', 'reasoning.delta', 'reasoning.end', 'message.end') AND created_at < ?)
+	`, shortCutoff, longCutoff)
 	if err != nil {
 		return fmt.Errorf("failed to prune old chat events: %w", err)
 	}
@@ -1180,14 +1191,6 @@ type AuthSessionEntry struct {
 	CreatedAt  time.Time
 	LastUsedAt time.Time
 	ExpiresAt  time.Time
-}
-
-type LastSessionEntry struct {
-	UserID               string
-	LastUserMessage      string
-	LastAssistantMessage string
-	Mode                 string
-	UpdatedAt            time.Time
 }
 
 type ChatSessionEntry struct {
@@ -1347,71 +1350,6 @@ func PurgeExpiredAuthSessions(now time.Time) error {
 	_, err := db.Exec(`DELETE FROM auth_sessions WHERE expires_at <= ?`, now.UTC())
 	if err != nil {
 		return fmt.Errorf("failed to purge expired auth sessions: %w", err)
-	}
-	return nil
-}
-
-func UpsertLastSession(userID, userMessage, assistantMessage, mode string, updatedAt time.Time) error {
-	if db == nil {
-		return fmt.Errorf("database not initialized")
-	}
-	userID = strings.TrimSpace(userID)
-	if userID == "" {
-		return fmt.Errorf("user id is required")
-	}
-
-	query := `
-	INSERT INTO last_sessions (user_id, last_user_message, last_assistant_message, mode, updated_at)
-	VALUES (?, ?, ?, ?, ?)
-	ON CONFLICT(user_id) DO UPDATE SET
-		last_user_message = excluded.last_user_message,
-		last_assistant_message = excluded.last_assistant_message,
-		mode = excluded.mode,
-		updated_at = excluded.updated_at`
-
-	_, err := db.Exec(query, userID, userMessage, assistantMessage, mode, updatedAt.UTC())
-	if err != nil {
-		return fmt.Errorf("failed to upsert last session: %w", err)
-	}
-	return nil
-}
-
-func GetLastSession(userID string) (LastSessionEntry, error) {
-	var entry LastSessionEntry
-	if db == nil {
-		return entry, fmt.Errorf("database not initialized")
-	}
-
-	query := `
-	SELECT user_id, last_user_message, last_assistant_message, mode, updated_at
-	FROM last_sessions
-	WHERE user_id = ?`
-
-	err := db.QueryRow(query, userID).Scan(
-		&entry.UserID,
-		&entry.LastUserMessage,
-		&entry.LastAssistantMessage,
-		&entry.Mode,
-		&entry.UpdatedAt,
-	)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return entry, err
-		}
-		return entry, fmt.Errorf("failed to fetch last session: %w", err)
-	}
-
-	return entry, nil
-}
-
-func DeleteLastSession(userID string) error {
-	if db == nil {
-		return fmt.Errorf("database not initialized")
-	}
-
-	_, err := db.Exec(`DELETE FROM last_sessions WHERE user_id = ?`, userID)
-	if err != nil {
-		return fmt.Errorf("failed to delete last session: %w", err)
 	}
 	return nil
 }

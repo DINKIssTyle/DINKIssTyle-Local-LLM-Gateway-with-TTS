@@ -111,7 +111,9 @@ fi
 
 # --- 5. Clean & Build ---
 echo "Cleaning old artifacts..."
-rm -rf build/bin
+# Only delete the binary to preserve assets, configuration, and downloaded models
+rm -f "build/bin/DKST LLM Chat Server"
+mkdir -p build/bin
 rm -rf frontend/dist
 
 echo "Building application for Linux..."

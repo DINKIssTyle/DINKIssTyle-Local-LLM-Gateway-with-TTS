@@ -1,6 +1,6 @@
 {
-    "name": "DKST LLM Chat",
-    "short_name": "DKST Chat",
+    "name": "DKST LLM Chat Server",
+    "short_name": "DKST Server",
     "description": "Local LLM Gateway with TTS Web Client",
     "start_url": "/index.html",
     "display": "standalone",
@@ -8,17 +8,22 @@
     "theme_color": "#0f172a",
     "icons": [
         {
-            "src": "favicon-32x32.png",
+            "src": "public/favicon-32.png",
             "sizes": "32x32",
             "type": "image/png"
         },
         {
-            "src": "apple-touch-icon.png",
+            "src": "public/apple-touch-icon.png",
             "sizes": "180x180",
             "type": "image/png"
         },
         {
-            "src": "appicon.png",
+            "src": "public/icon-192.png",
+            "sizes": "192x192",
+            "type": "image/png"
+        },
+        {
+            "src": "public/icon-512.png",
             "sizes": "512x512",
             "type": "image/png"
         }

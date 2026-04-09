@@ -3,7 +3,9 @@ rem Created by DINKIssTyle on 2026.
 rem Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
 
 echo Cleaning build artifacts...
-if exist "build\bin" rmdir /s /q "build\bin"
+rem Only delete the binary to preserve assets, configuration, and downloaded models
+if exist "build\bin\DKST LLM Chat Server.exe" del "build\bin\DKST LLM Chat Server.exe"
+if not exist "build\bin" mkdir "build\bin"
 if exist "frontend\dist" rmdir /s /q "frontend\dist"
 
 echo Clean complete. Building...

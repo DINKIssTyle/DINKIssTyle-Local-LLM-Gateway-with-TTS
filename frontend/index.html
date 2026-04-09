@@ -8,14 +8,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="application-name" content="DKST LLM Chat">
-    <meta name="apple-mobile-web-app-title" content="DKST LLM Chat">
-    <title>DKST LLM Chat</title>
+    <meta name="application-name" content="DKST LLM Chat Server">
+    <meta name="apple-mobile-web-app-title" content="DKST LLM Chat Server">
+    <title>DKST LLM Chat Server</title>
 
     <!-- Favicons -->
-    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
-    <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
-    <link rel="icon" type="image/png" sizes="16x16" href="favicon-16x16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="public/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="public/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="public/favicon-16.png">
     <link rel="manifest" href="site.webmanifest">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -122,9 +122,12 @@
             margin-bottom: 20px;
         }
 
-        .header .material-icons-round {
-            font-size: 32px;
-            color: var(--accent-color);
+        .header-logo {
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            object-fit: cover;
+            flex: 0 0 auto;
         }
 
         .header h1 {
@@ -851,8 +854,8 @@
 <body>
     <div class="controller">
         <div class="header">
-            <span class="material-icons-round">dns</span>
-            <h1>DKST LLM Chat</h1>
+            <img src="public/icon-512.png" alt="DKST LLM Chat Server Icon" class="header-logo">
+            <h1>DKST LLM Chat Server</h1>
         </div>
 
         <!-- Restart Required Banner -->
@@ -1242,7 +1245,7 @@
             </div>
             <div class="modal-body">
                 <div style="text-align: center; margin-bottom: 20px;">
-                    <img src="appicon.png" alt="App Icon" style="width: 64px; height: 64px; margin-bottom: 12px;">
+                    <img src="public/icon-512.png" alt="App Icon" style="width: 64px; height: 64px; margin-bottom: 12px;">
                     <div style="font-size: 18px; font-weight: 600; color: var(--text-color); margin-bottom: 4px;">DKST
                         LLM Chat Server</div>
                     <div style="color: var(--accent-color);">Version 3.0</div>

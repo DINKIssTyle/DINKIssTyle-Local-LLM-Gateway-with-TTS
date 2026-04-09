@@ -15,7 +15,7 @@ const ASSETS = [
     '/icons.css?v=2',
     '/app.js?v=9',
     '/icons.css',
-    '/appicon.png',
+    '/public/icon-512.png',
     '/site.webmanifest',
     '/vendor/github-dark.min.css',
     '/vendor/marked.min.js',
@@ -39,10 +39,9 @@ const ASSETS = [
     '/vendor/fonts/jetbrains-mono-400-latin.woff2',
     '/vendor/fonts/material-icons-round.woff2',
     '/fonts/MaterialIconsRound-Regular.otf',
-    '/favicon-32x32.png',
-    '/favicon-16x16.png',
-    '/favicon.ico',
-    '/apple-touch-icon.png'
+    '/public/favicon-32.png',
+    '/public/favicon-16.png',
+    '/public/apple-touch-icon.png'
 ];
 
 function normalizedPathname(input) {
