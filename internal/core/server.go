@@ -2260,7 +2260,10 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 		handleChat(w, r, app, authMgr)
 	}))
 	mux.HandleFunc("/api/models", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
-		handleModels(w, r, app)
+		handleModels(w, r, app, authMgr)
+	}))
+	mux.HandleFunc("/api/models/unload", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
+		handleModelUnload(w, r, app, authMgr)
 	}))
 	mux.HandleFunc("/api/dictionary", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
 		lang := r.URL.Query().Get("lang")
@@ -3126,8 +3129,40 @@ func handleSavedTurnTitleRefresh() http.HandlerFunc {
 	}
 }
 
+func resolveModelAPIConfig(r *http.Request, app *App, authMgr *AuthManager, requestedMode string) (string, string, string) {
+	app.serverMux.Lock()
+	endpoint := app.llmEndpoint
+	token := app.llmApiToken
+	mode := app.llmMode
+	app.serverMux.Unlock()
+
+	userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+	if userID != "" && authMgr != nil {
+		authMgr.mu.RLock()
+		user := authMgr.users[userID]
+		authMgr.mu.RUnlock()
+		if user != nil {
+			if user.Settings.ApiEndpoint != nil && strings.TrimSpace(*user.Settings.ApiEndpoint) != "" {
+				endpoint = *user.Settings.ApiEndpoint
+			}
+			if user.Settings.ApiToken != nil {
+				token = *user.Settings.ApiToken
+			}
+			if user.Settings.LLMMode != nil && strings.TrimSpace(*user.Settings.LLMMode) != "" {
+				mode = *user.Settings.LLMMode
+			}
+		}
+	}
+
+	if strings.TrimSpace(requestedMode) != "" {
+		mode = requestedMode
+	}
+
+	return normalizeLLMEndpoint(endpoint), sanitizeLLMToken(token), normalizeLLMMode(mode)
+}
+
 // handleModels proxies model list requests to LLM server
-func handleModels(w http.ResponseWriter, r *http.Request, app *App) {
+func handleModels(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthManager) {
 	// Add CORS headers
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -3142,6 +3177,7 @@ func handleModels(w http.ResponseWriter, r *http.Request, app *App) {
 		// Handle Model Load Request
 		var req struct {
 			Model string `json:"model"`
+			Mode  string `json:"mode"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid JSON", http.StatusBadRequest)
@@ -3153,7 +3189,8 @@ func handleModels(w http.ResponseWriter, r *http.Request, app *App) {
 			return
 		}
 
-		if err := app.LoadModel(req.Model); err != nil {
+		endpoint, token, mode := resolveModelAPIConfig(r, app, authMgr, req.Mode)
+		if err := app.LoadModelWithConfig(req.Model, endpoint, token, mode); err != nil {
 			log.Printf("[handleModels] Load failed: %v", err)
 			http.Error(w, fmt.Sprintf("Failed to load model: %v", err), http.StatusBadGateway)
 			return
@@ -3170,7 +3207,8 @@ func handleModels(w http.ResponseWriter, r *http.Request, app *App) {
 	}
 
 	// Try to fetch fresh models
-	bodyBytes, err := app.FetchAndCacheModels()
+	endpoint, token, mode := resolveModelAPIConfig(r, app, authMgr, r.URL.Query().Get("mode"))
+	bodyBytes, err := app.FetchAndCacheModelsWithConfig(endpoint, token, mode)
 	if err != nil {
 		log.Printf("[handleModels] Fetch failed: %v", err)
 
@@ -3193,6 +3231,45 @@ func handleModels(w http.ResponseWriter, r *http.Request, app *App) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Model-Source", "live")
 	w.Write(bodyBytes)
+}
+
+func handleModelUnload(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthManager) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		InstanceID string `json:"instance_id"`
+		Mode       string `json:"mode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if strings.TrimSpace(req.InstanceID) == "" {
+		http.Error(w, "instance_id required", http.StatusBadRequest)
+		return
+	}
+
+	endpoint, token, mode := resolveModelAPIConfig(r, app, authMgr, req.Mode)
+	if err := app.UnloadModelWithConfig(req.InstanceID, endpoint, token, mode); err != nil {
+		log.Printf("[handleModelUnload] Unload failed: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to unload model: %v", err), http.StatusBadGateway)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "Model unloaded"})
 }
 
 // handleChat proxies chat requests to LM Studio with SSE streaming

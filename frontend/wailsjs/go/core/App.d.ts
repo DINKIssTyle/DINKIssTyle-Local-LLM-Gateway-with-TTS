@@ -29,6 +29,8 @@ export function ExportEmbeddingModelManifest():Promise<string>;
 
 export function FetchAndCacheModels():Promise<Array<number>>;
 
+export function FetchAndCacheModelsWithConfig(arg1:string,arg2:string,arg3:string):Promise<Array<number>>;
+
 export function GenerateCertificate(arg1:string):Promise<void>;
 
 export function GetAutoStartServer():Promise<boolean>;
@@ -88,6 +90,8 @@ export function GetWelcomeState():Promise<core.WelcomeState>;
 export function LearnToolPattern(arg1:string,arg2:string):Promise<void>;
 
 export function LoadModel(arg1:string):Promise<void>;
+
+export function LoadModelWithConfig(arg1:string,arg2:string,arg3:string,arg4:string):Promise<void>;
 
 export function LogoutAllSessions():Promise<void>;
 
@@ -160,6 +164,10 @@ export function StartServerWithCurrentConfig():Promise<void>;
 export function Startup(arg1:context.Context):Promise<void>;
 
 export function StopServer():Promise<void>;
+
+export function UnloadModel(arg1:string):Promise<void>;
+
+export function UnloadModelWithConfig(arg1:string,arg2:string,arg3:string,arg4:string):Promise<void>;
 
 export function UpdateUserPassword(arg1:string,arg2:string):Promise<void>;
 
