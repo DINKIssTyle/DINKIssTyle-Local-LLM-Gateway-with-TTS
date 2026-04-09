@@ -7430,7 +7430,7 @@ function createMessageElement(msg) {
                         </div>
                     </section>
                 </div>
-                <div class="message-actions is-pending" hidden>
+                <div class="message-actions">
                     <button class="icon-btn save-btn" onclick="saveMessageTurn(this)" title="${escapeAttr(t('action.saveTurn'))}">
                         <span class="material-icons-round">bookmark_add</span>
                     </button>
@@ -7634,9 +7634,8 @@ function attachStreamingAudioButtonToMessage(msgEl) {
 
     // If TTS starts playing, ensure the action bar is visible so the user can see the "Stop" button.
     const actionBar = msgEl.querySelector('.message-actions');
-    if (actionBar && actionBar.hidden) {
-        actionBar.hidden = false;
-        actionBar.classList.add('is-ready');
+    if (actionBar && !actionBar.classList.contains('is-ready')) {
+        setAssistantActionBarReady(msgEl.id);
     }
 }
 
@@ -7651,12 +7650,10 @@ function setAssistantActionBarReady(elementId) {
         return;
     }
 
-    actionBar.hidden = false;
     actionBar.classList.add('is-pending');
 
     const finishReadyState = () => {
         if (!actionBar.isConnected) return;
-        actionBar.hidden = false;
         actionBar.classList.add('is-ready');
         actionBar.classList.remove('is-pending');
         delete actionBar.dataset.readyScheduled;
@@ -8830,16 +8827,11 @@ function updateSyncedMessageContent(id, text, options = {}) {
         const actionBar = el.querySelector('.message-actions');
         const hasVisibleContent = !!cleanText.trim();
         if (responseCard) responseCard.hidden = !hasVisibleContent;
-        const copyBtn = actionBar.querySelector('.copy-btn');
-            const speakBtn = actionBar.querySelector('.speak-btn');
-            if (copyBtn) copyBtn.hidden = !hasVisibleContent;
-            if (speakBtn) speakBtn.hidden = !hasVisibleContent;
-
-            // Deep Sync Rationale: If we are actively updating content and it's meaningful, 
-            // and we are NOT the one generating (syncing from server), reveal it early.
-            if (hasVisibleContent && (!isGenerating || deferToServerChatSession)) {
-                setAssistantActionBarReady(el.id);
-            }
+        if (actionBar && hasVisibleContent) {
+            // Rationale: We no longer reveal the action bar early here to avoid showing buttons 
+            // during reasoning or tool calls. They will be revealed by request.complete 
+            // or if TTS starts (via attachStreamingAudioButtonToMessage).
+        }
         syncAssistantMessageShellState(el);
         scrollToBottom(wasNearBottom);
         return;

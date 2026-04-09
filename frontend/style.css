@@ -827,15 +827,22 @@ body.keyboard-open #chat-header {
 
 .message-actions {
   display: flex;
-  gap: 8px;
-  padding: 2px 4px 0 2px;
-  margin-bottom: 28px;
+  gap: 12px;
+  padding: 4px 0 0 0;
+  margin-top: 4px;
+  margin-bottom: 0;
   align-items: center;
   justify-content: flex-start;
   opacity: 0;
-  transform: translateY(10px);
+  max-height: 0;
+  overflow: hidden;
+  transform: translateY(8px);
   pointer-events: none;
-  transition: opacity 0.28s ease, transform 0.34s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: 
+    opacity 0.4s ease, 
+    transform 0.45s cubic-bezier(0.2, 0.8, 0.2, 1),
+    max-height 0.4s ease,
+    margin-bottom 0.4s ease;
 }
 
 .message-actions.is-pending {
@@ -846,6 +853,8 @@ body.keyboard-open #chat-header {
 
 .message-actions.is-ready {
   opacity: 1;
+  max-height: 60px;
+  margin-bottom: 28px;
   transform: translateY(0);
   pointer-events: auto;
 }
