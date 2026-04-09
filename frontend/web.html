@@ -215,15 +215,12 @@
 
                     <div class="setting-item">
                         <label data-i18n="setting.temperature.label">Temperature</label>
-                        <p class="setting-desc" data-i18n="setting.temperature.desc">(기본값: 0.7) 값이 낮을수록 평범한 대답, 높을수록
-                            창의적인 대답</p>
-                        <input type="number" id="cfg-temp" step="0.1" value="0.7">
-                    </div>
-
-                    <div class="setting-item">
-                        <label data-i18n="setting.maxTokens.label">Max Tokens</label>
-                        <p class="setting-desc" data-i18n="setting.maxTokens.desc">(기본값: 4096) LLM이 생성할 최대 토큰 수</p>
-                        <input type="number" id="cfg-max-tokens" value="2048">
+                        <p class="setting-desc" data-i18n="setting.temperature.desc">Auto면 모델 기본값을 사용하고, 직접 지정하면 0.1 단위로 조절합니다.</p>
+                        <button type="button" id="cfg-temp-trigger" class="btn btn-secondary settings-action-btn"
+                            onclick="openTemperatureModal()">
+                            <span class="material-icons-round">tune</span>
+                            <span id="cfg-temp-display">Auto</span>
+                        </button>
                     </div>
                 </div>
 
@@ -498,6 +495,33 @@
                 <div class="saved-turn-modal-footer">
                     <button class="saved-turn-close-btn" onclick="closeSavedTurnModal()"
                         data-i18n="action.close">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="temperature-modal" class="modal-overlay" onclick="if(event.target===this)closeTemperatureModal()">
+        <div class="modal temperature-modal">
+            <div class="modal-header">
+                <h2 data-i18n="setting.temperature.label">Temperature</h2>
+                <button class="modal-close" onclick="closeTemperatureModal()">
+                    <span class="material-icons-round">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="temperature-modal-value-row">
+                    <div id="temperature-modal-value" class="temperature-modal-value">Auto</div>
+                    <button type="button" id="temperature-modal-auto" class="btn btn-secondary btn-compact"
+                        onclick="setTemperatureAuto()">
+                        <span class="material-icons-round">auto_mode</span>
+                        <span data-i18n="setting.temperature.auto">Auto</span>
+                    </button>
+                </div>
+                <p class="setting-desc" data-i18n="setting.temperature.modalDesc">0은 Auto이며, 이 경우 temperature 필드를 요청에 넣지 않습니다.</p>
+                <input type="range" id="temperature-modal-slider" min="0" max="1" step="0.1" value="0">
+                <div class="temperature-modal-scale">
+                    <span>Auto</span>
+                    <span>1.0</span>
                 </div>
             </div>
         </div>
