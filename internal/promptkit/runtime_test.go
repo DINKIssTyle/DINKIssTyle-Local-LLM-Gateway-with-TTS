@@ -127,10 +127,32 @@ func TestBuildRuntimeInstructionsIncludesMemoryAndEnvironment(t *testing.T) {
 func TestBuildRuntimeInstructionsAddsGemmaSpecificRules(t *testing.T) {
 	got := BuildRuntimeInstructions(RuntimeInstructionsInput{
 		ModelID:               "gemma-4-foo",
-		UseNativeIntegrations: false,
+		UseNativeIntegrations: true,
 	})
 
 	if !strings.Contains(got, "GEMMA-4 RULE") {
 		t.Fatalf("expected gemma-specific rules in runtime instructions")
+	}
+}
+
+func TestBuildRuntimeInstructionsOmitsToolGuidanceWhenNativeIntegrationsDisabled(t *testing.T) {
+	got := BuildRuntimeInstructions(RuntimeInstructionsInput{
+		ModelID:               "gemma-4-foo",
+		UseNativeIntegrations: false,
+		MemorySnapshot:        "likes tea",
+		ActiveContext:         "recently asked about weather",
+	})
+
+	if strings.Contains(got, ToolGuidelineMarker()) {
+		t.Fatalf("expected no tool guideline marker when native integrations are disabled")
+	}
+	if strings.Contains(got, "<tool_call>") {
+		t.Fatalf("expected no textual tool-call guidance when native integrations are disabled")
+	}
+	if strings.Contains(got, "search_web") || strings.Contains(got, "execute_command") {
+		t.Fatalf("expected no MCP tool names when native integrations are disabled")
+	}
+	if !strings.Contains(got, "### MEMORY CONTEXT ###") {
+		t.Fatalf("expected passive memory context to still be injected")
 	}
 }

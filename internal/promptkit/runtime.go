@@ -24,9 +24,16 @@ func ToolGuidelineMarker() string {
 }
 
 func BuildRuntimeInstructions(input RuntimeInstructionsInput) string {
-	extraInstr := buildToolUsage(input.EnvironmentInfo, input.ModelID, input.UseNativeIntegrations)
+	extraInstr := ""
+	if input.UseNativeIntegrations {
+		extraInstr = buildToolUsage(input.EnvironmentInfo, input.ModelID, input.UseNativeIntegrations)
+	}
 	if input.RecentContext != "" || input.MemorySnapshot != "" || input.ActiveContext != "" || input.UserProfileFacts != "" {
-		extraInstr += buildMemoryTemplate("", input.RecentContext, input.MemorySnapshot, input.ActiveContext, input.RetrievalInjected, input.UserProfileFacts)
+		if input.UseNativeIntegrations {
+			extraInstr += buildMemoryTemplate("", input.RecentContext, input.MemorySnapshot, input.ActiveContext, input.RetrievalInjected, input.UserProfileFacts)
+		} else {
+			extraInstr += buildPassiveMemoryTemplate(input.RecentContext, input.MemorySnapshot, input.ActiveContext, input.UserProfileFacts)
+		}
 	}
 	return extraInstr
 }
@@ -251,4 +258,35 @@ func buildMemoryTemplate(staticMemory string, recentContext string, userProfile 
 MEMORY & SEARCH RULES:
 %s
 `, staticMemory, recentContext, combinedProfile, activeContext, strings.Join(rules, "\n"))
+}
+
+func buildPassiveMemoryTemplate(recentContext string, userProfile string, activeContext string, userProfileFacts string) string {
+	combinedProfile := ""
+	if strings.TrimSpace(userProfileFacts) != "" {
+		combinedProfile = "## Known Facts:\n" + userProfileFacts
+		if strings.TrimSpace(userProfile) != "" {
+			combinedProfile += "\n\n## Recent Memory Snapshot:\n" + userProfile
+		}
+	} else {
+		combinedProfile = userProfile
+	}
+
+	return fmt.Sprintf(`
+### MEMORY CONTEXT ###
+
+#### RECENT CONTEXT
+%s
+
+#### USER PROFILE
+%s
+
+#### ACTIVE CONTEXT
+%s
+
+MEMORY USAGE RULES:
+1. Use RECENT CONTEXT, USER PROFILE, and ACTIVE CONTEXT only as provided reference context for this answer.
+2. Do not mention tools, integrations, MCP, or hidden retrieval steps.
+3. If the provided memory context is insufficient, answer normally from the visible conversation and your model knowledge.
+4. Do not invent or claim to have searched additional memory when no tool access is available.
+`, recentContext, combinedProfile, activeContext)
 }
