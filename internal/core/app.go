@@ -56,26 +56,25 @@ type App struct {
 	modelCacheMux  sync.RWMutex
 	modelCacheTime time.Time
 
-
 	baseListener    net.Listener // Primary TCP listener for hybrid HTTP/HTTPS
 	secondaryServer *http.Server // Secondary HTTP server for backward compatibility
 }
 
 // AppConfig holds the persistent application configuration
 type AppConfig struct {
-	Port              string                       `json:"port"`
-	LLMEndpoint       string                       `json:"llmEndpoint"`
-	LLMApiToken       string                       `json:"llmApiToken"`
-	LLMMode           string                       `json:"llmMode"`
-	EnableTTS         bool                         `json:"enableTTS"`
-	TTS               ServerTTSConfig              `json:"tts"`
-	Embedding         EmbeddingModelConfig         `json:"embedding"`
-	StartOnBoot       bool                         `json:"startOnBoot"`
-	MinimizeToTray    bool                         `json:"minimizeToTray"`
-	AutoStartServer   bool                         `json:"autoStartServer"`
-	CertDomain        string                       `json:"certDomain"`
-	DebugTraceEnabled bool                         `json:"debugTraceEnabled"`
-	WelcomeDismissed  bool                         `json:"welcomeDismissed"`
+	Port              string               `json:"port"`
+	LLMEndpoint       string               `json:"llmEndpoint"`
+	LLMApiToken       string               `json:"llmApiToken"`
+	LLMMode           string               `json:"llmMode"`
+	EnableTTS         bool                 `json:"enableTTS"`
+	TTS               ServerTTSConfig      `json:"tts"`
+	Embedding         EmbeddingModelConfig `json:"embedding"`
+	StartOnBoot       bool                 `json:"startOnBoot"`
+	MinimizeToTray    bool                 `json:"minimizeToTray"`
+	AutoStartServer   bool                 `json:"autoStartServer"`
+	CertDomain        string               `json:"certDomain"`
+	DebugTraceEnabled bool                 `json:"debugTraceEnabled"`
+	WelcomeDismissed  bool                 `json:"welcomeDismissed"`
 }
 
 type WelcomeState struct {
@@ -476,7 +475,6 @@ func (a *App) Startup(ctx context.Context) {
 		wruntime.WindowSetSize(ctx, 755, 800)
 	}
 
-
 	// Check for Auto Start Server
 	if a.GetAutoStartServer() {
 		fmt.Println("Auto-starting server based on configuration...")
@@ -554,13 +552,6 @@ func (a *App) GetServerStatus() map[string]interface{} {
 	}
 
 	llmBusy := currentLLMActivityBusy()
-	if !llmBusy {
-		if busy, err := mcp.HasRunningChatSession(); err == nil {
-			llmBusy = busy
-		} else {
-			log.Printf("[GetServerStatus] failed to inspect LLM activity: %v", err)
-		}
-	}
 
 	return map[string]interface{}{
 		"running":          running,
@@ -785,7 +776,6 @@ func CreateAppMenu(app *App) *menu.Menu {
 
 	return men
 }
-
 
 // Startup Settings - exposed to Wails frontend
 
@@ -1909,4 +1899,3 @@ func (a *App) ResetMemory(userID string) string {
 
 	return "Memory reset successfully."
 }
-

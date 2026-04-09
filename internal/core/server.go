@@ -66,6 +66,8 @@ var (
 	llmActivityCount    int64
 )
 
+const staleRunningSessionThreshold = 20 * time.Second
+
 type savedTurnTitleTask struct {
 	cancel context.CancelFunc
 }
@@ -99,6 +101,27 @@ func beginLLMActivity() func() {
 		}
 		emitLLMActivityChanged()
 	}
+}
+
+func normalizeStaleRunningSession(entry mcp.ChatSessionEntry) mcp.ChatSessionEntry {
+	if strings.TrimSpace(strings.ToLower(entry.Status)) != "running" {
+		return entry
+	}
+	if currentLLMActivityBusy() {
+		return entry
+	}
+	if entry.UpdatedAt.IsZero() || time.Since(entry.UpdatedAt) <= staleRunningSessionThreshold {
+		return entry
+	}
+
+	entry.Status = "idle"
+	saved, err := mcp.UpsertChatSession(entry)
+	if err != nil {
+		log.Printf("[chat-session] failed to normalize stale running session for %s: %v", entry.UserID, err)
+		return entry
+	}
+	log.Printf("[chat-session] normalized stale running session for %s (last update %s)", saved.UserID, saved.UpdatedAt.Format(time.RFC3339Nano))
+	return saved
 }
 
 // Structured Tool Call Support
@@ -2527,6 +2550,7 @@ func handleCurrentChatSession() http.HandlerFunc {
 			json.NewEncoder(w).Encode(map[string]interface{}{"has_session": false})
 			return
 		}
+		entry = normalizeStaleRunningSession(entry)
 
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"has_session": true,
@@ -2560,6 +2584,7 @@ func handleChatSessionEvents() http.HandlerFunc {
 			http.Error(w, "Failed to load chat session", http.StatusInternalServerError)
 			return
 		}
+		session = normalizeStaleRunningSession(session)
 
 		afterSeq := 0
 		if raw := strings.TrimSpace(r.URL.Query().Get("after_seq")); raw != "" {
