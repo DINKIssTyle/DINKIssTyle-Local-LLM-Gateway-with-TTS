@@ -2660,6 +2660,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     document.addEventListener('visibilitychange', () => {
         if (document.hidden) {
+            stopSTT({ suppressAutoSend: true, forceAbort: true });
             relinquishLocalStreamOwnership('document-hidden');
             cancelComposerBackgroundTasks('document-hidden');
             clearReconnectWatchdog();
@@ -2671,6 +2672,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     window.addEventListener('pagehide', () => {
+        stopSTT({ suppressAutoSend: true, forceAbort: true });
         relinquishLocalStreamOwnership('pagehide');
     });
 
@@ -9559,6 +9561,8 @@ let recognition = null;
 let isSTTActive = false;
 let sttPlaceholderTimer = null;
 let sttPlaceholderIndex = 0;
+let sttSuppressAutoSend = false;
+let sttStopFallbackTimer = null;
 
 /**
  * Toggles Speech-to-Text (STT) recognition
@@ -9584,6 +9588,66 @@ function toggleSTT() {
     }
 }
 
+function clearSTTStopFallbackTimer() {
+    if (!sttStopFallbackTimer) return;
+    clearTimeout(sttStopFallbackTimer);
+    sttStopFallbackTimer = null;
+}
+
+function finalizeSTTSession(options = {}) {
+    const suppressAutoSend = options.suppressAutoSend === true;
+    const resetRecognition = options.resetRecognition !== false;
+    clearSTTStopFallbackTimer();
+    isSTTActive = false;
+    stopSTTPlaceholderAnimation();
+    syncMicRecordingUI();
+    if (suppressAutoSend) {
+        sttSuppressAutoSend = true;
+    }
+    if (resetRecognition) {
+        recognition = null;
+    }
+}
+
+function stopSTT(options = {}) {
+    const suppressAutoSend = options.suppressAutoSend === true;
+    const forceAbort = options.forceAbort === true;
+    if (!recognition) {
+        finalizeSTTSession({ suppressAutoSend, resetRecognition: true });
+        return;
+    }
+
+    if (suppressAutoSend) {
+        sttSuppressAutoSend = true;
+    }
+
+    const activeRecognition = recognition;
+    clearSTTStopFallbackTimer();
+    sttStopFallbackTimer = setTimeout(() => {
+        if (recognition === activeRecognition) {
+            try {
+                activeRecognition.abort();
+            } catch (_) { }
+            finalizeSTTSession({ suppressAutoSend: true, resetRecognition: true });
+            console.warn('[STT] Forced cleanup after stop timeout');
+        }
+    }, 1200);
+
+    try {
+        if (forceAbort) {
+            activeRecognition.abort();
+        } else {
+            activeRecognition.stop();
+        }
+    } catch (error) {
+        console.warn('[STT] stop failed, aborting instead:', error);
+        try {
+            activeRecognition.abort();
+        } catch (_) { }
+        finalizeSTTSession({ suppressAutoSend: true, resetRecognition: true });
+    }
+}
+
 function startSTT() {
     cancelComposerBackgroundTasks('user-stt');
     if (!('webkitSpeechRecognition' in window)) {
@@ -9591,67 +9655,74 @@ function startSTT() {
         return;
     }
 
-    if (!recognition) {
-        recognition = new webkitSpeechRecognition();
-        recognition.continuous = false;
-        recognition.interimResults = true;
-
-        recognition.lang = config.language === 'ko' ? 'ko-KR' : 'en-US';
-
-        recognition.onstart = () => {
-            isSTTActive = true;
-            startSTTPlaceholderAnimation();
-            syncMicRecordingUI();
-            console.log("[STT] Recording started");
-        };
-
-        recognition.onresult = (event) => {
-            let interimTranscript = '';
-            let finalTranscript = '';
-
-            for (let i = event.resultIndex; i < event.results.length; ++i) {
-                if (event.results[i].isFinal) {
-                    finalTranscript += event.results[i][0].transcript;
-                } else {
-                    interimTranscript += event.results[i][0].transcript;
-                }
-            }
-
-            if (finalTranscript || interimTranscript) {
-                const input = document.getElementById('message-input');
-                // Real-time update message input
-                input.value = finalTranscript || interimTranscript;
-                input.dispatchEvent(new Event('input')); // Auto-resize textarea
-                updateInlineComposerActionVisibility();
-            }
-        };
-
-        recognition.onerror = (event) => {
-            console.error("[STT] Error:", event.error);
-            stopSTTPlaceholderAnimation();
-            stopSTT();
-        };
-
-        recognition.onend = () => {
-            isSTTActive = false;
-            stopSTTPlaceholderAnimation();
-            syncMicRecordingUI();
-            console.log("[STT] Recording ended");
-
-            // Auto-send if there is content
-            const input = document.getElementById('message-input');
-            if (input.value.trim()) {
-                sendMessage({ fromVoiceInput: true });
-            }
-        };
+    if (recognition) {
+        stopSTT({ suppressAutoSend: true, forceAbort: true });
     }
 
-    recognition.start();
-}
+    const nextRecognition = new webkitSpeechRecognition();
+    recognition = nextRecognition;
+    sttSuppressAutoSend = false;
+    nextRecognition.continuous = false;
+    nextRecognition.interimResults = true;
+    nextRecognition.lang = config.language === 'ko' ? 'ko-KR' : 'en-US';
 
-function stopSTT() {
-    if (recognition) {
-        recognition.stop();
+    nextRecognition.onstart = () => {
+        if (recognition !== nextRecognition) return;
+        clearSTTStopFallbackTimer();
+        isSTTActive = true;
+        startSTTPlaceholderAnimation();
+        syncMicRecordingUI();
+        console.log("[STT] Recording started");
+    };
+
+    nextRecognition.onresult = (event) => {
+        if (recognition !== nextRecognition) return;
+        let interimTranscript = '';
+        let finalTranscript = '';
+
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+            if (event.results[i].isFinal) {
+                finalTranscript += event.results[i][0].transcript;
+            } else {
+                interimTranscript += event.results[i][0].transcript;
+            }
+        }
+
+        if (finalTranscript || interimTranscript) {
+            const input = document.getElementById('message-input');
+            input.value = finalTranscript || interimTranscript;
+            input.dispatchEvent(new Event('input'));
+            updateInlineComposerActionVisibility();
+        }
+    };
+
+    nextRecognition.onerror = (event) => {
+        if (recognition !== nextRecognition) return;
+        console.error("[STT] Error:", event.error);
+        finalizeSTTSession({
+            suppressAutoSend: event.error === 'aborted' || event.error === 'not-allowed' || event.error === 'service-not-allowed',
+            resetRecognition: true
+        });
+    };
+
+    nextRecognition.onend = () => {
+        if (recognition !== nextRecognition) return;
+        const shouldAutoSend = !sttSuppressAutoSend;
+        finalizeSTTSession({ suppressAutoSend: true, resetRecognition: true });
+        console.log("[STT] Recording ended");
+
+        const input = document.getElementById('message-input');
+        if (shouldAutoSend && input.value.trim()) {
+            sendMessage({ fromVoiceInput: true });
+        }
+        sttSuppressAutoSend = false;
+    };
+
+    try {
+        nextRecognition.start();
+    } catch (error) {
+        console.error('[STT] Failed to start recognition:', error);
+        finalizeSTTSession({ suppressAutoSend: true, resetRecognition: true });
     }
 }
 
