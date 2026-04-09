@@ -3649,6 +3649,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			log.Printf("[chat-session] failed to initialize current session for %s: %v", userID, err)
 		} else {
 			chatSessionOK = true
+			sessionStatus = "running"
 		}
 	}
 
