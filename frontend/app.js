@@ -10074,6 +10074,22 @@ function updateMicLayout() {
 // Global STT state
 let recognition = null;
 let isSTTActive = false;
+
+/**
+ * Helper to detect iOS/iPadOS for platform-specific bug workarounds
+ */
+function isIOS() {
+    return [
+        'iPad Simulator',
+        'iPhone Simulator',
+        'iPod Simulator',
+        'iPad',
+        'iPhone',
+        'iPod'
+    ].includes(navigator.platform)
+        || (navigator.userAgent.includes("Mac") && "ontouchend" in document);
+}
+
 let sttPlaceholderTimer = null;
 let sttPlaceholderIndex = 0;
 let sttSuppressAutoSend = false;
@@ -10112,13 +10128,29 @@ function clearSTTStopFallbackTimer() {
 function finalizeSTTSession(options = {}) {
     const suppressAutoSend = options.suppressAutoSend === true;
     const resetRecognition = options.resetRecognition !== false;
+    const instance = options.instance || (resetRecognition ? recognition : null);
+
     clearSTTStopFallbackTimer();
     isSTTActive = false;
     stopSTTPlaceholderAnimation();
     syncMicRecordingUI();
+
     if (suppressAutoSend) {
         sttSuppressAutoSend = true;
     }
+
+    // Aggressive cleanup for iOS/Safari to release microphone hardware
+    if (instance) {
+        try {
+            instance.onstart = null;
+            instance.onresult = null;
+            instance.onerror = null;
+            instance.onend = null;
+            // Ensure it's absolutely stopped
+            instance.abort();
+        } catch (_) { }
+    }
+
     if (resetRecognition) {
         recognition = null;
     }
@@ -10138,28 +10170,25 @@ function stopSTT(options = {}) {
 
     const activeRecognition = recognition;
     clearSTTStopFallbackTimer();
+
+    // Shorter fallback for more responsive hardware release
     sttStopFallbackTimer = setTimeout(() => {
-        if (recognition === activeRecognition) {
-            try {
-                activeRecognition.abort();
-            } catch (_) { }
-            finalizeSTTSession({ suppressAutoSend: true, resetRecognition: true });
+        if (recognition === activeRecognition || !recognition) {
+            finalizeSTTSession({ instance: activeRecognition, suppressAutoSend: true, resetRecognition: recognition === activeRecognition });
             console.warn('[STT] Forced cleanup after stop timeout');
         }
-    }, 1200);
+    }, 800);
 
     try {
-        if (forceAbort) {
+        // iOS works much better with abort() for immediate hardware release
+        if (forceAbort || isIOS()) {
             activeRecognition.abort();
         } else {
             activeRecognition.stop();
         }
     } catch (error) {
         console.warn('[STT] stop failed, aborting instead:', error);
-        try {
-            activeRecognition.abort();
-        } catch (_) { }
-        finalizeSTTSession({ suppressAutoSend: true, resetRecognition: true });
+        finalizeSTTSession({ instance: activeRecognition, suppressAutoSend: true, resetRecognition: true });
     }
 }
 
