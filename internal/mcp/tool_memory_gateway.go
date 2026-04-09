@@ -1,10 +1,13 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,10 +18,18 @@ import (
 )
 
 const (
-	legacyMacMemoryRootName = "DKST LLM Chat"
-	macMemoryRootName       = "DKST LLM Chat Server"
-	savedTurnMemoryOffset   = int64(1_000_000_000)
+	legacyMacMemoryRootName       = "DKST LLM Chat"
+	macMemoryRootName             = "DKST LLM Chat Server"
+	savedTurnMemoryOffset         = int64(1_000_000_000)
+	memorySynthesisMaxTokens      = 384
+	memorySynthesisMaxRetries     = 3
+	memorySynthesisRequestTimeout = 12 * time.Second
+	memorySynthesisClientTimeout  = 15 * time.Second
+	memorySynthesisRawTokenBudget = 1800
+	memorySynthesisPromptBudget   = 2400
 )
+
+var memorySynthesisEndpoint = "http://127.0.0.1:1234/v1/chat/completions"
 
 type MemorySnapshotDebug struct {
 	Text           string  `json:"text"`
@@ -397,6 +408,7 @@ func AutoSearchMemoryDebugQuery(userID, input string) AutoSearchMemoryDebug {
 // SynthesizeMemoryContext makes a quick LLM call to extract only the facts relevant to the query
 // from the raw database records, filtering out noise.
 func SynthesizeMemoryContext(userID, query, rawMemories string) (string, error) {
+	rawMemories = compactMemoryTextByEstimatedTokens(rawMemories, memorySynthesisRawTokenBudget)
 	prompt := fmt.Sprintf(`You are a background memory filtering agent.
 Below are raw logs of past conversations between the user and the assistant.
 The user is currently asking or saying: "%s"
@@ -422,48 +434,153 @@ Raw Logs:
 		"model": "local-model",
 		"messages": []Message{
 			{Role: "system", Content: "Extract facts concisely. No chat. No markdown unless necessary. Never emit XML tags, tool calls, commands, or JSON."},
-			{Role: "user", Content: prompt},
+			{Role: "user", Content: compactMemoryTextByEstimatedTokens(prompt, memorySynthesisPromptBudget)},
 		},
 		"temperature": 0.1,
+		"max_tokens":  memorySynthesisMaxTokens,
+		"stream":      false,
 	}
 
-	reqBody, _ := json.Marshal(payload)
+	reqBody, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("failed to encode synthesis request: %w", err)
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, "POST", "http://127.0.0.1:1234/v1/chat/completions", strings.NewReader(string(reqBody)))
+	content, err := doMemorySynthesisRequest(reqBody)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
+	if content == "NO_RELEVANT_INFO" || content == "" {
+		return "", nil
 	}
+	return content, nil
+}
+
+func doMemorySynthesisRequest(reqBody []byte) (string, error) {
+	client := &http.Client{Timeout: memorySynthesisClientTimeout}
+	var lastErr error
+
+	for attempt := 0; attempt < memorySynthesisMaxRetries; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), memorySynthesisRequestTimeout)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, memorySynthesisEndpoint, bytes.NewReader(reqBody))
+		if err != nil {
+			cancel()
+			return "", err
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			cancel()
+			lastErr = err
+		} else {
+			content, shouldRetry, readErr := decodeMemorySynthesisResponse(resp)
+			cancel()
+			if readErr == nil {
+				return content, nil
+			}
+			lastErr = readErr
+			if !shouldRetry {
+				return "", readErr
+			}
+		}
+
+		if attempt == memorySynthesisMaxRetries-1 {
+			break
+		}
+		time.Sleep(memorySynthesisBackoff(attempt))
+	}
+
+	return "", fmt.Errorf("memory synthesis failed after %d attempts: %w", memorySynthesisMaxRetries, lastErr)
+}
+
+func decodeMemorySynthesisResponse(resp *http.Response) (string, bool, error) {
 	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		err := fmt.Errorf("llm synthesis returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return "", resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500, err
+	}
 
 	var resData struct {
 		Choices []struct {
-			Message Message `json:"message"`
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
 		} `json:"choices"`
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&resData); err != nil {
-		return "", err
+		return "", true, err
+	}
+	if len(resData.Choices) == 0 {
+		return "", false, fmt.Errorf("empty response from LLM")
+	}
+	return strings.TrimSpace(resData.Choices[0].Message.Content), false, nil
+}
+
+func memorySynthesisBackoff(attempt int) time.Duration {
+	base := 250 * time.Millisecond
+	scale := time.Duration(math.Pow(2, float64(attempt)))
+	delay := base * scale
+	maxDelay := 2 * time.Second
+	if delay > maxDelay {
+		return maxDelay
+	}
+	return delay
+}
+
+func compactMemoryTextByEstimatedTokens(input string, tokenLimit int) string {
+	input = strings.TrimSpace(input)
+	if tokenLimit <= 0 || input == "" {
+		return input
+	}
+	if estimateTokenCount(input) <= tokenLimit {
+		return input
 	}
 
-	if len(resData.Choices) > 0 {
-		content := strings.TrimSpace(resData.Choices[0].Message.Content)
-		if content == "NO_RELEVANT_INFO" || content == "" {
-			return "", nil
+	var b strings.Builder
+	used := 0
+	for _, r := range input {
+		cost := estimatedTokenCost(r)
+		if used+cost > tokenLimit {
+			break
 		}
-		return content, nil
+		b.WriteRune(r)
+		used += cost
 	}
+	return strings.TrimSpace(b.String()) + "... (truncated)"
+}
 
-	return "", fmt.Errorf("empty response from LLM")
+func estimateTokenCount(input string) int {
+	total := 0
+	for _, r := range input {
+		total += estimatedTokenCost(r)
+	}
+	return total
+}
+
+func estimatedTokenCost(r rune) int {
+	switch {
+	case r <= 0x7F:
+		if r == '\n' || r == '\r' || r == '\t' || r == ' ' {
+			return 1
+		}
+		return 1
+	case isCJKRune(r):
+		return 2
+	default:
+		return 2
+	}
+}
+
+func isCJKRune(r rune) bool {
+	return (r >= 0x1100 && r <= 0x11FF) ||
+		(r >= 0x2E80 && r <= 0x9FFF) ||
+		(r >= 0xAC00 && r <= 0xD7AF) ||
+		(r >= 0xF900 && r <= 0xFAFF) ||
+		(r >= 0xFF00 && r <= 0xFFEF)
 }
 
 // ReadMemoryDB calls the SQLite db to read full text of a specific memory ID
@@ -574,7 +691,7 @@ func GetUserMemoryFilePath(userID, filename string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, filename), nil
+	return safeUserDocumentPath(dir, filename)
 }
 
 // ListUserMemoryFiles returns all .md files in the user's memory directory
@@ -603,11 +720,6 @@ func ListUserMemoryFiles(userID string) ([]string, error) {
 
 // ReadUserDocument reads a specific document from user's memory folder
 func ReadUserDocument(userID, filename string) (string, error) {
-	// Validate filename to prevent directory traversal
-	if strings.Contains(filename, "..") || strings.Contains(filename, "/") || strings.Contains(filename, "\\") {
-		return "", fmt.Errorf("invalid filename: %s", filename)
-	}
-
 	filePath, err := GetUserMemoryFilePath(userID, filename)
 	if err != nil {
 		return "", err
@@ -626,11 +738,6 @@ func ReadUserDocument(userID, filename string) (string, error) {
 
 // WriteUserDocument writes content to a specific document in user's memory folder
 func WriteUserDocument(userID, filename, content string) error {
-	// Validate filename
-	if strings.Contains(filename, "..") || strings.Contains(filename, "/") || strings.Contains(filename, "\\") {
-		return fmt.Errorf("invalid filename: %s", filename)
-	}
-
 	filePath, err := GetUserMemoryFilePath(userID, filename)
 	if err != nil {
 		return err
@@ -643,4 +750,28 @@ func WriteUserDocument(userID, filename, content string) error {
 	}
 
 	return os.WriteFile(filePath, []byte(content), 0644)
+}
+
+func safeUserDocumentPath(baseDir, filename string) (string, error) {
+	cleanBase := filepath.Clean(baseDir)
+	cleanName := filepath.Clean(strings.TrimSpace(filename))
+	if cleanName == "." || cleanName == "" {
+		return "", fmt.Errorf("invalid filename: %s", filename)
+	}
+	if strings.Contains(cleanName, `\`) || filepath.IsAbs(cleanName) {
+		return "", fmt.Errorf("invalid filename: %s", filename)
+	}
+
+	fullPath := filepath.Join(cleanBase, cleanName)
+	relative, err := filepath.Rel(cleanBase, fullPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to validate document path: %w", err)
+	}
+	if relative == "." || relative == "" {
+		return "", fmt.Errorf("invalid filename: %s", filename)
+	}
+	if relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) || filepath.IsAbs(relative) {
+		return "", fmt.Errorf("invalid filename: %s", filename)
+	}
+	return fullPath, nil
 }

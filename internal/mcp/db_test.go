@@ -197,6 +197,37 @@ func TestMemoryChunkTableExists(t *testing.T) {
 	}
 }
 
+func TestInitDBConfiguresSQLitePragmas(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "memory_pragmas_*.db")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	dbPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(dbPath)
+
+	if err := InitDB(dbPath); err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer CloseDB()
+
+	var journalMode string
+	if err := db.QueryRow(`PRAGMA journal_mode`).Scan(&journalMode); err != nil {
+		t.Fatalf("failed to read journal_mode: %v", err)
+	}
+	if journalMode != "wal" {
+		t.Fatalf("expected WAL journal mode, got %q", journalMode)
+	}
+
+	var busyTimeout int
+	if err := db.QueryRow(`PRAGMA busy_timeout`).Scan(&busyTimeout); err != nil {
+		t.Fatalf("failed to read busy_timeout: %v", err)
+	}
+	if busyTimeout != sqliteBusyTimeout {
+		t.Fatalf("expected busy_timeout %d, got %d", sqliteBusyTimeout, busyTimeout)
+	}
+}
+
 func TestInsertMemoryCreatesChunks(t *testing.T) {
 	tmpFile, err := os.CreateTemp("", "memory_chunk_insert_*.db")
 	if err != nil {

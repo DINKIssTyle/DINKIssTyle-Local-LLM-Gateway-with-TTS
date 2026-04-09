@@ -45,6 +45,10 @@ const (
 	retentionBackgroundJobsDays   = 7
 )
 
+const (
+	sqliteBusyTimeout = 5000
+)
+
 type MemoryRetentionConfig struct {
 	CoreDays      int `json:"coreDays"`
 	WorkingDays   int `json:"workingDays"`
@@ -128,8 +132,8 @@ func InitDB(dbPath string) error {
 	if err = db.Ping(); err != nil {
 		return fmt.Errorf("database unreachable: %w", err)
 	}
-	if _, err = db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
-		return fmt.Errorf("failed to enable foreign keys: %w", err)
+	if err = configureSQLiteConnection(db); err != nil {
+		return err
 	}
 	memoryRetentionSchemaMu.Lock()
 	memoryRetentionSchemaChecked = false
@@ -137,6 +141,19 @@ func InitDB(dbPath string) error {
 
 	// Initialize schema
 	return createSchema()
+}
+
+func configureSQLiteConnection(db *sql.DB) error {
+	if _, err := db.Exec(`PRAGMA journal_mode = WAL`); err != nil {
+		return fmt.Errorf("failed to enable WAL mode: %w", err)
+	}
+	if _, err := db.Exec(fmt.Sprintf(`PRAGMA busy_timeout = %d`, sqliteBusyTimeout)); err != nil {
+		return fmt.Errorf("failed to set busy timeout: %w", err)
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		return fmt.Errorf("failed to enable foreign keys: %w", err)
+	}
+	return nil
 }
 
 // CloseDB closes the database connection.
