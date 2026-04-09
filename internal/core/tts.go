@@ -37,7 +37,15 @@ type memoryWriteSeeker struct {
 func (m *memoryWriteSeeker) Write(p []byte) (int, error) {
 	end := m.pos + int64(len(p))
 	if end > int64(len(m.buf)) {
-		grow := make([]byte, end)
+		newLen := int(end)
+		newCap := cap(m.buf)
+		if newCap == 0 {
+			newCap = 4096
+		}
+		for newCap < newLen {
+			newCap *= 2
+		}
+		grow := make([]byte, newLen, newCap)
 		copy(grow, m.buf)
 		m.buf = grow
 	}
@@ -411,14 +419,20 @@ func (tts *TextToSpeech) infer(ctx context.Context, textList []string, langList 
 	textIDsShape := []int64{int64(bsz), int64(len(textIDs[0]))}
 	textMaskShape := []int64{int64(bsz), 1, int64(len(textMask[0][0]))}
 
-	textIDsTensor := intArrayToTensor(textIDs, textIDsShape)
+	textIDsTensor, err := intArrayToTensor(textIDs, textIDsShape)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create text ids tensor: %w", err)
+	}
 	defer textIDsTensor.Destroy()
-	textMaskTensor := arrayToTensor(textMask, textMaskShape)
+	textMaskTensor, err := arrayToTensor(textMask, textMaskShape)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create text mask tensor: %w", err)
+	}
 	defer textMaskTensor.Destroy()
 
 	// Predict duration
 	dpOutputs := make([]ort.ArbitraryTensor, 1)
-	err := tts.dpOrt.Run(
+	err = tts.dpOrt.Run(
 		[]ort.ArbitraryTensor{textIDsTensor, style.DpTensor, textMaskTensor},
 		dpOutputs,
 	)
@@ -434,7 +448,10 @@ func (tts *TextToSpeech) infer(ctx context.Context, textList []string, langList 
 	}
 
 	// Encode text
-	textIDsTensor2 := intArrayToTensor(textIDs, textIDsShape)
+	textIDsTensor2, err := intArrayToTensor(textIDs, textIDsShape)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create text ids tensor for encoder: %w", err)
+	}
 	defer textIDsTensor2.Destroy()
 	textEncOutputs := make([]ort.ArbitraryTensor, 1)
 	err = tts.textEncOrt.Run(
@@ -461,9 +478,15 @@ func (tts *TextToSpeech) infer(ctx context.Context, textList []string, langList 
 	defer totalStepTensor.Destroy()
 
 	// Optimization: Move invariant tensor creation OUT of the loop
-	latentMaskTensor := arrayToTensor(latentMask, latentMaskShape)
+	latentMaskTensor, err := arrayToTensor(latentMask, latentMaskShape)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create latent mask tensor: %w", err)
+	}
 	defer latentMaskTensor.Destroy()
-	textMaskTensor2 := arrayToTensor(textMask, textMaskShape)
+	textMaskTensor2, err := arrayToTensor(textMask, textMaskShape)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create text mask tensor for denoiser: %w", err)
+	}
 	defer textMaskTensor2.Destroy()
 
 	// Denoising loop
@@ -480,8 +503,15 @@ func (tts *TextToSpeech) infer(ctx context.Context, textList []string, langList 
 			currentStepArray[b] = float32(step)
 		}
 
-		currentStepTensor, _ := ort.NewTensor(scalarShape, currentStepArray)
-		noisyLatentTensor := arrayToTensor(xt, latentShape)
+		currentStepTensor, err := ort.NewTensor(scalarShape, currentStepArray)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to create current step tensor: %w", err)
+		}
+		noisyLatentTensor, err := arrayToTensor(xt, latentShape)
+		if err != nil {
+			currentStepTensor.Destroy()
+			return nil, nil, fmt.Errorf("failed to create noisy latent tensor: %w", err)
+		}
 
 		vectorEstOutputs := make([]ort.ArbitraryTensor, 1)
 		err = tts.vectorEstOrt.Run(
@@ -514,7 +544,10 @@ func (tts *TextToSpeech) infer(ctx context.Context, textList []string, langList 
 	}
 
 	// Generate waveform
-	finalLatentTensor := arrayToTensor(xt, latentShape)
+	finalLatentTensor, err := arrayToTensor(xt, latentShape)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create final latent tensor: %w", err)
+	}
 	defer finalLatentTensor.Destroy()
 
 	vocoderOutputs := make([]ort.ArbitraryTensor, 1)
@@ -559,10 +592,7 @@ func (tts *TextToSpeech) sampleNoisyLatent(durOnnx []float32) ([][][]float64, []
 		for d := 0; d < latentDim; d++ {
 			row := make([]float64, latentLen)
 			for t := 0; t < latentLen; t++ {
-				const eps = 1e-10
-				u1 := math.Max(eps, rng.Float64())
-				u2 := rng.Float64()
-				row[t] = math.Sqrt(-2.0*math.Log(u1)) * math.Cos(2.0*math.Pi*u2)
+				row[t] = rng.NormFloat64()
 			}
 			batch[d] = row
 		}
@@ -907,7 +937,7 @@ func loadJSONInt64(filePath string) ([]int64, error) {
 	return result, nil
 }
 
-func arrayToTensor(array [][][]float64, shape []int64) *ort.Tensor[float32] {
+func arrayToTensor(array [][][]float64, shape []int64) (*ort.Tensor[float32], error) {
 	totalSize := int64(1)
 	for _, dim := range shape {
 		totalSize *= dim
@@ -926,13 +956,13 @@ func arrayToTensor(array [][][]float64, shape []int64) *ort.Tensor[float32] {
 
 	tensor, err := ort.NewTensor(shape, flat)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
-	return tensor
+	return tensor, nil
 }
 
-func intArrayToTensor(array [][]int64, shape []int64) *ort.Tensor[int64] {
+func intArrayToTensor(array [][]int64, shape []int64) (*ort.Tensor[int64], error) {
 	totalSize := int64(1)
 	for _, dim := range shape {
 		totalSize *= dim
@@ -949,10 +979,10 @@ func intArrayToTensor(array [][]int64, shape []int64) *ort.Tensor[int64] {
 
 	tensor, err := ort.NewTensor(shape, flat)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
-	return tensor
+	return tensor, nil
 }
 
 // InitializeONNXRuntime initializes ONNX Runtime environment
