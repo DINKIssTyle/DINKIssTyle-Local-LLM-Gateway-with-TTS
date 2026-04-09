@@ -66,7 +66,18 @@ var (
 	llmActivityCount    int64
 )
 
+// 컨텍스트 예산 설정
 const staleRunningSessionThreshold = 20 * time.Second
+
+const (
+	recentContextDefaultTurns       = 4
+	recentContextLatestTurnBudget   = 1400
+	recentContextLatestUserBudget   = 760
+	recentContextLatestAssistBudget = 640
+	recentContextOlderUserBudget    = 220
+	recentContextOlderAssistBudget  = 300
+	recentContextStatefulBudget     = 900
+)
 
 type savedTurnTitleTask struct {
 	cancel context.CancelFunc
@@ -138,6 +149,22 @@ func compactText(input string, limit int) string {
 	}
 	runes := []rune(input)
 	return strings.TrimSpace(string(runes[:limit])) + "... (truncated)"
+}
+
+func firstRunes(input string, limit int) string {
+	runes := []rune(strings.TrimSpace(input))
+	if limit <= 0 || len(runes) <= limit {
+		return strings.TrimSpace(input)
+	}
+	return strings.TrimSpace(string(runes[:limit]))
+}
+
+func lastRunes(input string, limit int) string {
+	runes := []rune(strings.TrimSpace(input))
+	if limit <= 0 || len(runes) <= limit {
+		return strings.TrimSpace(input)
+	}
+	return strings.TrimSpace(string(runes[len(runes)-limit:]))
 }
 
 func normalizeRelaxedToolArgsJSON(raw string) (string, bool) {
@@ -735,6 +762,189 @@ func cleanContentForStatefulSummaryServer(text string) string {
 	)
 }
 
+type recentContextTurn struct {
+	User      string
+	Assistant string
+}
+
+func cleanRecentContextText(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+	cleaned := regexp.MustCompile(`<think>[\s\S]*?</think>`).ReplaceAllString(text, "")
+	cleaned = strings.ReplaceAll(cleaned, "\r\n", "\n")
+	cleaned = strings.ReplaceAll(cleaned, "\r", "\n")
+	lines := strings.Split(cleaned, "\n")
+	normalized := make([]string, 0, len(lines))
+	blankCount := 0
+	for _, line := range lines {
+		trimmed := strings.TrimRight(line, " \t")
+		if strings.TrimSpace(trimmed) == "" {
+			blankCount++
+			if blankCount > 1 {
+				continue
+			}
+			normalized = append(normalized, "")
+			continue
+		}
+		blankCount = 0
+		normalized = append(normalized, trimmed)
+	}
+	return strings.TrimSpace(strings.Join(normalized, "\n"))
+}
+
+func isRecentContextSignalLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(trimmed, "```") ||
+		strings.HasPrefix(trimmed, "$ ") ||
+		strings.HasPrefix(trimmed, "> ") ||
+		strings.HasPrefix(trimmed, "# ") ||
+		strings.HasPrefix(trimmed, "at ") {
+		return true
+	}
+	if strings.Contains(lower, "error") ||
+		strings.Contains(lower, "exception") ||
+		strings.Contains(lower, "traceback") ||
+		strings.Contains(lower, "panic") ||
+		strings.Contains(lower, "failed") ||
+		strings.Contains(lower, "warning") {
+		return true
+	}
+	if regexp.MustCompile(`(?:^|[\s(])(?:npm|pnpm|yarn|bun|go|python|node|git|curl|sql)\b`).MatchString(trimmed) {
+		return true
+	}
+	if regexp.MustCompile(`(?:/|\.go\b|\.ts\b|\.js\b|\.json\b|\.md\b|\.yaml\b|\.yml\b|:\d+)`).MatchString(trimmed) {
+		return true
+	}
+	return false
+}
+
+func compactRecentTurnContent(text string, limit int) string {
+	cleaned := cleanRecentContextText(text)
+	if cleaned == "" || limit <= 0 {
+		return ""
+	}
+	if len([]rune(cleaned)) <= limit {
+		return cleaned
+	}
+
+	lines := strings.Split(cleaned, "\n")
+	signalLines := make([]string, 0, 4)
+	seen := map[string]struct{}{}
+	for _, line := range lines {
+		if !isRecentContextSignalLine(line) {
+			continue
+		}
+		trimmed := compactText(strings.TrimSpace(line), 180)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		signalLines = append(signalLines, trimmed)
+		if len(signalLines) >= 4 {
+			break
+		}
+	}
+
+	headBudget := max(120, limit/3)
+	tailBudget := max(80, limit/5)
+	head := firstRunes(cleaned, headBudget)
+	tail := lastRunes(cleaned, tailBudget)
+
+	parts := []string{}
+	if head != "" {
+		parts = append(parts, head)
+	}
+	if len(signalLines) > 0 {
+		parts = append(parts, "Key lines:\n"+strings.Join(signalLines, "\n"))
+	}
+	if tail != "" && tail != head {
+		parts = append(parts, tail)
+	}
+
+	compacted := strings.Join(parts, "\n...\n")
+	if len([]rune(compacted)) <= limit {
+		return compacted + "\n... (middle omitted)"
+	}
+
+	reducedHead := firstRunes(cleaned, max(90, limit/4))
+	reducedTail := lastRunes(cleaned, max(60, limit/7))
+	reducedSignals := signalLines
+	if len(reducedSignals) > 2 {
+		reducedSignals = reducedSignals[:2]
+	}
+	parts = []string{reducedHead}
+	if len(reducedSignals) > 0 {
+		parts = append(parts, "Key lines:\n"+strings.Join(reducedSignals, "\n"))
+	}
+	if reducedTail != "" && reducedTail != reducedHead {
+		parts = append(parts, reducedTail)
+	}
+	return compactText(strings.Join(parts, "\n...\n"), limit)
+}
+
+func formatRecentContextTurns(turns []recentContextTurn, maxTurns int, totalBudget int) (string, int) {
+	if maxTurns <= 0 {
+		maxTurns = recentContextDefaultTurns
+	}
+	filtered := make([]recentContextTurn, 0, len(turns))
+	for _, turn := range turns {
+		userText := strings.TrimSpace(turn.User)
+		assistantText := strings.TrimSpace(turn.Assistant)
+		if userText == "" && assistantText == "" {
+			continue
+		}
+		filtered = append(filtered, recentContextTurn{
+			User:      userText,
+			Assistant: assistantText,
+		})
+	}
+	if len(filtered) == 0 {
+		return "", 0
+	}
+	if len(filtered) > maxTurns {
+		filtered = filtered[len(filtered)-maxTurns:]
+	}
+
+	entries := make([]string, 0, len(filtered))
+	for i, turn := range filtered {
+		label := fmt.Sprintf("Turn -%d", len(filtered)-i)
+		isLatest := i == len(filtered)-1
+		chunk := make([]string, 0, 2)
+		if turn.User != "" {
+			if isLatest {
+				chunk = append(chunk, fmt.Sprintf("User: %s", compactRecentTurnContent(turn.User, recentContextLatestUserBudget)))
+			} else {
+				chunk = append(chunk, fmt.Sprintf("User: %s", compactText(cleanContentForStatefulSummaryServer(turn.User), recentContextOlderUserBudget)))
+			}
+		}
+		if turn.Assistant != "" {
+			if isLatest {
+				chunk = append(chunk, fmt.Sprintf("Assistant: %s", compactRecentTurnContent(turn.Assistant, recentContextLatestAssistBudget)))
+			} else {
+				chunk = append(chunk, fmt.Sprintf("Assistant: %s", compactText(cleanContentForStatefulSummaryServer(turn.Assistant), recentContextOlderAssistBudget)))
+			}
+		}
+		if len(chunk) == 0 {
+			continue
+		}
+		entries = append(entries, label+"\n"+strings.Join(chunk, "\n"))
+	}
+
+	rendered := strings.TrimSpace(strings.Join(entries, "\n\n"))
+	if totalBudget > 0 && len([]rune(rendered)) > totalBudget {
+		return compactRecentTurnContent(rendered, totalBudget), len(filtered)
+	}
+	return rendered, len(filtered)
+}
+
 func summarizeChatSessionForReset(existingSummary string, snapshot chatSessionUISnapshot) string {
 	lines := make([]string, 0, 16)
 	if strings.TrimSpace(existingSummary) != "" {
@@ -770,32 +980,19 @@ func summarizeChatSessionForReset(existingSummary string, snapshot chatSessionUI
 }
 
 func buildRecentContextFromSnapshot(snapshot chatSessionUISnapshot, maxTurns int) (string, int) {
-	if maxTurns <= 0 {
-		maxTurns = 4
-	}
-	entries := make([]string, 0, maxTurns*2)
-	turns := 0
-	for i := len(snapshot.Messages) - 1; i >= 0 && turns < maxTurns; i-- {
-		msg := snapshot.Messages[i]
-		userText := cleanContentForStatefulSummaryServer(msg.UserContent)
-		assistantText := cleanContentForStatefulSummaryServer(msg.AssistantContent)
+	turns := make([]recentContextTurn, 0, len(snapshot.Messages))
+	for _, msg := range snapshot.Messages {
+		userText := cleanRecentContextText(msg.UserContent)
+		assistantText := cleanRecentContextText(msg.AssistantContent)
 		if userText == "" && assistantText == "" {
 			continue
 		}
-		chunk := make([]string, 0, 3)
-		if userText != "" {
-			chunk = append(chunk, fmt.Sprintf("User: %s", compactText(userText, 420)))
-		}
-		if assistantText != "" {
-			chunk = append(chunk, fmt.Sprintf("Assistant: %s", compactText(assistantText, 520)))
-		}
-		if len(chunk) == 0 {
-			continue
-		}
-		turns++
-		entries = append([]string{fmt.Sprintf("Turn -%d\n%s", turns, strings.Join(chunk, "\n"))}, entries...)
+		turns = append(turns, recentContextTurn{
+			User:      userText,
+			Assistant: assistantText,
+		})
 	}
-	return strings.TrimSpace(strings.Join(entries, "\n\n")), turns
+	return formatRecentContextTurns(turns, maxTurns, 2200)
 }
 
 func buildRecentContextFromEvents(userID string, entry mcp.ChatSessionEntry, maxTurns int) (string, int) {
@@ -862,35 +1059,23 @@ func buildRecentContextFromEvents(userID string, entry mcp.ChatSessionEntry, max
 		}
 	}
 
-	if maxTurns <= 0 {
-		maxTurns = 4
-	}
-	entries := make([]string, 0, maxTurns*2)
-	turns := 0
-	for i := len(order) - 1; i >= 0 && turns < maxTurns; i-- {
-		turn := byTurn[order[i]]
+	turns := make([]recentContextTurn, 0, len(order))
+	for _, turnID := range order {
+		turn := byTurn[turnID]
 		if turn == nil {
 			continue
 		}
-		userText := cleanContentForStatefulSummaryServer(turn.user)
-		assistantText := cleanContentForStatefulSummaryServer(turn.assistant)
+		userText := cleanRecentContextText(turn.user)
+		assistantText := cleanRecentContextText(turn.assistant)
 		if userText == "" && assistantText == "" {
 			continue
 		}
-		chunk := make([]string, 0, 2)
-		if userText != "" {
-			chunk = append(chunk, fmt.Sprintf("User: %s", compactText(userText, 420)))
-		}
-		if assistantText != "" {
-			chunk = append(chunk, fmt.Sprintf("Assistant: %s", compactText(assistantText, 520)))
-		}
-		if len(chunk) == 0 {
-			continue
-		}
-		turns++
-		entries = append([]string{fmt.Sprintf("Turn -%d\n%s", turns, strings.Join(chunk, "\n"))}, entries...)
+		turns = append(turns, recentContextTurn{
+			User:      userText,
+			Assistant: assistantText,
+		})
 	}
-	return strings.TrimSpace(strings.Join(entries, "\n\n")), turns
+	return formatRecentContextTurns(turns, maxTurns, 2200)
 }
 
 func getRecentConversationContext(userID string) (string, int, string) {
@@ -900,10 +1085,10 @@ func getRecentConversationContext(userID string) (string, int, string) {
 	}
 	snapshot := parseChatSessionUISnapshot(entry.UIStateJSON)
 	if text, turns := buildRecentContextFromSnapshot(snapshot, 4); strings.TrimSpace(text) != "" {
-		return compactText(text, 2200), turns, "ui_snapshot"
+		return text, turns, "ui_snapshot"
 	}
 	if text, turns := buildRecentContextFromEvents(userID, entry, 4); strings.TrimSpace(text) != "" {
-		return compactText(text, 2200), turns, "chat_events"
+		return text, turns, "chat_events"
 	}
 	return "", 0, ""
 }
@@ -3449,6 +3634,12 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	// Always unmarshal body into reqMap to prevent nil panics later in the turn loop
 	json.Unmarshal(body, &reqMap)
 	initialUserInputText := extractChatInputText(reqMap)
+	hasPreviousResponseID := llmMode == "stateful" && strings.TrimSpace(extractStringValue(reqMap, []string{"previous_response_id"})) != ""
+	if !hasPreviousResponseID && llmMode == "stateful" && strings.TrimSpace(userID) != "" {
+		if existingSession, err := mcp.GetCurrentChatSession(userID); err == nil && strings.TrimSpace(existingSession.LastResponseID) != "" {
+			hasPreviousResponseID = true
+		}
+	}
 	AddDebugTrace("chat", "request.received", "Incoming chat request", map[string]interface{}{
 		"user":       userID,
 		"body_bytes": len(body),
@@ -3465,16 +3656,21 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	autoContextDebug := mcp.AutoSearchMemoryDebug{}
 	if enableMemory && contextStrategy == "retrieval" {
 		recentContext, recentContextTurns, recentContextSource = getRecentConversationContext(userID)
-		memorySnapshotDebug = mcp.GetMemorySnapshotDebug(userID)
-		memorySnapshot = memorySnapshotDebug.Text
-		if messages, ok := reqMap["messages"].([]interface{}); ok && len(messages) > 0 {
-			for i := len(messages) - 1; i >= 0; i-- {
-				if m, ok := messages[i].(map[string]interface{}); ok {
-					if role, ok := m["role"].(string); ok && role == "user" {
-						if content, ok := m["content"].(string); ok {
-							autoContextDebug = mcp.AutoSearchMemoryDebugQuery(userID, content)
-							autoContext = compactText(autoContextDebug.Context, 1200)
-							break
+		if hasPreviousResponseID {
+			recentContext = compactRecentTurnContent(recentContext, recentContextStatefulBudget)
+			recentContextSource += "+stateful_compact"
+		} else {
+			memorySnapshotDebug = mcp.GetMemorySnapshotDebug(userID)
+			memorySnapshot = memorySnapshotDebug.Text
+			if messages, ok := reqMap["messages"].([]interface{}); ok && len(messages) > 0 {
+				for i := len(messages) - 1; i >= 0; i-- {
+					if m, ok := messages[i].(map[string]interface{}); ok {
+						if role, ok := m["role"].(string); ok && role == "user" {
+							if content, ok := m["content"].(string); ok {
+								autoContextDebug = mcp.AutoSearchMemoryDebugQuery(userID, content)
+								autoContext = compactText(autoContextDebug.Context, 1200)
+								break
+							}
 						}
 					}
 				}
@@ -3518,7 +3714,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				"context_strategy":      contextStrategy,
 				"recent_context":        recentContext,
 				"memory_snapshot":       memorySnapshot,
+				"memory_snapshot_full":  memorySnapshotDebug.RawText,
 				"active_context":        autoContext,
+				"active_context_full":   autoContextDebug.RawContext,
 				"memory_snapshot_debug": memorySnapshotDebug,
 				"active_context_debug":  autoContextDebug,
 				"recent_context_turns":  recentContextTurns,
@@ -3581,10 +3779,13 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		"saved_turn_hits":          autoContextDebug.SavedTurnHits,
 		"chunk_match_count":        autoContextDebug.ChunkMatchCount,
 		"__payload": map[string]interface{}{
-			"kind":             "prepared_request_context",
-			"context_strategy": contextStrategy,
-			"memory_snapshot":  memorySnapshot,
-			"active_context":   autoContext,
+			"kind":                 "prepared_request_context",
+			"context_strategy":     contextStrategy,
+			"recent_context":       recentContext,
+			"memory_snapshot":      memorySnapshot,
+			"memory_snapshot_full": memorySnapshotDebug.RawText,
+			"active_context":       autoContext,
+			"active_context_full":  autoContextDebug.RawContext,
 		},
 		"stateful_turns": statefulTurnCount,
 		"stateful_chars": statefulEstChars,

@@ -33,6 +33,7 @@ var memorySynthesisEndpoint = "http://127.0.0.1:1234/v1/chat/completions"
 
 type MemorySnapshotDebug struct {
 	Text           string  `json:"text"`
+	RawText        string  `json:"raw_text,omitempty"`
 	MemoryCount    int     `json:"memory_count"`
 	SavedTurnCount int     `json:"saved_turn_count"`
 	MemoryIDs      []int64 `json:"memory_ids,omitempty"`
@@ -339,7 +340,37 @@ func GetMemorySnapshotDebug(userID string) MemorySnapshotDebug {
 		debug.MemoryIDs = append(debug.MemoryIDs, r.ID)
 	}
 	debug.Text = sb.String()
+	debug.RawText = formatMemorySnapshotDebugText(results, 1200, 12000)
 	return debug
+}
+
+func formatMemorySnapshotDebugText(results []MemoryEntry, perEntryLimit int, totalLimit int) string {
+	if len(results) == 0 {
+		return ""
+	}
+	if perEntryLimit <= 0 {
+		perEntryLimit = 1200
+	}
+	if totalLimit <= 0 {
+		totalLimit = 12000
+	}
+
+	var sb strings.Builder
+	for _, r := range results {
+		entry := fmt.Sprintf("- [%s] %s\n", r.CreatedAt.Format("2006-01-02"), compactMemoryText(r.FullText, perEntryLimit))
+		if sb.Len()+len(entry) > totalLimit {
+			remaining := totalLimit - sb.Len()
+			if remaining > 0 {
+				sb.WriteString(compactMemoryText(entry, remaining))
+			}
+			if sb.Len() > 0 {
+				sb.WriteString("\n... (debug payload truncated)")
+			}
+			break
+		}
+		sb.WriteString(entry)
+	}
+	return strings.TrimSpace(sb.String())
 }
 
 // AutoSearchMemory searches for the most relevant memories using extracted keywords
