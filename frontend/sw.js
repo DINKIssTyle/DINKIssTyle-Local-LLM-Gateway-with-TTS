@@ -126,3 +126,66 @@ self.addEventListener('fetch', event => {
         })
     );
 });
+
+// ============================================================================
+// Push Notification Handling (Optimized for iOS 18.4+)
+// ============================================================================
+
+// Push Event: Handle incoming push messages
+self.addEventListener('push', event => {
+    if (!event.data) return;
+
+    try {
+        const data = event.data.json();
+        
+        // Support for Declarative Web Push (iOS 18.4+) 
+        // and standard Web Push Notifications
+        if (data.notification) {
+            const options = {
+                body: data.notification.body || '',
+                icon: data.notification.icon || '/public/icon-512.png',
+                badge: data.notification.badge || '/public/favicon-32.png',
+                data: data.notification.data || {},
+                actions: data.notification.actions || []
+            };
+
+            event.waitUntil(
+                self.registration.showNotification(
+                    data.notification.title || 'DKST Chat', 
+                    options
+                )
+            );
+        }
+    } catch (e) {
+        console.error('[SW] Push processing failed:', e);
+        // Fallback for simple text push
+        const text = event.data.text();
+        event.waitUntil(
+            self.registration.showNotification('DKST Chat', {
+                body: text,
+                icon: '/public/icon-512.png'
+            })
+        );
+    }
+});
+
+// Notification Click: Handle interaction with notifications
+self.addEventListener('notificationclick', event => {
+    event.notification.close();
+
+    // Primary action: focus or open the app
+    event.waitUntil(
+        clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clientList => {
+            if (clientList.length > 0) {
+                let client = clientList[0];
+                for (let i = 0; i < clientList.length; i++) {
+                    if (clientList[i].focused) {
+                        client = clientList[i];
+                    }
+                }
+                return client.focus();
+            }
+            return clients.openWindow('/');
+        })
+    );
+});

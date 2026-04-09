@@ -19,8 +19,7 @@ let config = {
     model: 'qwen/qwen3.5-35b-a3b',
     secondaryModel: '',
     hideThink: false,       // Default: False
-    temperature: 0.7,      // Default: 0.7
-    maxTokens: 4096,       // Default: 4096
+    temperature: null,     // null => Auto (omit from payload)
     historyCount: 10,
     enableTTS: true,       // Default: True
     enableTTS: true,       // Default: True
@@ -549,9 +548,9 @@ const translations = {
         'setting.systemPrompt.label': '시스템 프롬프트',
         'setting.systemPrompt.desc': 'LLM의 역할을 지정하세요. 예: "당신은 나의 영어 선생님입니다." System_prompt.json에서 수정할 수 있습니다.',
         'setting.temperature.label': 'Temperature',
-        'setting.temperature.desc': '(기본값: 0.7) 값이 낮을수록 평범한 대답, 높을수록 창의적인 대답',
-        'setting.maxTokens.label': 'Max Tokens',
-        'setting.maxTokens.desc': '(기본값: 4096) LLM이 생성할 최대 토큰 수',
+        'setting.temperature.desc': 'Auto면 모델 기본값을 사용하고, 직접 지정하면 0.1 단위로 조절합니다.',
+        'setting.temperature.auto': 'Auto',
+        'setting.temperature.modalDesc': '0은 Auto이며, 이 경우 temperature 필드를 요청에 넣지 않습니다.',
         'setting.history.label': 'History Count',
         'setting.history.desc': '(기본값: 10) 대화 기억 횟수',
         'setting.apiToken.label': 'API Token',
@@ -795,9 +794,9 @@ const translations = {
         'setting.systemPrompt.label': 'System Prompt',
         'setting.systemPrompt.desc': 'Define the LLM\'s role. Example: "You are my English teacher." It can be modified in System_prompt.json.',
         'setting.temperature.label': 'Temperature',
-        'setting.temperature.desc': '(Default: 0.7) Lower = predictable, Higher = creative',
-        'setting.maxTokens.label': 'Max Tokens',
-        'setting.maxTokens.desc': '(Default: 4096) Maximum tokens to generate',
+        'setting.temperature.desc': 'Auto uses the model default. Manual values change in 0.1 steps.',
+        'setting.temperature.auto': 'Auto',
+        'setting.temperature.modalDesc': '0 means Auto, and the request omits the temperature field.',
         'setting.history.label': 'History Count',
         'setting.history.desc': '(Default: 10) Number of messages to remember',
         'setting.apiToken.label': 'API Token',
@@ -976,7 +975,186 @@ const translations = {
         'error.mcpFailed': 'LM Studio MCP Connection Failed.\n\nSolution:\n1. Open LM Studio -> Developer (sidebar) -> Server Settings\n2. Turn ON \'Allow calling servers from mcp.json\'\n3. Or turn OFF \'Enable MCP Features\' in the top right settings (⚙️).\n\nOriginal Error: ',
         'warning.loopDetected': '[⚠️ Repeated responses were detected, and the response was stopped.]',
         'warning.repeatRetrying': '[⚠️ Repetition was detected, so the request is being retried with adjusted LM Studio weights.]',
-        'warning.repeatStopped': '[⚠️ Repetition was detected, so the response was stopped.]'
+        'warning.repeatStopped': '[⚠️ Repetition was detected, so the response was stopped.]',
+        'action.stop': 'Stop',
+        'action.stopGeneration': 'Stop Generation'
+    },
+    'ko': {
+        'setting.history.label': '대화 기억 횟수',
+        'setting.history.desc': '(기본값: 10) 기억할 대화 상자의 개수입니다.',
+        'setting.apiToken.label': 'API 토큰',
+        'setting.apiToken.desc': 'LM Studio API 토큰 (인증 활성화 시 필요)',
+        'setting.apiToken.placeholder': '비워두면 기본값 사용',
+        'setting.llmMode.label': '연결 모드',
+        'setting.llmMode.desc': 'OpenAI 호환 모드와 LM Studio 모드 중 선택하세요.',
+        'setting.llmMode.option.standard': 'OpenAI 호환',
+        'setting.llmMode.option.stateful': 'LM Studio',
+        'setting.contextStrategy.label': '배경 / 문맥 메모리',
+        'setting.contextStrategy.desc': '현재 모드에서 대화 문맥을 유지하는 방식을 선택합니다.',
+        'setting.contextStrategy.option.retrieval': 'FTS5 + Vector',
+        'setting.contextStrategy.option.stateful': 'Stateful',
+        'setting.contextStrategy.option.none': '비활성화',
+        'setting.contextStrategy.option.history': '단순 히스토리',
+        'setting.enableMCP.label': 'MCP 기능 활성화',
+        'setting.enableMCP.desc': 'Model Context Protocol 통합 기능을 사용합니다 (웹 검색, 브라우징 등)',
+        'setting.enableMemory.label': '개인 메모리 활성화',
+        'setting.enableMemory.desc': 'LLM이 로컬 파일에 개인적인 세부 사항을 기억하도록 허용합니다.',
+        'setting.showReasoningControl.label': 'Reasoning 컨트롤 표시',
+        'setting.showReasoningControl.desc': '선택한 모델이 Reasoning을 지원할 때 입력창 위에 컨트롤 바를 표시합니다.',
+        'setting.forceShowReasoningControl.label': 'Reasoning 컨트롤 강제 표시',
+        'setting.forceShowReasoningControl.desc': '모델 메타데이터에 정보가 없어도 컨트롤 바를 강제로 표시합니다.',
+        'setting.statefulTurnLimit.label': 'Stateful 턴 제한',
+        'setting.statefulTurnLimit.desc': '(기본값: 8) 대화가 요약되어 정리되기 전까지 유지할 턴 수입니다.',
+        'setting.statefulCharBudget.label': 'Stateful 글자수 예산',
+        'setting.statefulCharBudget.desc': '(기본값: 32000) 활성 문맥이 이 글자수를 넘으면 자동으로 요약 및 정리가 수행됩니다.',
+        'setting.statefulTokenBudget.label': 'Stateful 토큰 예산',
+        'setting.statefulTokenBudget.desc': '(기본값: 30000) 자동 문맥 압축을 트리거하는 주요 토큰 임계값입니다.',
+        'setting.memory.warning': '주의: 개인 데이터는 암호화되지 않은 상태로 로컬 디스크에 저장됩니다.',
+        'setting.memory.open': '파일 열기',
+        'setting.memory.reset': '메모리 초기화',
+        'setting.memory.reset.confirm': '개인 메모리를 초기화하시겠습니까? 이 작업은 되돌릴 수 없습니다.',
+        'setting.memory.reset.success': '메모리가 성공적으로 초기화되었습니다.',
+        'setting.userBubbleTheme.label': '사용자 말풍선 스타일',
+        'setting.userBubbleTheme.desc': '사용자 메시지 말풍선의 그라데이션 프리셋을 선택합니다.',
+        'setting.markdownRenderMode.label': '마크다운 렌더링 모드',
+        'setting.markdownRenderMode.desc': '응답 스트리밍 중 마크다운 렌더링의 공격성을 선택합니다.',
+        'setting.markdownRenderMode.option.fast': '빠른 렌더링',
+        'setting.markdownRenderMode.option.balanced': '약간 지연된 렌더링',
+        'setting.markdownRenderMode.option.final': '완료 후 렌더링',
+        'setting.hapticsEnabled.label': '진동(햅틱) 활성화',
+        'setting.hapticsEnabled.desc': '지원되는 기기에서 버튼 클릭 시 진동 피드백을 줍니다.',
+        'setting.micLayout.label': '마이크 배치',
+        'setting.micLayout.desc': '화면에 마이크 버튼을 배치하는 방식입니다.',
+        'setting.micLayout.option.none': '표시 안 함',
+        'setting.micLayout.option.left': '왼쪽 사이드',
+        'setting.micLayout.option.right': '오른쪽 사이드',
+        'setting.micLayout.option.bottom': '하단 중앙',
+        'setting.micLayout.option.inline': '입력창 내부',
+        'setting.voiceInputAutoPlay.label': '음성 입력 시 자동 재생',
+        'setting.voiceInputAutoPlay.desc': '마이크로 보낸 메시지는 TTS 자동 재생 설정과 관계없이 이 옵션을 따릅니다.',
+        'status.thinking': '생각 중...',
+        'status.live': 'LIVE',
+        'status.running': '실행 중',
+        'status.done': '완료',
+        'status.failed': '실패',
+        'status.stopped': '중단됨',
+        'status.unexpectedStop': '응답이 예기치 않게 중단되었습니다.',
+        'status.thoughtForSeconds': '{seconds}초 동안 생각함',
+        'status.thoughtForMinutes': '{minutes}분 동안 생각함',
+        'status.thoughtForMinutesSeconds': '{minutes}분 {seconds}초 동안 생각함',
+        'tool.currentTimeChecked': '현재 시간을 확인했습니다.',
+        'tool.currentLocationChecked': '사용자 위치를 확인했습니다.',
+        'tool.fallbackName': '도구',
+        'tool.executeCommand': '명령어 실행: {value}',
+        'tool.searchQuery': '검색어: {value}',
+        'tool.openUrl': '페이지 열기: {value}',
+        'tool.readBufferedSource': '소스 읽기: {value}',
+        'tool.searchMemory': '메모리 검색: {value}',
+        'tool.readMemory': '메모리 읽기: ID {value}',
+        'tool.deleteMemory': '메모리 삭제: ID {value}',
+        'tool.executionFinished': '도구 실행이 완료되었습니다.',
+        'tool.noQueryDetails': '상세 쿼리 없음',
+        'tool.unknownError': '알 수 없는 오류',
+        'progress.processingPrompt': '프롬프트 처리 중',
+        'progress.loadingModel': '모델 로드 중',
+        'progress.modelLoaded': '모델 로드 완료',
+        'background.savedTurnTitle': '대화 제목 생성 중...',
+        'setting.enableTTS.label': 'TTS 활성화',
+        'setting.enableTTS.desc': '응답을 음성으로 재생합니다.',
+        'setting.autoPlay.label': '자동 재생',
+        'setting.autoPlay.desc': '응답을 자동으로 음성 재생합니다.',
+        'setting.ttsEngine.label': 'TTS 엔진',
+        'setting.ttsEngine.desc': 'Supertonic 2와 운영체제 기본 음성 중 선택하세요.',
+        'setting.ttsEngine.option.supertonic': 'Supertonic 2',
+        'setting.ttsEngine.option.os': 'OS TTS',
+        'setting.voiceStyle.label': '목소리 스타일',
+        'setting.voiceStyle.desc': 'TTS 목소리 스타일을 선택하세요.',
+        'setting.osVoice.label': 'OS 목소리',
+        'setting.osVoice.desc': '운영체제에서 제공하는 목소리를 선택하세요.',
+        'setting.osRate.label': 'OS 속도',
+        'setting.osRate.desc': '운영체제 목소리의 재생 속도입니다.',
+        'setting.osPitch.label': 'OS 음조',
+        'setting.osPitch.desc': '운영체제 목소리의 높낮이입니다.',
+        'setting.osVoice.loading': '목소리 불러오는 중...',
+        'setting.osVoice.unavailable': 'OS TTS 사용 불가',
+        'setting.speed.label': '재생 속도',
+        'setting.speed.desc': '음성 재생 속도입니다.',
+        'setting.ttsLang.label': 'TTS 언어',
+        'setting.ttsLang.desc': '선호하는 언어를 선택하세요.',
+        'setting.chunkSize.label': '스마트 청킹',
+        'setting.chunkSize.desc': '(추천: 150~300) TTS가 한 번에 읽을 글자 수입니다.',
+        'setting.steps.label': '추론 단계(Steps)',
+        'setting.steps.desc': '(추천: 2~8, 기본: 5) 높을수록 자연스럽습니다.',
+        'setting.threads.label': 'CPU 스레드',
+        'setting.threads.desc': '(기본: 2) TTS 생성에 사용할 스레드 수입니다.',
+        'setting.format.label': '오디오 형식',
+        'setting.format.desc': 'MP3는 WAV에서 변환됩니다.',
+        'setting.format.note': 'WAV 형식을 사용하면 모바일에서 화면이 꺼져도 재생이 잘 됩니다.',
+        'setting.enableEmbeddings.label': '임베딩 검색 활성화',
+        'setting.enableEmbeddings.desc': 'FTS5와 함께 임베딩 유사도 검색을 병행합니다.',
+        'setting.embeddingModel.label': '임베딩 모델',
+        'setting.embeddingModel.desc': '로컬 임베딩 모델을 선택하세요.',
+        'modal.models.title': '모델 관리자',
+        'setting.modelsRoot.label': '모델 저장 폴더',
+        'action.downloadModel': '다운로드',
+        'action.redownloadModel': '재다운로드',
+        'action.exportManifest': '매니페스트',
+        'status.downloading': '다운로드 중',
+        'models.loading': '불러오는 중...',
+        'models.empty': '관리 가능한 모델이 없습니다.',
+        'models.loadFailed': '모델 정보를 가져오지 못했습니다.',
+        'models.downloadStarted': '다운로드가 시작되었습니다.',
+        'models.downloadFinished': '다운로드가 완료되었습니다.',
+        'models.downloadFailed': '다운로드에 실패했습니다.',
+        'models.progressBytes': '{downloaded} / {total}',
+        'section.advanced': '고급 설정',
+        'setting.cert.label': 'HTTPS 인증서',
+        'setting.cert.desc': '이 기기에서 서버를 신뢰하도록 인증서를 다운로드하세요.',
+        'action.downloadCert': '인증서 다운로드',
+        'chat.welcome': '반가워요! 대화할 준비가 되었습니다.',
+        'chat.instruction': '설정(⚙️)에서 엔진을 구성할 수 있습니다.',
+        'chat.startup.welcomeTitle': '환영합니다.',
+        'chat.startup.welcomeBody': '바로 대화를 시작하실 수 있습니다.',
+        'chat.startup.issueBody': '아래 항목들을 확인해주세요.',
+        'chat.startup.restore': '이전 대화 불러오기',
+        'chat.startup.restoreLoaded': '이전 대화가 로드되었습니다.',
+        'chat.startup.restoreMissing': '불러올 대화가 없습니다.',
+        'chat.startup.restoreFailed': '대화를 불러오지 못했습니다.',
+        'chat.reconnect.title': '연결이 끊어진 것 같습니다.',
+        'chat.reconnect.body': '백그라운드에서 복귀한 후 동기화가 중단되었습니다.',
+        'chat.reconnect.action': '다시 연결',
+        'chat.passiveSyncWaiting': '다른 창에서 응답을 생성 중입니다...',
+        'chat.passiveSyncThinking': '다른 창에서 생각 중입니다...',
+        'chat.passiveSyncTool': '다른 창에서 도구를 사용 중입니다...',
+        'input.placeholder': '메시지를 입력하세요...',
+        'input.placeholder.sttA': '말씀하세요...',
+        'input.placeholder.sttB': '듣고 있어요...',
+        'input.placeholder.restoring': '이전 대화를 복구하는 중...',
+        'reasoning.auto': '자동',
+        'progress.restoringHistory': '이전 대화 복구 중',
+        'background.serverChatContinuing': '서버 응답 재개 중...',
+        'restore.skeletonTitle': '이전 대화 복원 중',
+        'restore.skeletonBody': '서버에서 기록과 상태를 가져오고 있습니다.',
+        'health.systemReady': '시스템 준비됨',
+        'health.checkRequired': '시스템 체크 필요',
+        'health.checkFailed': '시스템 체크 실패',
+        'health.backendError': '백엔드와 통신할 수 없습니다 (Wails/API 모두 불가).',
+        'health.llm': 'LLM',
+        'health.tts': 'TTS',
+        'health.status.connected': '연결됨',
+        'health.status.ready': '준비됨',
+        'health.status.disabled': '비활성화',
+        'health.status.unreachable': '도달 불가',
+        'health.mode': '모드',
+        'health.checkToken': ' -> **API 토큰**을 확인하세요.',
+        'health.checkServer': ' -> **LM Studio 서버**가 켜져 있는지 확인하세요.',
+        'error.authFailed': 'LM Studio 인증 실패.\n\n해결 방법:\n1. LM Studio -> Developer -> Server Settings\n2. \'Require Authentication\' 끄기\n3. 또는 토큰을 생성해 설정에 입력하세요.\n\n오류: ',
+        'error.mcpFailed': 'LM Studio MCP 연결 실패.\n\n해결 방법:\n1. LM Studio -> Developer -> Server Settings\n2. \'Allow calling servers from mcp.json\' 켜기\n3. 또는 설정에서 MCP 기능을 끄세요.\n\n오류: ',
+        'warning.loopDetected': '[⚠️ 반복적인 응답이 감지되어 중단되었습니다.]',
+        'warning.repeatRetrying': '[⚠️ 반복이 감지되어 LM Studio 가중치를 조정해 다시 시도합니다.]',
+        'warning.repeatStopped': '[⚠️ 반복이 감지되어 응답을 중단했습니다.]',
+        'action.stop': '중단',
+        'action.stopGeneration': '답변 중단'
     }
 };
 
@@ -1277,6 +1455,7 @@ function applyTranslations() {
     renderContextStrategyOptions();
     updateMessageInputPlaceholder();
     renderSavedLibraryList();
+    syncTemperatureUI();
 }
 
 function setLanguage(lang) {
@@ -1284,6 +1463,7 @@ function setLanguage(lang) {
     persistClientConfig();
     applyTranslations();
     renderReasoningControl();
+    syncTemperatureUI();
 }
 
 // ============================================================================
@@ -1292,13 +1472,13 @@ function setLanguage(lang) {
 let wakeLock = null;
 let lastKeyboardViewportSignalAt = 0;
 
-// Audio Context Recovery for iOS/PWA
+// Audio Context & Wake Lock Recovery for iOS/PWA
 document.addEventListener('visibilitychange', async () => {
     if (document.visibilityState === 'visible') {
-        console.log('[Audio] App foregrounded, checking audio context...');
+        console.log('[Audio] App foregrounded, checking recovery...');
 
-        // Re-acquire Wake Lock if it was active
-        if (isPlayingQueue || isGenerating) {
+        // Re-acquire Wake Lock if it should be active
+        if (isPlayingQueue || isGenerating || isSTTActive) {
             await requestWakeLock();
         }
     }
@@ -1371,28 +1551,53 @@ document.addEventListener('keydown', (event) => {
     }
 });
 
+/**
+ * Holistic sync for Screen Wake Lock based on app state
+ */
+async function syncWakeLock() {
+    const shouldBeActive = isGenerating || isPlayingQueue || isSTTActive;
+    if (shouldBeActive) {
+        await requestWakeLock();
+    } else {
+        await releaseWakeLock();
+    }
+}
+
 async function requestWakeLock() {
-    if ('wakeLock' in navigator) {
-        try {
-            wakeLock = await navigator.wakeLock.request('screen');
-            console.log('[WakeLock] Screen Wake Lock active');
-            wakeLock.addEventListener('release', () => {
-                console.log('[WakeLock] Screen Wake Lock released');
-            });
-        } catch (err) {
-            console.error(`[WakeLock] Failed to request Wake Lock: ${err.name}, ${err.message}`);
+    if (!('wakeLock' in navigator)) return;
+    if (wakeLock) return; // Already acquired
+
+    try {
+        wakeLock = await navigator.wakeLock.request('screen');
+        console.log('[WakeLock] Screen Wake Lock active');
+        
+        wakeLock.addEventListener('release', () => {
+            console.log('[WakeLock] Screen Wake Lock released');
+            // If it was released because of visibility change, we'll re-acquire on visibilitychange event
+            // But if it was released and we still need it (e.g. system interrupt), try re-acquiring if visible
+            if (document.visibilityState === 'visible' && (isGenerating || isPlayingQueue || isSTTActive)) {
+                wakeLock = null;
+                requestWakeLock();
+            } else {
+                wakeLock = null;
+            }
+        });
+    } catch (err) {
+        if (err.name !== 'NotAllowedError') {
+            console.error(`[WakeLock] Failed: ${err.name}, ${err.message}`);
         }
+        wakeLock = null;
     }
 }
 
 async function releaseWakeLock() {
-    if (wakeLock) {
-        try {
-            await wakeLock.release();
-            wakeLock = null;
-        } catch (err) {
-            console.error(`[WakeLock] Failed to release Wake Lock: ${err.name}, ${err.message}`);
-        }
+    if (!wakeLock) return;
+    try {
+        const lock = wakeLock;
+        wakeLock = null; // Clear first to prevent race
+        await lock.release();
+    } catch (err) {
+        console.error(`[WakeLock] Error releasing: ${err.message}`);
     }
 }
 
@@ -1513,6 +1718,58 @@ function openSettingsModal() {
 
 function closeSettingsModal() {
     document.getElementById('settings-modal').classList.remove('active');
+}
+
+function normalizeTemperatureValue(value, fallback = null) {
+    if (value === null || value === undefined || value === '' || value === 'auto') {
+        return fallback;
+    }
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+        return fallback;
+    }
+    const clamped = clampNumber(numeric, 0, 1);
+    if (clamped <= 0) {
+        return null;
+    }
+    return Math.round(clamped * 10) / 10;
+}
+
+function isTemperatureAuto(value = config.temperature) {
+    return normalizeTemperatureValue(value, null) === null;
+}
+
+function formatTemperatureSettingLabel(value = config.temperature) {
+    const normalized = normalizeTemperatureValue(value, null);
+    return normalized === null ? t('setting.temperature.auto') : normalized.toFixed(1);
+}
+
+function syncTemperatureUI() {
+    const triggerLabel = document.getElementById('cfg-temp-display');
+    const slider = document.getElementById('temperature-modal-slider');
+    const valueEl = document.getElementById('temperature-modal-value');
+    const autoBtn = document.getElementById('temperature-modal-auto');
+    const normalized = normalizeTemperatureValue(config.temperature, null);
+    const sliderValue = normalized === null ? 0 : normalized;
+    if (triggerLabel) triggerLabel.textContent = formatTemperatureSettingLabel(normalized);
+    if (slider) slider.value = String(sliderValue);
+    if (valueEl) valueEl.textContent = formatTemperatureSettingLabel(normalized);
+    if (autoBtn) autoBtn.classList.toggle('btn-primary', normalized === null);
+}
+
+function openTemperatureModal() {
+    syncTemperatureUI();
+    document.getElementById('temperature-modal')?.classList.add('active');
+}
+
+function closeTemperatureModal() {
+    document.getElementById('temperature-modal')?.classList.remove('active');
+}
+
+function setTemperatureAuto() {
+    config.temperature = null;
+    syncTemperatureUI();
+    saveConfig(false);
 }
 
 function formatBytes(value) {
@@ -1997,14 +2254,18 @@ async function saveEditedSavedTurnTitle() {
 }
 
 function buildSavedTurnTitleRequestPayload(extra = {}) {
-    return {
+    const payload = {
         model_id: config.model || '',
         secondary_model: config.secondaryModel || '',
         api_token: config.apiToken || '',
         llm_mode: config.llmMode || 'standard',
-        temperature: getConfiguredTemperature(),
         ...extra
     };
+    const temperature = getConfiguredTemperature();
+    if (temperature !== null) {
+        payload.temperature = temperature;
+    }
+    return payload;
 }
 
 async function saveTurn(promptText, responseText) {
@@ -3041,6 +3302,10 @@ function syncGlobalLLMComposerUI(session = currentChatSessionCache) {
     }
 
     updateMessageInputPlaceholder();
+
+    // Ensure the send button reflects the global active state
+    // We call a variant that doesn't trigger syncGlobalLLMComposerUI again to avoid loop
+    updateSendButtonStateCore();
 }
 
 function broadcastLLMActivityState(busy, phase = 'answering') {
@@ -3644,7 +3909,8 @@ function loadConfig() {
     }
 
     config.ttsEngine = config.ttsEngine === 'os' ? 'os' : 'supertonic';
-    config.temperature = normalizeTemperatureValue(config.temperature, 0.7);
+    config.temperature = normalizeTemperatureValue(config.temperature, null);
+    delete config.maxTokens;
     config.reasoning = normalizeReasoningValue(config.reasoning);
     config.showReasoningControl = config.showReasoningControl !== false;
     config.forceShowReasoningControl = config.forceShowReasoningControl === true;
@@ -3664,8 +3930,6 @@ function loadConfig() {
     document.getElementById('cfg-hide-think').checked = config.hideThink;
     document.getElementById('cfg-show-reasoning-control').checked = config.showReasoningControl;
     document.getElementById('cfg-force-show-reasoning-control').checked = config.forceShowReasoningControl;
-    document.getElementById('cfg-temp').value = config.temperature;
-    document.getElementById('cfg-max-tokens').value = config.maxTokens;
     document.getElementById('cfg-history').value = config.historyCount;
     const apiTokenEl = document.getElementById('cfg-api-token');
     if (apiTokenEl) apiTokenEl.value = config.apiToken || '';
@@ -3747,6 +4011,7 @@ function loadConfig() {
     // Apply i18n translations
     // Apply i18n translations
     applyTranslations();
+    syncTemperatureUI();
 
     // Initialize System Prompt Presets (loads from external file)
     loadSystemPrompts();
@@ -3843,16 +4108,18 @@ function setupSettingsListeners() {
     });
 
     // Selects & Inputs: save on change
-    const autoSaveIds = ['cfg-api', 'cfg-temp', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-os-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-context-strategy', 'cfg-show-reasoning-control', 'cfg-force-show-reasoning-control', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model', 'cfg-tts-engine', 'cfg-markdown-render-mode', 'cfg-enable-haptics', 'cfg-embedding-model', 'cfg-mic-layout'];
+    const autoSaveIds = ['cfg-api', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-os-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-context-strategy', 'cfg-show-reasoning-control', 'cfg-force-show-reasoning-control', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model', 'cfg-tts-engine', 'cfg-markdown-render-mode', 'cfg-enable-haptics', 'cfg-embedding-model', 'cfg-mic-layout'];
     autoSaveIds.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.onchange = () => saveConfig(false);
     });
-    const tempEl = document.getElementById('cfg-temp');
-    if (tempEl) {
-        tempEl.oninput = () => {
-            config.temperature = normalizeTemperatureValue(tempEl.value, 0.7);
+    const temperatureSlider = document.getElementById('temperature-modal-slider');
+    if (temperatureSlider) {
+        temperatureSlider.oninput = () => {
+            config.temperature = normalizeTemperatureValue(temperatureSlider.value, null);
+            syncTemperatureUI();
         };
+        temperatureSlider.onchange = () => saveConfig(false);
     }
 
     if (composerReasoningSelect) {
@@ -4019,8 +4286,8 @@ function saveConfig(closeModal = true) {
     config.hideThink = document.getElementById('cfg-hide-think').checked;
     config.showReasoningControl = document.getElementById('cfg-show-reasoning-control').checked;
     config.forceShowReasoningControl = document.getElementById('cfg-force-show-reasoning-control').checked;
-    config.temperature = normalizeTemperatureValue(document.getElementById('cfg-temp').value, 0.7);
-    config.maxTokens = parseInt(document.getElementById('cfg-max-tokens').value);
+    config.temperature = normalizeTemperatureValue(config.temperature, null);
+    delete config.maxTokens;
     config.historyCount = parseInt(document.getElementById('cfg-history').value);
     config.enableTTS = document.getElementById('cfg-enable-tts').checked;
 
@@ -5828,7 +6095,11 @@ function setupEventListeners() {
 
     // Stop handling
     sendBtn.addEventListener('click', () => {
-        if (isGenerating) {
+        const session = currentChatSessionCache;
+        const sessionRunning = sessionLLMActivityRunning || String(session?.Status || '').trim().toLowerCase() === 'running';
+        const isCurrentlyActive = isGenerating || sessionRunning || llmActivityBusy;
+
+        if (isCurrentlyActive) {
             stopGeneration();
         } else {
             unlockAudioContext(); // Unlock audio on user interaction
@@ -6134,14 +6405,6 @@ function clampNumber(value, min, max) {
     return Math.min(max, Math.max(min, value));
 }
 
-function normalizeTemperatureValue(value, fallback = 0.7) {
-    const numeric = Number(value);
-    if (!Number.isFinite(numeric)) {
-        return fallback;
-    }
-    return clampNumber(numeric, 0, 2);
-}
-
 function normalizeReasoningValue(value) {
     const normalized = String(value || '').trim().toLowerCase();
     return DEFAULT_REASONING_OPTIONS.includes(normalized) ? normalized : '';
@@ -6436,21 +6699,19 @@ function getEffectiveReasoningSelection() {
 }
 
 function getConfiguredTemperature() {
-    const tempInput = document.getElementById('cfg-temp');
-    if (tempInput) {
-        const normalized = normalizeTemperatureValue(tempInput.value, normalizeTemperatureValue(config.temperature, 0.7));
-        config.temperature = normalized;
-        return normalized;
-    }
-    return normalizeTemperatureValue(config.temperature, 0.7);
+    config.temperature = normalizeTemperatureValue(config.temperature, null);
+    return config.temperature;
 }
 
 function buildRepeatRecoveryOverrides() {
     const baseTemperature = getConfiguredTemperature();
-    return {
-        repeatPenalty: LM_STUDIO_REPEAT_RECOVERY_PENALTY,
-        temperature: clampNumber(baseTemperature + LM_STUDIO_REPEAT_RECOVERY_TEMPERATURE_DELTA, 0, 1)
+    const overrides = {
+        repeatPenalty: LM_STUDIO_REPEAT_RECOVERY_PENALTY
     };
+    if (baseTemperature !== null) {
+        overrides.temperature = clampNumber(baseTemperature + LM_STUDIO_REPEAT_RECOVERY_TEMPERATURE_DELTA, 0, 1);
+    }
+    return overrides;
 }
 
 function buildChatPayload({ text, currentImage, temperatureOverride = null, repeatPenaltyOverride = null } = {}) {
@@ -6482,9 +6743,11 @@ function buildChatPayload({ text, currentImage, temperatureOverride = null, repe
             // The client sends only the user's base prompt and local summary.
             // Runtime tool/memory instructions are injected on the server.
             system_prompt: buildClientStatefulPrompt(),
-            temperature: resolvedTemperature,
             stream: true
         };
+        if (resolvedTemperature !== null) {
+            payload.temperature = resolvedTemperature;
+        }
 
         if (repeatPenaltyOverride !== null
             && repeatPenaltyOverride !== undefined
@@ -6533,10 +6796,11 @@ function buildChatPayload({ text, currentImage, temperatureOverride = null, repe
     payload = {
         model: config.model,
         messages: [systemMsg, ...payloadHistory],
-        temperature: resolvedTemperature,
-        max_tokens: config.maxTokens,
         stream: true
     };
+    if (resolvedTemperature !== null) {
+        payload.temperature = resolvedTemperature;
+    }
 
     if (reasoningSelection) {
         payload.reasoning_effort = reasoningSelection;
@@ -6629,6 +6893,7 @@ async function sendMessage(options = {}) {
 
     // Prepare Assistant Placeholder
     isGenerating = true;
+    syncWakeLock(); // Request wake lock for generation
     broadcastLLMActivityState(true, 'answering');
     lockScrollToLatest = true;
     updateSendButtonState();
@@ -6656,7 +6921,11 @@ async function sendMessage(options = {}) {
 
             console.log('=== LLM Request Payload ===');
             console.log('Attempt:', attempt + 1);
-            console.log('Temperature:', payload.temperature);
+            if (Object.prototype.hasOwnProperty.call(payload, 'temperature')) {
+                console.log('Temperature:', payload.temperature);
+            } else {
+                console.log('Temperature: Auto (omitted)');
+            }
             if (payload.repeat_penalty) {
                 console.log('Repeat Penalty:', payload.repeat_penalty);
             }
@@ -6697,6 +6966,7 @@ async function sendMessage(options = {}) {
     } finally {
         pendingVoiceInputAutoTTS = false;
         isGenerating = false;
+        syncWakeLock(); // Release wake lock if nothing else is active
         broadcastLLMActivityState(false, 'finished');
         lockScrollToLatest = false;
         stopStreamingMessageAutoScroll();
@@ -6776,27 +7046,35 @@ function detectRunawayRepetition(text = '') {
 }
 
 function updateSendButtonState() {
-    if (isGenerating) {
+    updateSendButtonStateCore();
+    syncGlobalLLMComposerUI(); // Calls updateMessageInputPlaceholder internally
+}
+
+/**
+ * Core logic for updating button icon and labels without triggering full UI sync
+ */
+function updateSendButtonStateCore() {
+    const session = currentChatSessionCache;
+    const sessionRunning = sessionLLMActivityRunning || String(session?.Status || '').trim().toLowerCase() === 'running';
+    const isCurrentlyActive = isGenerating || sessionRunning || llmActivityBusy;
+
+    if (isCurrentlyActive) {
         sendBtn.disabled = false; // Enabled so we can Click to Stop
         sendBtn.innerHTML = '<span class="material-icons-round">stop</span>';
-        sendBtn.title = "Stop Generation";
+        sendBtn.title = t('action.stopGeneration');
         sendBtn.classList.add('stop-btn');
     } else {
         sendBtn.disabled = false;
         sendBtn.innerHTML = '<span class="material-icons-round">send</span>';
-        sendBtn.title = "Send Message";
+        sendBtn.title = t('action.send') || "Send Message";
         sendBtn.classList.remove('stop-btn');
     }
 
-    inputContainer?.classList.toggle('is-generating', isGenerating);
-    syncGlobalLLMComposerUI();
-    updateReasoningControlVisibility();
-    updateComposerBackgroundTaskUI();
+    inputContainer?.classList.toggle('is-generating', isCurrentlyActive);
 
     // Also update giant mic icon if layout is active
-    updateMicUIForGeneration(isGenerating);
+    updateMicUIForGeneration(isCurrentlyActive);
     updateInlineComposerActionVisibility();
-    updateMessageInputPlaceholder();
 }
 
 function hasComposableUserInput() {
@@ -7701,7 +7979,11 @@ function renderProgressDock(label, percent = null, mode = 'prompt-processing', i
     composerProgressLabel = label || '';
     composerProgressActive = true;
     composerProgressPercent = percentLabel;
+    
     updateMessageInputPlaceholder();
+    // Explicitly refresh send button to ensure Stop icon is visible during prompt processing
+    updateSendButtonStateCore();
+
     inputContainer?.classList.add('has-progress');
 
     const wasHidden = chatProgressDock.hidden;
@@ -7965,6 +8247,9 @@ function setToolCardState(elementId, state, summary = '', args = null, toolName 
     }
     renderToolHistory(card, historyEl, state);
     syncAssistantMessageShellState(card.closest('.message.assistant'));
+    
+    // Explicitly refresh send button to ensure Stop icon is visible during tool use
+    updateSendButtonStateCore();
 }
 
 function extractToolPreview(args, summary = '', toolName = '') {
@@ -8381,6 +8666,9 @@ function showReasoningStatus(elementId, text, isFinal = false, elapsedOverrideMs
     }
     bodyEl.textContent = cleanText;
     syncAssistantMessageShellState(card.closest('.message.assistant'));
+    
+    // Refresh send button during active reasoning
+    updateSendButtonStateCore();
 }
 
 function finalizeReasoningStatus(elementId, outcome = 'done', detail = '', durationOverrideMs = null) {
@@ -8430,6 +8718,9 @@ function finalizeReasoningStatus(elementId, outcome = 'done', detail = '', durat
         bodyEl.textContent = detail;
     }
     syncAssistantMessageShellState(card.closest('.message.assistant'));
+    
+    // Refresh send button when reasoning ends
+    updateSendButtonStateCore();
 }
 
 function finalizeAssistantStatusCards(elementId, outcome = 'done', detail = '') {
@@ -8446,6 +8737,9 @@ function finalizeAssistantStatusCards(elementId, outcome = 'done', detail = '') 
     if (reasoningCard && reasoningCard.querySelector('.reasoning-title')?.classList.contains('is-live')) {
         finalizeReasoningStatus(elementId, outcome, detail);
     }
+
+    // Comprehensive refresh on finalization
+    updateSendButtonStateCore();
 }
 
 function renderInitialAssistantMarkdown(text) {

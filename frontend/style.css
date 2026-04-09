@@ -2628,6 +2628,64 @@ body.keyboard-open .scroll-to-bottom-btn {
   background: rgba(255, 255, 255, 0.1);
 }
 
+.settings-action-btn {
+  width: 100%;
+  justify-content: center;
+  gap: 10px;
+  padding: 10px 14px;
+  min-height: 44px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-color);
+}
+
+.settings-action-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.settings-action-btn .material-icons-round {
+  font-size: 16px;
+  color: var(--text-secondary);
+}
+
+#cfg-temp-display {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--text-color);
+}
+
+.temperature-modal {
+  max-width: 420px;
+}
+
+.temperature-modal-value-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.temperature-modal-value {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text-color);
+}
+
+#temperature-modal-slider {
+  width: 100%;
+  margin-top: 10px;
+}
+
+.temperature-modal-scale {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 /* Modal Body */
 .modal-body {
   flex: 1;
@@ -3343,4 +3401,74 @@ body.layout-mic-bottom {
   gap: 8px;
   margin-top: 12px;
   flex-wrap: wrap;
+}
+
+@media (hover: none), (pointer: coarse) {
+  button:hover,
+  .btn:hover,
+  .icon-btn:hover,
+  .settings-action-btn:hover,
+  .header-model-dropdown-item:hover,
+  .scroll-to-bottom-btn:hover,
+  .theme-swatch-btn:hover,
+  .startup-action-btn:hover,
+  .message-actions .icon-btn:hover,
+  .reasoning-control-select:hover,
+  .speak-btn:hover,
+  .saved-library-search-clear:hover,
+  .saved-turn-inline-title-view:hover,
+  .saved-turn-inline-title-view-header:hover,
+  .saved-turn-inline-title-btn:hover:not(:disabled),
+  .saved-turn-inline-title-btn.primary:hover:not(:disabled),
+  .saved-turn-close-btn:hover,
+  .modal-close:hover,
+  a:hover,
+  #mic-layout-container:hover,
+  #mic-layout-container:hover #giant-mic-btn {
+    color: inherit;
+    border-color: inherit;
+    box-shadow: none;
+    transform: none;
+    filter: none;
+  }
+
+  .modal input[type="text"]:hover,
+  .modal input[type="number"]:hover,
+  .modal input[type="password"]:hover,
+  .modal textarea:hover,
+  .modal select:hover,
+  .modal input[type="checkbox"]:hover,
+  .modal input[type="range"]::-webkit-slider-thumb:hover,
+  ::-webkit-scrollbar-thumb:hover {
+    box-shadow: none;
+    border-color: var(--border-color);
+    filter: none;
+  }
+
+  .btn-primary:hover,
+  .btn.btn-primary:hover {
+    background: var(--send-btn-gradient);
+    color: var(--send-btn-text-color);
+  }
+
+  .btn-secondary:hover,
+  .btn.btn-secondary:hover,
+  .settings-action-btn:hover {
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-color);
+  }
+
+  .btn-danger:hover {
+    background: var(--danger-color);
+    color: #fff;
+  }
+
+  .modal-close:hover {
+    background: transparent;
+    color: #8b949e;
+  }
+
+  #mic-layout-container:hover #giant-mic-btn {
+    background-color: var(--ai-bubble-bg);
+  }
 }
