@@ -1519,6 +1519,18 @@ func GetCurrentChatSession(userID string) (ChatSessionEntry, error) {
 	return GetChatSession(userID, "default")
 }
 
+func HasRunningChatSession() (bool, error) {
+	if db == nil {
+		return false, fmt.Errorf("database not initialized")
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM chat_sessions WHERE status = 'running'`).Scan(&count); err != nil {
+		return false, fmt.Errorf("failed to inspect running chat sessions: %w", err)
+	}
+	return count > 0, nil
+}
+
 func ClearChatSessionEvents(userID string, sessionID int64) error {
 	if db == nil {
 		return fmt.Errorf("database not initialized")

@@ -12,6 +12,7 @@ const DEFAULT_STATEFUL_TOKEN_BUDGET = 30000;
 const LM_STUDIO_REPEAT_RECOVERY_PENALTY = 1.15;
 const LM_STUDIO_REPEAT_RECOVERY_TEMPERATURE_DELTA = 0.15;
 const DEFAULT_REASONING_OPTIONS = ['off', 'low', 'medium', 'high', 'on'];
+const STREAM_LOOP_DETECTION_TAIL_CHARS = 1200;
 
 let config = {
     apiEndpoint: 'http://127.0.0.1:1234',
@@ -60,6 +61,13 @@ let config = {
     markdownRenderMode: 'fast', // Options: 'fast', 'balanced', 'final'
     hapticsEnabled: true
 };
+
+let streamLoopWorker = null;
+let streamLoopWorkerFailed = false;
+let streamLoopWorkerMessageId = 0;
+const pendingStreamLoopChecks = new Map();
+let pendingStreamRenderFrame = 0;
+const pendingStreamRenderUpdates = new Map();
 
 function getDefaultContextStrategyForMode(mode) {
     return mode === 'stateful' ? 'stateful' : 'history';
@@ -315,6 +323,168 @@ function shouldFallbackToLooseMarkdown(host, normalized) {
     return false;
 }
 
+function getLoopDetectionTail(text = '', minLength = 0) {
+    const source = String(text || '');
+    if (source.length < minLength) return '';
+    return source.slice(-STREAM_LOOP_DETECTION_TAIL_CHARS);
+}
+
+function detectMessageRunawayRepetitionLocally(text = '') {
+    const tail = getLoopDetectionTail(text, 100);
+    if (!tail) return null;
+
+    const shortLoopMatch = tail.match(/([\s\S]{5,}?)\1{9,}/);
+    const longLoopMatch = tail.match(/([\s\S]{50,}?)\1{5,}/);
+    const loopMatch = shortLoopMatch || longLoopMatch;
+    if (!loopMatch || !loopMatch[1] || loopMatch[1].length < 4) return null;
+
+    const snippet = loopMatch[1];
+    const isToolLog = snippet.includes('Tool Call')
+        || snippet.includes('Tool Finished')
+        || snippet.includes('🛠️')
+        || snippet.includes('✅');
+    if (isToolLog) return null;
+
+    return {
+        snippet: snippet.slice(0, 120),
+        repetitions: Math.max(2, Math.floor(loopMatch[0].length / loopMatch[1].length)),
+        source: 'message-loop'
+    };
+}
+
+function createStreamLoopWorker() {
+    if (streamLoopWorker || streamLoopWorkerFailed || typeof Worker !== 'function') return streamLoopWorker;
+
+    try {
+        streamLoopWorker = new Worker('public/stream-loop-worker.js?v=1');
+        streamLoopWorker.onmessage = (event) => {
+            const data = event?.data || {};
+            const id = Number(data.id || 0);
+            const pending = pendingStreamLoopChecks.get(id);
+            if (!pending) return;
+            pendingStreamLoopChecks.delete(id);
+            pending.resolve(data.result || null);
+        };
+        streamLoopWorker.onerror = (error) => {
+            console.warn('[Stream] Loop worker failed, falling back to main thread', error);
+            streamLoopWorkerFailed = true;
+            if (streamLoopWorker) {
+                streamLoopWorker.terminate();
+                streamLoopWorker = null;
+            }
+            pendingStreamLoopChecks.forEach((pending) => pending.resolve(null));
+            pendingStreamLoopChecks.clear();
+        };
+    } catch (error) {
+        console.warn('[Stream] Failed to start loop worker, falling back to main thread', error);
+        streamLoopWorkerFailed = true;
+        streamLoopWorker = null;
+    }
+
+    return streamLoopWorker;
+}
+
+function detectRunawayRepetitionAsync(text = '', kind = 'message') {
+    const source = String(text || '');
+    if (!source) return Promise.resolve(null);
+
+    const worker = createStreamLoopWorker();
+    if (!worker) {
+        return Promise.resolve(
+            kind === 'reasoning'
+                ? detectRunawayRepetition(source)
+                : detectMessageRunawayRepetitionLocally(source)
+        );
+    }
+
+    return new Promise((resolve) => {
+        const id = ++streamLoopWorkerMessageId;
+        pendingStreamLoopChecks.set(id, { resolve });
+        worker.postMessage({ id, kind, text: source });
+    });
+}
+
+function extractFinalAssistantContentFromPayload(payload = {}) {
+    const payloadMap = payload && typeof payload === 'object' ? payload : {};
+    const result = payloadMap.result && typeof payloadMap.result === 'object' ? payloadMap.result : null;
+    const output = Array.isArray(result?.output) ? result.output : [];
+    const messageParts = output
+        .filter((item) => item && item.type === 'message' && typeof item.content === 'string')
+        .map((item) => item.content)
+        .filter((content) => content.trim());
+    if (messageParts.length > 0) {
+        return messageParts.join('');
+    }
+
+    if (typeof payloadMap.final_assistant_content === 'string' && payloadMap.final_assistant_content.trim()) {
+        return payloadMap.final_assistant_content;
+    }
+
+    return '';
+}
+
+function extractReasoningContentFromPayload(payload = {}) {
+    const payloadMap = payload && typeof payload === 'object' ? payload : {};
+    const result = payloadMap.result && typeof payloadMap.result === 'object' ? payloadMap.result : null;
+    const output = Array.isArray(result?.output) ? result.output : [];
+    const reasoningParts = output
+        .filter((item) => item && item.type === 'reasoning' && typeof item.content === 'string')
+        .map((item) => item.content)
+        .filter((content) => content.trim());
+    if (reasoningParts.length > 0) {
+        return reasoningParts.join('\n\n');
+    }
+
+    return '';
+}
+
+function extractToolStateFromPayload(payload = {}) {
+    const payloadMap = payload && typeof payload === 'object' ? payload : {};
+    const result = payloadMap.result && typeof payloadMap.result === 'object' ? payloadMap.result : null;
+    const output = Array.isArray(result?.output) ? result.output : [];
+    const toolCalls = output.filter((item) => item && item.type === 'tool_call');
+    if (toolCalls.length === 0) return null;
+
+    const history = [];
+    let toolName = '';
+    let args = null;
+    let state = 'success';
+
+    toolCalls.forEach((item) => {
+        const itemTool = String(item.tool || '').trim();
+        if (itemTool) {
+            toolName = itemTool;
+        }
+        if (item.arguments != null) {
+            args = item.arguments;
+            const detail = extractToolPreview(item.arguments, '', itemTool || toolName || 'Tool');
+            if (detail) {
+                const displayTool = formatToolDisplayName(itemTool || toolName || 'Tool');
+                const signature = `${displayTool}::${detail}`;
+                const last = history[history.length - 1];
+                if (!last || last.signature !== signature) {
+                    history.push({
+                        signature,
+                        tool: displayTool,
+                        detail
+                    });
+                }
+            }
+        }
+        if (typeof item.output === 'string' && !item.output.trim()) {
+            state = 'failure';
+        }
+    });
+
+    return {
+        state,
+        summary: state === 'failure' ? t('tool.unknownError') : t('tool.executionFinished'),
+        args,
+        toolName: toolName || 'Tool',
+        history
+    };
+}
+
 // ============================================================================
 // i18n Translation System
 // ============================================================================
@@ -529,6 +699,9 @@ const translations = {
         'chat.reconnect.title': '연결이 잠시 멈춘 것 같습니다.',
         'chat.reconnect.body': '백그라운드 복귀 후 동기화가 지연되고 있습니다. 다시 연결을 시도해 주세요.',
         'chat.reconnect.action': '재접속 시도',
+        'chat.passiveSyncWaiting': '다른곳에서 응답이 생성중입니다. 응답이 끝나면 이 곳에 응답내용이 표시됩니다.',
+        'chat.passiveSyncThinking': '다른 창에서 응답을 생성하고 있습니다...',
+        'chat.passiveSyncTool': '다른 창에서 MCP 도구를 사용 중입니다...',
         'input.placeholder': '메시지를 입력하세요...',
         'input.placeholder.sttA': '지금 말하세요...',
         'input.placeholder.sttB': '듣는 중...',
@@ -771,6 +944,9 @@ const translations = {
         'chat.reconnect.title': 'Connection seems paused.',
         'chat.reconnect.body': 'Sync has not resumed after returning from the background. Try reconnecting.',
         'chat.reconnect.action': 'Reconnect',
+        'chat.passiveSyncWaiting': 'A response is being generated elsewhere. It will appear here when it finishes.',
+        'chat.passiveSyncThinking': 'Another window is generating a reply...',
+        'chat.passiveSyncTool': 'Another window is using an MCP tool...',
         'input.placeholder': 'Type a message...',
         'input.placeholder.sttA': 'Speak now...',
         'input.placeholder.sttB': 'Listening...',
@@ -2166,6 +2342,7 @@ let suppressNextScrollEvent = false;
 let activeStreamingMessageId = null;
 let pendingScrollToBottom = false;
 let lastObservedChatScrollHeight = 0;
+let pendingChatScrollMetricsFrame = null;
 let pendingInputFocusChatScrollTop = null;
 let pendingFirstInputScrollRepairTop = null;
 let progressDockHideTimer = null;
@@ -2174,9 +2351,55 @@ let composerProgressActive = false;
 let composerProgressPercent = null;
 const composerBackgroundTasks = new Map();
 const scrollToBottomBtn = document.getElementById('scroll-to-bottom-btn');
+const llmActivityIndicator = document.getElementById('llm-activity-indicator');
+let chatScrollMetrics = {
+    scrollTop: 0,
+    scrollHeight: 0,
+    clientHeight: 0,
+    distanceFromBottom: 0,
+    nearBottom: true,
+    longScrollable: false
+};
+
+function readChatScrollMetrics() {
+    if (!chatMessages) {
+        return { ...chatScrollMetrics };
+    }
+    const scrollTop = chatMessages.scrollTop;
+    const scrollHeight = chatMessages.scrollHeight;
+    const clientHeight = chatMessages.clientHeight;
+    const distanceFromBottom = scrollHeight - clientHeight - scrollTop;
+    return {
+        scrollTop,
+        scrollHeight,
+        clientHeight,
+        distanceFromBottom,
+        nearBottom: distanceFromBottom <= AUTO_SCROLL_THRESHOLD_PX,
+        longScrollable: (scrollHeight - clientHeight) > Math.max(320, Math.round(window.innerHeight * 0.45))
+    };
+}
+
+function commitChatScrollMetrics(metrics) {
+    chatScrollMetrics = metrics;
+    lastObservedChatScrollHeight = metrics.scrollHeight;
+    return chatScrollMetrics;
+}
+
+function refreshChatScrollMetrics() {
+    return commitChatScrollMetrics(readChatScrollMetrics());
+}
+
+function scheduleChatScrollMetricsRefresh() {
+    if (!chatMessages || pendingChatScrollMetricsFrame != null) return;
+    pendingChatScrollMetricsFrame = requestAnimationFrame(() => {
+        pendingChatScrollMetricsFrame = null;
+        refreshChatScrollMetrics();
+        updateScrollToBottomButton();
+    });
+}
 
 if (chatMessages) {
-    lastObservedChatScrollHeight = chatMessages.scrollHeight;
+    refreshChatScrollMetrics();
     chatMessages.addEventListener('scroll', () => {
         if (suppressNextScrollEvent) {
             suppressNextScrollEvent = false;
@@ -2184,7 +2407,8 @@ if (chatMessages) {
             return;
         }
 
-        shouldAutoScroll = isChatNearBottom();
+        const metrics = refreshChatScrollMetrics();
+        shouldAutoScroll = metrics.nearBottom;
         if (!shouldAutoScroll) {
             if (autoScrollHoldTimeout) {
                 clearTimeout(autoScrollHoldTimeout);
@@ -2193,13 +2417,11 @@ if (chatMessages) {
             lockScrollToLatest = false;
         }
 
-        lastObservedChatScrollHeight = chatMessages.scrollHeight;
         if (isGenerating) {
             if (shouldAutoScroll) {
                 lockScrollToLatest = true;
             } else {
-                const distanceFromBottom = chatMessages.scrollHeight - chatMessages.clientHeight - chatMessages.scrollTop;
-                if (distanceFromBottom > AUTO_SCROLL_THRESHOLD_PX * 2) {
+                if (metrics.distanceFromBottom > AUTO_SCROLL_THRESHOLD_PX * 2) {
                     lockScrollToLatest = false;
                 }
             }
@@ -2615,6 +2837,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     await syncServerConfig(); // Sync with server
     setupEventListeners();
     initServerControl();
+    if (window.runtime?.EventsOn) {
+        window.runtime.EventsOn('llm-activity', (state) => {
+            llmActivityBusy = !!state?.busy;
+            updateLLMActivityIndicator();
+            syncGlobalLLMComposerUI();
+        });
+    }
+    if (llmActivitySyncChannel) {
+        llmActivitySyncChannel.addEventListener('message', (event) => {
+            const state = event?.data || {};
+            if (state?.sourceId === localLLMActivitySourceId) {
+                return;
+            }
+            externalLLMActivityBusy = !!state?.busy;
+            externalLLMActivityPhase = String(state?.phase || '').trim().toLowerCase();
+            if (!externalLLMActivityBusy && !isPassiveServerSession()) {
+                passiveGenerationPlaceholder = '';
+            }
+            updateLLMActivityIndicator();
+            syncGlobalLLMComposerUI();
+        });
+    }
 
     // Setup Markdown
     marked.setOptions({
@@ -2726,12 +2970,151 @@ let savedTitleRefreshAbortController = null;
 let isSavedLibraryOpen = false;
 let savedLibrarySwipeState = null;
 let savedLibraryCloseTimer = null;
+let passiveGenerationPlaceholder = '';
+let llmActivityBusy = false;
+let externalLLMActivityBusy = false;
+let externalLLMActivityPhase = '';
+let sessionLLMActivityRunning = false;
+const localLLMActivitySourceId = `chat-${Math.random().toString(36).slice(2, 10)}`;
 const savedTurnsSyncChannel = typeof BroadcastChannel !== 'undefined'
     ? new BroadcastChannel('dkst-saved-turns-sync')
     : null;
 const configSyncChannel = typeof BroadcastChannel !== 'undefined'
     ? new BroadcastChannel('dkst-config-sync')
     : null;
+const llmActivitySyncChannel = typeof BroadcastChannel !== 'undefined'
+    ? new BroadcastChannel('dkst-llm-activity-sync')
+    : null;
+
+function isPassiveServerSession(session = currentChatSessionCache) {
+    return !!session
+        && session.Status === 'running'
+        && !abortController;
+}
+
+function getPassiveSyncWaitingText() {
+    return t('chat.passiveSyncWaiting');
+}
+
+function getPassiveGenerationLabel(phase = '') {
+    const normalized = String(phase || '').trim().toLowerCase();
+    if (normalized === 'tool_call') {
+        return t('chat.passiveSyncTool');
+    }
+    if (normalized === 'thinking') {
+        return t('chat.passiveSyncThinking');
+    }
+    return getPassiveSyncWaitingText();
+}
+
+function syncPassiveGenerationUI(session = currentChatSessionCache, phase = '') {
+    const isPassiveRunning = isPassiveServerSession(session);
+    inputContainer?.classList.toggle('is-passive-generating', isPassiveRunning);
+    if (!isPassiveRunning) {
+        passiveGenerationPlaceholder = '';
+        clearComposerBackgroundTask('passive-server-chat');
+        updateMessageInputPlaceholder();
+        return;
+    }
+    passiveGenerationPlaceholder = getPassiveGenerationLabel(phase);
+    setComposerBackgroundTask('passive-server-chat', {
+        label: passiveGenerationPlaceholder
+    });
+    updateMessageInputPlaceholder();
+}
+
+function syncGlobalLLMComposerUI(session = currentChatSessionCache) {
+    const localGenerating = !!abortController;
+    const sessionRunning = sessionLLMActivityRunning || String(session?.Status || '').trim().toLowerCase() === 'running';
+    const active = localGenerating || sessionRunning || llmActivityBusy || externalLLMActivityBusy;
+    const passiveBusy = sessionRunning && !localGenerating;
+
+    inputContainer?.classList.toggle('is-llm-active', active);
+
+    if (passiveBusy) {
+        passiveGenerationPlaceholder = getPassiveGenerationLabel(externalLLMActivityPhase);
+        inputContainer?.classList.add('is-passive-generating');
+        setComposerBackgroundTask('passive-server-chat', {
+            label: passiveGenerationPlaceholder
+        });
+    } else if (!isPassiveServerSession()) {
+        inputContainer?.classList.remove('is-passive-generating');
+        passiveGenerationPlaceholder = '';
+        clearComposerBackgroundTask('passive-server-chat');
+    }
+
+    updateMessageInputPlaceholder();
+}
+
+function isLLMActivityRunning(session = currentChatSessionCache) {
+    return llmActivityBusy || externalLLMActivityBusy || !!abortController || String(session?.Status || '').trim().toLowerCase() === 'running';
+}
+
+function broadcastLLMActivityState(busy, phase = 'answering') {
+    if (!llmActivitySyncChannel) return;
+    try {
+        llmActivitySyncChannel.postMessage({
+            sourceId: localLLMActivitySourceId,
+            busy: !!busy,
+            phase: String(phase || '').trim().toLowerCase() || 'answering',
+            at: Date.now()
+        });
+    } catch (error) {
+        console.warn('[LLMActivitySync] broadcast failed:', error);
+    }
+}
+
+function updateLLMActivityIndicator(session = currentChatSessionCache) {
+    if (!llmActivityIndicator) return;
+    const active = isLLMActivityRunning(session);
+    llmActivityIndicator.classList.toggle('is-active', active);
+    llmActivityIndicator.setAttribute('aria-hidden', active ? 'false' : 'true');
+    llmActivityIndicator.title = active ? 'LLM processing' : 'LLM idle';
+}
+
+function ensurePassiveSyncPlaceholder(turnId = '', sessionId = 'default', eventSeq = 0) {
+    const resolvedTurnId = String(turnId || `server-turn-${sessionId || 'default'}-${eventSeq || '0'}`).trim();
+    if (!resolvedTurnId) return '';
+
+    serverReplayCurrentTurnId = resolvedTurnId;
+    const assistantId = ensureServerReplayAssistant(resolvedTurnId, sessionId, eventSeq);
+    if (!assistantId) return '';
+
+    serverReplayCurrentAssistantId = assistantId;
+    serverReplayMessageBuffers.delete(assistantId);
+    serverReplayReasoningBuffers.delete(assistantId);
+    updateSyncedMessageContent(assistantId, getPassiveSyncWaitingText(), { animate: false });
+    syncPassiveGenerationUI(currentChatSessionCache);
+
+    const assistantEl = document.getElementById(assistantId);
+    const actionBar = assistantEl?.querySelector('.message-actions');
+    if (actionBar) {
+        actionBar.hidden = true;
+        actionBar.classList.remove('is-ready', 'is-pending');
+    }
+    return assistantId;
+}
+
+function ensurePassiveSyncPlaceholderForRunningSession(session = currentChatSessionCache) {
+    if (!isPassiveServerSession(session)) return '';
+
+    const sessionUISnapshot = getCurrentChatSessionUISnapshot(session);
+    const snapshotMessages = Array.isArray(sessionUISnapshot.messages) ? sessionUISnapshot.messages : [];
+    let turnId = String(snapshotMessages[snapshotMessages.length - 1]?.turn_id || '').trim();
+
+    if (!turnId) {
+        const userNodes = chatMessages ? Array.from(chatMessages.querySelectorAll('.message.user[data-turn-id]')) : [];
+        const lastUserMessage = userNodes[userNodes.length - 1] || null;
+        turnId = String(lastUserMessage?.dataset?.turnId || serverReplayCurrentTurnId || '').trim();
+    }
+    if (!turnId) return '';
+
+    const latestMessage = snapshotMessages[snapshotMessages.length - 1] || null;
+    const hasFinalAssistantContent = !!String(latestMessage?.assistant_content || '').trim();
+    if (hasFinalAssistantContent) return '';
+
+    return ensurePassiveSyncPlaceholder(turnId, session?.ID || 'default', sessionUISnapshot.last_event_seq || currentChatSessionEventSeq || 0);
+}
 
 function broadcastConfigSync() {
     const payload = {
@@ -2953,6 +3336,7 @@ function relinquishLocalStreamOwnership(reason = 'server-sync') {
     activeLocalAssistantId = '';
     locallyRenderedTurnIds = new Set();
     isGenerating = false;
+    broadcastLLMActivityState(false, 'finished');
     localStreamOwnershipReleased = true;
     hideProgressDock();
     updateSendButtonState();
@@ -3988,6 +4372,10 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
     const sessionUISnapshot = getCurrentChatSessionUISnapshot(sessionSnapshot);
     const snapshotMessages = Array.isArray(sessionUISnapshot.messages) ? sessionUISnapshot.messages : [];
     if (snapshotMessages.length === 0) return false;
+    const passiveRunningSession = isPassiveServerSession(sessionSnapshot);
+    const pendingTurnId = passiveRunningSession
+        ? String(snapshotMessages[snapshotMessages.length - 1]?.turn_id || '').trim()
+        : '';
 
     messages = [];
 
@@ -3999,7 +4387,8 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
         const turnId = String(item?.turn_id || `snapshot-turn-${index + 1}`);
         const assistantId = buildServerAssistantMessageId(turnId, `snapshot-turn-${index + 1}`);
         const snapshotToolState = sessionUISnapshot.tool_cards?.[turnId] || null;
-        const hasAssistantContent = hasAssistantSnapshotContent(item?.assistant_content, item?.reasoning_content, snapshotToolState);
+        const waitingForRemoteReply = passiveRunningSession && turnId === pendingTurnId;
+        const hasAssistantContent = waitingForRemoteReply || hasAssistantSnapshotContent(item?.assistant_content, item?.reasoning_content, snapshotToolState);
         lastTurnId = turnId;
         if (hasAssistantContent) {
             lastAssistantId = assistantId;
@@ -4022,15 +4411,20 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
     snapshotMessages.forEach((item, index) => {
         const turnId = String(item?.turn_id || `snapshot-turn-${index + 1}`);
         const assistantId = buildServerAssistantMessageId(turnId, `snapshot-turn-${index + 1}`);
+        const waitingForRemoteReply = passiveRunningSession && turnId === pendingTurnId;
         const assistantText = String(item?.assistant_content || '');
         const reasoningText = String(item?.reasoning_content || '');
         const reasoningDuration = getSnapshotReasoningDuration(item);
         const snapshotToolState = sessionUISnapshot.tool_cards?.[turnId] || null;
-        if (!hasAssistantSnapshotContent(assistantText, reasoningText, snapshotToolState)) {
+        if (!waitingForRemoteReply && !hasAssistantSnapshotContent(assistantText, reasoningText, snapshotToolState)) {
             return;
         }
 
         ensureAssistantMessageElement(assistantId, turnId);
+        if (waitingForRemoteReply) {
+            ensurePassiveSyncPlaceholder(turnId, sessionSnapshot?.ID || 'default', sessionUISnapshot.last_event_seq || 0);
+            return;
+        }
         if (reasoningText && !config.hideThink) {
             serverReplayReasoningBuffers.set(assistantId, reasoningText);
             const card = ensureReasoningCard(assistantId);
@@ -4172,6 +4566,8 @@ function applyCurrentChatSessionSnapshot(session) {
     }
     if (!session) {
         currentChatSessionCache = null;
+        sessionLLMActivityRunning = false;
+        syncGlobalLLMComposerUI(null);
         if (!abortController && isGenerating) {
             isGenerating = false;
             updateSendButtonState();
@@ -4190,6 +4586,9 @@ function applyCurrentChatSessionSnapshot(session) {
     }
 
     currentChatSessionCache = session;
+    sessionLLMActivityRunning = String(session?.Status || '').trim().toLowerCase() === 'running';
+    updateLLMActivityIndicator(session);
+    syncGlobalLLMComposerUI();
 
     const serverGenerating = session.Status === 'running';
     if (!abortController && isGenerating !== serverGenerating) {
@@ -4211,6 +4610,9 @@ function applyCurrentChatSessionSnapshot(session) {
         statefulPeakInputTokens = Number(session.PeakInputTokens || 0);
         updateStatefulBudgetIndicator();
     }
+
+    syncPassiveGenerationUI(session);
+    ensurePassiveSyncPlaceholderForRunningSession(session);
 }
 
 function applyCurrentChatSessionEvent(entry) {
@@ -4226,6 +4628,7 @@ function applyCurrentChatSessionEvent(entry) {
     const sessionId = entry.SessionID || 'default';
     const entryTurnId = entry.TurnID || payload.turn_id || '';
     const isLocalActiveTurn = isActiveLocalTurn(entryTurnId);
+    const isPassiveRunning = !isLocalActiveTurn && isPassiveServerSession(currentChatSessionCache);
 
     if (isLocalActiveTurn) {
         switch (entry.EventType) {
@@ -4251,6 +4654,34 @@ function applyCurrentChatSessionEvent(entry) {
     }
 
     switch (entry.EventType) {
+        case 'generation.started':
+            if (isPassiveRunning) {
+                syncPassiveGenerationUI(currentChatSessionCache, payload.phase || 'queued');
+                ensurePassiveSyncPlaceholder(entryTurnId || serverReplayCurrentTurnId, sessionId, entry.EventSeq);
+            }
+            break;
+        case 'generation.first_token':
+            if (isPassiveRunning) {
+                syncPassiveGenerationUI(currentChatSessionCache, payload.phase || 'answering');
+                ensurePassiveSyncPlaceholder(entryTurnId || serverReplayCurrentTurnId, sessionId, entry.EventSeq);
+            }
+            break;
+        case 'generation.phase':
+            if (isPassiveRunning) {
+                syncPassiveGenerationUI(currentChatSessionCache, payload.phase || '');
+                if (payload.phase === 'tool_call' || payload.phase === 'thinking') {
+                    ensurePassiveSyncPlaceholder(entryTurnId || serverReplayCurrentTurnId, sessionId, entry.EventSeq);
+                }
+            }
+            break;
+        case 'generation.finished':
+            sessionLLMActivityRunning = false;
+            passiveGenerationPlaceholder = '';
+            inputContainer?.classList.remove('is-passive-generating');
+            clearComposerBackgroundTask('passive-server-chat');
+            syncGlobalLLMComposerUI();
+            updateMessageInputPlaceholder();
+            break;
         case 'message.created': {
             if (entry.Role === 'user') {
                 const userContent = payload.content || '';
@@ -4266,10 +4697,17 @@ function applyCurrentChatSessionEvent(entry) {
                 if (!document.querySelector(`.message.user[data-turn-id="${turnId}"]`)) {
                     appendMessage({ role: 'user', content: userContent, turnId });
                 }
+                if (isPassiveRunning) {
+                    ensurePassiveSyncPlaceholder(turnId, sessionId, entry.EventSeq);
+                }
             }
             break;
         }
         case 'message.delta': {
+            if (isPassiveRunning) {
+                ensurePassiveSyncPlaceholder(entryTurnId || serverReplayCurrentTurnId, sessionId, entry.EventSeq);
+                break;
+            }
             let assistantId = '';
             if (isLocalActiveTurn) {
                 serverReplayCurrentTurnId = entryTurnId || serverReplayCurrentTurnId;
@@ -4292,6 +4730,10 @@ function applyCurrentChatSessionEvent(entry) {
             break;
         }
         case 'reasoning.start':
+            if (isPassiveRunning) {
+                ensurePassiveSyncPlaceholder(entryTurnId || serverReplayCurrentTurnId, sessionId, entry.EventSeq);
+                break;
+            }
             if (!isLocalActiveTurn && !serverReplayCurrentAssistantId && (entryTurnId || serverReplayCurrentTurnId)) {
                 const nextTurnId = entryTurnId || serverReplayCurrentTurnId;
                 serverReplayCurrentTurnId = nextTurnId;
@@ -4315,6 +4757,10 @@ function applyCurrentChatSessionEvent(entry) {
             if (serverReplayCurrentAssistantId) showReasoningStatus(serverReplayCurrentAssistantId, '...');
             break;
         case 'reasoning.delta':
+            if (isPassiveRunning) {
+                ensurePassiveSyncPlaceholder(entryTurnId || serverReplayCurrentTurnId, sessionId, entry.EventSeq);
+                break;
+            }
             if (!isLocalActiveTurn && !serverReplayCurrentAssistantId && (entryTurnId || serverReplayCurrentTurnId)) {
                 const nextTurnId = entryTurnId || serverReplayCurrentTurnId;
                 serverReplayCurrentTurnId = nextTurnId;
@@ -4345,6 +4791,9 @@ function applyCurrentChatSessionEvent(entry) {
                 break;
             }
         case 'reasoning.end':
+            if (isPassiveRunning) {
+                break;
+            }
             if (isLocalActiveTurn) {
                 if (activeLocalAssistantId) {
                     finalizeReasoningStatus(
@@ -4366,6 +4815,10 @@ function applyCurrentChatSessionEvent(entry) {
             }
             break;
         case 'tool_call.start':
+            if (isPassiveRunning) {
+                ensurePassiveSyncPlaceholder(entryTurnId || serverReplayCurrentTurnId, sessionId, entry.EventSeq);
+                break;
+            }
             if (!isLocalActiveTurn && !serverReplayCurrentAssistantId && (entryTurnId || serverReplayCurrentTurnId)) {
                 const nextTurnId = entryTurnId || serverReplayCurrentTurnId;
                 serverReplayCurrentTurnId = nextTurnId;
@@ -4378,6 +4831,10 @@ function applyCurrentChatSessionEvent(entry) {
             if (serverReplayCurrentAssistantId) setToolCardState(serverReplayCurrentAssistantId, 'running', '', null, payload.tool || '');
             break;
         case 'tool_call.arguments':
+            if (isPassiveRunning) {
+                ensurePassiveSyncPlaceholder(entryTurnId || serverReplayCurrentTurnId, sessionId, entry.EventSeq);
+                break;
+            }
             if (!isLocalActiveTurn && !serverReplayCurrentAssistantId && (entryTurnId || serverReplayCurrentTurnId)) {
                 const nextTurnId = entryTurnId || serverReplayCurrentTurnId;
                 serverReplayCurrentTurnId = nextTurnId;
@@ -4390,6 +4847,9 @@ function applyCurrentChatSessionEvent(entry) {
             if (serverReplayCurrentAssistantId) setToolCardState(serverReplayCurrentAssistantId, 'running', '', payload.arguments || null, payload.tool || '');
             break;
         case 'tool_call.success':
+            if (isPassiveRunning) {
+                break;
+            }
             if (isLocalActiveTurn) {
                 if (activeLocalAssistantId) setToolCardState(activeLocalAssistantId, 'success', t('tool.executionFinished'), null, payload.tool || '');
                 break;
@@ -4397,6 +4857,9 @@ function applyCurrentChatSessionEvent(entry) {
             if (serverReplayCurrentAssistantId) setToolCardState(serverReplayCurrentAssistantId, 'success', t('tool.executionFinished'), null, payload.tool || '');
             break;
         case 'tool_call.failure':
+            if (isPassiveRunning) {
+                break;
+            }
             if (isLocalActiveTurn) {
                 if (activeLocalAssistantId) setToolCardState(activeLocalAssistantId, 'failure', payload.reason || t('tool.unknownError'), null, payload.tool || '');
                 break;
@@ -4404,6 +4867,9 @@ function applyCurrentChatSessionEvent(entry) {
             if (serverReplayCurrentAssistantId) setToolCardState(serverReplayCurrentAssistantId, 'failure', payload.reason || t('tool.unknownError'), null, payload.tool || '');
             break;
         case 'prompt_processing.progress':
+            if (isPassiveRunning) {
+                break;
+            }
             if (isLocalActiveTurn) {
                 renderProgressDock(t('progress.processingPrompt'), (payload.progress || 0) * 100, 'prompt-processing', false);
                 break;
@@ -4411,6 +4877,9 @@ function applyCurrentChatSessionEvent(entry) {
             renderProgressDock(t('progress.processingPrompt'), (payload.progress || 0) * 100, 'prompt-processing', false);
             break;
         case 'model_load.start':
+            if (isPassiveRunning) {
+                break;
+            }
             if (isLocalActiveTurn) {
                 renderProgressDock(t('progress.loadingModel'), null, 'model-loading', true);
                 break;
@@ -4418,6 +4887,9 @@ function applyCurrentChatSessionEvent(entry) {
             renderProgressDock(t('progress.loadingModel'), null, 'model-loading', true);
             break;
         case 'model_load.progress':
+            if (isPassiveRunning) {
+                break;
+            }
             if (isLocalActiveTurn) {
                 renderProgressDock(t('progress.loadingModel'), (payload.progress || 0) * 100, 'model-loading', false);
                 break;
@@ -4425,6 +4897,9 @@ function applyCurrentChatSessionEvent(entry) {
             renderProgressDock(t('progress.loadingModel'), (payload.progress || 0) * 100, 'model-loading', false);
             break;
         case 'model_load.end':
+            if (isPassiveRunning) {
+                break;
+            }
             if (isLocalActiveTurn) {
                 renderProgressDock(`${t('progress.modelLoaded')} (${payload.load_time_seconds?.toFixed?.(1) || '?'}s)`, 100, 'model-loading', false);
                 break;
@@ -4433,17 +4908,38 @@ function applyCurrentChatSessionEvent(entry) {
             break;
         case 'chat.end':
         case 'request.complete':
+            sessionLLMActivityRunning = false;
+            passiveGenerationPlaceholder = '';
+            inputContainer?.classList.remove('is-passive-generating');
+            clearComposerBackgroundTask('passive-server-chat');
+            syncGlobalLLMComposerUI();
             if (isLocalActiveTurn) {
+                if (activeLocalAssistantId) {
+                    const payloadToolState = extractToolStateFromPayload(payload);
+                    if (payloadToolState) {
+                        const card = ensureToolCard(activeLocalAssistantId, payloadToolState.toolName || 'Tool');
+                        if (card) {
+                            card._history = Array.isArray(payloadToolState.history) ? [...payloadToolState.history] : [];
+                        }
+                        setToolCardState(activeLocalAssistantId, payloadToolState.state || 'success', payloadToolState.summary || '', payloadToolState.args || null, payloadToolState.toolName || '');
+                    }
+                    const payloadReasoningText = extractReasoningContentFromPayload(payload);
+                    if (payloadReasoningText && !serverReplayReasoningBuffers.get(activeLocalAssistantId)) {
+                        serverReplayReasoningBuffers.set(activeLocalAssistantId, payloadReasoningText);
+                        showReasoningStatus(activeLocalAssistantId, payloadReasoningText, false, Number(payload.total_elapsed_ms || payload.elapsed_ms || 0) || null);
+                    }
+                }
                 if (activeLocalAssistantId && !serverReplayReasoningBuffers.has(activeLocalAssistantId) && Number.isFinite(Number(payload.total_elapsed_ms || payload.elapsed_ms))) {
                     finalizeReasoningStatus(activeLocalAssistantId, 'done', '', Number(payload.total_elapsed_ms || payload.elapsed_ms));
+                } else if (activeLocalAssistantId && serverReplayReasoningBuffers.has(activeLocalAssistantId)) {
+                    finalizeReasoningStatus(activeLocalAssistantId, 'done', '', Number(payload.total_elapsed_ms || payload.elapsed_ms || 0) || null);
                 }
                 if (activeLocalAssistantId) {
-                    const finalText = typeof payload.final_assistant_content === 'string'
-                        ? payload.final_assistant_content
-                        : (serverReplayMessageBuffers.get(activeLocalAssistantId) || '');
-                    if (typeof payload.final_assistant_content === 'string') {
-                        serverReplayMessageBuffers.set(activeLocalAssistantId, payload.final_assistant_content);
-                        updateSyncedMessageContent(activeLocalAssistantId, payload.final_assistant_content, { animate: false });
+                    const payloadFinalText = extractFinalAssistantContentFromPayload(payload);
+                    const finalText = payloadFinalText || (serverReplayMessageBuffers.get(activeLocalAssistantId) || '');
+                    if (payloadFinalText) {
+                        serverReplayMessageBuffers.set(activeLocalAssistantId, payloadFinalText);
+                        updateSyncedMessageContent(activeLocalAssistantId, payloadFinalText, { animate: false });
                     }
                     finalizeMessageContent(activeLocalAssistantId, finalText);
                     finalizeAssistantStatusCards(activeLocalAssistantId, 'done');
@@ -4455,26 +4951,48 @@ function applyCurrentChatSessionEvent(entry) {
                 cleanupTrailingEmptyAssistantMessages();
                 break;
             }
+            if (!serverReplayCurrentAssistantId) {
+                const resolvedTurnId = entryTurnId || serverReplayCurrentTurnId || `server-turn-${sessionId}-${entry.EventSeq}`;
+                serverReplayCurrentTurnId = resolvedTurnId;
+                serverReplayCurrentAssistantId = ensureServerReplayAssistant(resolvedTurnId, sessionId, entry.EventSeq);
+            }
             if (serverReplayCurrentAssistantId) {
+                const payloadToolState = extractToolStateFromPayload(payload);
+                if (payloadToolState) {
+                    const card = ensureToolCard(serverReplayCurrentAssistantId, payloadToolState.toolName || 'Tool');
+                    if (card) {
+                        card._history = Array.isArray(payloadToolState.history) ? [...payloadToolState.history] : [];
+                    }
+                    setToolCardState(serverReplayCurrentAssistantId, payloadToolState.state || 'success', payloadToolState.summary || '', payloadToolState.args || null, payloadToolState.toolName || '');
+                }
+                const payloadReasoningText = extractReasoningContentFromPayload(payload);
+                if (payloadReasoningText && !serverReplayReasoningBuffers.get(serverReplayCurrentAssistantId)) {
+                    serverReplayReasoningBuffers.set(serverReplayCurrentAssistantId, payloadReasoningText);
+                    showReasoningStatus(serverReplayCurrentAssistantId, payloadReasoningText, false, Number(payload.total_elapsed_ms || payload.elapsed_ms || 0) || null);
+                }
                 if (!serverReplayReasoningBuffers.has(serverReplayCurrentAssistantId) && Number.isFinite(Number(payload.total_elapsed_ms || payload.elapsed_ms))) {
                     finalizeReasoningStatus(serverReplayCurrentAssistantId, 'done', '', Number(payload.total_elapsed_ms || payload.elapsed_ms));
+                } else if (serverReplayReasoningBuffers.has(serverReplayCurrentAssistantId)) {
+                    finalizeReasoningStatus(serverReplayCurrentAssistantId, 'done', '', Number(payload.total_elapsed_ms || payload.elapsed_ms || 0) || null);
                 }
-                const finalText = typeof payload.final_assistant_content === 'string'
-                    ? payload.final_assistant_content
-                    : (serverReplayMessageBuffers.get(serverReplayCurrentAssistantId) || '');
-                if (typeof payload.final_assistant_content === 'string') {
-                    serverReplayMessageBuffers.set(serverReplayCurrentAssistantId, payload.final_assistant_content);
-                    updateSyncedMessageContent(serverReplayCurrentAssistantId, payload.final_assistant_content, { animate: false });
+                const payloadFinalText = extractFinalAssistantContentFromPayload(payload);
+                const finalText = payloadFinalText || (serverReplayMessageBuffers.get(serverReplayCurrentAssistantId) || '');
+                if (payloadFinalText) {
+                    serverReplayMessageBuffers.set(serverReplayCurrentAssistantId, payloadFinalText);
+                    updateSyncedMessageContent(serverReplayCurrentAssistantId, payloadFinalText, { animate: false });
                 }
                 finalizeMessageContent(serverReplayCurrentAssistantId, finalText);
                 finalizeAssistantStatusCards(serverReplayCurrentAssistantId, 'done');
                 setAssistantActionBarReady(serverReplayCurrentAssistantId);
                 cleanupAssistantMessagesForTurn(serverReplayCurrentTurnId || entryTurnId, serverReplayCurrentAssistantId);
+                holdAutoScrollAtBottom(900);
+                scrollToBottom(true);
             }
             hideProgressDock();
             cleanupTrailingEmptyAssistantMessages();
             break;
         case 'request.cancelled':
+            sessionLLMActivityRunning = false;
             if (isLocalActiveTurn) {
                 if (activeLocalAssistantId) {
                     finalizeAssistantStatusCards(activeLocalAssistantId, 'stopped', t('status.stopped'));
@@ -4488,6 +5006,7 @@ function applyCurrentChatSessionEvent(entry) {
                 finalizeAssistantStatusCards(serverReplayCurrentAssistantId, 'stopped', t('status.stopped'));
             }
             hideProgressDock();
+            syncGlobalLLMComposerUI();
             cleanupTrailingEmptyAssistantMessages();
             break;
         case 'session.cleared':
@@ -4657,6 +5176,7 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
     if (!Array.isArray(items) || items.length === 0) return;
 
     const sessionUISnapshot = getCurrentChatSessionUISnapshot(sessionSnapshot);
+    const passiveRunningSession = isPassiveServerSession(sessionSnapshot);
     chatMessages?.classList.add('is-session-hydrating');
     resetChatViewState();
     dismissStartupCards();
@@ -4804,6 +5324,9 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
     }
 
     const fragment = document.createDocumentFragment();
+    const pendingTurnId = passiveRunningSession && users.length > 0
+        ? String(users[users.length - 1]?.turnId || '').trim()
+        : '';
     for (const user of users) {
         if (!document.querySelector(`.message.user[data-turn-id="${user.turnId}"]`)) {
             appendMessage({ role: 'user', content: user.content, turnId: user.turnId }, { parent: fragment, skipScroll: true });
@@ -4811,10 +5334,11 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
         messages.push({ role: 'user', content: user.content, turnId: user.turnId });
         const assistantId = assistantByTurn.get(user.turnId);
         if (!assistantId) continue;
+        const waitingForRemoteReply = passiveRunningSession && user.turnId === pendingTurnId;
         const assistantText = assistantTextById.get(assistantId) || '';
         const reasoningText = reasoningTextById.get(assistantId) || '';
         const toolState = toolStateById.get(assistantId) || sessionUISnapshot.tool_cards?.[user.turnId] || null;
-        if (!hasAssistantSnapshotContent(assistantText, reasoningText, toolState)) continue;
+        if (!waitingForRemoteReply && !hasAssistantSnapshotContent(assistantText, reasoningText, toolState)) continue;
         if (!document.getElementById(assistantId)) {
             appendMessage({
                 role: 'assistant',
@@ -4832,11 +5356,16 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
     for (const user of users) {
         const assistantId = assistantByTurn.get(user.turnId);
         if (!assistantId) continue;
+        const waitingForRemoteReply = passiveRunningSession && user.turnId === pendingTurnId;
         const assistantText = assistantTextById.get(assistantId) || '';
         const reasoningText = reasoningTextById.get(assistantId) || '';
         const toolState = toolStateById.get(assistantId);
         const snapshotToolState = sessionUISnapshot.tool_cards?.[user.turnId] || null;
         const mergedToolState = toolState || snapshotToolState;
+        if (waitingForRemoteReply) {
+            ensurePassiveSyncPlaceholder(user.turnId, sessionSnapshot?.ID || 'default', currentChatSessionEventSeq || 0);
+            continue;
+        }
         if (!hasAssistantSnapshotContent(assistantText, reasoningText, mergedToolState)) continue;
         const assistantEl = ensureAssistantMessageElement(assistantId);
         if (!assistantEl) continue;
@@ -5425,6 +5954,7 @@ function resetChatViewState() {
     locallyRenderedTurnIds = new Set();
     isGenerating = false;
     abortController = null;
+    broadcastLLMActivityState(false, 'finished');
     hideProgressDock();
     updateSendButtonState();
     updateStatefulBudgetIndicator();
@@ -6157,6 +6687,7 @@ async function sendMessage(options = {}) {
 
     // Prepare Assistant Placeholder
     isGenerating = true;
+    broadcastLLMActivityState(true, 'answering');
     lockScrollToLatest = true;
     updateSendButtonState();
 
@@ -6224,6 +6755,7 @@ async function sendMessage(options = {}) {
     } finally {
         pendingVoiceInputAutoTTS = false;
         isGenerating = false;
+        broadcastLLMActivityState(false, 'finished');
         lockScrollToLatest = false;
         stopStreamingMessageAutoScroll();
         activeStreamingMessageId = null;
@@ -6271,7 +6803,7 @@ async function stopGeneration({ preserveAssistantUI = false } = {}) {
 }
 
 function detectRunawayRepetition(text = '') {
-    const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+    const normalized = getLoopDetectionTail(text, 140).replace(/\s+/g, ' ').trim();
     if (normalized.length < 140) return null;
 
     const shortLoopMatch = normalized.match(/([\s\S]{6,}?)\1{8,}/);
@@ -6315,6 +6847,8 @@ function updateSendButtonState() {
     }
 
     inputContainer?.classList.toggle('is-generating', isGenerating);
+    updateLLMActivityIndicator();
+    syncGlobalLLMComposerUI();
     updateReasoningControlVisibility();
     updateComposerBackgroundTaskUI();
 
@@ -6607,7 +7141,7 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
                     else if (json.type === 'reasoning.delta' && json.content) {
                         // Add to reasoning buffer, NOT to contentToAdd/fullText
                         reasoningBuffer += json.content;
-                        const reasoningLoop = detectRunawayRepetition(reasoningBuffer);
+                        const reasoningLoop = await detectRunawayRepetitionAsync(reasoningBuffer, 'reasoning');
                         if (reasoningLoop) {
                             const repetitionError = new Error(
                                 config.llmMode === 'stateful' && !streamOptions.repeatRecoveryApplied
@@ -6715,45 +7249,23 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
 
                         fullText += contentToAdd;
 
-                        // --- LOOP DETECTION (Regex-based) ---
-                        // --- LOOP DETECTION (Regex-based) ---
-                        // Relaxed logic per user request (Step Id: 4593)
-                        // 1. Increased thresholds (Short: 5->10, Long: 3->6)
-                        // 2. Explicitly ignore Tool Call patterns (Agents loops are handled by backend)
                         if (!loopDetected && fullText.length >= 100) {
-                            // Pattern: 5+ chars repeated 10+ times consecutively (was 5)
-                            const shortLoopMatch = fullText.match(/([\s\S]{5,}?)\1{9,}/);
-                            // Pattern: 50+ chars repeated 6+ times consecutively (was 3)
-                            const longLoopMatch = fullText.match(/([\s\S]{50,}?)\1{5,}/);
-                            const loopMatch = shortLoopMatch || longLoopMatch;
-
-                            if (loopMatch && loopMatch[1].length >= 4) {
-                                // Exclude Tool Call logs from loop detection (False positives common in agents)
-                                const isToolLog = loopMatch[1].includes("Tool Call") ||
-                                    loopMatch[1].includes("Tool Finished") ||
-                                    loopMatch[1].includes("🛠️") ||
-                                    loopMatch[1].includes("✅");
-
-                                if (!isToolLog) {
-                                    console.warn(`[Loop Detection] Pattern detected: "${loopMatch[1].substring(0, 30)}..." repeated ${Math.floor(loopMatch[0].length / loopMatch[1].length)}+ times`);
-                                    loopDetected = true;
-                                    const repetitionError = new Error(
-                                        config.llmMode === 'stateful' && !streamOptions.repeatRecoveryApplied
-                                            ? t('warning.repeatRetrying')
-                                            : t('warning.repeatStopped')
-                                    );
-                                    repetitionError.code = 'LMSTUDIO_RUNAWAY_REPETITION';
-                                    repetitionError.phase = 'message';
-                                    repetitionError.snippet = loopMatch[1].substring(0, 120);
-                                    streamRestartRequested = true;
-                                    throw repetitionError;
-                                } else {
-                                    console.log(`[Loop Detection] Ignored tool pattern: "${loopMatch[1].substring(0, 20)}..."`);
-                                }
+                            const loopMatch = await detectRunawayRepetitionAsync(fullText, 'message');
+                            if (loopMatch) {
+                                console.warn(`[Loop Detection] Pattern detected: "${loopMatch.snippet.substring(0, 30)}..." repeated ${loopMatch.repetitions || '?'}+ times`);
+                                loopDetected = true;
+                                const repetitionError = new Error(
+                                    config.llmMode === 'stateful' && !streamOptions.repeatRecoveryApplied
+                                        ? t('warning.repeatRetrying')
+                                        : t('warning.repeatStopped')
+                                );
+                                repetitionError.code = 'LMSTUDIO_RUNAWAY_REPETITION';
+                                repetitionError.phase = 'message';
+                                repetitionError.snippet = loopMatch.snippet;
+                                streamRestartRequested = true;
+                                throw repetitionError;
                             }
                         }
-                        // --- END LOOP DETECTION ---
-                        // --- END LOOP DETECTION ---
 
                         let displayText = fullText;
 
@@ -6812,7 +7324,7 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
                             displayText = displayText.split('<think>')[0];
                         }
 
-                        if (!deferToServerChatSession) updateMessageContent(elementId, displayText);
+                        if (!deferToServerChatSession) scheduleStreamMessageRender(elementId, displayText);
 
                     }
 
@@ -8164,14 +8676,15 @@ function renderMathWithKatex(host) {
     }
 }
 
-function renderMarkdownIntoHost(host, markdownText) {
+function renderMarkdownIntoHost(host, markdownText, options = {}) {
     if (!host) return;
+    const allowLooseFallback = options.allowLooseFallback !== false;
     const normalized = normalizeMarkdownForRender(markdownText || '');
     host.dataset.markdownSource = normalized;
 
     const renderer = getMarkdownRenderer();
     host.innerHTML = normalized.trim() ? renderer.render(normalized) : '';
-    if (shouldFallbackToLooseMarkdown(host, normalized)) {
+    if (allowLooseFallback && shouldFallbackToLooseMarkdown(host, normalized)) {
         host.innerHTML = renderLooseMarkdownToHtml(normalized);
     }
     if (renderer.name !== 'remark') {
@@ -8293,6 +8806,7 @@ function deduplicateCommittedPending(committedText, pendingText) {
 }
 
 function finalizeMessageContent(id, text) {
+    flushStreamMessageRender(id);
     const el = ensureAssistantMessageElement(id);
     if (!el) return;
     const bubble = el.querySelector('.message-bubble');
@@ -8438,6 +8952,31 @@ function schedulePendingMarkdownRender(el, pendingHost, pendingText) {
     requestAnimationFrame(runRender);
 }
 
+function flushStreamMessageRender(id) {
+    const key = String(id || '');
+    if (!key) return;
+    const pendingText = pendingStreamRenderUpdates.get(key);
+    if (typeof pendingText !== 'string') return;
+    pendingStreamRenderUpdates.delete(key);
+    updateMessageContent(key, pendingText);
+}
+
+function scheduleStreamMessageRender(id, text) {
+    const key = String(id || '');
+    if (!key) return;
+    pendingStreamRenderUpdates.set(key, String(text || ''));
+    if (pendingStreamRenderFrame) return;
+
+    pendingStreamRenderFrame = requestAnimationFrame(() => {
+        pendingStreamRenderFrame = 0;
+        const updates = Array.from(pendingStreamRenderUpdates.entries());
+        pendingStreamRenderUpdates.clear();
+        updates.forEach(([messageId, latestText]) => {
+            updateMessageContent(messageId, latestText);
+        });
+    });
+}
+
 function updateMessageContent(id, text) {
     const el = ensureAssistantMessageElement(id);
     if (!el) return;
@@ -8477,7 +9016,7 @@ function updateMessageContent(id, text) {
     if (renderMode === 'fast') {
         committedText = cleanText;
         if (committedText !== previousCommittedText) {
-            renderMarkdownIntoHost(committedHost, committedText);
+            renderMarkdownIntoHost(committedHost, committedText, { allowLooseFallback: false });
         }
         renderStreamingPreviewIntoHost(pendingHost, '');
     } else {
@@ -8518,13 +9057,12 @@ function updateMessageContent(id, text) {
 
 function isChatNearBottom() {
     if (!chatMessages) return true;
-    const distanceFromBottom = chatMessages.scrollHeight - chatMessages.clientHeight - chatMessages.scrollTop;
-    return distanceFromBottom <= AUTO_SCROLL_THRESHOLD_PX;
+    return !!chatScrollMetrics.nearBottom;
 }
 
 function hasLongScrollableChat() {
     if (!chatMessages) return false;
-    return (chatMessages.scrollHeight - chatMessages.clientHeight) > Math.max(320, Math.round(window.innerHeight * 0.45));
+    return !!chatScrollMetrics.longScrollable;
 }
 
 function updateScrollToBottomButton() {
@@ -8576,9 +9114,17 @@ function scheduleChatScrollToBottom() {
     requestAnimationFrame(() => {
         pendingScrollToBottom = false;
         if (!chatMessages) return;
+        const metrics = refreshChatScrollMetrics();
         suppressNextScrollEvent = true;
-        chatMessages.scrollTop = chatMessages.scrollHeight;
-        lastObservedChatScrollHeight = chatMessages.scrollHeight;
+        chatMessages.scrollTop = metrics.scrollHeight;
+        commitChatScrollMetrics({
+            scrollTop: Math.max(0, metrics.scrollHeight - metrics.clientHeight),
+            scrollHeight: metrics.scrollHeight,
+            clientHeight: metrics.clientHeight,
+            distanceFromBottom: 0,
+            nearBottom: true,
+            longScrollable: metrics.longScrollable
+        });
         scrollActiveMessageIntoView();
         updateScrollToBottomButton();
     });
@@ -8593,22 +9139,26 @@ function observeAutoScrollResizes(elements) {
 
     const targets = (elements || []).filter(Boolean);
     if (targets.length === 0) return;
-    lastObservedChatScrollHeight = chatMessages.scrollHeight;
+    refreshChatScrollMetrics();
 
     autoScrollResizeObserver = new ResizeObserver(() => {
         if (!chatMessages) return;
-        const currentScrollHeight = chatMessages.scrollHeight;
-        const delta = currentScrollHeight - lastObservedChatScrollHeight;
+        const previousMetrics = chatScrollMetrics;
+        const currentMetrics = refreshChatScrollMetrics();
+        const delta = currentMetrics.scrollHeight - previousMetrics.scrollHeight;
 
         if (shouldAutoScroll || lockScrollToLatest) {
             scheduleChatScrollToBottom();
         } else if (Math.abs(delta) > 1) {
             suppressNextScrollEvent = true;
             chatMessages.scrollTop += delta;
+            commitChatScrollMetrics({
+                ...currentMetrics,
+                scrollTop: currentMetrics.scrollTop + delta,
+                distanceFromBottom: Math.max(0, currentMetrics.distanceFromBottom - delta)
+            });
             updateScrollToBottomButton();
         }
-
-        lastObservedChatScrollHeight = currentScrollHeight;
     });
 
     targets.forEach((target) => autoScrollResizeObserver.observe(target));
@@ -9740,7 +10290,7 @@ function updateMessageInputPlaceholder() {
             ? t('input.placeholder.restoring')
             : (composerProgressActive
                 ? [composerProgressLabel, composerProgressPercent].filter(Boolean).join(' - ')
-                : (backgroundTask?.label || t('input.placeholder')));
+                : (passiveGenerationPlaceholder || backgroundTask?.label || t('input.placeholder')));
 
     messageInput.placeholder = nextPlaceholder;
     messageInput.classList.toggle('stt-listening', isSTTActive);

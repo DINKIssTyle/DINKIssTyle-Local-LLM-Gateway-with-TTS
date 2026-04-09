@@ -559,8 +559,18 @@ func (a *App) GetServerStatus() map[string]interface{} {
 		running = true
 	}
 
+	llmBusy := currentLLMActivityBusy()
+	if !llmBusy {
+		if busy, err := mcp.HasRunningChatSession(); err == nil {
+			llmBusy = busy
+		} else {
+			log.Printf("[GetServerStatus] failed to inspect LLM activity: %v", err)
+		}
+	}
+
 	return map[string]interface{}{
 		"running":          running,
+		"llmBusy":          llmBusy,
 		"port":             port,
 		"llmEndpoint":      llmEndpoint,
 		"llmMode":          llmMode,
