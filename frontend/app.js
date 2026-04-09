@@ -1478,9 +1478,7 @@ document.addEventListener('visibilitychange', async () => {
         console.log('[Audio] App foregrounded, checking recovery...');
 
         // Re-acquire Wake Lock if it should be active
-        if (isPlayingQueue || isGenerating || isSTTActive) {
-            await requestWakeLock();
-        }
+        syncWakeLock();
     }
 });
 
@@ -1555,7 +1553,7 @@ document.addEventListener('keydown', (event) => {
  * Holistic sync for Screen Wake Lock based on app state
  */
 async function syncWakeLock() {
-    const shouldBeActive = isGenerating || isPlayingQueue || isSTTActive;
+    const shouldBeActive = !!(isGenerating || isPlayingQueue || isSTTActive || streamingTTSActive);
     if (shouldBeActive) {
         await requestWakeLock();
     } else {
@@ -1569,22 +1567,21 @@ async function requestWakeLock() {
 
     try {
         wakeLock = await navigator.wakeLock.request('screen');
-        console.log('[WakeLock] Screen Wake Lock active');
+        console.info('[WakeLock] Screen Wake Lock acquired');
         
         wakeLock.addEventListener('release', () => {
-            console.log('[WakeLock] Screen Wake Lock released');
-            // If it was released because of visibility change, we'll re-acquire on visibilitychange event
-            // But if it was released and we still need it (e.g. system interrupt), try re-acquiring if visible
-            if (document.visibilityState === 'visible' && (isGenerating || isPlayingQueue || isSTTActive)) {
+            console.info('[WakeLock] Screen Wake Lock released');
+            const stillBusy = !!(isGenerating || isPlayingQueue || isSTTActive || streamingTTSActive);
+            if (document.visibilityState === 'visible' && stillBusy) {
                 wakeLock = null;
-                requestWakeLock();
+                setTimeout(() => syncWakeLock(), 1000);
             } else {
                 wakeLock = null;
             }
         });
     } catch (err) {
         if (err.name !== 'NotAllowedError') {
-            console.error(`[WakeLock] Failed: ${err.name}, ${err.message}`);
+            console.warn('[WakeLock] Request failed:', err);
         }
         wakeLock = null;
     }
@@ -1594,10 +1591,10 @@ async function releaseWakeLock() {
     if (!wakeLock) return;
     try {
         const lock = wakeLock;
-        wakeLock = null; // Clear first to prevent race
+        wakeLock = null;
         await lock.release();
     } catch (err) {
-        console.error(`[WakeLock] Error releasing: ${err.message}`);
+        console.warn('[WakeLock] Release failed:', err);
     }
 }
 
@@ -7623,7 +7620,7 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
             activeLocalAssistantId = '';
         }
         localStreamOwnershipReleased = false;
-        releaseWakeLock(); // Release screen lock after generation and TTS streaming is done
+        syncWakeLock();
     }
 
     return historyContent;
@@ -8587,10 +8584,10 @@ function stopAllAudio() {
     // Clear audio cache to free memory
     clearTTSAudioCache();
     clearMediaSessionMetadata();
-    releaseWakeLock(); // Release lock on stop
-
-    // Reset loop state
+    // Reset state and sync wake lock
     isPlayingQueue = false;
+    streamingTTSActive = false;
+    syncWakeLock();
 
     // Cancel streaming
     streamingTTSActive = false;
@@ -9948,7 +9945,7 @@ async function processOSTTSQueue() {
     if (ttsQueue.length === 0) return;
 
     isPlayingQueue = true;
-    requestWakeLock();
+    syncWakeLock();
     const btn = currentAudioBtn;
     const sessionId = ttsSessionId;
     const mediaSessionLabel = activeTTSSessionLabel;
@@ -10087,7 +10084,7 @@ async function processTTSQueue(isFirstChunk = false) {
     if (isPlayingQueue) return; // Already running
 
     isPlayingQueue = true;
-    requestWakeLock(); // Request screen keep-alive
+    syncWakeLock();
     const btn = currentAudioBtn;
     const sessionId = ttsSessionId;
     const mediaSessionLabel = activeTTSSessionLabel;
@@ -10238,6 +10235,7 @@ function endTTS(btn, sessionId) {
         isPlayingQueue = false;
         activeTTSSessionLabel = "";
         clearMediaSessionMetadata();
+        syncWakeLock();
     }
 }
 
@@ -10428,6 +10426,7 @@ function finalizeSTTSession(options = {}) {
     isSTTActive = false;
     stopSTTPlaceholderAnimation();
     syncMicRecordingUI();
+    syncWakeLock();
 
     if (suppressAutoSend) {
         sttSuppressAutoSend = true;
@@ -10510,6 +10509,7 @@ function startSTT() {
         isSTTActive = true;
         startSTTPlaceholderAnimation();
         syncMicRecordingUI();
+        syncWakeLock();
         console.log("[STT] Recording started");
     };
 
