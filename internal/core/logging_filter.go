@@ -87,10 +87,6 @@ func shouldWriteConsoleLog(msg string) bool {
 		"[redirect]",
 		"[hybrid]",
 		"[db]",
-		"[asyncmemory]",
-		"[memoryworker]",
-		"[memoryworker-llm]",
-		"[self-evolution]",
 		"[handleconfig]",
 		"[fetchandcachemodels]",
 	}

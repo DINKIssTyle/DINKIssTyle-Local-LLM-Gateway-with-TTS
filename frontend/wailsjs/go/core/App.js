@@ -126,10 +126,6 @@ export function GetTTSDictionary(arg1) {
   return window['go']['core']['App']['GetTTSDictionary'](arg1);
 }
 
-export function GetToolPattern(arg1) {
-  return window['go']['core']['App']['GetToolPattern'](arg1);
-}
-
 export function GetUserApiToken(arg1) {
   return window['go']['core']['App']['GetUserApiToken'](arg1);
 }
@@ -164,10 +160,6 @@ export function GetVoiceStyles() {
 
 export function GetWelcomeState() {
   return window['go']['core']['App']['GetWelcomeState']();
-}
-
-export function LearnToolPattern(arg1, arg2) {
-  return window['go']['core']['App']['LearnToolPattern'](arg1, arg2);
 }
 
 export function LoadModel(arg1) {
@@ -300,10 +292,6 @@ export function Shutdown(arg1) {
 
 export function StartManagedModelDownload(arg1) {
   return window['go']['core']['App']['StartManagedModelDownload'](arg1);
-}
-
-export function StartMemoryWorker() {
-  return window['go']['core']['App']['StartMemoryWorker']();
 }
 
 export function StartServer(arg1) {

@@ -56,7 +56,6 @@ type App struct {
 	modelCacheMux  sync.RWMutex
 	modelCacheTime time.Time
 
-	toolPatterns map[string]map[string]string // Custom tool parsing patterns
 
 	baseListener    net.Listener // Primary TCP listener for hybrid HTTP/HTTPS
 	secondaryServer *http.Server // Secondary HTTP server for backward compatibility
@@ -77,7 +76,6 @@ type AppConfig struct {
 	CertDomain        string                       `json:"certDomain"`
 	DebugTraceEnabled bool                         `json:"debugTraceEnabled"`
 	WelcomeDismissed  bool                         `json:"welcomeDismissed"`
-	ToolPatterns      map[string]map[string]string `json:"toolPatterns"`
 }
 
 type WelcomeState struct {
@@ -392,7 +390,6 @@ func (a *App) loadConfig() {
 	if cfg.CertDomain != "" {
 		a.certDomain = cfg.CertDomain
 	}
-	a.toolPatterns = cfg.ToolPatterns
 
 	fmt.Printf("[loadConfig] Loaded Config from %s\n", cfgPath)
 	fmt.Printf("   -> Port: %s, Endpoint: %s, Mode: %s\n", a.port, a.llmEndpoint, a.llmMode)
@@ -445,7 +442,6 @@ func (a *App) saveConfig() {
 	cfg.WelcomeDismissed = a.welcomeDismissed
 	cfg.TTS = ttsConfig
 	cfg.Embedding = currentEmbeddingModelConfig()
-	cfg.ToolPatterns = a.toolPatterns
 
 	data, err = json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -480,8 +476,6 @@ func (a *App) Startup(ctx context.Context) {
 		wruntime.WindowSetSize(ctx, 755, 800)
 	}
 
-	// Start Async Memory Worker (Disabled: Transitioned to real-time raw-to-DB model)
-	// a.StartMemoryWorker()
 
 	// Check for Auto Start Server
 	if a.GetAutoStartServer() {
@@ -792,7 +786,6 @@ func CreateAppMenu(app *App) *menu.Menu {
 	return men
 }
 
-// SetEnableMemory is removed; use per-user settings via /api/config
 
 // Startup Settings - exposed to Wails frontend
 
@@ -1917,15 +1910,3 @@ func (a *App) ResetMemory(userID string) string {
 	return "Memory reset successfully."
 }
 
-// GetToolPattern returns the custom tool parsing pattern for a specific model ID
-// Returns nil if no pattern is defined
-func (a *App) GetToolPattern(modelID string) map[string]string {
-	if a.toolPatterns == nil {
-		return nil
-	}
-	// Direct match
-	if pattern, ok := a.toolPatterns[modelID]; ok {
-		return pattern
-	}
-	return nil
-}

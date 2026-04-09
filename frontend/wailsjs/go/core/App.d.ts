@@ -67,8 +67,6 @@ export function GetTTSConfig():Promise<core.ServerTTSConfig>;
 
 export function GetTTSDictionary(arg1:string):Promise<Record<string, string>>;
 
-export function GetToolPattern(arg1:string):Promise<Record<string, string>>;
-
 export function GetUserApiToken(arg1:string):Promise<string>;
 
 export function GetUserDetail(arg1:string):Promise<Record<string, any>>;
@@ -86,8 +84,6 @@ export function GetUsers():Promise<Array<Record<string, string>>>;
 export function GetVoiceStyles():Promise<Array<string>>;
 
 export function GetWelcomeState():Promise<core.WelcomeState>;
-
-export function LearnToolPattern(arg1:string,arg2:string):Promise<void>;
 
 export function LoadModel(arg1:string):Promise<void>;
 
@@ -154,8 +150,6 @@ export function ShowAbout():Promise<void>;
 export function Shutdown(arg1:context.Context):Promise<void>;
 
 export function StartManagedModelDownload(arg1:string):Promise<void>;
-
-export function StartMemoryWorker():Promise<void>;
 
 export function StartServer(arg1:string):Promise<void>;
 
