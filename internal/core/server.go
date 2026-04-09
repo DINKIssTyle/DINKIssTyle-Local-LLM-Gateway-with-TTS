@@ -4161,7 +4161,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 								fullResponse += content
 
 								// 🔍 Self-Evolution for Custom Format
-								if toolPattern == nil && len(content) > 5 {
+								if enableMCP && toolPattern == nil && len(content) > 5 {
 									lc := strings.ToLower(content)
 									if strings.Contains(lc, "<|") ||
 										strings.Contains(lc, "function") ||
@@ -4232,6 +4232,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 							}
 							continue
 						} else if msgType == "tool_call.arguments" {
+							if !enableMCP {
+								continue
+							}
 							eventPayload := map[string]interface{}{}
 							for key, value := range chunk {
 								eventPayload[key] = value
@@ -4283,6 +4286,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 							emitStreamChunk(line)
 							continue
 						} else if msgType == "tool_call.name" || msgType == "tool_call.start" || msgType == "tool_call.success" || msgType == "tool_call.failure" {
+							if !enableMCP {
+								continue
+							}
 							appendChatEvent("assistant", msgType, chunk)
 							emitStreamChunk(line)
 							continue
@@ -4353,7 +4359,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 					}
 
 					// --- B. Handle Tool Pattern Logic (if enabled and buffering) ---
-					if toolPattern != nil && isBuffering {
+					if enableMCP && toolPattern != nil && isBuffering {
 						// Extract content for buffering
 						var content string
 						if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
@@ -4659,7 +4665,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 						}
 
 						// 🧪 Special Handling for Command-R / GPT-OSS Format (<|channel|>)
-						if !isBuffering && (looksLikeChannelToolMarkup(content) || strings.Contains(content, "<|tool_code|>") || strings.Contains(content, "<tool_call>") || strings.Contains(content, "<execute_command") || strings.Contains(content, "<search_memory") || strings.Contains(content, "<read_memory") || strings.Contains(content, "<read_memory_context") || strings.Contains(content, "<read_buffered_source")) {
+						if enableMCP && !isBuffering && (looksLikeChannelToolMarkup(content) || strings.Contains(content, "<|tool_code|>") || strings.Contains(content, "<tool_call>") || strings.Contains(content, "<execute_command") || strings.Contains(content, "<search_memory") || strings.Contains(content, "<read_memory") || strings.Contains(content, "<read_memory_context") || strings.Contains(content, "<read_buffered_source")) {
 							log.Printf("[handleChat] Detected Command-R/GPT-OSS/Qwen Tool Call Pattern. Switching to buffering mode.")
 							isBuffering = true
 							buffer = content
@@ -4680,7 +4686,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 						}
 
 						// 🔍 Self-Correction for non-buffered models
-						if len(content) > 5 {
+						if enableMCP && len(content) > 5 {
 							lc := strings.ToLower(content)
 							// Broaden trigger keywords: <|, function, tool, execute, {"name":, and tool names
 							hasToolName := strings.Contains(lc, "search_web") ||
@@ -4767,7 +4773,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		// 🛠️ Structured Output Support (JSON)
 		// Check if buffer looks like a complete JSON object from a Structured Output model
 		// Pattern: {"thought": "...", "tool_name": "...", "tool_arguments": ...}
-		if isBuffering || (strings.HasPrefix(strings.TrimSpace(buffer), "{") && strings.Contains(buffer, "\"tool_name\"")) {
+		if enableMCP && (isBuffering || (strings.HasPrefix(strings.TrimSpace(buffer), "{") && strings.Contains(buffer, "\"tool_name\""))) {
 			var structTool StructuredToolCall
 			if err := json.Unmarshal([]byte(buffer), &structTool); err == nil {
 				if structTool.ToolName != "" {
@@ -4847,7 +4853,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		}
 
 		// 🛡️ TOOL EXECUTION & LOOP LOGIC
-		if toolExecutedThisTurn {
+		if enableMCP && toolExecutedThisTurn {
 			log.Printf("[handleChat] Turn %d detected Tool Call: %s. Executing...", turn, lastToolName)
 			AddDebugTrace("chat", "tool.detected", "Tool call detected in assistant output", map[string]interface{}{
 				"turn": turn,
@@ -4976,7 +4982,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	} // --- TURN LOOP END ---
 
 	// 🛡️ SELF-CORRECTION TRIGGER (Only if we didn't loop or at the very end)
-	if needsCorrection && badContentCapture != "" {
+	if enableMCP && needsCorrection && badContentCapture != "" {
 		log.Printf("[handleChat] Triggering Self-Correction for invalid tool format...")
 		AddDebugTrace("chat", "self_correction.start", "Triggering tool-call self-correction", map[string]interface{}{
 			"snippet": compactText(badContentCapture, 180),
