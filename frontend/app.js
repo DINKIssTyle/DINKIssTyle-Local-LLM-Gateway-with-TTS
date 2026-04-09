@@ -2351,7 +2351,6 @@ let composerProgressActive = false;
 let composerProgressPercent = null;
 const composerBackgroundTasks = new Map();
 const scrollToBottomBtn = document.getElementById('scroll-to-bottom-btn');
-const llmActivityIndicator = document.getElementById('llm-activity-indicator');
 let chatScrollMetrics = {
     scrollTop: 0,
     scrollHeight: 0,
@@ -2840,7 +2839,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (window.runtime?.EventsOn) {
         window.runtime.EventsOn('llm-activity', (state) => {
             llmActivityBusy = !!state?.busy;
-            updateLLMActivityIndicator();
             syncGlobalLLMComposerUI();
         });
     }
@@ -2855,7 +2853,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (!externalLLMActivityBusy && !isPassiveServerSession()) {
                 passiveGenerationPlaceholder = '';
             }
-            updateLLMActivityIndicator();
             syncGlobalLLMComposerUI();
         });
     }
@@ -3046,10 +3043,6 @@ function syncGlobalLLMComposerUI(session = currentChatSessionCache) {
     updateMessageInputPlaceholder();
 }
 
-function isLLMActivityRunning(session = currentChatSessionCache) {
-    return llmActivityBusy || externalLLMActivityBusy || !!abortController || String(session?.Status || '').trim().toLowerCase() === 'running';
-}
-
 function broadcastLLMActivityState(busy, phase = 'answering') {
     if (!llmActivitySyncChannel) return;
     try {
@@ -3062,14 +3055,6 @@ function broadcastLLMActivityState(busy, phase = 'answering') {
     } catch (error) {
         console.warn('[LLMActivitySync] broadcast failed:', error);
     }
-}
-
-function updateLLMActivityIndicator(session = currentChatSessionCache) {
-    if (!llmActivityIndicator) return;
-    const active = isLLMActivityRunning(session);
-    llmActivityIndicator.classList.toggle('is-active', active);
-    llmActivityIndicator.setAttribute('aria-hidden', active ? 'false' : 'true');
-    llmActivityIndicator.title = active ? 'LLM processing' : 'LLM idle';
 }
 
 function ensurePassiveSyncPlaceholder(turnId = '', sessionId = 'default', eventSeq = 0) {
@@ -4587,7 +4572,6 @@ function applyCurrentChatSessionSnapshot(session) {
 
     currentChatSessionCache = session;
     sessionLLMActivityRunning = String(session?.Status || '').trim().toLowerCase() === 'running';
-    updateLLMActivityIndicator(session);
     syncGlobalLLMComposerUI();
 
     const serverGenerating = session.Status === 'running';
@@ -4633,20 +4617,10 @@ function applyCurrentChatSessionEvent(entry) {
     if (isLocalActiveTurn) {
         switch (entry.EventType) {
             case 'message.created':
-            case 'message.delta':
-            case 'reasoning.start':
-            case 'reasoning.delta':
-            case 'reasoning.end':
-            case 'tool_call.start':
-            case 'tool_call.arguments':
-            case 'tool_call.success':
-            case 'tool_call.failure':
             case 'prompt_processing.progress':
             case 'model_load.start':
             case 'model_load.progress':
             case 'model_load.end':
-            case 'chat.end':
-            case 'request.complete':
                 return;
             default:
                 break;
@@ -4704,10 +4678,6 @@ function applyCurrentChatSessionEvent(entry) {
             break;
         }
         case 'message.delta': {
-            if (isPassiveRunning) {
-                ensurePassiveSyncPlaceholder(entryTurnId || serverReplayCurrentTurnId, sessionId, entry.EventSeq);
-                break;
-            }
             let assistantId = '';
             if (isLocalActiveTurn) {
                 serverReplayCurrentTurnId = entryTurnId || serverReplayCurrentTurnId;
@@ -4724,16 +4694,17 @@ function applyCurrentChatSessionEvent(entry) {
             const next = typeof payload.full_content === 'string'
                 ? payload.full_content
                 : appendStreamChunkDedup(serverReplayMessageBuffers.get(assistantId) || '', String(payload.content || ''));
+        
+        // Deep Sync Rationale: Do not buffer the "Generation in progress..." placeholder text
+        // so that it doesn't get treated as final content if the server doesn't send a full_content payload later.
+        if (next !== getPassiveSyncWaitingText()) {
             serverReplayMessageBuffers.set(assistantId, next);
-            updateSyncedMessageContent(assistantId, next);
-            cleanupAssistantMessagesForTurn(serverReplayCurrentTurnId || entryTurnId, assistantId);
+        }
+        updateSyncedMessageContent(assistantId, next);
+        cleanupAssistantMessagesForTurn(serverReplayCurrentTurnId || entryTurnId, assistantId);
             break;
         }
         case 'reasoning.start':
-            if (isPassiveRunning) {
-                ensurePassiveSyncPlaceholder(entryTurnId || serverReplayCurrentTurnId, sessionId, entry.EventSeq);
-                break;
-            }
             if (!isLocalActiveTurn && !serverReplayCurrentAssistantId && (entryTurnId || serverReplayCurrentTurnId)) {
                 const nextTurnId = entryTurnId || serverReplayCurrentTurnId;
                 serverReplayCurrentTurnId = nextTurnId;
@@ -4757,10 +4728,6 @@ function applyCurrentChatSessionEvent(entry) {
             if (serverReplayCurrentAssistantId) showReasoningStatus(serverReplayCurrentAssistantId, '...');
             break;
         case 'reasoning.delta':
-            if (isPassiveRunning) {
-                ensurePassiveSyncPlaceholder(entryTurnId || serverReplayCurrentTurnId, sessionId, entry.EventSeq);
-                break;
-            }
             if (!isLocalActiveTurn && !serverReplayCurrentAssistantId && (entryTurnId || serverReplayCurrentTurnId)) {
                 const nextTurnId = entryTurnId || serverReplayCurrentTurnId;
                 serverReplayCurrentTurnId = nextTurnId;
@@ -4791,9 +4758,6 @@ function applyCurrentChatSessionEvent(entry) {
                 break;
             }
         case 'reasoning.end':
-            if (isPassiveRunning) {
-                break;
-            }
             if (isLocalActiveTurn) {
                 if (activeLocalAssistantId) {
                     finalizeReasoningStatus(
@@ -4815,10 +4779,6 @@ function applyCurrentChatSessionEvent(entry) {
             }
             break;
         case 'tool_call.start':
-            if (isPassiveRunning) {
-                ensurePassiveSyncPlaceholder(entryTurnId || serverReplayCurrentTurnId, sessionId, entry.EventSeq);
-                break;
-            }
             if (!isLocalActiveTurn && !serverReplayCurrentAssistantId && (entryTurnId || serverReplayCurrentTurnId)) {
                 const nextTurnId = entryTurnId || serverReplayCurrentTurnId;
                 serverReplayCurrentTurnId = nextTurnId;
@@ -4847,9 +4807,6 @@ function applyCurrentChatSessionEvent(entry) {
             if (serverReplayCurrentAssistantId) setToolCardState(serverReplayCurrentAssistantId, 'running', '', payload.arguments || null, payload.tool || '');
             break;
         case 'tool_call.success':
-            if (isPassiveRunning) {
-                break;
-            }
             if (isLocalActiveTurn) {
                 if (activeLocalAssistantId) setToolCardState(activeLocalAssistantId, 'success', t('tool.executionFinished'), null, payload.tool || '');
                 break;
@@ -4857,9 +4814,6 @@ function applyCurrentChatSessionEvent(entry) {
             if (serverReplayCurrentAssistantId) setToolCardState(serverReplayCurrentAssistantId, 'success', t('tool.executionFinished'), null, payload.tool || '');
             break;
         case 'tool_call.failure':
-            if (isPassiveRunning) {
-                break;
-            }
             if (isLocalActiveTurn) {
                 if (activeLocalAssistantId) setToolCardState(activeLocalAssistantId, 'failure', payload.reason || t('tool.unknownError'), null, payload.tool || '');
                 break;
@@ -4867,9 +4821,6 @@ function applyCurrentChatSessionEvent(entry) {
             if (serverReplayCurrentAssistantId) setToolCardState(serverReplayCurrentAssistantId, 'failure', payload.reason || t('tool.unknownError'), null, payload.tool || '');
             break;
         case 'prompt_processing.progress':
-            if (isPassiveRunning) {
-                break;
-            }
             if (isLocalActiveTurn) {
                 renderProgressDock(t('progress.processingPrompt'), (payload.progress || 0) * 100, 'prompt-processing', false);
                 break;
@@ -4877,9 +4828,6 @@ function applyCurrentChatSessionEvent(entry) {
             renderProgressDock(t('progress.processingPrompt'), (payload.progress || 0) * 100, 'prompt-processing', false);
             break;
         case 'model_load.start':
-            if (isPassiveRunning) {
-                break;
-            }
             if (isLocalActiveTurn) {
                 renderProgressDock(t('progress.loadingModel'), null, 'model-loading', true);
                 break;
@@ -4887,9 +4835,6 @@ function applyCurrentChatSessionEvent(entry) {
             renderProgressDock(t('progress.loadingModel'), null, 'model-loading', true);
             break;
         case 'model_load.progress':
-            if (isPassiveRunning) {
-                break;
-            }
             if (isLocalActiveTurn) {
                 renderProgressDock(t('progress.loadingModel'), (payload.progress || 0) * 100, 'model-loading', false);
                 break;
@@ -4897,9 +4842,6 @@ function applyCurrentChatSessionEvent(entry) {
             renderProgressDock(t('progress.loadingModel'), (payload.progress || 0) * 100, 'model-loading', false);
             break;
         case 'model_load.end':
-            if (isPassiveRunning) {
-                break;
-            }
             if (isLocalActiveTurn) {
                 renderProgressDock(`${t('progress.modelLoaded')} (${payload.load_time_seconds?.toFixed?.(1) || '?'}s)`, 100, 'model-loading', false);
                 break;
@@ -6847,7 +6789,6 @@ function updateSendButtonState() {
     }
 
     inputContainer?.classList.toggle('is-generating', isGenerating);
-    updateLLMActivityIndicator();
     syncGlobalLLMComposerUI();
     updateReasoningControlVisibility();
     updateComposerBackgroundTaskUI();
@@ -7601,13 +7542,18 @@ function ensureAssistantMessageElement(id, turnId = '') {
 
 function isAssistantMessageVisiblyEmpty(msgEl) {
     if (!msgEl || !msgEl.classList?.contains('assistant')) return false;
+    if (msgEl.classList.contains('has-startup-card')) return false;
     const markdownHost = msgEl.querySelector('.assistant-response-card .markdown-body');
     const markdownSource = String(markdownHost?.dataset?.markdownSource || '').trim();
     const markdownText = String(markdownHost?.textContent || '').trim();
     const reasoningText = String(msgEl.querySelector('.assistant-reasoning')?.textContent || '').trim();
-    const hasToolCards = msgEl.querySelectorAll('.assistant-tools .tool-card').length > 0;
+    // Corrected selector from .tool-card to .tool-status-card
+    const hasToolCards = msgEl.querySelectorAll('.assistant-tools .tool-status-card').length > 0;
+    const hasImage = !!msgEl.querySelector('.message-image');
     const responseCard = msgEl.querySelector('.assistant-response-card');
-    const hasVisibleResponse = !responseCard?.hidden && (!!markdownSource || !!markdownText);
+    // If the response card is NOT hidden and has content, it's not empty.
+    // Also, if it has an image (which is inside the response card but might be shown even if text is empty), it's not empty.
+    const hasVisibleResponse = (!responseCard?.hidden && (!!markdownSource || !!markdownText)) || hasImage;
     const hasVisibleReasoning = !!reasoningText;
     return !hasVisibleResponse && !hasVisibleReasoning && !hasToolCards;
 }
@@ -7638,7 +7584,7 @@ function cleanupTrailingEmptyAssistantMessages() {
 }
 
 function getAssistantMessageParts(elementId, turnId = '') {
-    const msgEl = ensureAssistantMessageElement(elementId, turnId);
+    const msgEl = document.getElementById(elementId);
     if (!msgEl) return {};
     return {
         msgEl,
@@ -7685,15 +7631,21 @@ function attachStreamingAudioButtonToMessage(msgEl) {
     if (!speakBtn) return;
     currentAudioBtn = speakBtn;
     syncCurrentAudioButtonUI();
+
+    // If TTS starts playing, ensure the action bar is visible so the user can see the "Stop" button.
+    const actionBar = msgEl.querySelector('.message-actions');
+    if (actionBar && actionBar.hidden) {
+        actionBar.hidden = false;
+        actionBar.classList.add('is-ready');
+    }
 }
 
 function setAssistantActionBarReady(elementId) {
     const { msgEl } = getAssistantMessageParts(elementId);
-    const actionBar = msgEl?.querySelector('.message-actions');
+    if (!msgEl) return;
+    const actionBar = msgEl.querySelector('.message-actions');
     if (!actionBar) return;
-    const responseCard = msgEl?.querySelector('.assistant-response-card');
-    const hasVisibleContent = !responseCard?.hidden;
-    if (!hasVisibleContent) return;
+    if (isAssistantMessageVisiblyEmpty(msgEl)) return;
     if (actionBar.classList.contains('is-ready') && !actionBar.hidden) {
         attachStreamingAudioButtonToMessage(msgEl);
         return;
@@ -7709,7 +7661,6 @@ function setAssistantActionBarReady(elementId) {
         actionBar.classList.remove('is-pending');
         delete actionBar.dataset.readyScheduled;
         attachStreamingAudioButtonToMessage(msgEl);
-        cleanupTrailingEmptyAssistantMessages();
     };
 
     if (actionBar.dataset.readyScheduled === 'true') {
@@ -7728,9 +7679,8 @@ function setAssistantActionBarReady(elementId) {
 
 function reconcileAssistantActionBarForMessage(msgEl) {
     if (!msgEl || !msgEl.classList?.contains('assistant') || !msgEl.id) return;
-    const responseCard = msgEl.querySelector('.assistant-response-card');
     const actionBar = msgEl.querySelector('.message-actions');
-    if (!responseCard || !actionBar || responseCard.hidden) return;
+    if (!actionBar || isAssistantMessageVisiblyEmpty(msgEl)) return;
     setAssistantActionBarReady(msgEl.id);
 }
 
@@ -8834,11 +8784,22 @@ function finalizeMessageContent(id, text) {
     const actionBar = el.querySelector('.message-actions');
     const hasVisibleContent = !!cleanText.trim();
     if (responseCard) responseCard.hidden = !hasVisibleContent;
-    if (actionBar) actionBar.hidden = !hasVisibleContent;
-    syncAssistantMessageShellState(el);
-    if (hasVisibleContent) {
-        reconcileAssistantActionBarForMessage(el);
+
+    if (actionBar) {
+        const visiblyEmpty = isAssistantMessageVisiblyEmpty(el);
+        actionBar.hidden = visiblyEmpty;
+
+        // Ensure buttons are revealed/hidden based on text availability
+        const copyBtn = actionBar.querySelector('.copy-btn');
+        const speakBtn = actionBar.querySelector('.speak-btn');
+        if (copyBtn) copyBtn.hidden = !hasVisibleContent;
+        if (speakBtn) speakBtn.hidden = !hasVisibleContent;
+
+        if (!visiblyEmpty) {
+            reconcileAssistantActionBarForMessage(el);
+        }
     }
+    syncAssistantMessageShellState(el);
 }
 
 function updateSyncedMessageContent(id, text, options = {}) {
@@ -8856,17 +8817,29 @@ function updateSyncedMessageContent(id, text, options = {}) {
     if (renderMode === 'final') {
         renderStreamingPreviewIntoHost(committedHost, cleanText);
         renderStreamingPreviewIntoHost(pendingHost, '');
-        el._streamRenderState = {
-            committedText: cleanText,
-            pendingText: ''
-        };
+
+        // Rationale: We only buffer meaningful content, not the ephemeral placeholders.
+        if (cleanText !== getPassiveSyncWaitingText()) {
+            el._streamRenderState = {
+                committedText: cleanText,
+                pendingText: ''
+            };
+        }
 
         const responseCard = el.querySelector('.assistant-response-card');
         const actionBar = el.querySelector('.message-actions');
-        if (responseCard) responseCard.hidden = !cleanText.trim();
-        if (actionBar && actionBar.classList.contains('is-ready')) {
-            actionBar.hidden = !cleanText.trim();
-        }
+        const hasVisibleContent = !!cleanText.trim();
+        if (responseCard) responseCard.hidden = !hasVisibleContent;
+        const copyBtn = actionBar.querySelector('.copy-btn');
+            const speakBtn = actionBar.querySelector('.speak-btn');
+            if (copyBtn) copyBtn.hidden = !hasVisibleContent;
+            if (speakBtn) speakBtn.hidden = !hasVisibleContent;
+
+            // Deep Sync Rationale: If we are actively updating content and it's meaningful, 
+            // and we are NOT the one generating (syncing from server), reveal it early.
+            if (hasVisibleContent && (!isGenerating || deferToServerChatSession)) {
+                setAssistantActionBarReady(el.id);
+            }
         syncAssistantMessageShellState(el);
         scrollToBottom(wasNearBottom);
         return;
