@@ -121,19 +121,21 @@ func (t *SessionTracker) AppendEvent(state SessionPersistState, role, eventType 
 			jsonPayload = string(bytes)
 		}
 	}
-	eventEntry, err := mcp.AppendChatEvent(t.UserID, t.Session.ID, role, eventType, "", t.ClientTurnID, jsonPayload)
-	if err != nil {
-		log.Printf("[chat-session] failed to append %s event for %s: %v", eventType, t.UserID, err)
-	} else if eventEntry.EventSeq > t.Snapshot.LastEventSeq {
-		t.Snapshot.LastEventSeq = eventEntry.EventSeq
+	if shouldPersistChatEvent(eventType) {
+		eventEntry, err := mcp.AppendChatEvent(t.UserID, t.Session.ID, role, eventType, "", t.ClientTurnID, jsonPayload)
+		if err != nil {
+			log.Printf("[chat-session] failed to append %s event for %s: %v", eventType, t.UserID, err)
+		} else if eventEntry.EventSeq > t.Snapshot.LastEventSeq {
+			t.Snapshot.LastEventSeq = eventEntry.EventSeq
+		}
 	}
-	if eventType == "message.created" || eventType == "message.delta" || eventType == "reasoning.start" || eventType == "reasoning.delta" || eventType == "reasoning.end" || eventType == "chat.end" || eventType == "request.complete" {
+	if shouldUpdateSessionMessageSnapshot(eventType) {
 		updateMessageSnapshot(&t.Snapshot, t.ClientTurnID, role, eventType, payload)
 	}
-	if strings.HasPrefix(eventType, "tool_call.") {
+	if shouldUpdateSessionToolSnapshot(eventType) {
 		updateToolSnapshot(&t.Snapshot, t.ClientTurnID, eventType, payload)
 	}
-	if eventType == "message.created" || eventType == "message.delta" || eventType == "reasoning.start" || eventType == "reasoning.delta" || eventType == "reasoning.end" || eventType == "chat.end" || eventType == "request.complete" || strings.HasPrefix(eventType, "tool_call.") {
+	if shouldPersistSessionUISnapshot(eventType) {
 		t.UIStateJSON = EncodeUISnapshot(t.Snapshot)
 		state.UIStateJSON = t.UIStateJSON
 		t.Session.UIStateJSON = t.UIStateJSON
@@ -141,6 +143,33 @@ func (t *SessionTracker) AppendEvent(state SessionPersistState, role, eventType 
 			log.Printf("[chat-session] failed to persist ui state for %s: %v", t.UserID, err)
 		}
 	}
+}
+
+func shouldUpdateSessionMessageSnapshot(eventType string) bool {
+	switch strings.TrimSpace(eventType) {
+	case "message.created", "chat.end", "request.complete", "request.cancelled", "session.cleared":
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldPersistChatEvent(eventType string) bool {
+	switch strings.TrimSpace(eventType) {
+	case "message.created", "chat.end", "request.complete", "generation.started", "generation.first_token", "generation.phase", "generation.finished":
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldUpdateSessionToolSnapshot(eventType string) bool {
+	eventType = strings.TrimSpace(eventType)
+	return eventType == "tool_call.success" || eventType == "tool_call.failure" || eventType == "chat.end" || eventType == "request.complete"
+}
+
+func shouldPersistSessionUISnapshot(eventType string) bool {
+	return shouldUpdateSessionMessageSnapshot(eventType) || shouldUpdateSessionToolSnapshot(eventType)
 }
 
 func (t *SessionTracker) Finalize(state SessionPersistState) {
@@ -280,6 +309,10 @@ func updateToolSnapshot(snapshot *SessionUISnapshot, turnID, eventType string, p
 			card.ToolName = strings.TrimSpace(toolName)
 		}
 		card.Summary = strings.TrimSpace(summary)
+	case "chat.end", "request.complete":
+		if extracted := extractToolCardSnapshotFromPayload(payloadMap); extracted != nil {
+			card = *extracted
+		}
 	}
 
 	snapshot.ToolCards[turnID] = card
@@ -340,6 +373,133 @@ func payloadInt64(value interface{}) (int64, bool) {
 	return 0, false
 }
 
+func extractFinalAssistantContent(payloadMap map[string]interface{}) string {
+	if payloadMap == nil {
+		return ""
+	}
+	resultMap, _ := payloadMap["result"].(map[string]interface{})
+	if resultMap != nil {
+		outputList, _ := resultMap["output"].([]interface{})
+		if len(outputList) > 0 {
+			var builder strings.Builder
+			for _, raw := range outputList {
+				item, _ := raw.(map[string]interface{})
+				if item == nil {
+					continue
+				}
+				if itemType, _ := item["type"].(string); itemType != "message" {
+					continue
+				}
+				content, _ := item["content"].(string)
+				if strings.TrimSpace(content) == "" {
+					continue
+				}
+				builder.WriteString(content)
+			}
+			if builder.Len() > 0 {
+				return builder.String()
+			}
+		}
+	}
+	if finalContent, ok := payloadMap["final_assistant_content"].(string); ok && finalContent != "" {
+		return finalContent
+	}
+	return ""
+}
+
+func extractReasoningContent(payloadMap map[string]interface{}) string {
+	if payloadMap == nil {
+		return ""
+	}
+	resultMap, _ := payloadMap["result"].(map[string]interface{})
+	if resultMap == nil {
+		return ""
+	}
+	outputList, _ := resultMap["output"].([]interface{})
+	if len(outputList) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(outputList))
+	for _, raw := range outputList {
+		item, _ := raw.(map[string]interface{})
+		if item == nil {
+			continue
+		}
+		if itemType, _ := item["type"].(string); itemType != "reasoning" {
+			continue
+		}
+		content, _ := item["content"].(string)
+		if strings.TrimSpace(content) == "" {
+			continue
+		}
+		parts = append(parts, content)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func extractToolCardSnapshotFromPayload(payloadMap map[string]interface{}) *SessionToolCardSnapshot {
+	if payloadMap == nil {
+		return nil
+	}
+	resultMap, _ := payloadMap["result"].(map[string]interface{})
+	if resultMap == nil {
+		return nil
+	}
+	outputList, _ := resultMap["output"].([]interface{})
+	if len(outputList) == 0 {
+		return nil
+	}
+
+	card := SessionToolCardSnapshot{
+		State:   "success",
+		History: []SessionToolHistorySnapshot{},
+	}
+	for _, raw := range outputList {
+		item, _ := raw.(map[string]interface{})
+		if item == nil {
+			continue
+		}
+		if itemType, _ := item["type"].(string); itemType != "tool_call" {
+			continue
+		}
+		toolName, _ := item["tool"].(string)
+		if strings.TrimSpace(toolName) != "" {
+			card.ToolName = strings.TrimSpace(toolName)
+		}
+		if args := item["arguments"]; args != nil {
+			card.Args = args
+			detail := compactToolSnapshotDetail(card.ToolName, args, "")
+			if detail != "" {
+				entry := SessionToolHistorySnapshot{
+					Tool:   strings.TrimSpace(card.ToolName),
+					Detail: detail,
+				}
+				if entry.Tool == "" {
+					entry.Tool = "Tool"
+				}
+				last := SessionToolHistorySnapshot{}
+				if len(card.History) > 0 {
+					last = card.History[len(card.History)-1]
+				}
+				if last.Tool != entry.Tool || last.Detail != entry.Detail {
+					card.History = append(card.History, entry)
+				}
+			}
+		}
+		if output, ok := item["output"].(string); ok && strings.TrimSpace(output) == "" {
+			card.State = "failure"
+		}
+	}
+
+	if strings.TrimSpace(card.ToolName) == "" && len(card.History) == 0 {
+		return nil
+	}
+	if card.State == "" {
+		card.State = "success"
+	}
+	return &card
+}
+
 func updateMessageSnapshot(snapshot *SessionUISnapshot, turnID, role, eventType string, payload interface{}) {
 	if snapshot == nil || strings.TrimSpace(turnID) == "" {
 		return
@@ -370,8 +530,11 @@ func updateMessageSnapshot(snapshot *SessionUISnapshot, turnID, role, eventType 
 			msg.AssistantContent += content
 		}
 	case "chat.end", "request.complete":
-		if finalContent, ok := payloadMap["final_assistant_content"].(string); ok && finalContent != "" {
+		if finalContent := extractFinalAssistantContent(payloadMap); finalContent != "" {
 			msg.AssistantContent = finalContent
+		}
+		if reasoningContent := extractReasoningContent(payloadMap); reasoningContent != "" {
+			msg.ReasoningContent = reasoningContent
 		}
 	case "reasoning.delta":
 		if content, ok := payloadMap["content"].(string); ok && content != "" {

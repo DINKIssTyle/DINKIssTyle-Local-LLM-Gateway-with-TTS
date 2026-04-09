@@ -122,6 +122,13 @@
             margin-bottom: 20px;
         }
 
+        .header-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+        }
+
         .header-logo {
             width: 28px;
             height: 28px;
@@ -133,6 +140,51 @@
         .header h1 {
             font-size: 18px;
             font-weight: 600;
+        }
+
+        .llm-activity-indicator {
+            width: 18px;
+            height: 18px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            margin-left: auto;
+            opacity: 0.5;
+            transition: opacity 0.18s ease;
+        }
+
+        .llm-activity-indicator__dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 999px;
+            background: rgba(139, 148, 158, 0.7);
+            box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04);
+        }
+
+        .llm-activity-indicator.is-active {
+            opacity: 1;
+        }
+
+        .llm-activity-indicator.is-active .llm-activity-indicator__dot {
+            background: #7ee787;
+            box-shadow:
+                0 0 0 1px rgba(126, 231, 135, 0.2),
+                0 0 14px rgba(126, 231, 135, 0.45);
+            animation: llm-activity-blink 1.05s ease-in-out infinite;
+        }
+
+        @keyframes llm-activity-blink {
+
+            0%,
+            100% {
+                transform: scale(0.92);
+                opacity: 0.55;
+            }
+
+            50% {
+                transform: scale(1.18);
+                opacity: 1;
+            }
         }
 
         .card {
@@ -854,8 +906,13 @@
 <body>
     <div class="controller">
         <div class="header">
-            <img src="public/icon-512.png" alt="DKST LLM Chat Server Icon" class="header-logo">
-            <h1>DKST LLM Chat Server</h1>
+            <div class="header-title">
+                <img src="public/icon-512.png" alt="DKST LLM Chat Server Icon" class="header-logo">
+                <h1>DKST LLM Chat Server</h1>
+            </div>
+            <div id="llm-activity-indicator" class="llm-activity-indicator" aria-hidden="true" title="LLM idle">
+                <span class="llm-activity-indicator__dot"></span>
+            </div>
         </div>
 
         <!-- Restart Required Banner -->
@@ -1465,12 +1522,13 @@
         let managedModelsRefreshTimer = null;
         let statusRefreshTimer = null;
         let welcomeState = null;
+        let llmActivityBusy = false;
 
         async function init() {
             if (typeof window.go !== 'undefined') {
                 try {
                     const status = await window.go.core.App.GetServerStatus();
-                    updateUI(status.running, status.port);
+                    updateUI(status.running, status.port, status.llmBusy);
                     document.getElementById('port-input').value = status.port; // Set loaded port
                     updateMcpPort();
                     document.getElementById('llm-endpoint').value = status.llmEndpoint || 'http://127.0.0.1:1234';
@@ -1526,6 +1584,11 @@
                         }
                         refreshManagedModels();
                         checkAssetStatus();
+                    });
+
+                    window.runtime.EventsOn("llm-activity", (state) => {
+                        llmActivityBusy = !!state?.busy;
+                        updateLlmActivityIndicator(llmActivityBusy);
                     });
                 } catch (e) {
                     console.error('Init failed:', e);
@@ -2310,18 +2373,30 @@
             if (typeof window.go === 'undefined') return;
             try {
                 const status = await window.go.core.App.GetServerStatus();
-                updateUI(status.running, status.port);
+                llmActivityBusy = !!status.llmBusy;
+                updateUI(status.running, status.port, status.llmBusy);
             } catch (e) {
                 console.error('Status update failed:', e);
             }
         }
 
-        function updateUI(running, port) {
+        function updateLlmActivityIndicator(llmBusy) {
+            const activity = document.getElementById('llm-activity-indicator');
+            if (!activity) {
+                return;
+            }
+            activity.classList.toggle('is-active', !!llmBusy);
+            activity.setAttribute('aria-hidden', llmBusy ? 'false' : 'true');
+            activity.title = llmBusy ? 'LLM processing' : 'LLM idle';
+        }
+
+        function updateUI(running, port, llmBusy = false) {
             isRunning = running;
             const dot = document.getElementById('status-dot');
             const text = document.getElementById('status-text');
             const btn = document.getElementById('toggle-btn');
             const portDisplay = document.getElementById('port-display');
+            updateLlmActivityIndicator(llmBusy);
 
             if (running) {
                 dot.classList.add('running');
