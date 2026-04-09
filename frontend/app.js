@@ -679,6 +679,10 @@ const translations = {
         'models.downloadStarted': '모델 다운로드를 시작했습니다.',
         'models.downloadFinished': '모델 다운로드가 완료되었습니다.',
         'models.downloadFailed': '모델 다운로드에 실패했습니다.',
+        'models.modalTitle': '모델 선택',
+        'models.loaded': '로드됨',
+        'models.unload': '언로드',
+        'models.unloading': '언로드 중...',
         'models.progressBytes': '{downloaded} / {total}',
         // Advanced
         'section.advanced': '고급 설정',
@@ -924,6 +928,10 @@ const translations = {
         'models.downloadStarted': 'Model download started.',
         'models.downloadFinished': 'Model download completed.',
         'models.downloadFailed': 'Model download failed.',
+        'models.modalTitle': 'Select Model',
+        'models.loaded': 'Loaded',
+        'models.unload': 'Unload',
+        'models.unloading': 'Unloading...',
         'models.progressBytes': '{downloaded} / {total}',
         // Advanced
         'section.advanced': 'Advanced Settings',
@@ -1526,9 +1534,6 @@ document.addEventListener('click', (event) => {
     if (button instanceof HTMLElement) {
         scheduleHeaderIconButtonBlur(button);
     }
-    if (event.target instanceof Element && !event.target.closest('.header-model-picker')) {
-        closeHeaderModelDropdown();
-    }
 }, true);
 
 document.addEventListener('touchend', (event) => {
@@ -1538,14 +1543,11 @@ document.addEventListener('touchend', (event) => {
     if (touch instanceof HTMLElement) {
         scheduleHeaderIconButtonBlur(touch);
     }
-    if (event.target instanceof Element && !event.target.closest('.header-model-picker')) {
-        closeHeaderModelDropdown();
-    }
 }, { passive: true, capture: true });
 
 document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
-        closeHeaderModelDropdown();
+        closeModelPickerModal();
     }
 });
 
@@ -1611,7 +1613,8 @@ async function fetchModels() {
     if (!select) return;
 
     try {
-        const response = await fetch('/api/models', { credentials: 'include' });
+        const mode = encodeURIComponent(String(config.llmMode || 'standard').trim().toLowerCase() || 'standard');
+        const response = await fetch(`/api/models?mode=${mode}`, { credentials: 'include' });
         if (!response.ok) {
             const errText = await response.text();
             throw new Error(errText || `HTTP ${response.status}`);
@@ -1681,7 +1684,7 @@ async function fetchModels() {
             }
         }
         updateHeaderModelDisplay();
-        renderHeaderModelDropdown();
+        renderModelPickerModal();
         renderReasoningControl();
     } catch (err) {
         console.error('[Models] Failed to fetch:', err);
@@ -1703,7 +1706,7 @@ async function fetchModels() {
             secondarySelect.value = config.secondaryModel;
         }
         updateHeaderModelDisplay();
-        renderHeaderModelDropdown();
+        renderModelPickerModal();
     }
 }
 
@@ -4000,7 +4003,7 @@ function loadConfig() {
 
     // Update header with model name
     updateHeaderModelDisplay();
-    renderHeaderModelDropdown();
+    renderModelPickerModal();
 
     applyChatFontSize();
     updateComposerLayoutMetrics();
@@ -4446,7 +4449,7 @@ function saveConfig(closeModal = true) {
 
     // Update header model name
     updateHeaderModelDisplay();
-    renderHeaderModelDropdown();
+    renderModelPickerModal();
 
     // Trigger explicit model load via backend
     if (config.model && config.apiEndpoint && config.apiEndpoint.includes('localhost')) {
@@ -4455,7 +4458,10 @@ function saveConfig(closeModal = true) {
         fetch('/api/models', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: config.model })
+            body: JSON.stringify({
+                model: config.model,
+                mode: config.llmMode || 'standard'
+            })
         }).then(async r => {
             if (r.ok) {
                 console.log('[Model] Explicitly loaded:', config.model);
@@ -5780,7 +5786,7 @@ async function syncServerConfig() {
                 if (memControls) memControls.style.display = config.enableMemory ? 'block' : 'none';
             }
             updateHeaderModelDisplay();
-            renderHeaderModelDropdown();
+            renderModelPickerModal();
             if (serverCfg.stateful_turn_limit !== undefined) {
                 config.statefulTurnLimit = Math.max(1, Number(serverCfg.stateful_turn_limit) || DEFAULT_STATEFUL_TURN_LIMIT);
                 const el = document.getElementById('cfg-stateful-turn-limit');
@@ -6491,9 +6497,47 @@ function normalizeModelInfo(model) {
         ?? model.model_info?.reasoning
     );
 
+    const loadedInstances = Array.isArray(model.loaded_instances) ? model.loaded_instances : [];
+    const primaryLoadedInstance = loadedInstances.find((instance) => {
+        if (!instance) return false;
+        if (typeof instance === 'string') return instance.trim() !== '';
+        if (typeof instance === 'object') {
+            return String(instance.instance_id || instance.id || instance.key || '').trim() !== '';
+        }
+        return false;
+    }) || null;
+    const primaryLoadedInstanceId = typeof primaryLoadedInstance === 'string'
+        ? primaryLoadedInstance.trim()
+        : String(
+            primaryLoadedInstance?.instance_id
+            || primaryLoadedInstance?.id
+            || primaryLoadedInstance?.key
+            || ''
+        ).trim();
+    const rawLoaded = model.loaded
+        ?? model.is_loaded
+        ?? model.isLoaded
+        ?? model.active
+        ?? model.currently_loaded
+        ?? model.metadata?.loaded
+        ?? model.model_info?.loaded;
+    const rawState = String(
+        model.state
+        ?? model.status
+        ?? model.load_state
+        ?? model.metadata?.state
+        ?? model.model_info?.state
+        ?? ''
+    ).trim().toLowerCase();
+    const isLoaded = loadedInstances.length > 0 || rawLoaded === true || ['loaded', 'active', 'ready', 'resident'].includes(rawState);
+
     return {
         id,
         displayName: String(model.display_name || model.displayName || model.name || id).trim() || id,
+        isLoaded,
+        loadedInstances,
+        primaryLoadedInstanceId,
+        stateLabel: rawState,
         supportsReasoning: reasoningCapability.supportsReasoning,
         reasoningOptions: reasoningCapability.reasoningOptions
     };
@@ -6510,10 +6554,6 @@ function getHeaderModelTrigger() {
     return document.getElementById('header-model-trigger');
 }
 
-function getHeaderModelDropdown() {
-    return document.getElementById('header-model-dropdown');
-}
-
 function updateHeaderModelDisplay() {
     const headerModelName = document.getElementById('header-model-name');
     if (!headerModelName) return;
@@ -6521,57 +6561,66 @@ function updateHeaderModelDisplay() {
     headerModelName.textContent = selectedModel?.displayName || config.model || 'No Model Set';
 }
 
-function renderHeaderModelDropdown() {
-    const dropdown = getHeaderModelDropdown();
-    if (!dropdown) return;
+function closeModelPickerModal() {
+    const trigger = getHeaderModelTrigger();
+    if (trigger) trigger.setAttribute('aria-expanded', 'false');
+    document.getElementById('model-picker-modal')?.classList.remove('active');
+}
+
+function renderModelPickerModal() {
+    const list = document.getElementById('model-picker-list');
+    if (!list) return;
 
     if (!availableModels.length) {
-        dropdown.innerHTML = '<div class="header-model-dropdown-item" aria-disabled="true"><span class="header-model-dropdown-label">No models available</span></div>';
+        list.innerHTML = `<div class="model-picker-empty">${escapeHtml(t('models.empty'))}</div>`;
         return;
     }
 
-    dropdown.innerHTML = availableModels.map((model) => {
+    const isStatefulMode = String(config.llmMode || '').trim().toLowerCase() === 'stateful';
+    list.innerHTML = availableModels.map((model) => {
         const selected = model.id === String(config.model || '').trim();
+        const loadedBadge = isStatefulMode && model.isLoaded
+            ? `<span class="model-picker-badge is-loaded">${escapeHtml(t('models.loaded'))}</span>`
+            : '';
+        const currentLabel = selected ? `<span class="model-picker-current">${escapeHtml(model.id)}</span>` : '';
+        const unloadButton = isStatefulMode && model.isLoaded && model.primaryLoadedInstanceId
+            ? `<button type="button" class="icon-btn model-picker-unload" title="${escapeAttr(t('models.unload'))}" onclick="unloadHeaderModel(event, '${escapeAttr(model.primaryLoadedInstanceId)}')"><span class="material-icons-round">eject</span></button>`
+            : '';
+
         return `
-            <button
-                class="header-model-dropdown-item${selected ? ' is-selected' : ''}"
-                type="button"
-                onclick="selectHeaderModel(this.dataset.modelId)"
-                data-model-id="${escapeAttr(model.id)}">
-                <span class="header-model-dropdown-label">${escapeHtml(model.displayName || model.id)}</span>
-                <span class="material-icons-round header-model-dropdown-check"${selected ? '' : ' hidden'}>check</span>
-            </button>
+            <div class="model-picker-item${selected ? ' is-selected' : ''}">
+                <button
+                    class="model-picker-main"
+                    type="button"
+                    onclick="selectHeaderModel('${escapeAttr(model.id)}')">
+                    <div class="model-picker-copy">
+                        <div class="model-picker-name">${escapeHtml(model.displayName || model.id)}</div>
+                        <div class="model-picker-meta">
+                            ${loadedBadge}
+                            ${currentLabel}
+                        </div>
+                    </div>
+                </button>
+                ${unloadButton}
+            </div>
         `;
     }).join('');
 }
 
-function closeHeaderModelDropdown() {
-    const trigger = getHeaderModelTrigger();
-    const dropdown = getHeaderModelDropdown();
-    if (trigger) trigger.setAttribute('aria-expanded', 'false');
-    if (dropdown) dropdown.hidden = true;
-}
-
-async function toggleHeaderModelDropdown(event) {
+async function openModelPickerModal(event) {
     if (event) {
         event.preventDefault();
         event.stopPropagation();
     }
     const trigger = getHeaderModelTrigger();
-    const dropdown = getHeaderModelDropdown();
-    if (!trigger || !dropdown) return;
-    const shouldOpen = dropdown.hidden;
-    if (shouldOpen) {
-        if (!availableModels.length) {
-            await fetchModels();
-        }
-        renderHeaderModelDropdown();
-    }
-    dropdown.hidden = !shouldOpen;
-    trigger.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
+    if (!trigger) return;
+    await fetchModels();
+    renderModelPickerModal();
+    document.getElementById('model-picker-modal')?.classList.add('active');
+    trigger.setAttribute('aria-expanded', 'true');
 }
 
-function selectHeaderModel(modelId) {
+async function selectHeaderModel(modelId) {
     const nextModel = String(modelId || '').trim();
     if (!nextModel) return;
     config.model = nextModel;
@@ -6589,9 +6638,39 @@ function selectHeaderModel(modelId) {
         }
     }
     updateHeaderModelDisplay();
-    renderHeaderModelDropdown();
-    closeHeaderModelDropdown();
+    renderModelPickerModal();
+    closeModelPickerModal();
     saveConfig(false);
+}
+
+async function unloadHeaderModel(event, instanceId) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+    const nextInstanceId = String(instanceId || '').trim();
+    if (!nextInstanceId) return;
+
+    try {
+        const response = await fetch('/api/models/unload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+                instance_id: nextInstanceId,
+                mode: config.llmMode || 'standard'
+            })
+        });
+        if (!response.ok) {
+            throw new Error(await response.text().catch(() => `HTTP ${response.status}`));
+        }
+        await fetchModels();
+        renderModelPickerModal();
+        showToast(`${t('models.unload')} ✓`);
+    } catch (error) {
+        console.warn('[Models] Unload failed:', error);
+        showToast(String(error?.message || 'Unload failed'), true);
+    }
 }
 
 function getSelectedModelInfo() {

@@ -50,6 +50,10 @@ export function FetchAndCacheModels() {
   return window['go']['core']['App']['FetchAndCacheModels']();
 }
 
+export function FetchAndCacheModelsWithConfig(arg1, arg2, arg3) {
+  return window['go']['core']['App']['FetchAndCacheModelsWithConfig'](arg1, arg2, arg3);
+}
+
 export function GenerateCertificate(arg1) {
   return window['go']['core']['App']['GenerateCertificate'](arg1);
 }
@@ -168,6 +172,10 @@ export function LearnToolPattern(arg1, arg2) {
 
 export function LoadModel(arg1) {
   return window['go']['core']['App']['LoadModel'](arg1);
+}
+
+export function LoadModelWithConfig(arg1, arg2, arg3, arg4) {
+  return window['go']['core']['App']['LoadModelWithConfig'](arg1, arg2, arg3, arg4);
 }
 
 export function LogoutAllSessions() {
@@ -312,6 +320,14 @@ export function Startup(arg1) {
 
 export function StopServer() {
   return window['go']['core']['App']['StopServer']();
+}
+
+export function UnloadModel(arg1) {
+  return window['go']['core']['App']['UnloadModel'](arg1);
+}
+
+export function UnloadModelWithConfig(arg1, arg2, arg3, arg4) {
+  return window['go']['core']['App']['UnloadModelWithConfig'](arg1, arg2, arg3, arg4);
 }
 
 export function UpdateUserPassword(arg1, arg2) {

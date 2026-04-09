@@ -1488,20 +1488,49 @@ func (a *App) CheckHealth() HealthCheckResult {
 	return result
 }
 
-// FetchAndCacheModels fetches models from the LLM server and caches them
-func (a *App) FetchAndCacheModels() ([]byte, error) {
+func normalizeLLMMode(mode string) string {
+	mode = strings.TrimSpace(strings.ToLower(mode))
+	if mode == "stateful" {
+		return "stateful"
+	}
+	return "standard"
+}
+
+func sanitizeLLMToken(token string) string {
+	token = strings.TrimSpace(token)
+	if strings.HasPrefix(strings.ToLower(token), "bearer ") {
+		token = strings.TrimSpace(token[7:])
+	}
+	return token
+}
+
+func normalizeLLMEndpoint(endpoint string) string {
+	endpoint = strings.TrimSpace(endpoint)
+	endpoint = strings.TrimSuffix(endpoint, "/")
+	endpoint = strings.TrimSuffix(endpoint, "/v1")
+	return endpoint
+}
+
+func (a *App) currentLLMRequestConfig() (string, string, string) {
 	a.serverMux.Lock()
 	endpoint := strings.TrimSuffix(a.llmEndpoint, "/")
 	endpoint = strings.TrimSuffix(endpoint, "/v1")
 	mode := a.llmMode
 	token := strings.TrimSpace(a.llmApiToken)
 	a.serverMux.Unlock()
+	return normalizeLLMEndpoint(endpoint), sanitizeLLMToken(token), normalizeLLMMode(mode)
+}
 
-	// Sanitize token
-	if strings.HasPrefix(strings.ToLower(token), "bearer ") {
-		token = strings.TrimSpace(token[7:])
-	}
+// FetchAndCacheModels fetches models from the LLM server and caches them
+func (a *App) FetchAndCacheModels() ([]byte, error) {
+	endpoint, token, mode := a.currentLLMRequestConfig()
+	return a.FetchAndCacheModelsWithConfig(endpoint, token, mode)
+}
 
+func (a *App) FetchAndCacheModelsWithConfig(endpoint, token, mode string) ([]byte, error) {
+	endpoint = normalizeLLMEndpoint(endpoint)
+	token = sanitizeLLMToken(token)
+	mode = normalizeLLMMode(mode)
 	fmt.Printf("[FetchAndCacheModels] Using LLM Endpoint: '%s' (Original: '%s') Mode: %s\n", endpoint, a.llmEndpoint, mode)
 
 	modelsURL := endpoint + "/v1/models"
@@ -1557,25 +1586,18 @@ func (a *App) FetchAndCacheModels() ([]byte, error) {
 
 // LoadModel sends a request to load a specific model
 func (a *App) LoadModel(modelID string) error {
-	a.serverMux.Lock()
-	endpoint := strings.TrimSuffix(a.llmEndpoint, "/")
-	endpoint = strings.TrimSuffix(endpoint, "/v1")
-	mode := a.llmMode
-	token := strings.TrimSpace(a.llmApiToken)
-	a.serverMux.Unlock()
+	endpoint, token, mode := a.currentLLMRequestConfig()
+	return a.LoadModelWithConfig(modelID, endpoint, token, mode)
+}
 
-	// Sanitize token
-	if strings.HasPrefix(strings.ToLower(token), "bearer ") {
-		token = strings.TrimSpace(token[7:])
-	}
+func (a *App) LoadModelWithConfig(modelID, endpoint, token, mode string) error {
+	endpoint = normalizeLLMEndpoint(endpoint)
+	token = sanitizeLLMToken(token)
+	mode = normalizeLLMMode(mode)
 
 	loadURL := endpoint + "/v1/models/load"
-	// Some servers might use different endpoints.
 	if mode == "stateful" {
-		// LM Studio defines /v1/models/load for both?
-		// Let's assume standard extension unless API varies.
-		// Stateful API usually implies chat endpoint behavior, but loading is often global.
-		// We'll stick to /v1/models/load as it's the common extension.
+		loadURL = endpoint + "/api/v1/models/load"
 	}
 
 	fmt.Printf("[LoadModel] Requesting load for model: %s to %s\n", modelID, loadURL)
@@ -1613,6 +1635,57 @@ func (a *App) LoadModel(modelID string) error {
 	}
 
 	fmt.Printf("[LoadModel] Successfully loaded model: %s\n", modelID)
+	return nil
+}
+
+func (a *App) UnloadModel(instanceID string) error {
+	endpoint, token, mode := a.currentLLMRequestConfig()
+	return a.UnloadModelWithConfig(instanceID, endpoint, token, mode)
+}
+
+func (a *App) UnloadModelWithConfig(instanceID, endpoint, token, mode string) error {
+	endpoint = normalizeLLMEndpoint(endpoint)
+	token = sanitizeLLMToken(token)
+	mode = normalizeLLMMode(mode)
+
+	unloadURL := endpoint + "/api/v1/models/unload"
+	if mode != "stateful" {
+		unloadURL = endpoint + "/v1/models/unload"
+	}
+	fmt.Printf("[UnloadModel] Requesting unload for instance: %s to %s\n", instanceID, unloadURL)
+
+	payload := map[string]interface{}{}
+	if strings.TrimSpace(instanceID) != "" {
+		payload["instance_id"] = strings.TrimSpace(instanceID)
+	}
+	body, _ := json.Marshal(payload)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, err := http.NewRequest("POST", unloadURL, bytes.NewBuffer(body))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %v", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	isMasked := strings.HasPrefix(token, "***") || strings.HasSuffix(token, "...")
+	if token != "" && !isMasked {
+		req.Header.Set("Authorization", "Bearer "+token)
+	} else {
+		req.Header.Set("Authorization", "Bearer lm-studio")
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("connection failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("server returned HTTP %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	fmt.Printf("[UnloadModel] Successfully unloaded instance: %s\n", instanceID)
 	return nil
 }
 

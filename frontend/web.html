@@ -527,6 +527,20 @@
         </div>
     </div>
 
+    <div id="model-picker-modal" class="modal-overlay" onclick="if(event.target===this)closeModelPickerModal()">
+        <div class="modal model-picker-modal">
+            <div class="modal-header">
+                <h2 data-i18n="models.modalTitle">모델 선택</h2>
+                <button class="modal-close" onclick="closeModelPickerModal()">
+                    <span class="material-icons-round">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div id="model-picker-list" class="model-picker-list"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- Mic Layout Support -->
     <div id="mic-layout-container" class="mic-layout-none" onclick="toggleSTT()">
         <div id="giant-mic-btn">
@@ -546,12 +560,11 @@
                 </button>
                 <div class="header-model-picker">
                     <button id="header-model-trigger" class="header-model-trigger" type="button"
-                        onclick="toggleHeaderModelDropdown(event)" aria-haspopup="listbox" aria-expanded="false"
+                        onclick="openModelPickerModal(event)" aria-haspopup="dialog" aria-expanded="false"
                         title="Select model">
                         <span id="header-model-name" class="header-model-name">Loading...</span>
                         <span class="material-icons-round header-model-trigger-icon">arrow_drop_down</span>
                     </button>
-                    <div id="header-model-dropdown" class="header-model-dropdown" hidden></div>
                 </div>
             </div>
             <div class="chat-header-actions">
