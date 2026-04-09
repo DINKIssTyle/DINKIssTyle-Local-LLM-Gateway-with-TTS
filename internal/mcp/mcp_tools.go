@@ -265,6 +265,42 @@ func GetToolList() []Tool {
 			},
 		},
 		{
+			Name:        "save_user_fact",
+			Description: "Save a structured fact about the user to their permanent profile. Use this when the user tells you their name, birthday, preferences, address, occupation, family info, pets, vehicles, or other personal details. These facts are automatically injected into every conversation, so they never need to be searched for. If a fact_key already exists, the value is updated.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"fact_key": map[string]interface{}{
+						"type":        "string",
+						"description": "A short, unique key identifying the fact, e.g. 'name', 'birthday', 'favorite_color', 'car', 'pet_name'.",
+					},
+					"fact_value": map[string]interface{}{
+						"type":        "string",
+						"description": "The value of the fact, e.g. '홍길동', '1990-03-15', '파란색', 'Tesla Model 3'.",
+					},
+					"category": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional category for the fact: 'identity', 'preference', 'work', 'family', 'vehicle', 'general'. Defaults to 'general'.",
+					},
+				},
+				"required": []string{"fact_key", "fact_value"},
+			},
+		},
+		{
+			Name:        "delete_user_fact",
+			Description: "Delete a specific fact from the user's permanent profile by its key. Use this when the user tells you a previously saved fact is wrong or outdated.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"fact_key": map[string]interface{}{
+						"type":        "string",
+						"description": "The key of the fact to delete, e.g. 'name', 'birthday'.",
+					},
+				},
+				"required": []string{"fact_key"},
+			},
+		},
+		{
 			Name:        "naver_search",
 			Description: "Search Naver (Korean portal). Specialized for dictionary, Korea-related content, weather, and news. Use this for specific Korean context.",
 			InputSchema: map[string]interface{}{
@@ -727,6 +763,46 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 		result, err := runDeleteMemoryHook(userID, args.MemoryID)
 		emitToolResultTrace(toolName, start, result, err)
 		return result, err
+
+	case "save_user_fact":
+		if !enableMemory {
+			return "", fmt.Errorf("memory feature is disabled by user settings")
+		}
+		var args struct {
+			FactKey   string `json:"fact_key"`
+			FactValue string `json:"fact_value"`
+			Category  string `json:"category"`
+		}
+		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
+			return "", fmt.Errorf("invalid arguments for save_user_fact: %v", err)
+		}
+		factID, err := UpsertUserProfileFact(userID, args.FactKey, args.FactValue, args.Category, "llm")
+		if err != nil {
+			emitToolResultTrace(toolName, start, "", err)
+			return "", err
+		}
+		result := fmt.Sprintf("Saved user profile fact: %s = %s (ID: %d)", args.FactKey, args.FactValue, factID)
+		emitToolResultTrace(toolName, start, result, nil)
+		return result, nil
+
+	case "delete_user_fact":
+		if !enableMemory {
+			return "", fmt.Errorf("memory feature is disabled by user settings")
+		}
+		var args struct {
+			FactKey string `json:"fact_key"`
+		}
+		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
+			return "", fmt.Errorf("invalid arguments for delete_user_fact: %v", err)
+		}
+		err := DeleteUserProfileFact(userID, args.FactKey)
+		if err != nil {
+			emitToolResultTrace(toolName, start, "", err)
+			return "", err
+		}
+		result := fmt.Sprintf("Deleted user profile fact: %s", args.FactKey)
+		emitToolResultTrace(toolName, start, result, nil)
+		return result, nil
 
 	case "get_current_time":
 		result, err := GetCurrentTime()

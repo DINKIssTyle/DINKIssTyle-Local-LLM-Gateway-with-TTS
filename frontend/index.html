@@ -2591,6 +2591,35 @@
             document.getElementById('edit-user-modal').style.display = 'none';
         }
 
+        function expandDisabledToolAliases(tools) {
+            const aliasGroups = {
+                personal_memory: ['search_memory', 'read_memory', 'read_memory_context', 'delete_memory']
+            };
+            const expanded = [];
+            const seen = new Set();
+
+            (tools || []).forEach(tool => {
+                const normalized = String(tool || '').trim();
+                if (!normalized) return;
+
+                const members = aliasGroups[normalized];
+                if (members) {
+                    members.forEach(member => {
+                        if (seen.has(member)) return;
+                        seen.add(member);
+                        expanded.push(member);
+                    });
+                    return;
+                }
+
+                if (seen.has(normalized)) return;
+                seen.add(normalized);
+                expanded.push(normalized);
+            });
+
+            return expanded;
+        }
+
         async function changeUserPassword() {
             const userId = document.getElementById('edit-user-id').value;
             const newPassword = document.getElementById('edit-new-password').value;
@@ -2654,7 +2683,7 @@
                         disabledTools.push(cb.getAttribute('data-tool-id'));
                     }
                 });
-                await window.go.core.App.SetUserDisabledTools(userId, disabledTools);
+                await window.go.core.App.SetUserDisabledTools(userId, expandDisabledToolAliases(disabledTools));
 
                 // Update Disallowed Commands/Dirs
                 const rawCmds = document.getElementById('edit-disallowed-cmds').value;

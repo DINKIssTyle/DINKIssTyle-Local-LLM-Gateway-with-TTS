@@ -40,9 +40,8 @@ const (
 )
 
 const (
-	retentionChatEventsDays        = 14
-	retentionRequestExecutionsDays = 21
-	retentionBackgroundJobsDays    = 7
+	retentionChatEventsDays     = 14
+	retentionBackgroundJobsDays = 7
 )
 
 type MemoryRetentionConfig struct {
@@ -388,58 +387,6 @@ func createSchema() error {
 		FOREIGN KEY(chunk_id) REFERENCES saved_turn_chunks(id)
 	);
 
-	CREATE TABLE IF NOT EXISTS request_patterns (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		user_id TEXT NOT NULL,
-		intent_key TEXT NOT NULL,
-		sample_query TEXT NOT NULL,
-		query_fingerprint TEXT NOT NULL,
-		hit_count INTEGER NOT NULL DEFAULT 1,
-		first_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		last_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-	);
-
-	CREATE INDEX IF NOT EXISTS idx_request_patterns_user_intent
-	ON request_patterns(user_id, intent_key);
-
-	CREATE UNIQUE INDEX IF NOT EXISTS idx_request_patterns_user_fingerprint
-	ON request_patterns(user_id, query_fingerprint);
-
-	CREATE TABLE IF NOT EXISTS request_executions (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		user_id TEXT NOT NULL,
-		intent_key TEXT NOT NULL,
-		request_pattern_id INTEGER,
-		raw_query TEXT NOT NULL,
-		normalized_query TEXT NOT NULL,
-		tool_chain_json TEXT NOT NULL,
-		tool_count INTEGER NOT NULL DEFAULT 0,
-		total_latency_ms INTEGER NOT NULL DEFAULT 0,
-		tool_latency_ms INTEGER NOT NULL DEFAULT 0,
-		success INTEGER NOT NULL DEFAULT 0,
-		fallback_used INTEGER NOT NULL DEFAULT 0,
-		repeated_tool_blocked INTEGER NOT NULL DEFAULT 0,
-		self_correction_used INTEGER NOT NULL DEFAULT 0,
-		followup_within_2m INTEGER NOT NULL DEFAULT 0,
-		user_feedback_score REAL NOT NULL DEFAULT 0,
-		recipe_version TEXT NOT NULL DEFAULT '',
-		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		FOREIGN KEY(request_pattern_id) REFERENCES request_patterns(id)
-	);
-
-	CREATE INDEX IF NOT EXISTS idx_request_executions_user_intent
-	ON request_executions(user_id, intent_key, created_at DESC);
-
-	CREATE TABLE IF NOT EXISTS request_intent_stats (
-		user_id TEXT NOT NULL,
-		intent_key TEXT NOT NULL,
-		total_count INTEGER NOT NULL DEFAULT 0,
-		success_count INTEGER NOT NULL DEFAULT 0,
-		avg_latency_ms REAL NOT NULL DEFAULT 0,
-		last_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		PRIMARY KEY (user_id, intent_key)
-	);
-
 	CREATE TABLE IF NOT EXISTS background_chat_jobs (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		user_id TEXT NOT NULL,
@@ -465,30 +412,27 @@ func createSchema() error {
 	CREATE INDEX IF NOT EXISTS idx_background_chat_jobs_status_updated
 	ON background_chat_jobs(status, updated_at DESC);
 
-	CREATE TABLE IF NOT EXISTS procedure_recipes (
+	CREATE TABLE IF NOT EXISTS user_profile_facts (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		user_id TEXT NOT NULL,
-		intent_key TEXT NOT NULL,
-		recipe_name TEXT NOT NULL,
-		trigger_hint TEXT NOT NULL DEFAULT '',
-		tool_chain_template_json TEXT NOT NULL,
-		preconditions_json TEXT NOT NULL DEFAULT '{}',
-		avg_latency_ms REAL NOT NULL DEFAULT 0,
-		success_rate REAL NOT NULL DEFAULT 0,
-		quality_score REAL NOT NULL DEFAULT 0,
-		final_score REAL NOT NULL DEFAULT 0,
-		usage_count INTEGER NOT NULL DEFAULT 0,
-		last_used_at DATETIME,
-		active INTEGER NOT NULL DEFAULT 1,
+		fact_key TEXT NOT NULL,
+		fact_value TEXT NOT NULL,
+		category TEXT NOT NULL DEFAULT 'general',
+		source TEXT NOT NULL DEFAULT 'llm',
 		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
 
-	CREATE INDEX IF NOT EXISTS idx_procedure_recipes_user_intent
-	ON procedure_recipes(user_id, intent_key, active, final_score DESC);
+	CREATE UNIQUE INDEX IF NOT EXISTS idx_user_profile_facts_user_key
+	ON user_profile_facts(user_id, fact_key);
 
-	CREATE UNIQUE INDEX IF NOT EXISTS idx_procedure_recipes_user_intent_name
-	ON procedure_recipes(user_id, intent_key, recipe_name);
+	CREATE INDEX IF NOT EXISTS idx_user_profile_facts_user_category
+	ON user_profile_facts(user_id, category);
+
+	CREATE TABLE IF NOT EXISTS app_meta (
+		key TEXT PRIMARY KEY,
+		value TEXT NOT NULL
+	);
 	`
 	_, err := db.Exec(query)
 	if err != nil {
@@ -501,10 +445,16 @@ func createSchema() error {
 	if err := migrateMemoryRetentionSchema(); err != nil {
 		return err
 	}
+	if err := dropDeprecatedProceduralMemoryTables(); err != nil {
+		return err
+	}
 	if err := migrateChatSessionsSchema(); err != nil {
 		return err
 	}
 	if err := migrateSavedTurnsSchema(); err != nil {
+		return err
+	}
+	if err := ensureFTSIndexVersion(); err != nil {
 		return err
 	}
 	if err := runRetentionMaintenance(time.Now().UTC()); err != nil {
@@ -512,6 +462,218 @@ func createSchema() error {
 	}
 
 	log.Println("[DB] Schema initialized successfully.")
+	return nil
+}
+
+func ensureFTSIndexVersion() error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	var version string
+	err := db.QueryRow(`SELECT value FROM app_meta WHERE key = 'fts_index_version'`).Scan(&version)
+	switch {
+	case err == nil && version == ftsIndexVersion:
+		return nil
+	case err != nil && err != sql.ErrNoRows:
+		return fmt.Errorf("failed to inspect fts index version: %w", err)
+	}
+
+	if err := rebuildAllFTSIndexes(); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`
+		INSERT INTO app_meta(key, value)
+		VALUES('fts_index_version', ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value
+	`, ftsIndexVersion); err != nil {
+		return fmt.Errorf("failed to persist fts index version: %w", err)
+	}
+	return nil
+}
+
+func rebuildAllFTSIndexes() error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin fts rebuild: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if err = rebuildMemoryChunkFTS(tx); err != nil {
+		return err
+	}
+	if err = rebuildSavedTurnChunkFTS(tx); err != nil {
+		return err
+	}
+	if err = rebuildWebSourceChunkFTS(tx); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit fts rebuild: %w", err)
+	}
+
+	log.Printf("[DB] Rebuilt FTS indexes with version %s", ftsIndexVersion)
+	return nil
+}
+
+func rebuildMemoryChunkFTS(tx *sql.Tx) error {
+	rows, err := tx.Query(`
+		SELECT id, chunk_text, memory_id, user_id, chunk_index
+		FROM memory_chunks
+		ORDER BY id ASC
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to query memory chunks for fts rebuild: %w", err)
+	}
+	defer rows.Close()
+
+	type row struct {
+		id         int64
+		chunkText  string
+		memoryID   int64
+		userID     string
+		chunkIndex int
+	}
+
+	var items []row
+	for rows.Next() {
+		var item row
+		if err := rows.Scan(&item.id, &item.chunkText, &item.memoryID, &item.userID, &item.chunkIndex); err != nil {
+			return fmt.Errorf("failed to scan memory chunk for fts rebuild: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("failed to iterate memory chunks for fts rebuild: %w", err)
+	}
+
+	if _, err := tx.Exec(`DELETE FROM memory_chunks_fts`); err != nil {
+		return fmt.Errorf("failed to clear memory chunk fts rows: %w", err)
+	}
+	stmt, err := tx.Prepare(`
+		INSERT INTO memory_chunks_fts(rowid, chunk_text, memory_id, user_id, chunk_index)
+		VALUES (?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare memory chunk fts rebuild insert: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, item := range items {
+		if _, err := stmt.Exec(item.id, buildFTSIndexedText(item.chunkText), item.memoryID, item.userID, item.chunkIndex); err != nil {
+			return fmt.Errorf("failed to rebuild memory chunk fts row %d: %w", item.id, err)
+		}
+	}
+	return nil
+}
+
+func rebuildSavedTurnChunkFTS(tx *sql.Tx) error {
+	rows, err := tx.Query(`
+		SELECT id, chunk_text, saved_turn_id, user_id, chunk_index
+		FROM saved_turn_chunks
+		ORDER BY id ASC
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to query saved turn chunks for fts rebuild: %w", err)
+	}
+	defer rows.Close()
+
+	type row struct {
+		id          int64
+		chunkText   string
+		savedTurnID int64
+		userID      string
+		chunkIndex  int
+	}
+
+	var items []row
+	for rows.Next() {
+		var item row
+		if err := rows.Scan(&item.id, &item.chunkText, &item.savedTurnID, &item.userID, &item.chunkIndex); err != nil {
+			return fmt.Errorf("failed to scan saved turn chunk for fts rebuild: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("failed to iterate saved turn chunks for fts rebuild: %w", err)
+	}
+
+	if _, err := tx.Exec(`DELETE FROM saved_turn_chunks_fts`); err != nil {
+		return fmt.Errorf("failed to clear saved turn chunk fts rows: %w", err)
+	}
+	stmt, err := tx.Prepare(`
+		INSERT INTO saved_turn_chunks_fts(rowid, chunk_text, saved_turn_id, user_id, chunk_index)
+		VALUES (?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare saved turn chunk fts rebuild insert: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, item := range items {
+		if _, err := stmt.Exec(item.id, buildFTSIndexedText(item.chunkText), item.savedTurnID, item.userID, item.chunkIndex); err != nil {
+			return fmt.Errorf("failed to rebuild saved turn chunk fts row %d: %w", item.id, err)
+		}
+	}
+	return nil
+}
+
+func rebuildWebSourceChunkFTS(tx *sql.Tx) error {
+	rows, err := tx.Query(`
+		SELECT id, chunk_text, source_id, user_id, chunk_index
+		FROM web_source_chunks
+		ORDER BY id ASC
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to query web source chunks for fts rebuild: %w", err)
+	}
+	defer rows.Close()
+
+	type row struct {
+		id         int64
+		chunkText  string
+		sourceID   string
+		userID     string
+		chunkIndex int
+	}
+
+	var items []row
+	for rows.Next() {
+		var item row
+		if err := rows.Scan(&item.id, &item.chunkText, &item.sourceID, &item.userID, &item.chunkIndex); err != nil {
+			return fmt.Errorf("failed to scan web source chunk for fts rebuild: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("failed to iterate web source chunks for fts rebuild: %w", err)
+	}
+
+	if _, err := tx.Exec(`DELETE FROM web_source_chunks_fts`); err != nil {
+		return fmt.Errorf("failed to clear web source chunk fts rows: %w", err)
+	}
+	stmt, err := tx.Prepare(`
+		INSERT INTO web_source_chunks_fts(rowid, chunk_text, source_id, user_id, chunk_index)
+		VALUES (?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare web source chunk fts rebuild insert: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, item := range items {
+		if _, err := stmt.Exec(item.id, buildFTSIndexedText(item.chunkText), item.sourceID, item.userID, item.chunkIndex); err != nil {
+			return fmt.Errorf("failed to rebuild web source chunk fts row %d: %w", item.id, err)
+		}
+	}
 	return nil
 }
 
@@ -839,9 +1001,6 @@ func runRetentionMaintenance(now time.Time) error {
 	if err := pruneOldBackgroundJobs(now); err != nil {
 		return err
 	}
-	if err := pruneOldRequestExecutions(now); err != nil {
-		return err
-	}
 	if err := pruneOldChatEvents(now); err != nil {
 		return err
 	}
@@ -854,6 +1013,25 @@ func runRetentionMaintenance(now time.Time) error {
 // RunRetentionMaintenance executes the SQLite retention cleanup pass using the current UTC time.
 func RunRetentionMaintenance() error {
 	return runRetentionMaintenance(time.Now().UTC())
+}
+
+func dropDeprecatedProceduralMemoryTables() error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	statements := []string{
+		`DROP TABLE IF EXISTS procedure_recipes`,
+		`DROP TABLE IF EXISTS request_intent_stats`,
+		`DROP TABLE IF EXISTS request_executions`,
+		`DROP TABLE IF EXISTS request_patterns`,
+	}
+	for _, statement := range statements {
+		if _, err := db.Exec(statement); err != nil {
+			return fmt.Errorf("failed to remove deprecated procedural memory tables: %w", err)
+		}
+	}
+	return nil
 }
 
 func pruneExpiredAuthSessions(now time.Time) error {
@@ -872,15 +1050,6 @@ func pruneOldBackgroundJobs(now time.Time) error {
 		  AND updated_at < ?`, cutoff)
 	if err != nil {
 		return fmt.Errorf("failed to prune old background jobs: %w", err)
-	}
-	return nil
-}
-
-func pruneOldRequestExecutions(now time.Time) error {
-	cutoff := now.AddDate(0, 0, -retentionRequestExecutionsDays).UTC()
-	_, err := db.Exec(`DELETE FROM request_executions WHERE created_at < ?`, cutoff)
-	if err != nil {
-		return fmt.Errorf("failed to prune old request executions: %w", err)
 	}
 	return nil
 }
@@ -1070,45 +1239,6 @@ type SavedTurnEntry struct {
 	ResponseText      string    `json:"response_text"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
-}
-
-type RequestExecutionEntry struct {
-	UserID               string
-	IntentKey            string
-	RequestPatternID     sql.NullInt64
-	RawQuery             string
-	NormalizedQuery      string
-	ToolChainJSON        string
-	ToolCount            int
-	TotalLatencyMS       int64
-	ToolLatencyMS        int64
-	Success              bool
-	FallbackUsed         bool
-	RepeatedToolBlocked  bool
-	SelfCorrectionUsed   bool
-	FollowupWithinTwoMin bool
-	UserFeedbackScore    float64
-	RecipeVersion        string
-	CreatedAt            time.Time
-}
-
-type ProcedureRecipeEntry struct {
-	ID                    int64
-	UserID                string
-	IntentKey             string
-	RecipeName            string
-	TriggerHint           string
-	ToolChainTemplateJSON string
-	PreconditionsJSON     string
-	AvgLatencyMS          float64
-	SuccessRate           float64
-	QualityScore          float64
-	FinalScore            float64
-	UsageCount            int
-	LastUsedAt            sql.NullTime
-	Active                bool
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
 }
 
 func InsertAuthSession(userID, tokenHash string, rememberMe bool, userAgent, clientAddr string, expiresAt time.Time) error {
@@ -1613,392 +1743,6 @@ func CountChatEvents(userID string, sessionID int64) (int, error) {
 		return 0, fmt.Errorf("failed to count chat events: %w", err)
 	}
 	return count, nil
-}
-
-func UpsertRequestPattern(userID, intentKey, sampleQuery, queryFingerprint string) (int64, error) {
-	if db == nil {
-		return 0, fmt.Errorf("database not initialized")
-	}
-	queryFingerprint = strings.TrimSpace(queryFingerprint)
-	if queryFingerprint == "" {
-		return 0, fmt.Errorf("query fingerprint is required")
-	}
-
-	query := `
-	INSERT INTO request_patterns (user_id, intent_key, sample_query, query_fingerprint, hit_count, first_seen_at, last_seen_at)
-	VALUES (?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-	ON CONFLICT(user_id, query_fingerprint) DO UPDATE SET
-		intent_key = excluded.intent_key,
-		sample_query = excluded.sample_query,
-		hit_count = request_patterns.hit_count + 1,
-		last_seen_at = CURRENT_TIMESTAMP`
-
-	if _, err := db.Exec(query, userID, intentKey, sampleQuery, queryFingerprint); err != nil {
-		return 0, fmt.Errorf("failed to upsert request pattern: %w", err)
-	}
-
-	var id int64
-	if err := db.QueryRow(
-		`SELECT id FROM request_patterns WHERE user_id = ? AND query_fingerprint = ?`,
-		userID,
-		queryFingerprint,
-	).Scan(&id); err != nil {
-		return 0, fmt.Errorf("failed to fetch request pattern id: %w", err)
-	}
-
-	return id, nil
-}
-
-func InsertRequestExecution(entry RequestExecutionEntry) error {
-	if db == nil {
-		return fmt.Errorf("database not initialized")
-	}
-
-	query := `
-	INSERT INTO request_executions (
-		user_id, intent_key, request_pattern_id, raw_query, normalized_query,
-		tool_chain_json, tool_count, total_latency_ms, tool_latency_ms, success,
-		fallback_used, repeated_tool_blocked, self_correction_used,
-		followup_within_2m, user_feedback_score, recipe_version, created_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-
-	_, err := db.Exec(
-		query,
-		entry.UserID,
-		entry.IntentKey,
-		entry.RequestPatternID,
-		entry.RawQuery,
-		entry.NormalizedQuery,
-		entry.ToolChainJSON,
-		entry.ToolCount,
-		entry.TotalLatencyMS,
-		entry.ToolLatencyMS,
-		boolToInt(entry.Success),
-		boolToInt(entry.FallbackUsed),
-		boolToInt(entry.RepeatedToolBlocked),
-		boolToInt(entry.SelfCorrectionUsed),
-		boolToInt(entry.FollowupWithinTwoMin),
-		entry.UserFeedbackScore,
-		entry.RecipeVersion,
-		entry.CreatedAt.UTC(),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to insert request execution: %w", err)
-	}
-
-	return nil
-}
-
-func UpsertRequestIntentStat(userID, intentKey string, success bool, latencyMS int64, seenAt time.Time) error {
-	if db == nil {
-		return fmt.Errorf("database not initialized")
-	}
-
-	query := `
-	INSERT INTO request_intent_stats (
-		user_id, intent_key, total_count, success_count, avg_latency_ms, last_seen_at
-	) VALUES (?, ?, 1, ?, ?, ?)
-	ON CONFLICT(user_id, intent_key) DO UPDATE SET
-		total_count = request_intent_stats.total_count + 1,
-		success_count = request_intent_stats.success_count + excluded.success_count,
-		avg_latency_ms = (
-			(request_intent_stats.avg_latency_ms * request_intent_stats.total_count) + excluded.avg_latency_ms
-		) / (request_intent_stats.total_count + 1),
-		last_seen_at = excluded.last_seen_at`
-
-	_, err := db.Exec(query, userID, intentKey, boolToInt(success), float64(latencyMS), seenAt.UTC())
-	if err != nil {
-		return fmt.Errorf("failed to upsert request intent stats: %w", err)
-	}
-
-	return nil
-}
-
-func UpsertProcedureRecipe(entry ProcedureRecipeEntry) error {
-	if db == nil {
-		return fmt.Errorf("database not initialized")
-	}
-
-	query := `
-	INSERT INTO procedure_recipes (
-		user_id, intent_key, recipe_name, trigger_hint, tool_chain_template_json,
-		preconditions_json, avg_latency_ms, success_rate, quality_score, final_score,
-		usage_count, last_used_at, active, created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-	ON CONFLICT(user_id, intent_key, recipe_name) DO UPDATE SET
-		trigger_hint = excluded.trigger_hint,
-		tool_chain_template_json = excluded.tool_chain_template_json,
-		preconditions_json = excluded.preconditions_json,
-		avg_latency_ms = excluded.avg_latency_ms,
-		success_rate = excluded.success_rate,
-		quality_score = excluded.quality_score,
-		final_score = excluded.final_score,
-		usage_count = excluded.usage_count,
-		last_used_at = excluded.last_used_at,
-		active = excluded.active,
-		updated_at = CURRENT_TIMESTAMP`
-
-	_, err := db.Exec(
-		query,
-		entry.UserID,
-		entry.IntentKey,
-		entry.RecipeName,
-		entry.TriggerHint,
-		entry.ToolChainTemplateJSON,
-		entry.PreconditionsJSON,
-		entry.AvgLatencyMS,
-		entry.SuccessRate,
-		entry.QualityScore,
-		entry.FinalScore,
-		entry.UsageCount,
-		entry.LastUsedAt,
-		boolToInt(entry.Active),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to upsert procedure recipe: %w", err)
-	}
-
-	return nil
-}
-
-func RefreshProcedureRecipes(userID, intentKey string) error {
-	if db == nil {
-		return fmt.Errorf("database not initialized")
-	}
-	userID = strings.TrimSpace(userID)
-	intentKey = strings.TrimSpace(intentKey)
-	if userID == "" || intentKey == "" {
-		return fmt.Errorf("user id and intent key are required")
-	}
-
-	rows, err := db.Query(`
-		SELECT tool_chain_json, total_latency_ms, success, fallback_used, repeated_tool_blocked,
-		       self_correction_used, created_at
-		FROM request_executions
-		WHERE user_id = ? AND intent_key = ?
-		ORDER BY created_at DESC
-		LIMIT 50`,
-		userID,
-		intentKey,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to query request executions: %w", err)
-	}
-	defer rows.Close()
-
-	type executionSample struct {
-		ToolChainJSON      string
-		TotalLatencyMS     int64
-		Success            bool
-		FallbackUsed       bool
-		RepeatedBlocked    bool
-		SelfCorrectionUsed bool
-		CreatedAt          time.Time
-	}
-
-	var samples []executionSample
-	for rows.Next() {
-		var sample executionSample
-		var successInt int
-		var fallbackInt int
-		var repeatedInt int
-		var selfCorrectionInt int
-		if err := rows.Scan(
-			&sample.ToolChainJSON,
-			&sample.TotalLatencyMS,
-			&successInt,
-			&fallbackInt,
-			&repeatedInt,
-			&selfCorrectionInt,
-			&sample.CreatedAt,
-		); err != nil {
-			return fmt.Errorf("failed to scan request execution: %w", err)
-		}
-		sample.Success = successInt != 0
-		sample.FallbackUsed = fallbackInt != 0
-		sample.RepeatedBlocked = repeatedInt != 0
-		sample.SelfCorrectionUsed = selfCorrectionInt != 0
-		samples = append(samples, sample)
-	}
-
-	if len(samples) == 0 {
-		return nil
-	}
-
-	type recipeAgg struct {
-		ToolChainJSON  string
-		UsageCount     int
-		SuccessCount   int
-		TotalLatencyMS int64
-		QualityTotal   float64
-		LastUsedAt     time.Time
-	}
-
-	aggregates := make(map[string]*recipeAgg)
-	for _, sample := range samples {
-		recipeName := deriveRecipeName(intentKey, sample.ToolChainJSON)
-		agg, ok := aggregates[recipeName]
-		if !ok {
-			agg = &recipeAgg{ToolChainJSON: sample.ToolChainJSON}
-			aggregates[recipeName] = agg
-		}
-		agg.UsageCount++
-		if sample.Success {
-			agg.SuccessCount++
-		}
-		agg.TotalLatencyMS += sample.TotalLatencyMS
-		agg.QualityTotal += computeExecutionQuality(sample.Success, sample.TotalLatencyMS, sample.FallbackUsed, sample.RepeatedBlocked, sample.SelfCorrectionUsed)
-		if sample.CreatedAt.After(agg.LastUsedAt) {
-			agg.LastUsedAt = sample.CreatedAt
-		}
-	}
-
-	for recipeName, agg := range aggregates {
-		avgLatency := float64(agg.TotalLatencyMS) / float64(agg.UsageCount)
-		successRate := float64(agg.SuccessCount) / float64(agg.UsageCount)
-		qualityScore := agg.QualityTotal / float64(agg.UsageCount)
-		speedScore := latencyToSpeedScore(avgLatency)
-		finalScore := successRate*0.45 + qualityScore*0.35 + speedScore*0.20
-
-		entry := ProcedureRecipeEntry{
-			UserID:                userID,
-			IntentKey:             intentKey,
-			RecipeName:            recipeName,
-			TriggerHint:           intentKey,
-			ToolChainTemplateJSON: agg.ToolChainJSON,
-			PreconditionsJSON:     "{}",
-			AvgLatencyMS:          avgLatency,
-			SuccessRate:           successRate,
-			QualityScore:          qualityScore,
-			FinalScore:            finalScore,
-			UsageCount:            agg.UsageCount,
-			LastUsedAt:            sql.NullTime{Time: agg.LastUsedAt, Valid: !agg.LastUsedAt.IsZero()},
-			Active:                true,
-		}
-
-		if err := UpsertProcedureRecipe(entry); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func GetTopProcedureRecipe(userID, intentKey string) (ProcedureRecipeEntry, error) {
-	var entry ProcedureRecipeEntry
-	if db == nil {
-		return entry, fmt.Errorf("database not initialized")
-	}
-
-	query := `
-	SELECT id, user_id, intent_key, recipe_name, trigger_hint, tool_chain_template_json,
-	       preconditions_json, avg_latency_ms, success_rate, quality_score, final_score,
-	       usage_count, last_used_at, active, created_at, updated_at
-	FROM procedure_recipes
-	WHERE user_id = ? AND intent_key = ? AND active = 1
-	ORDER BY final_score DESC, usage_count DESC, updated_at DESC
-	LIMIT 1`
-
-	var activeInt int
-	err := db.QueryRow(query, userID, intentKey).Scan(
-		&entry.ID,
-		&entry.UserID,
-		&entry.IntentKey,
-		&entry.RecipeName,
-		&entry.TriggerHint,
-		&entry.ToolChainTemplateJSON,
-		&entry.PreconditionsJSON,
-		&entry.AvgLatencyMS,
-		&entry.SuccessRate,
-		&entry.QualityScore,
-		&entry.FinalScore,
-		&entry.UsageCount,
-		&entry.LastUsedAt,
-		&activeInt,
-		&entry.CreatedAt,
-		&entry.UpdatedAt,
-	)
-	if err != nil {
-		return entry, err
-	}
-	entry.Active = activeInt != 0
-	return entry, nil
-}
-
-func deriveRecipeName(intentKey, toolChainJSON string) string {
-	var events []struct {
-		Tool string `json:"tool"`
-	}
-	if err := json.Unmarshal([]byte(toolChainJSON), &events); err != nil || len(events) == 0 {
-		if strings.TrimSpace(intentKey) == "" {
-			return "direct_answer"
-		}
-		return intentKey + "_direct"
-	}
-
-	parts := make([]string, 0, len(events))
-	for _, event := range events {
-		name := strings.TrimSpace(event.Tool)
-		if name == "" {
-			continue
-		}
-		parts = append(parts, name)
-	}
-	if len(parts) == 0 {
-		return intentKey + "_direct"
-	}
-	return strings.Join(parts, "__")
-}
-
-func computeExecutionQuality(success bool, latencyMS int64, fallbackUsed bool, repeatedBlocked bool, selfCorrectionUsed bool) float64 {
-	score := 0.0
-	if success {
-		score += 1.0
-	} else {
-		score -= 1.0
-	}
-
-	switch {
-	case latencyMS > 0 && latencyMS <= 1500:
-		score += 0.5
-	case latencyMS <= 3000:
-		score += 0.2
-	}
-
-	if fallbackUsed {
-		score -= 0.2
-	}
-	if repeatedBlocked {
-		score -= 0.2
-	}
-	if selfCorrectionUsed {
-		score -= 0.3
-	}
-
-	if score < 0 {
-		return 0
-	}
-	if score > 1 {
-		return 1
-	}
-	return score
-}
-
-func latencyToSpeedScore(avgLatencyMS float64) float64 {
-	switch {
-	case avgLatencyMS <= 0:
-		return 0
-	case avgLatencyMS <= 1500:
-		return 1.0
-	case avgLatencyMS <= 3000:
-		return 0.8
-	case avgLatencyMS <= 5000:
-		return 0.5
-	case avgLatencyMS <= 8000:
-		return 0.2
-	default:
-		return 0
-	}
 }
 
 func boolToInt(v bool) int {
@@ -2689,7 +2433,7 @@ func rebuildSavedTurnChunksTx(tx *sql.Tx, savedTurnID int64, userID, title, prom
 		if _, err := tx.Exec(`
 			INSERT INTO saved_turn_chunks_fts(rowid, chunk_text, saved_turn_id, user_id, chunk_index)
 			VALUES (?, ?, ?, ?, ?)
-		`, chunkID, chunk.Text, savedTurnID, userID, chunk.Index); err != nil {
+		`, chunkID, buildFTSIndexedText(chunk.Text), savedTurnID, userID, chunk.Index); err != nil {
 			return fmt.Errorf("failed to index saved turn chunk: %w", err)
 		}
 		if err := upsertSavedTurnChunkEmbeddingTx(tx, chunkID, chunk.Text); err != nil {
@@ -2760,7 +2504,7 @@ func insertMemoryChunksTx(tx *sql.Tx, memoryID int64, userID, fullText string, c
 		if _, err := tx.Exec(`
 			INSERT INTO memory_chunks_fts(rowid, chunk_text, memory_id, user_id, chunk_index)
 			VALUES (?, ?, ?, ?, ?)
-		`, chunkID, chunk.Text, memoryID, userID, chunk.Index); err != nil {
+		`, chunkID, buildFTSIndexedText(chunk.Text), memoryID, userID, chunk.Index); err != nil {
 			return fmt.Errorf("failed to index memory chunk: %w", err)
 		}
 		if err := upsertMemoryChunkEmbeddingTx(tx, chunkID, chunk.Text); err != nil {
@@ -3360,4 +3104,162 @@ func DeleteMemory(userID string, memoryID int64) error {
 	}
 
 	return nil
+}
+
+// --- User Profile Facts ---
+
+// UserProfileFact represents a structured key-value fact about the user.
+type UserProfileFact struct {
+	ID        int64     `json:"id"`
+	UserID    string    `json:"user_id"`
+	FactKey   string    `json:"fact_key"`
+	FactValue string    `json:"fact_value"`
+	Category  string    `json:"category"`
+	Source    string    `json:"source"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// UpsertUserProfileFact inserts or updates a structured fact about the user.
+// If a fact with the same user_id and fact_key already exists, its value is updated.
+func UpsertUserProfileFact(userID, factKey, factValue, category, source string) (int64, error) {
+	if db == nil {
+		return 0, fmt.Errorf("database not initialized")
+	}
+	factKey = strings.TrimSpace(factKey)
+	factValue = strings.TrimSpace(factValue)
+	if factKey == "" || factValue == "" {
+		return 0, fmt.Errorf("fact_key and fact_value must not be empty")
+	}
+	if category == "" {
+		category = "general"
+	}
+	if source == "" {
+		source = "llm"
+	}
+
+	now := time.Now().UTC()
+	result, err := db.Exec(`
+		INSERT INTO user_profile_facts (user_id, fact_key, fact_value, category, source, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(user_id, fact_key) DO UPDATE SET
+			fact_value = excluded.fact_value,
+			category = excluded.category,
+			source = excluded.source,
+			updated_at = excluded.updated_at
+	`, userID, factKey, factValue, category, source, now, now)
+	if err != nil {
+		return 0, fmt.Errorf("failed to upsert user profile fact: %w", err)
+	}
+	return result.LastInsertId()
+}
+
+// GetUserProfileFacts returns all profile facts for a user, ordered by category then key.
+func GetUserProfileFacts(userID string) ([]UserProfileFact, error) {
+	if db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+
+	rows, err := db.Query(`
+		SELECT id, user_id, fact_key, fact_value, category, source, created_at, updated_at
+		FROM user_profile_facts
+		WHERE user_id = ?
+		ORDER BY category ASC, fact_key ASC
+	`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query user profile facts: %w", err)
+	}
+	defer rows.Close()
+
+	var facts []UserProfileFact
+	for rows.Next() {
+		var f UserProfileFact
+		if err := rows.Scan(&f.ID, &f.UserID, &f.FactKey, &f.FactValue, &f.Category, &f.Source, &f.CreatedAt, &f.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan user profile fact: %w", err)
+		}
+		facts = append(facts, f)
+	}
+	return facts, rows.Err()
+}
+
+// DeleteUserProfileFact removes a specific profile fact by user_id and fact_key.
+func DeleteUserProfileFact(userID, factKey string) error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	factKey = strings.TrimSpace(factKey)
+	if factKey == "" {
+		return fmt.Errorf("fact_key must not be empty")
+	}
+
+	result, err := db.Exec(`
+		DELETE FROM user_profile_facts
+		WHERE user_id = ? AND fact_key = ?
+	`, userID, factKey)
+	if err != nil {
+		return fmt.Errorf("failed to delete user profile fact: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to check deleted rows: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("profile fact '%s' not found for user", factKey)
+	}
+	return nil
+}
+
+// DeleteUserProfileFactByID removes a specific profile fact by its numeric ID.
+func DeleteUserProfileFactByID(userID string, factID int64) error {
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	result, err := db.Exec(`
+		DELETE FROM user_profile_facts
+		WHERE id = ? AND user_id = ?
+	`, factID, userID)
+	if err != nil {
+		return fmt.Errorf("failed to delete user profile fact by ID: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to check deleted rows: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("profile fact ID %d not found for user", factID)
+	}
+	return nil
+}
+
+// FormatUserProfileForPrompt builds a formatted string of all profile facts for system prompt injection.
+func FormatUserProfileForPrompt(userID string) string {
+	facts, err := GetUserProfileFacts(userID)
+	if err != nil {
+		log.Printf("[MCP] Failed to load user profile facts: %v", err)
+		return ""
+	}
+	if len(facts) == 0 {
+		return ""
+	}
+
+	categoryMap := make(map[string][]UserProfileFact)
+	var categoryOrder []string
+	for _, f := range facts {
+		if _, exists := categoryMap[f.Category]; !exists {
+			categoryOrder = append(categoryOrder, f.Category)
+		}
+		categoryMap[f.Category] = append(categoryMap[f.Category], f)
+	}
+
+	var sb strings.Builder
+	for _, cat := range categoryOrder {
+		sb.WriteString(fmt.Sprintf("[%s]\n", cat))
+		for _, f := range categoryMap[cat] {
+			sb.WriteString(fmt.Sprintf("- %s: %s\n", f.FactKey, f.FactValue))
+		}
+	}
+	return strings.TrimSpace(sb.String())
 }

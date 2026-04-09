@@ -18,11 +18,11 @@ type RequestInput struct {
 	ContextStrategy   string
 	EnableMCP         bool
 	EnableMemory      bool
-	ProceduralHint    string
 	RecentContext     string
 	MemorySnapshot    string
 	ActiveContext     string
 	RetrievalInjected bool
+	UserProfileFacts  string
 }
 
 type PreparedRequest struct {
@@ -57,7 +57,7 @@ func PrepareRequest(input RequestInput) (PreparedRequest, error) {
 
 	useNativeIntegrations := input.EnableMCP && strings.TrimSpace(strings.ToLower(input.LLMMode)) == "stateful"
 	includeRetrievalMemory := contextStrategy == "retrieval"
-	shouldInjectRuntime := useNativeIntegrations || includeRetrievalMemory || strings.TrimSpace(input.ProceduralHint) != ""
+	shouldInjectRuntime := useNativeIntegrations || includeRetrievalMemory
 
 	if shouldInjectRuntime {
 		if useNativeIntegrations {
@@ -68,11 +68,11 @@ func PrepareRequest(input RequestInput) (PreparedRequest, error) {
 				EnvironmentInfo:       buildEnvironmentInfo(),
 				ModelID:               extractModelID(reqMap),
 				UseNativeIntegrations: useNativeIntegrations,
-				ProceduralHint:        input.ProceduralHint,
 				RecentContext:         conditionalContextValue(includeRetrievalMemory, input.RecentContext),
 				MemorySnapshot:        conditionalContextValue(includeRetrievalMemory, input.MemorySnapshot),
 				ActiveContext:         conditionalContextValue(includeRetrievalMemory, input.ActiveContext),
 				RetrievalInjected:     includeRetrievalMemory && input.RetrievalInjected,
+				UserProfileFacts:      input.UserProfileFacts,
 			})
 			prepared.InjectedPrompt = promptkit.InjectPrompt(reqMap, extraInstr)
 		}

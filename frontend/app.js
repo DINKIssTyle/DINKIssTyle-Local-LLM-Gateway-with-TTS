@@ -32,6 +32,7 @@ let config = {
     ttsVoice: 'F1',        // Default: F1
     ttsSpeed: 1.1,         // Default: 1.1
     autoTTS: true,         // Default: True (Auto-play)
+    voiceInputAutoTTS: true, // Default: True (Override auto-play for STT messages)
     ttsFormat: 'wav',      // Default: wav
     ttsSteps: 5,           // Default: 5
     ttsThreads: 2,         // Default: 2
@@ -431,6 +432,8 @@ const translations = {
         'setting.micLayout.option.right': '오른쪽',
         'setting.micLayout.option.bottom': '하단',
         'setting.micLayout.option.inline': '메시지 창 내부',
+        'setting.voiceInputAutoPlay.label': '음성 입력 시 자동 재생',
+        'setting.voiceInputAutoPlay.desc': '마이크로 보낸 메시지는 TTS 엔진의 자동 재생 설정과 관계없이 이 옵션을 우선 적용합니다.',
         'status.thinking': '생각 중...',
         'status.live': '진행 중',
         'status.running': '실행 중',
@@ -672,6 +675,8 @@ const translations = {
         'setting.micLayout.option.right': 'Right Side',
         'setting.micLayout.option.bottom': 'Bottom',
         'setting.micLayout.option.inline': 'In Message Input',
+        'setting.voiceInputAutoPlay.label': 'Auto-play For Voice Input',
+        'setting.voiceInputAutoPlay.desc': 'Messages sent with the microphone follow this option even if TTS engine auto-play is turned off.',
         'status.thinking': 'Thinking...',
         'status.live': 'Live',
         'status.running': 'Running',
@@ -2144,6 +2149,7 @@ let streamingTTSCommittedIndex = 0; // How much of the display text has been sen
 let streamingTTSBuffer = ""; // Uncommitted text buffer
 let streamingTTSProcessor = null; // Reference to the active processor loop
 let ttsSessionId = 0;
+let pendingVoiceInputAutoTTS = false;
 let osTTSVoices = [];
 let osTTSVoicesReady = false;
 
@@ -3244,6 +3250,7 @@ function loadConfig() {
     config.hapticsEnabled = config.hapticsEnabled !== false;
     config.osTtsRate = Number(config.osTtsRate) > 0 ? Number(config.osTtsRate) : 1.0;
     config.osTtsPitch = Number(config.osTtsPitch) >= 0 ? Number(config.osTtsPitch) : 1.0;
+    config.voiceInputAutoTTS = config.voiceInputAutoTTS !== false;
     config.contextStrategy = normalizeContextStrategyForMode(config.llmMode, config.contextStrategy);
     config.enableMCP = enforceMCPPolicyForMode(config.llmMode);
 
@@ -3283,6 +3290,8 @@ function loadConfig() {
     if (statefulTokenBudgetEl) statefulTokenBudgetEl.value = parseInt(config.statefulTokenBudget, 10) || DEFAULT_STATEFUL_TOKEN_BUDGET;
 
     document.getElementById('cfg-auto-tts').checked = config.autoTTS || false;
+    const voiceInputAutoTTSEl = document.getElementById('cfg-voice-input-auto-tts');
+    if (voiceInputAutoTTSEl) voiceInputAutoTTSEl.checked = config.voiceInputAutoTTS !== false;
     document.getElementById('cfg-tts-engine').value = config.ttsEngine || 'supertonic';
     document.getElementById('cfg-tts-lang').value = config.ttsLang;
     document.getElementById('cfg-enable-embeddings').checked = config.enableEmbeddings || false;
@@ -3356,6 +3365,7 @@ function updateSettingsVisibility() {
     const mcpContainer = document.getElementById('container-enable-mcp');
     const memContainer = document.getElementById('container-enable-memory');
     const statefulBudgetContainer = document.getElementById('container-stateful-budget');
+    const micLayoutValue = document.getElementById('cfg-mic-layout')?.value || config.micLayout || 'none';
     config.llmMode = mode;
     renderContextStrategyOptions();
     config.contextStrategy = normalizeContextStrategyForMode(mode, document.getElementById('cfg-context-strategy')?.value || config.contextStrategy);
@@ -3369,6 +3379,7 @@ function updateSettingsVisibility() {
     const showHistory = usesHistoryConversationContext();
     const showMCP = mode === 'stateful';
     const showStatefulBudget = usesStatefulConversationContext();
+    const voiceInputAutoTTSContainer = document.getElementById('container-voice-input-auto-tts');
     const mcpEl = document.getElementById('cfg-enable-mcp');
     if (mcpEl) {
         mcpEl.checked = config.enableMCP;
@@ -3379,6 +3390,7 @@ function updateSettingsVisibility() {
     if (contextStrategyContainer) contextStrategyContainer.style.display = 'block';
     if (mcpContainer) mcpContainer.style.display = showMCP ? 'block' : 'none';
     if (statefulBudgetContainer) statefulBudgetContainer.style.display = showStatefulBudget ? 'block' : 'none';
+    if (voiceInputAutoTTSContainer) voiceInputAutoTTSContainer.style.display = micLayoutValue !== 'none' ? 'block' : 'none';
 
     if (memContainer) memContainer.style.display = usesRetrievalConversationContext() ? 'block' : 'none';
 }
@@ -3430,7 +3442,7 @@ function setupSettingsListeners() {
     });
 
     // Selects & Inputs: save on change
-    const autoSaveIds = ['cfg-api', 'cfg-temp', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-os-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-context-strategy', 'cfg-show-reasoning-control', 'cfg-force-show-reasoning-control', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model', 'cfg-tts-engine', 'cfg-markdown-render-mode', 'cfg-enable-haptics', 'cfg-embedding-model'];
+    const autoSaveIds = ['cfg-api', 'cfg-temp', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-os-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-context-strategy', 'cfg-show-reasoning-control', 'cfg-force-show-reasoning-control', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model', 'cfg-tts-engine', 'cfg-markdown-render-mode', 'cfg-enable-haptics', 'cfg-embedding-model', 'cfg-mic-layout'];
     autoSaveIds.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.onchange = () => saveConfig(false);
@@ -3620,6 +3632,8 @@ function saveConfig(closeModal = true) {
     config.enableMemory = memEl ? memEl.checked : false;
 
     config.autoTTS = document.getElementById('cfg-auto-tts').checked;
+    const voiceInputAutoTTSEl = document.getElementById('cfg-voice-input-auto-tts');
+    config.voiceInputAutoTTS = voiceInputAutoTTSEl ? voiceInputAutoTTSEl.checked : true;
     config.ttsEngine = document.getElementById('cfg-tts-engine').value || 'supertonic';
     config.ttsLang = document.getElementById('cfg-tts-lang').value;
     config.enableEmbeddings = document.getElementById('cfg-enable-embeddings').checked;
@@ -6061,7 +6075,7 @@ async function ensureStatefulContextBudget(nextUserText = '') {
 
 /* Chat Logic */
 
-async function sendMessage() {
+async function sendMessage(options = {}) {
     if (isSavedLibraryOpen) {
         closeSavedLibrary();
     }
@@ -6082,6 +6096,7 @@ async function sendMessage() {
 
     // Stop and clear any existing audio/TTS
     stopAllAudio();
+    pendingVoiceInputAutoTTS = !!options.fromVoiceInput;
 
     // Prepare User Message
     const turnId = generateTurnId();
@@ -6142,7 +6157,8 @@ async function sendMessage() {
 
             try {
                 assistantContent = await streamResponse(payload, assistantId, turnId, {
-                    repeatRecoveryApplied: attempt > 0
+                    repeatRecoveryApplied: attempt > 0,
+                    fromVoiceInput: !!options.fromVoiceInput
                 });
                 break;
             } catch (e) {
@@ -6173,6 +6189,7 @@ async function sendMessage() {
             updateMessageContent(assistantId, `**Error:** ${e.message}`);
         }
     } finally {
+        pendingVoiceInputAutoTTS = false;
         isGenerating = false;
         lockScrollToLatest = false;
         stopStreamingMessageAutoScroll();
@@ -6186,6 +6203,14 @@ async function sendMessage() {
     if (assistantContent && assistantContent.trim()) {
         ensureLastSessionCacheLoaded(true).catch(console.warn);
     }
+}
+
+function shouldAutoPlayTTSForRequest(options = {}) {
+    if (!config.enableTTS) return false;
+    if (options.fromVoiceInput) {
+        return config.voiceInputAutoTTS !== false;
+    }
+    return !!config.autoTTS;
 }
 
 async function stopCurrentChatSessionOnServer() {
@@ -6411,7 +6436,9 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
 
 
     // Initialize streaming TTS if enabled
-    const useStreamingTTS = config.enableTTS && config.autoTTS;
+    const useStreamingTTS = shouldAutoPlayTTSForRequest({
+        fromVoiceInput: streamOptions.fromVoiceInput === true || pendingVoiceInputAutoTTS
+    });
     if (useStreamingTTS) {
         initStreamingTTS(elementId);
         requestWakeLock(); // Request wake lock when TTS streaming starts
@@ -9562,7 +9589,7 @@ function startSTT() {
             // Auto-send if there is content
             const input = document.getElementById('message-input');
             if (input.value.trim()) {
-                sendMessage();
+                sendMessage({ fromVoiceInput: true });
             }
         };
     }

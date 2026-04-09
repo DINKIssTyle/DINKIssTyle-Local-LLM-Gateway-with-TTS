@@ -12,11 +12,11 @@ type RuntimeInstructionsInput struct {
 	EnvironmentInfo       string
 	ModelID               string
 	UseNativeIntegrations bool
-	ProceduralHint        string
 	RecentContext         string
 	MemorySnapshot        string
 	ActiveContext         string
 	RetrievalInjected     bool
+	UserProfileFacts      string
 }
 
 func ToolGuidelineMarker() string {
@@ -25,11 +25,8 @@ func ToolGuidelineMarker() string {
 
 func BuildRuntimeInstructions(input RuntimeInstructionsInput) string {
 	extraInstr := buildToolUsage(input.EnvironmentInfo, input.ModelID, input.UseNativeIntegrations)
-	if input.ProceduralHint != "" {
-		extraInstr += input.ProceduralHint
-	}
-	if input.RecentContext != "" || input.MemorySnapshot != "" || input.ActiveContext != "" {
-		extraInstr += buildMemoryTemplate("", input.RecentContext, input.MemorySnapshot, input.ActiveContext, input.RetrievalInjected)
+	if input.RecentContext != "" || input.MemorySnapshot != "" || input.ActiveContext != "" || input.UserProfileFacts != "" {
+		extraInstr += buildMemoryTemplate("", input.RecentContext, input.MemorySnapshot, input.ActiveContext, input.RetrievalInjected, input.UserProfileFacts)
 	}
 	return extraInstr
 }
@@ -196,10 +193,21 @@ func buildToolUsage(envInfo string, modelID string, useNativeIntegrations bool) 
 	return strings.Join(lines, "\n")
 }
 
-func buildMemoryTemplate(staticMemory string, recentContext string, userProfile string, activeContext string, retrievalInjected bool) string {
+func buildMemoryTemplate(staticMemory string, recentContext string, userProfile string, activeContext string, retrievalInjected bool, userProfileFacts string) string {
+	// If we have structured profile facts, prepend them to the USER PROFILE section
+	combinedProfile := ""
+	if strings.TrimSpace(userProfileFacts) != "" {
+		combinedProfile = "## Known Facts (always available, no search needed):\n" + userProfileFacts
+		if strings.TrimSpace(userProfile) != "" {
+			combinedProfile += "\n\n## Recent Memory Snapshot:\n" + userProfile
+		}
+	} else {
+		combinedProfile = userProfile
+	}
+
 	rules := []string{
 		"1. Treat RECENT CONTEXT as the primary source for continuity about the latest few turns.",
-		"2. Treat USER PROFILE as summary only.",
+		"2. Treat USER PROFILE Known Facts as ground truth for personal details about the user. These never require search_memory.",
 		"3. If the user explicitly asks you to search memory, recall prior chats, or find what was said before, you MUST use 'search_memory' before answering.",
 		"4. If past details are missing or uncertain, use 'search_memory' instead of saying you do not know.",
 		"5. After 'search_memory', prefer 'read_memory_context' for the best candidate before relying on it. Use 'read_memory' only when you need the full original text.",
@@ -208,13 +216,13 @@ func buildMemoryTemplate(staticMemory string, recentContext string, userProfile 
 		"8. Only 'read_buffered_source' uses 'source_id' for web evidence.",
 		"9. Try alternative names, relationships, or synonyms if the first search fails.",
 		"10. Do not guess past details.",
-		"11. Do not create tool calls to save memory; saving happens automatically.",
+		"11. When the user tells you personal facts (name, birthday, preferences, etc.), proactively use 'save_user_fact' to save them to their permanent profile.",
 	}
 	if retrievalInjected && strings.TrimSpace(activeContext) != "" {
 		rules = []string{
 			"1. Treat RECENT CONTEXT as the primary source for continuity about the latest few turns.",
 			"2. ACTIVE CONTEXT was already retrieved for this turn. Prefer answering from RECENT CONTEXT plus ACTIVE CONTEXT when they are sufficient.",
-			"3. Treat USER PROFILE as summary only.",
+			"3. Treat USER PROFILE Known Facts as ground truth for personal details about the user. These never require search_memory.",
 			"4. If the user explicitly asks you to search memory, recall prior chats, or find what was said before, you MUST use 'search_memory' before answering.",
 			"5. Use 'search_memory' whenever RECENT CONTEXT and ACTIVE CONTEXT are clearly insufficient or contradictory. Do not simply say you do not know without trying memory search first.",
 			"6. If you must inspect memory further, prefer 'read_memory_context' after 'search_memory'. Use 'read_memory' only for the full original text.",
@@ -222,7 +230,7 @@ func buildMemoryTemplate(staticMemory string, recentContext string, userProfile 
 			"8. If memory search still does not answer the question and the remaining question is about factual/public knowledge, use web search next instead of stopping at 'I do not know'.",
 			"9. Only 'read_buffered_source' uses 'source_id' for web evidence.",
 			"10. Do not guess past details.",
-			"11. Do not create tool calls to save memory; saving happens automatically.",
+			"11. When the user tells you personal facts (name, birthday, preferences, etc.), proactively use 'save_user_fact' to save them to their permanent profile.",
 		}
 	}
 	return fmt.Sprintf(`
@@ -242,5 +250,5 @@ func buildMemoryTemplate(staticMemory string, recentContext string, userProfile 
 
 MEMORY & SEARCH RULES:
 %s
-`, staticMemory, recentContext, userProfile, activeContext, strings.Join(rules, "\n"))
+`, staticMemory, recentContext, combinedProfile, activeContext, strings.Join(rules, "\n"))
 }

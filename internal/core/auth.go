@@ -68,6 +68,96 @@ type AuthManager struct {
 	sessionMu sync.RWMutex
 }
 
+var disabledToolAliasGroups = map[string][]string{
+	"personal_memory": {
+		"search_memory",
+		"read_memory",
+		"read_memory_context",
+		"delete_memory",
+	},
+}
+
+func expandDisabledToolAliases(tools []string) []string {
+	if len(tools) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]bool, len(tools))
+	expanded := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		tool = strings.TrimSpace(tool)
+		if tool == "" {
+			continue
+		}
+		if members, ok := disabledToolAliasGroups[tool]; ok {
+			for _, member := range members {
+				if seen[member] {
+					continue
+				}
+				seen[member] = true
+				expanded = append(expanded, member)
+			}
+			continue
+		}
+		if seen[tool] {
+			continue
+		}
+		seen[tool] = true
+		expanded = append(expanded, tool)
+	}
+	return expanded
+}
+
+func collapseDisabledToolsForUI(tools []string) []string {
+	if len(tools) == 0 {
+		return []string{}
+	}
+
+	seen := make(map[string]bool, len(tools))
+	collapsed := make([]string, 0, len(tools))
+	disabled := make(map[string]bool, len(tools))
+	for _, tool := range tools {
+		tool = strings.TrimSpace(tool)
+		if tool == "" {
+			continue
+		}
+		disabled[tool] = true
+	}
+
+	for alias, members := range disabledToolAliasGroups {
+		anyMemberDisabled := disabled[alias]
+		for _, member := range members {
+			if disabled[member] {
+				anyMemberDisabled = true
+				break
+			}
+		}
+		if anyMemberDisabled {
+			seen[alias] = true
+			collapsed = append(collapsed, alias)
+		}
+	}
+
+outer:
+	for _, tool := range tools {
+		tool = strings.TrimSpace(tool)
+		if tool == "" || seen[tool] {
+			continue
+		}
+		for _, members := range disabledToolAliasGroups {
+			for _, member := range members {
+				if tool == member {
+					continue outer
+				}
+			}
+		}
+		seen[tool] = true
+		collapsed = append(collapsed, tool)
+	}
+
+	return collapsed
+}
+
 // NewAuthManager creates a new AuthManager
 func NewAuthManager(usersFile string) *AuthManager {
 	am := &AuthManager{
@@ -475,7 +565,7 @@ func (am *AuthManager) SetUserDisabledTools(id string, tools []string) error {
 		return fmt.Errorf("user not found")
 	}
 
-	user.Settings.DisabledTools = tools
+	user.Settings.DisabledTools = expandDisabledToolAliases(tools)
 	return am.saveUsersLocked()
 }
 
@@ -492,7 +582,7 @@ func (am *AuthManager) GetUserDisabledTools(id string) ([]string, error) {
 	if user.Settings.DisabledTools == nil {
 		return []string{}, nil
 	}
-	return user.Settings.DisabledTools, nil
+	return collapseDisabledToolsForUI(user.Settings.DisabledTools), nil
 }
 
 // generateToken creates a random session token

@@ -314,28 +314,18 @@ func GetMemorySnapshotDebug(userID string) MemorySnapshotDebug {
 		log.Printf("[MCP] Failed to get memory snapshot: %v", err)
 		return MemorySnapshotDebug{Text: "No recent memories found."}
 	}
-	savedTurns, savedErr := ListSavedTurns(userID, 5)
-	if savedErr != nil {
-		log.Printf("[MCP] Failed to get saved turn snapshot: %v", savedErr)
-	}
-	if len(results) == 0 && len(savedTurns) == 0 {
+	if len(results) == 0 {
 		return MemorySnapshotDebug{Text: "No recent memories found."}
 	}
 
 	var sb strings.Builder
 	debug := MemorySnapshotDebug{
-		MemoryCount:    len(results),
-		SavedTurnCount: len(savedTurns),
-		MemoryIDs:      make([]int64, 0, len(results)),
-		SavedTurnIDs:   make([]int64, 0, len(savedTurns)),
+		MemoryCount: len(results),
+		MemoryIDs:   make([]int64, 0, len(results)),
 	}
 	for _, r := range results {
 		sb.WriteString(fmt.Sprintf("- [%s] %s\n", r.CreatedAt.Format("2006-01-02"), compactMemoryText(r.FullText, 120)))
 		debug.MemoryIDs = append(debug.MemoryIDs, r.ID)
-	}
-	for _, turn := range savedTurns {
-		sb.WriteString(fmt.Sprintf("- [%s] Saved turn: %s\n", turn.CreatedAt.Format("2006-01-02"), compactMemoryText(turn.Title, 120)))
-		debug.SavedTurnIDs = append(debug.SavedTurnIDs, turn.ID)
 	}
 	debug.Text = sb.String()
 	return debug

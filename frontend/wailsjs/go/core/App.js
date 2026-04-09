@@ -18,12 +18,12 @@ export function CheckHealth() {
   return window['go']['core']['App']['CheckHealth']();
 }
 
-export function ConfirmAndRunStorageMigration() {
-  return window['go']['core']['App']['ConfirmAndRunStorageMigration']();
-}
-
 export function ClearDebugTrace() {
   return window['go']['core']['App']['ClearDebugTrace']();
+}
+
+export function ConfirmAndRunStorageMigration() {
+  return window['go']['core']['App']['ConfirmAndRunStorageMigration']();
 }
 
 export function DeleteUser(arg1) {
@@ -122,10 +122,6 @@ export function GetTTSDictionary(arg1) {
   return window['go']['core']['App']['GetTTSDictionary'](arg1);
 }
 
-export function GetWelcomeState() {
-  return window['go']['core']['App']['GetWelcomeState']();
-}
-
 export function GetToolPattern(arg1) {
   return window['go']['core']['App']['GetToolPattern'](arg1);
 }
@@ -160,6 +156,10 @@ export function GetUsers() {
 
 export function GetVoiceStyles() {
   return window['go']['core']['App']['GetVoiceStyles']();
+}
+
+export function GetWelcomeState() {
+  return window['go']['core']['App']['GetWelcomeState']();
 }
 
 export function LearnToolPattern(arg1, arg2) {

@@ -493,21 +493,6 @@ func selectRelevantBufferedChunks(source *BufferedWebSource, query string, maxCh
 	return selected
 }
 
-func tokenizeQuery(query string) []string {
-	query = strings.ToLower(strings.TrimSpace(query))
-	fields := strings.FieldsFunc(query, func(r rune) bool {
-		return r == ' ' || r == '\n' || r == '\r' || r == '\t' || r == ',' || r == '.' || r == ':' || r == ';' || r == '(' || r == ')' || r == '"' || r == '\'' || r == '?' || r == '!'
-	})
-	var terms []string
-	for _, field := range fields {
-		field = strings.TrimSpace(field)
-		if len([]rune(field)) >= 2 {
-			terms = append(terms, field)
-		}
-	}
-	return terms
-}
-
 func scoreBufferedChunk(text string, terms []string) int {
 	if len(terms) == 0 {
 		return 0
@@ -579,7 +564,7 @@ func saveBufferedWebSourceDB(source *BufferedWebSource) error {
 		if _, err := tx.Exec(`
 			INSERT INTO web_source_chunks_fts(rowid, chunk_text, source_id, user_id, chunk_index)
 			VALUES (?, ?, ?, ?, ?)
-		`, chunkID, chunk.Text, source.SourceID, source.UserID, chunk.Index); err != nil {
+		`, chunkID, buildFTSIndexedText(chunk.Text), source.SourceID, source.UserID, chunk.Index); err != nil {
 			return fmt.Errorf("failed to index web source chunk: %w", err)
 		}
 		if err := upsertBufferedChunkEmbeddingTx(tx, chunkID, chunk.Text); err != nil {
@@ -935,20 +920,7 @@ func buildBufferedFTSQuery(query string) string {
 		return ""
 	}
 
-	rawTerms := tokenizeQuery(query)
-	seen := make(map[string]struct{}, len(rawTerms))
-	terms := make([]string, 0, len(rawTerms))
-	for _, term := range rawTerms {
-		term = strings.TrimSpace(term)
-		if term == "" {
-			continue
-		}
-		if _, exists := seen[term]; exists {
-			continue
-		}
-		seen[term] = struct{}{}
-		terms = append(terms, quoteFTSPhrase(term))
-	}
+	terms := buildFTSQueryClauses(query)
 	if len(terms) == 0 {
 		return quoteFTSPhrase(query)
 	}

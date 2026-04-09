@@ -144,34 +144,6 @@ export namespace core {
 	        this.progressText = source["progressText"];
 	    }
 	}
-	export class WelcomeState {
-	    showModal: boolean;
-	    requiresMigration: boolean;
-	    migrationMessage: string;
-	    requiresTtsDownload: boolean;
-	    ttsDownloadMessage: string;
-	    canSkipTtsDownload: boolean;
-	    restartRecommended: boolean;
-	    primaryMessage: string;
-	    secondaryMessage: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new WelcomeState(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.showModal = source["showModal"];
-	        this.requiresMigration = source["requiresMigration"];
-	        this.migrationMessage = source["migrationMessage"];
-	        this.requiresTtsDownload = source["requiresTtsDownload"];
-	        this.ttsDownloadMessage = source["ttsDownloadMessage"];
-	        this.canSkipTtsDownload = source["canSkipTtsDownload"];
-	        this.restartRecommended = source["restartRecommended"];
-	        this.primaryMessage = source["primaryMessage"];
-	        this.secondaryMessage = source["secondaryMessage"];
-	    }
-	}
 	export class ServerTTSConfig {
 	    engine: string;
 	    voiceStyle: string;
@@ -198,6 +170,34 @@ export namespace core {
 	        this.osVoiceLang = source["osVoiceLang"];
 	        this.osRate = source["osRate"];
 	        this.osPitch = source["osPitch"];
+	    }
+	}
+	export class WelcomeState {
+	    showModal: boolean;
+	    requiresMigration: boolean;
+	    migrationMessage: string;
+	    requiresTtsDownload: boolean;
+	    ttsDownloadMessage: string;
+	    canSkipTtsDownload: boolean;
+	    restartRecommended: boolean;
+	    primaryMessage: string;
+	    secondaryMessage: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new WelcomeState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.showModal = source["showModal"];
+	        this.requiresMigration = source["requiresMigration"];
+	        this.migrationMessage = source["migrationMessage"];
+	        this.requiresTtsDownload = source["requiresTtsDownload"];
+	        this.ttsDownloadMessage = source["ttsDownloadMessage"];
+	        this.canSkipTtsDownload = source["canSkipTtsDownload"];
+	        this.restartRecommended = source["restartRecommended"];
+	        this.primaryMessage = source["primaryMessage"];
+	        this.secondaryMessage = source["secondaryMessage"];
 	    }
 	}
 
@@ -242,3 +242,4 @@ export namespace promptkit {
 	}
 
 }
+

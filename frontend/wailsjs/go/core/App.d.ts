@@ -13,9 +13,9 @@ export function CheckAssets():Promise<boolean>;
 
 export function CheckHealth():Promise<core.HealthCheckResult>;
 
-export function ConfirmAndRunStorageMigration():Promise<string>;
-
 export function ClearDebugTrace():Promise<void>;
+
+export function ConfirmAndRunStorageMigration():Promise<string>;
 
 export function DeleteUser(arg1:string):Promise<void>;
 
@@ -65,8 +65,6 @@ export function GetTTSConfig():Promise<core.ServerTTSConfig>;
 
 export function GetTTSDictionary(arg1:string):Promise<Record<string, string>>;
 
-export function GetWelcomeState():Promise<core.WelcomeState>;
-
 export function GetToolPattern(arg1:string):Promise<Record<string, string>>;
 
 export function GetUserApiToken(arg1:string):Promise<string>;
@@ -84,6 +82,8 @@ export function GetUserMemoryRetentionConfig(arg1:string):Promise<mcp.MemoryRete
 export function GetUsers():Promise<Array<Record<string, string>>>;
 
 export function GetVoiceStyles():Promise<Array<string>>;
+
+export function GetWelcomeState():Promise<core.WelcomeState>;
 
 export function LearnToolPattern(arg1:string,arg2:string):Promise<void>;
 

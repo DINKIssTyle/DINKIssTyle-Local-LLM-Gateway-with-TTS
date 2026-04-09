@@ -3110,7 +3110,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				enableMemory = true // Default to true for authenticated users
 			}
 			if user.Settings.DisabledTools != nil {
-				disabledTools = user.Settings.DisabledTools
+				disabledTools = expandDisabledToolAliases(user.Settings.DisabledTools)
 			}
 			if user.Settings.DisallowedCommands != nil {
 				disallowedCmds = user.Settings.DisallowedCommands
@@ -3181,23 +3181,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		"__payload":  prettyJSONForDebug(body),
 	})
 
-	var procCtx *RequestExecutionContext
-	if ctx, err := buildRequestExecutionContext(userID, reqMap, requestStart); err != nil {
-		log.Printf("[ProceduralMemory] failed to initialize request context: %v", err)
-	} else {
-		procCtx = ctx
-	}
-
-	proceduralHint := ""
-	if hint, recipeVersion, err := getProceduralHint(procCtx); err != nil {
-		log.Printf("[ProceduralMemory] failed to load procedural hint: %v", err)
-	} else if hint != "" {
-		proceduralHint = hint
-		if procCtx != nil {
-			procCtx.RecipeVersion = recipeVersion
-		}
-	}
-
 	memorySnapshot := ""
 	autoContext := ""
 	recentContext := ""
@@ -3221,6 +3204,15 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 					}
 				}
 			}
+		}
+	}
+
+	// Load structured user profile facts (always, not dependent on context strategy)
+	userProfileFacts := ""
+	if enableMemory && strings.TrimSpace(userID) != "" {
+		userProfileFacts = mcp.FormatUserProfileForPrompt(userID)
+		if strings.TrimSpace(userProfileFacts) != "" {
+			log.Printf("[handleChat] Loaded %d chars of user profile facts for %s", len(userProfileFacts), userID)
 		}
 	}
 	if contextStrategy == "retrieval" {
@@ -3268,11 +3260,11 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		ContextStrategy:   contextStrategy,
 		EnableMCP:         enableMCP,
 		EnableMemory:      enableMemory,
-		ProceduralHint:    proceduralHint,
 		RecentContext:     recentContext,
 		MemorySnapshot:    memorySnapshot,
 		ActiveContext:     autoContext,
 		RetrievalInjected: strings.TrimSpace(recentContext) != "" || strings.TrimSpace(memorySnapshot) != "" || strings.TrimSpace(autoContext) != "",
+		UserProfileFacts:  userProfileFacts,
 	})
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to prepare chat request: %v", err), http.StatusInternalServerError)
@@ -4547,14 +4539,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 			var result string
 			var err error
-			toolSkipped := false
 			if (lastToolName == "search_web" || lastToolName == "naver_search") && toolUsageCounts[lastToolName] > 3 {
 				result = fmt.Sprintf("Tool budget reached for %s. Do not search again in this answer. Use the evidence already buffered and answer the user directly.", lastToolName)
-				toolSkipped = true
-				if procCtx != nil {
-					procCtx.FallbackUsed = true
-					procCtx.RepeatedBlocked = true
-				}
 				AddDebugTrace("chat", "tool.skipped", "Skipped repeated web search due to per-request budget", map[string]interface{}{
 					"turn":  turn,
 					"tool":  lastToolName,
@@ -4562,11 +4548,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				})
 			} else if lastToolName == "read_web_page" && toolUsageCounts[lastToolName] > 2 {
 				result = "read_web_page already ran multiple times in this answer. Avoid more page reads unless the user explicitly asks to retry. Answer from buffered search evidence or use read_buffered_source."
-				toolSkipped = true
-				if procCtx != nil {
-					procCtx.FallbackUsed = true
-					procCtx.RepeatedBlocked = true
-				}
 				AddDebugTrace("chat", "tool.skipped", "Skipped repeated page read due to per-request budget", map[string]interface{}{
 					"turn":  turn,
 					"tool":  lastToolName,
@@ -4574,11 +4555,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				})
 			} else if lastToolName == "execute_command" && toolUsageCounts[lastToolName] > 5 {
 				result = "execute_command already ran many times in this answer. Stop gathering more shell output and answer the user directly from the latest useful results."
-				toolSkipped = true
-				if procCtx != nil {
-					procCtx.FallbackUsed = true
-					procCtx.RepeatedBlocked = true
-				}
 				AddDebugTrace("chat", "tool.skipped", "Skipped execute_command due to overall budget", map[string]interface{}{
 					"turn":  turn,
 					"tool":  lastToolName,
@@ -4586,11 +4562,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				})
 			} else if lastToolName == "execute_command" && executeCommandFamily != "" && executeCommandFamilyCounts[executeCommandFamily] > 3 {
 				result = fmt.Sprintf("Too many execute_command calls were used for the same task family (%s). Use the latest command results you already have and answer the user directly.", executeCommandFamily)
-				toolSkipped = true
-				if procCtx != nil {
-					procCtx.FallbackUsed = true
-					procCtx.RepeatedBlocked = true
-				}
 				AddDebugTrace("chat", "tool.skipped", "Skipped execute_command due to family budget", map[string]interface{}{
 					"turn":    turn,
 					"tool":    lastToolName,
@@ -4600,11 +4571,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				})
 			} else if toolSignatureCounts[toolSig] > 1 {
 				result = fmt.Sprintf("Duplicate tool call prevented for %s with near-identical arguments. Use existing buffered evidence and continue answering.", lastToolName)
-				toolSkipped = true
-				if procCtx != nil {
-					procCtx.FallbackUsed = true
-					procCtx.RepeatedBlocked = true
-				}
 				AddDebugTrace("chat", "tool.skipped", "Skipped duplicate tool call with same arguments", map[string]interface{}{
 					"turn":  turn,
 					"tool":  lastToolName,
@@ -4641,13 +4607,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 					"tool": lastToolName,
 				}
 			}
-			if procCtx != nil {
-				procCtx.AddToolEvent(lastToolName, lastToolArgsStr, time.Since(toolStart), err == nil, toolSkipped)
-				if err != nil {
-					procCtx.FallbackUsed = true
-				}
-			}
-
 			// Emit Result Event to Frontend
 			resBytes, _ := json.Marshal(toolResultEvt)
 			appendChatEvent("assistant", fmt.Sprintf("%v", toolResultEvt["type"]), toolResultEvt)
@@ -4686,10 +4645,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	// 🛡️ SELF-CORRECTION TRIGGER (Only if we didn't loop or at the very end)
 	if needsCorrection && badContentCapture != "" {
 		log.Printf("[handleChat] Triggering Self-Correction for invalid tool format...")
-		if procCtx != nil {
-			procCtx.SelfCorrectionUsed = true
-			procCtx.FallbackUsed = true
-		}
 		AddDebugTrace("chat", "self_correction.start", "Triggering tool-call self-correction", map[string]interface{}{
 			"snippet": compactText(badContentCapture, 180),
 		})
@@ -4720,10 +4675,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	if enableMemory && len(messagesForMemory) > 0 && fullResponse != "" {
 		log.Printf("[handleChat] Final Assistant Response Captured (Len: %d). Logging to DB...", len(fullResponse))
 		go logChatToHistory(userID, messagesForMemory, fullResponse, modelID)
-	}
-	if procCtx != nil {
-		procCtx.Success = strings.TrimSpace(fullResponse) != ""
-		persistRequestExecution(procCtx)
 	}
 	if llmMode == "stateful" {
 		if strings.TrimSpace(fullResponse) != "" || strings.TrimSpace(sessionLastResponseID) != "" {
