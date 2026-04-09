@@ -9,7 +9,7 @@
     <meta charset="UTF-8">
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
-    <title>DKST LLM Chat Server</title>
+    <title>DKST LLM Chat</title>
 
     <!-- Favicons -->
     <link rel="apple-touch-icon" sizes="180x180" href="public/apple-touch-icon.png">
@@ -279,7 +279,8 @@
                             <span data-i18n="setting.voiceInputAutoPlay.label">음성 입력 시 자동 재생</span>
                             <input type="checkbox" id="cfg-voice-input-auto-tts">
                         </div>
-                        <p class="setting-desc" data-i18n="setting.voiceInputAutoPlay.desc">마이크로 보낸 메시지는 TTS 엔진의 자동 재생 설정과 관계없이 이 옵션을 우선 적용합니다.</p>
+                        <p class="setting-desc" data-i18n="setting.voiceInputAutoPlay.desc">마이크로 보낸 메시지는 TTS 엔진의 자동 재생
+                            설정과 관계없이 이 옵션을 우선 적용합니다.</p>
                     </div>
                 </div>
 
@@ -530,9 +531,6 @@
                 </div>
             </div>
             <div class="chat-header-actions">
-                <div id="llm-activity-indicator" class="llm-activity-indicator" aria-hidden="true" title="LLM idle">
-                    <span class="llm-activity-indicator__dot"></span>
-                </div>
                 <div class="font-size-controls" aria-label="Text size controls">
                     <button class="icon-btn" onclick="adjustChatFontSize(-1)" title="Decrease text size">
                         <span class="material-icons-round">remove</span>
