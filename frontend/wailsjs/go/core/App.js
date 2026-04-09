@@ -18,12 +18,20 @@ export function CheckHealth() {
   return window['go']['core']['App']['CheckHealth']();
 }
 
+export function ConfirmAndRunStorageMigration() {
+  return window['go']['core']['App']['ConfirmAndRunStorageMigration']();
+}
+
 export function ClearDebugTrace() {
   return window['go']['core']['App']['ClearDebugTrace']();
 }
 
 export function DeleteUser(arg1) {
   return window['go']['core']['App']['DeleteUser'](arg1);
+}
+
+export function DismissWelcome() {
+  return window['go']['core']['App']['DismissWelcome']();
 }
 
 export function DownloadAssets() {
@@ -114,6 +122,10 @@ export function GetTTSDictionary(arg1) {
   return window['go']['core']['App']['GetTTSDictionary'](arg1);
 }
 
+export function GetWelcomeState() {
+  return window['go']['core']['App']['GetWelcomeState']();
+}
+
 export function GetToolPattern(arg1) {
   return window['go']['core']['App']['GetToolPattern'](arg1);
 }
@@ -180,6 +192,10 @@ export function ResetMemory(arg1) {
 
 export function RestartServer() {
   return window['go']['core']['App']['RestartServer']();
+}
+
+export function RunStorageMigration() {
+  return window['go']['core']['App']['RunStorageMigration']();
 }
 
 export function SetAutoStartServer(arg1) {

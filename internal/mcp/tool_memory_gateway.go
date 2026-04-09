@@ -565,12 +565,7 @@ func GetUserMemoryDir(userID string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		newRoot := filepath.Join(home, "Documents", macMemoryRootName)
-		legacyRoot := filepath.Join(home, "Documents", legacyMacMemoryRootName)
-		if err := migrateLegacyMacMemoryRoot(legacyRoot, newRoot); err != nil {
-			return "", err
-		}
-		baseDir = filepath.Join(newRoot, "memory")
+		baseDir = filepath.Join(home, "Documents", macMemoryRootName, "memory")
 	} else {
 		// Windows/Linux: Executable directory
 		ex, err := os.Executable()
@@ -581,24 +576,6 @@ func GetUserMemoryDir(userID string) (string, error) {
 	}
 
 	return filepath.Join(baseDir, userID), nil
-}
-
-func migrateLegacyMacMemoryRoot(oldRoot, newRoot string) error {
-	if oldRoot == newRoot {
-		return nil
-	}
-	if _, err := os.Stat(newRoot); err == nil {
-		return nil
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	if _, err := os.Stat(oldRoot); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	return os.Rename(oldRoot, newRoot)
 }
 
 // GetUserMemoryFilePath returns the path to a specific memory file for a user.

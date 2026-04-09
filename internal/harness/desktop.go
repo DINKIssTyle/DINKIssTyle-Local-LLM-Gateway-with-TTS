@@ -99,11 +99,7 @@ func (d *Desktop) options() *options.App {
 }
 
 func (d *Desktop) initMemoryDB() {
-	dbPath, err := mcp.GetUserMemoryFilePath("default", "memory.db")
-	if err != nil {
-		log.Printf("Failed to resolve DB path: %v", err)
-		return
-	}
+	dbPath := core.GetMemoryDatabasePath()
 	if err := mcp.InitDB(dbPath); err != nil {
 		log.Printf("Failed to init SQLite: %v", err)
 	}

@@ -1,0 +1,5 @@
+macOS, Mac O S
+GUI, G U I
+CLI, C L I
+LLM, L L M
+AI, A I

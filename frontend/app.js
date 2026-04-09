@@ -3579,7 +3579,7 @@ function initSystemPromptPresets() {
     }
 }
 
-// 외부 파일(system_prompts.json, dictionary_*.txt) 새로고침
+// 외부 파일(system_prompts.json, dictionary/dictionary_*.txt) 새로고침
 async function reloadExternalFiles() {
     try {
         await loadSystemPrompts();

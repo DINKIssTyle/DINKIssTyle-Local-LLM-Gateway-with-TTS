@@ -15,14 +15,10 @@ go build -ldflags "-s -w -H windowsgui" -tags desktop,production -o "build\bin\D
 
 if exist "build\bin\DKST LLM Chat Server.exe" (
     echo Copying assets...
-    if not exist "build\bin\onnxruntime" mkdir "build\bin\onnxruntime"
-    copy /Y "onnxruntime\onnxruntime.dll" "build\bin\onnxruntime\" >nul
-    copy /Y "onnxruntime\LICENSE.txt" "build\bin\onnxruntime\" >nul
-    copy /Y "onnxruntime\ThirdPartyNotices.txt" "build\bin\onnxruntime\" >nul
+    if exist "bundle\assets" xcopy /E /I /Y "bundle\assets" "build\bin\assets" >nul
+    if exist "bundle\dictionary" xcopy /E /I /Y "bundle\dictionary" "build\bin\dictionary" >nul
     copy /Y "bundle\users.json" "build\bin\" >nul
     copy /Y "bundle\config.json" "build\bin\" 2>nul
-    copy /Y "bundle\dictionary_*.txt" "build\bin\" 2>nul
-    copy /Y "bundle\Dictionary_editor.py" "build\bin\" 2>nul
     copy /Y "bundle\system_prompts.json" "build\bin\" >nul
     copy /Y "bundle\ThirdPartyNotices.md" "build\bin\" >nul
     echo Build success!

@@ -1350,26 +1350,27 @@ func executeCommandBudgetFamily(command string) string {
 
 // getActiveCertPaths returns the paths to the active certificate and key pair.
 func getActiveCertPaths(appDataDir string, certDomain string) (string, string, bool) {
-	// 1. Try `{certDomain}.crt` / `{certDomain}.key`
-	crtPath := filepath.Join(appDataDir, certDomain+".crt")
-	crtKeyPath := filepath.Join(appDataDir, certDomain+".key")
-	if _, err := os.Stat(crtPath); err == nil {
-		if _, err := os.Stat(crtKeyPath); err == nil {
-			return crtPath, crtKeyPath, true
+	certDir := filepath.Join(appDataDir, certDirName)
+	candidates := []struct {
+		cert     string
+		key      string
+		specific bool
+	}{
+		{filepath.Join(certDir, certDomain+".crt"), filepath.Join(certDir, certDomain+".key"), true},
+		{filepath.Join(certDir, certDomain+".pem"), filepath.Join(certDir, certDomain+".key"), true},
+		{filepath.Join(appDataDir, certDomain+".crt"), filepath.Join(appDataDir, certDomain+".key"), true},
+		{filepath.Join(appDataDir, certDomain+".pem"), filepath.Join(appDataDir, certDomain+".key"), true},
+		{filepath.Join(certDir, "cert.pem"), filepath.Join(certDir, "key.pem"), false},
+		{filepath.Join(appDataDir, "cert.pem"), filepath.Join(appDataDir, "key.pem"), false},
+	}
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate.cert); err == nil {
+			if _, err := os.Stat(candidate.key); err == nil {
+				return candidate.cert, candidate.key, candidate.specific
+			}
 		}
 	}
-
-	// 2. Try `{certDomain}.pem` / `{certDomain}.key`
-	pemPath := filepath.Join(appDataDir, certDomain+".pem")
-	pemKeyPath := filepath.Join(appDataDir, certDomain+".key")
-	if _, err := os.Stat(pemPath); err == nil {
-		if _, err := os.Stat(pemKeyPath); err == nil {
-			return pemPath, pemKeyPath, true
-		}
-	}
-
-	// 3. Fallback to default `cert.pem` / `key.pem`
-	return filepath.Join(appDataDir, "cert.pem"), filepath.Join(appDataDir, "key.pem"), false
+	return filepath.Join(certDir, "cert.pem"), filepath.Join(certDir, "key.pem"), false
 }
 
 // ensureSelfSignedCert check if certificate and key exist in AppDataDir, if not create them.
@@ -1396,9 +1397,12 @@ func ensureSelfSignedCert(appDataDir string, certDomain string) (string, string,
 	}
 
 	// Default/Fallback names if not domain specific
-	if certPath == filepath.Join(appDataDir, "cert.pem") {
-		certPath = filepath.Join(appDataDir, certDomain+".crt")
-		keyPath = filepath.Join(appDataDir, certDomain+".key")
+	if certPath == filepath.Join(appDataDir, certDirName, "cert.pem") || certPath == filepath.Join(appDataDir, "cert.pem") {
+		certPath = filepath.Join(appDataDir, certDirName, certDomain+".crt")
+		keyPath = filepath.Join(appDataDir, certDirName, certDomain+".key")
+	}
+	if err := os.MkdirAll(filepath.Dir(certPath), 0755); err != nil {
+		return "", "", fmt.Errorf("failed to create cert directory: %v", err)
 	}
 
 	log.Printf("[HTTPS] Generating self-signed certificate for %s...", certDomain)
@@ -4818,7 +4822,7 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 	if !strings.HasSuffix(styleName, ".json") {
 		styleName += ".json"
 	}
-	voiceStylePath := GetResourcePath(filepath.Join("assets", "voice_styles", styleName))
+	voiceStylePath := filepath.Join(getTTSAssetsDir(), legacyTTSVoiceStylesDir, styleName)
 
 	// Check Cache
 	styleMutex.Lock()
@@ -4907,7 +4911,7 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 
 // handleTTSStyles returns list of available voice styles
 func handleTTSStyles(w http.ResponseWriter, r *http.Request) {
-	files, err := os.ReadDir(GetResourcePath(filepath.Join("assets", "voice_styles")))
+	files, err := os.ReadDir(filepath.Join(getTTSAssetsDir(), legacyTTSVoiceStylesDir))
 	if err != nil {
 		http.Error(w, "Failed to read styles directory", http.StatusInternalServerError)
 		return

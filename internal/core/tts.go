@@ -19,7 +19,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"time"
 
@@ -966,21 +965,14 @@ func InitializeONNXRuntime() error {
 	// 	log.SetOutput(io.MultiWriter(os.Stdout, logFile))
 	// }
 
-	libName := "onnxruntime.dll"
-	if runtime.GOOS == "darwin" {
-		libName = "libonnxruntime.dylib"
-	} else if runtime.GOOS == "linux" {
-		libName = "libonnxruntime.so"
-	}
-
-	libPath := GetResourcePath(filepath.Join("onnxruntime", libName))
+	libPath := getONNXRuntimeLibraryPath()
 	log.Printf("Attempting to load ONNX Runtime library from: %s", libPath)
 
 	if _, err := os.Stat(libPath); err != nil {
 		log.Printf("Library file not found at: %s", libPath)
 		// Fallback to checking beside executable if getResourcePath failed for some reason
 		exe, _ := os.Executable()
-		fallback := filepath.Join(filepath.Dir(exe), libName)
+		fallback := filepath.Join(filepath.Dir(exe), getONNXRuntimeLibraryFileName())
 		if _, err := os.Stat(fallback); err == nil {
 			libPath = fallback
 			log.Printf("Found library at fallback path: %s", libPath)

@@ -186,25 +186,25 @@ func (a *App) getManagedModelDownloadPlan(key string) (ManagedModelStatus, []Dow
 	switch key {
 	case "tts:supertonic":
 		status := getTTSModelStatus()
-		assetsDir := filepath.Join(GetAppDataDir(), "assets")
+		assetsDir := getWritableTTSAssetsDir()
 		specs := []DownloadFileSpec{
-			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/onnx/duration_predictor.onnx", DestPath: filepath.Join(assetsDir, "onnx", "duration_predictor.onnx"), Label: "duration_predictor.onnx"},
-			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/onnx/text_encoder.onnx", DestPath: filepath.Join(assetsDir, "onnx", "text_encoder.onnx"), Label: "text_encoder.onnx"},
-			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/onnx/vector_estimator.onnx", DestPath: filepath.Join(assetsDir, "onnx", "vector_estimator.onnx"), Label: "vector_estimator.onnx"},
-			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/onnx/vocoder.onnx", DestPath: filepath.Join(assetsDir, "onnx", "vocoder.onnx"), Label: "vocoder.onnx"},
-			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/onnx/tts.json", DestPath: filepath.Join(assetsDir, "onnx", "tts.json"), Label: "tts.json"},
-			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/onnx/unicode_indexer.json", DestPath: filepath.Join(assetsDir, "onnx", "unicode_indexer.json"), Label: "unicode_indexer.json"},
+			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/onnx/duration_predictor.onnx", DestPath: filepath.Join(assetsDir, legacyTTSOnnxDirName, "duration_predictor.onnx"), Label: "duration_predictor.onnx"},
+			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/onnx/text_encoder.onnx", DestPath: filepath.Join(assetsDir, legacyTTSOnnxDirName, "text_encoder.onnx"), Label: "text_encoder.onnx"},
+			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/onnx/vector_estimator.onnx", DestPath: filepath.Join(assetsDir, legacyTTSOnnxDirName, "vector_estimator.onnx"), Label: "vector_estimator.onnx"},
+			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/onnx/vocoder.onnx", DestPath: filepath.Join(assetsDir, legacyTTSOnnxDirName, "vocoder.onnx"), Label: "vocoder.onnx"},
+			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/onnx/tts.json", DestPath: filepath.Join(assetsDir, legacyTTSOnnxDirName, "tts.json"), Label: "tts.json"},
+			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/onnx/unicode_indexer.json", DestPath: filepath.Join(assetsDir, legacyTTSOnnxDirName, "unicode_indexer.json"), Label: "unicode_indexer.json"},
 			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/LICENSE", DestPath: filepath.Join(assetsDir, "LICENSE"), Label: "LICENSE"},
-			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/voice_styles/M1.json", DestPath: filepath.Join(assetsDir, "voice_styles", "M1.json"), Label: "M1.json"},
-			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/voice_styles/M2.json", DestPath: filepath.Join(assetsDir, "voice_styles", "M2.json"), Label: "M2.json"},
-			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/voice_styles/M3.json", DestPath: filepath.Join(assetsDir, "voice_styles", "M3.json"), Label: "M3.json"},
-			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/voice_styles/M4.json", DestPath: filepath.Join(assetsDir, "voice_styles", "M4.json"), Label: "M4.json"},
-			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/voice_styles/M5.json", DestPath: filepath.Join(assetsDir, "voice_styles", "M5.json"), Label: "M5.json"},
-			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/voice_styles/F1.json", DestPath: filepath.Join(assetsDir, "voice_styles", "F1.json"), Label: "F1.json"},
-			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/voice_styles/F2.json", DestPath: filepath.Join(assetsDir, "voice_styles", "F2.json"), Label: "F2.json"},
-			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/voice_styles/F3.json", DestPath: filepath.Join(assetsDir, "voice_styles", "F3.json"), Label: "F3.json"},
-			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/voice_styles/F4.json", DestPath: filepath.Join(assetsDir, "voice_styles", "F4.json"), Label: "F4.json"},
-			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/voice_styles/F5.json", DestPath: filepath.Join(assetsDir, "voice_styles", "F5.json"), Label: "F5.json"},
+			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/voice_styles/M1.json", DestPath: filepath.Join(assetsDir, legacyTTSVoiceStylesDir, "M1.json"), Label: "M1.json"},
+			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/voice_styles/M2.json", DestPath: filepath.Join(assetsDir, legacyTTSVoiceStylesDir, "M2.json"), Label: "M2.json"},
+			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/voice_styles/M3.json", DestPath: filepath.Join(assetsDir, legacyTTSVoiceStylesDir, "M3.json"), Label: "M3.json"},
+			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/voice_styles/M4.json", DestPath: filepath.Join(assetsDir, legacyTTSVoiceStylesDir, "M4.json"), Label: "M4.json"},
+			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/voice_styles/M5.json", DestPath: filepath.Join(assetsDir, legacyTTSVoiceStylesDir, "M5.json"), Label: "M5.json"},
+			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/voice_styles/F1.json", DestPath: filepath.Join(assetsDir, legacyTTSVoiceStylesDir, "F1.json"), Label: "F1.json"},
+			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/voice_styles/F2.json", DestPath: filepath.Join(assetsDir, legacyTTSVoiceStylesDir, "F2.json"), Label: "F2.json"},
+			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/voice_styles/F3.json", DestPath: filepath.Join(assetsDir, legacyTTSVoiceStylesDir, "F3.json"), Label: "F3.json"},
+			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/voice_styles/F4.json", DestPath: filepath.Join(assetsDir, legacyTTSVoiceStylesDir, "F4.json"), Label: "F4.json"},
+			{URL: "https://huggingface.co/Supertone/supertonic-2/resolve/main/voice_styles/F5.json", DestPath: filepath.Join(assetsDir, legacyTTSVoiceStylesDir, "F5.json"), Label: "F5.json"},
 		}
 		return status, specs, func() error {
 			if err := InitTTS(assetsDir, 4); err != nil {

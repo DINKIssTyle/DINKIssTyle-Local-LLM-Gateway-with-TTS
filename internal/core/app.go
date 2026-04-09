@@ -49,6 +49,7 @@ type App struct {
 	authMgr          *AuthManager
 	assets           embed.FS
 	IsQuitting       bool
+	welcomeDismissed bool
 
 	// Server-side Model Cache
 	modelCache     []byte
@@ -75,7 +76,20 @@ type AppConfig struct {
 	AutoStartServer   bool                         `json:"autoStartServer"`
 	CertDomain        string                       `json:"certDomain"`
 	DebugTraceEnabled bool                         `json:"debugTraceEnabled"`
+	WelcomeDismissed  bool                         `json:"welcomeDismissed"`
 	ToolPatterns      map[string]map[string]string `json:"toolPatterns"`
+}
+
+type WelcomeState struct {
+	ShowModal           bool   `json:"showModal"`
+	RequiresMigration   bool   `json:"requiresMigration"`
+	MigrationMessage    string `json:"migrationMessage"`
+	RequiresTTSDownload bool   `json:"requiresTtsDownload"`
+	TTSDownloadMessage  string `json:"ttsDownloadMessage"`
+	CanSkipTTSDownload  bool   `json:"canSkipTtsDownload"`
+	RestartRecommended  bool   `json:"restartRecommended"`
+	PrimaryMessage      string `json:"primaryMessage"`
+	SecondaryMessage    string `json:"secondaryMessage"`
 }
 
 const (
@@ -115,32 +129,10 @@ func GetAppDataDir() string {
 	}
 
 	docDir := filepath.Join(homeDir, "Documents", macAppDataDirName)
-	legacyDir := filepath.Join(homeDir, "Documents", legacyMacAppDataDirName)
-	if err := migrateMacAppDataDir(legacyDir, docDir); err != nil {
-		return exeDir // Fallback
-	}
 	if err := os.MkdirAll(docDir, 0755); err != nil {
 		return exeDir // Fallback
 	}
 	return docDir
-}
-
-func migrateMacAppDataDir(oldDir, newDir string) error {
-	if oldDir == newDir {
-		return nil
-	}
-	if _, err := os.Stat(newDir); err == nil {
-		return nil
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	if _, err := os.Stat(oldDir); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	return os.Rename(oldDir, newDir)
 }
 
 // GetResourcePath returns the absolute path for a resource
@@ -206,47 +198,76 @@ func (a *App) CheckAndSetupPaths() {
 		resourceDir = filepath.Join(filepath.Dir(bundleDir), "Resources")
 	}
 
-	// List of things to copy from bundle to AppDataDir if missing
-	items := []string{"onnxruntime", "users.json", "config.json", "Dictionary_editor.py", "system_prompts.json"}
-
-	// Copy specific items
-	for _, item := range items {
-		destPath := filepath.Join(appDataDir, item)
-		if _, err := os.Stat(destPath); os.IsNotExist(err) {
-			srcPath := filepath.Join(bundleDir, item)
-			if _, err := os.Stat(srcPath); os.IsNotExist(err) {
-				if _, err := os.Stat(item); err == nil {
-					srcPath = item
-				} else if _, err := os.Stat(filepath.Join("bundle", item)); err == nil {
-					srcPath = filepath.Join("bundle", item)
-				} else {
-					continue
-				}
+	copyIfMissing := func(destRelative string, sourceCandidates ...string) {
+		destPath := filepath.Join(appDataDir, destRelative)
+		if pathExists(destPath) {
+			return
+		}
+		for _, candidate := range sourceCandidates {
+			if !pathExists(candidate) {
+				continue
 			}
-			copyRecursive(srcPath, destPath)
+			if err := copyRecursive(candidate, destPath); err != nil {
+				fmt.Printf("Setup: failed to copy %s -> %s: %v\n", candidate, destPath, err)
+			}
+			return
 		}
 	}
 
-	// Copy all dictionary files (dictionary_*.txt)
-	// Check bundle first, then CWD
-	dictPattern := "dictionary_*.txt"
-	matches, _ := filepath.Glob(filepath.Join(resourceDir, dictPattern))
-	if len(matches) == 0 {
-		matches, _ = filepath.Glob(filepath.Join(bundleDir, dictPattern)) // Legacy MacOS check
-	}
-	if len(matches) == 0 {
-		matches, _ = filepath.Glob(dictPattern) // CWD check
-	}
-	if len(matches) == 0 {
-		matches, _ = filepath.Glob(filepath.Join("bundle", dictPattern)) // Bundle check
-	}
+	copyIfMissing("users.json",
+		filepath.Join(resourceDir, "users.json"),
+		filepath.Join(bundleDir, "users.json"),
+		filepath.Join("bundle", "users.json"),
+	)
+	copyIfMissing("config.json",
+		filepath.Join(resourceDir, "config.json"),
+		filepath.Join(bundleDir, "config.json"),
+		filepath.Join("bundle", "config.json"),
+	)
+	copyIfMissing("system_prompts.json",
+		filepath.Join(resourceDir, "system_prompts.json"),
+		filepath.Join(bundleDir, "system_prompts.json"),
+		filepath.Join("bundle", "system_prompts.json"),
+	)
+	copyIfMissing("ThirdPartyNotices.md",
+		filepath.Join(resourceDir, "ThirdPartyNotices.md"),
+		filepath.Join(bundleDir, "ThirdPartyNotices.md"),
+		filepath.Join("bundle", "ThirdPartyNotices.md"),
+	)
+	copyIfMissing(filepath.Join(assetsDirName, runtimeDirName, onnxRuntimeDirName),
+		filepath.Join(resourceDir, assetsDirName, runtimeDirName, onnxRuntimeDirName),
+		filepath.Join(bundleDir, assetsDirName, runtimeDirName, onnxRuntimeDirName),
+		filepath.Join("bundle", assetsDirName, runtimeDirName, onnxRuntimeDirName),
+		filepath.Join(assetsDirName, runtimeDirName, onnxRuntimeDirName),
+		filepath.Join("onnxruntime"),
+	)
+	copyIfMissing(filepath.Join(dictionaryDirName, "Dictionary_editor.py"),
+		filepath.Join(resourceDir, dictionaryDirName, "Dictionary_editor.py"),
+		filepath.Join(bundleDir, dictionaryDirName, "Dictionary_editor.py"),
+		filepath.Join("bundle", dictionaryDirName, "Dictionary_editor.py"),
+		filepath.Join(dictionaryDirName, "Dictionary_editor.py"),
+		filepath.Join("bundle", "Dictionary_editor.py"),
+	)
 
-	for _, srcPath := range matches {
-		filename := filepath.Base(srcPath)
-		destPath := filepath.Join(appDataDir, filename)
-		if _, err := os.Stat(destPath); os.IsNotExist(err) {
+	dictPatterns := []string{
+		filepath.Join(resourceDir, dictionaryDirName, "dictionary_*.txt"),
+		filepath.Join(bundleDir, dictionaryDirName, "dictionary_*.txt"),
+		filepath.Join("bundle", dictionaryDirName, "dictionary_*.txt"),
+		filepath.Join(dictionaryDirName, "dictionary_*.txt"),
+		filepath.Join("bundle", "dictionary_*.txt"),
+	}
+	for _, pattern := range dictPatterns {
+		matches, _ := filepath.Glob(pattern)
+		for _, srcPath := range matches {
+			filename := filepath.Base(srcPath)
+			destPath := filepath.Join(appDataDir, dictionaryDirName, filename)
+			if pathExists(destPath) {
+				continue
+			}
 			fmt.Printf("Setup: Copying dictionary %s to %s\n", filename, destPath)
-			copyRecursive(srcPath, destPath)
+			if err := copyRecursive(srcPath, destPath); err != nil {
+				fmt.Printf("Setup: failed to copy dictionary %s: %v\n", filename, err)
+			}
 		}
 	}
 }
@@ -271,6 +292,9 @@ func copyRecursive(src, dst string) error {
 			}
 		}
 	} else {
+		if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+			return err
+		}
 		in, err := os.Open(src)
 		if err != nil {
 			return err
@@ -309,6 +333,14 @@ func NewApp(assets embed.FS) *App {
 		AddDebugTrace(ev.Source, ev.Stage, ev.Message, ev.Details)
 	})
 	return a
+}
+
+func (a *App) reloadUsersFromCurrentStorage() error {
+	if a.authMgr == nil {
+		return nil
+	}
+	a.authMgr.usersFile = GetResourcePath("users.json")
+	return a.authMgr.LoadUsers()
 }
 
 func (a *App) loadConfig() {
@@ -355,6 +387,7 @@ func (a *App) loadConfig() {
 	a.llmApiToken = cfg.LLMApiToken
 	a.enableTTS = cfg.EnableTTS
 	a.enableDebugTrace = cfg.DebugTraceEnabled
+	a.welcomeDismissed = cfg.WelcomeDismissed
 	setDebugTraceCollectorEnabled(a.enableDebugTrace)
 	if cfg.CertDomain != "" {
 		a.certDomain = cfg.CertDomain
@@ -409,6 +442,7 @@ func (a *App) saveConfig() {
 	cfg.EnableTTS = a.enableTTS
 	cfg.DebugTraceEnabled = a.enableDebugTrace
 	cfg.CertDomain = a.certDomain
+	cfg.WelcomeDismissed = a.welcomeDismissed
 	cfg.TTS = ttsConfig
 	cfg.Embedding = currentEmbeddingModelConfig()
 	cfg.ToolPatterns = a.toolPatterns
@@ -432,6 +466,9 @@ func (a *App) Startup(ctx context.Context) {
 
 	// Setup paths for non-Windows
 	a.CheckAndSetupPaths()
+	if err := a.reloadUsersFromCurrentStorage(); err != nil {
+		fmt.Printf("Failed to reload users after path setup: %v\n", err)
+	}
 
 	// Reload config now that paths are set up and files potentially copied
 	a.loadConfig()
@@ -464,50 +501,9 @@ func (a *App) Startup(ctx context.Context) {
 		}
 	}()
 
-	// Initialize TTS if enabled and the Supertonic engine is selected
-	if a.enableTTS && ttsConfig.Engine == "supertonic" {
-		if !a.CheckAssets() {
-			selection, err := wruntime.MessageDialog(ctx, wruntime.MessageDialogOptions{
-				Type:          wruntime.QuestionDialog,
-				Title:         "TTS Assets Missing",
-				Message:       "Required TTS models are missing. Do you want to download them now? (approx. 300MB)\nThe application might pause while downloading.",
-				Buttons:       []string{"Yes", "No"},
-				DefaultButton: "Yes",
-				CancelButton:  "No",
-			})
-
-			if err == nil && selection == "Yes" {
-				// Show info dialog that download is starting
-				wruntime.MessageDialog(ctx, wruntime.MessageDialogOptions{
-					Type:    wruntime.InfoDialog,
-					Title:   "Downloading Assets",
-					Message: "Download starting. Please check the terminal for progress if attached.\nThe window might be unresponsive until download completes.",
-				})
-
-				if err := a.DownloadAssets(); err != nil {
-					wruntime.MessageDialog(ctx, wruntime.MessageDialogOptions{
-						Type:    wruntime.ErrorDialog,
-						Title:   "Download Failed",
-						Message: fmt.Sprintf("Failed to download assets: %v", err),
-					})
-					return
-				}
-
-				wruntime.MessageDialog(ctx, wruntime.MessageDialogOptions{
-					Type:    wruntime.InfoDialog,
-					Title:   "Download Complete",
-					Message: "TTS assets downloaded successfully.",
-				})
-
-				// Notify frontend
-				wruntime.EventsEmit(ctx, "assets-ready")
-			} else {
-				fmt.Println("TTS assets download skipped by user. TTS disabled.")
-				return
-			}
-		}
-
-		if err := InitTTS(GetResourcePath("assets"), ttsConfig.Threads); err != nil {
+	// Initialize TTS only when assets are already present.
+	if a.enableTTS && ttsConfig.Engine == "supertonic" && a.CheckAssets() {
+		if err := InitTTS(getTTSAssetsDir(), ttsConfig.Threads); err != nil {
 			fmt.Printf("Initial TTS Init failed: %v\n", err)
 		}
 	}
@@ -635,7 +631,7 @@ func (a *App) SetEnableTTS(enabled bool) {
 		applyEmbeddingRuntimeConfig()
 		if ttsConfig.Engine == "supertonic" && globalTTS == nil {
 			go func() {
-				if err := InitTTS(GetResourcePath("assets"), ttsConfig.Threads); err != nil {
+				if err := InitTTS(getTTSAssetsDir(), ttsConfig.Threads); err != nil {
 					fmt.Printf("Dynamic TTS Init failed: %v\n", err)
 				}
 			}()
@@ -704,14 +700,21 @@ func (a *App) GenerateCertificate(domain string) error {
 	}
 
 	appDataDir := GetAppDataDir()
-	certPath := filepath.Join(appDataDir, domain+".crt")
-	keyPath := filepath.Join(appDataDir, domain+".key")
-	derPath := filepath.Join(appDataDir, domain+".der.crt")
+	certDir := getWritableCertDir()
+	if err := os.MkdirAll(certDir, 0755); err != nil {
+		return err
+	}
+	certPath := filepath.Join(certDir, domain+".crt")
+	keyPath := filepath.Join(certDir, domain+".key")
+	derPath := filepath.Join(certDir, domain+".der.crt")
 
 	// Remove existing files to force regeneration
 	os.Remove(certPath)
 	os.Remove(keyPath)
 	os.Remove(derPath)
+	os.Remove(filepath.Join(appDataDir, domain+".crt"))
+	os.Remove(filepath.Join(appDataDir, domain+".key"))
+	os.Remove(filepath.Join(appDataDir, domain+".der.crt"))
 
 	_, _, err := ensureSelfSignedCert(appDataDir, domain)
 	if err != nil {
@@ -725,16 +728,19 @@ func (a *App) GenerateCertificate(domain string) error {
 
 // OpenCertFolder opens the application's data directory in the system file explorer.
 func (a *App) OpenCertFolder() error {
-	appDataDir := GetAppDataDir()
+	certDir := getWritableCertDir()
+	if err := os.MkdirAll(certDir, 0755); err != nil {
+		return err
+	}
 
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
-		cmd = exec.Command("explorer", appDataDir)
+		cmd = exec.Command("explorer", certDir)
 	case "darwin":
-		cmd = exec.Command("open", appDataDir)
+		cmd = exec.Command("open", certDir)
 	case "linux":
-		cmd = exec.Command("xdg-open", appDataDir)
+		cmd = exec.Command("xdg-open", certDir)
 	default:
 		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
 	}
@@ -1282,7 +1288,7 @@ func (a *App) GetUserDisallowedDirectories(id string) ([]string, error) {
 // GetVoiceStyles returns a list of available voice style files (JSON)
 func (a *App) GetVoiceStyles() []string {
 	var styles []string
-	folder := GetResourcePath(filepath.Join("assets", "voice_styles"))
+	folder := filepath.Join(getTTSAssetsDir(), legacyTTSVoiceStylesDir)
 	entries, err := os.ReadDir(folder)
 	if err != nil {
 		return styles
@@ -1338,7 +1344,7 @@ func (a *App) SetServerTTSConfig(cfg ServerTTSConfig) {
 	if a.enableTTS && cfg.Engine == "supertonic" {
 		fmt.Printf("Reloading TTS engine with %d threads...\n", cfg.Threads)
 		go func() {
-			if err := InitTTS(GetResourcePath("assets"), cfg.Threads); err != nil {
+			if err := InitTTS(getTTSAssetsDir(), cfg.Threads); err != nil {
 				fmt.Printf("Failed to reload TTS after config update: %v\n", err)
 			}
 		}()
@@ -1356,7 +1362,7 @@ func (a *App) SetTTSThreads(threads int) {
 	if a.enableTTS && ttsConfig.Engine == "supertonic" {
 		fmt.Printf("Reloading TTS with %d threads...\n", threads)
 		go func() {
-			if err := InitTTS(GetResourcePath("assets"), threads); err != nil {
+			if err := InitTTS(getTTSAssetsDir(), threads); err != nil {
 				fmt.Printf("Failed to reload TTS: %v\n", err)
 			}
 		}()
@@ -1365,7 +1371,7 @@ func (a *App) SetTTSThreads(threads int) {
 
 // CheckAssets checks if required assets exist
 func (a *App) CheckAssets() bool {
-	assetsDir := GetResourcePath("assets")
+	assetsDir := getTTSAssetsDir()
 	requiredFiles := []string{
 		"onnx/duration_predictor.onnx",
 		"onnx/text_encoder.onnx",
@@ -1629,7 +1635,7 @@ func (a *App) GetCachedModels() []byte {
 // DownloadAssets downloads missing assets
 func (a *App) DownloadAssets() error {
 	downloader := NewDownloader()
-	assetsDir := filepath.Join(GetAppDataDir(), "assets")
+	assetsDir := getWritableTTSAssetsDir()
 	if err := downloader.DownloadAssets(assetsDir); err != nil {
 		return err
 	}
@@ -1647,12 +1653,42 @@ func (a *App) DownloadAssets() error {
 	return nil
 }
 
+func (a *App) GetWelcomeState() WelcomeState {
+	requiresMigration, migrationMessage := detectLegacyStorageNeedsMigration(GetAppDataDir())
+	requiresTTSDownload := !a.CheckAssets()
+
+	state := WelcomeState{
+		ShowModal:           !a.welcomeDismissed || requiresMigration,
+		RequiresMigration:   requiresMigration,
+		MigrationMessage:    migrationMessage,
+		RequiresTTSDownload: requiresTTSDownload,
+		TTSDownloadMessage:  "Voice runtime files are optional, but they are needed for Supertonic TTS and local embedding features.",
+		CanSkipTTSDownload:  true,
+		RestartRecommended:  requiresMigration,
+		PrimaryMessage:      "Welcome to DKST LLM Chat Server.",
+		SecondaryMessage:    "A few one-time setup actions may be needed before everything is ready.",
+	}
+	if requiresMigration {
+		state.PrimaryMessage = "Welcome back."
+		state.SecondaryMessage = "We found an older storage layout that should be reorganized once."
+	}
+	if !requiresMigration && !requiresTTSDownload && a.welcomeDismissed {
+		state.ShowModal = false
+	}
+	return state
+}
+
+func (a *App) DismissWelcome() {
+	a.welcomeDismissed = true
+	a.saveConfig()
+}
+
 // GetLicenseText returns the content of LICENSE files
 func (a *App) GetLicenseText() string {
 	var builder strings.Builder
 
 	// App/Assets License
-	assetsLicensePath := GetResourcePath(filepath.Join("assets", "LICENSE"))
+	assetsLicensePath := filepath.Join(getTTSAssetsDir(), "LICENSE")
 	if content, err := os.ReadFile(assetsLicensePath); err == nil {
 		builder.WriteString("=== Assets / Model License ===\n")
 		builder.WriteString(string(content))
@@ -1660,7 +1696,7 @@ func (a *App) GetLicenseText() string {
 	}
 
 	// ONNX Runtime License
-	onnxLicensePath := GetResourcePath(filepath.Join("onnxruntime", "LICENSE.txt"))
+	onnxLicensePath := filepath.Join(getONNXRuntimeDir(), "LICENSE.txt")
 	if content, err := os.ReadFile(onnxLicensePath); err == nil {
 		builder.WriteString("=== ONNX Runtime License ===\n")
 		builder.WriteString(string(content))
@@ -1683,8 +1719,8 @@ func (a *App) GetTTSDictionary(lang string) map[string]string {
 	if lang == "" {
 		lang = "ko"
 	}
-	filename := fmt.Sprintf("dictionary_%s.txt", lang)
-	dictFile := filepath.Join(GetAppDataDir(), filename)
+	filename := getDictionaryFilename(lang)
+	dictFile := getWritableDictionaryFilePath(lang)
 
 	// Create default if missing (only for ko/en as examples, or empty for others)
 	if _, err := os.Stat(dictFile); os.IsNotExist(err) {
@@ -1698,8 +1734,13 @@ func (a *App) GetTTSDictionary(lang string) map[string]string {
 			defaultContent = "" // Empty for others by default
 		}
 		if defaultContent != "" {
+			_ = os.MkdirAll(filepath.Dir(dictFile), 0755)
 			os.WriteFile(dictFile, []byte(defaultContent), 0644)
 		}
+	}
+
+	if !fileExists(dictFile) {
+		dictFile = getDictionarySourcePath(lang)
 	}
 
 	result := make(map[string]string)
