@@ -13,9 +13,13 @@ export function CheckAssets():Promise<boolean>;
 
 export function CheckHealth():Promise<core.HealthCheckResult>;
 
+export function ConfirmAndRunStorageMigration():Promise<string>;
+
 export function ClearDebugTrace():Promise<void>;
 
 export function DeleteUser(arg1:string):Promise<void>;
+
+export function DismissWelcome():Promise<void>;
 
 export function DownloadAssets():Promise<void>;
 
@@ -61,6 +65,8 @@ export function GetTTSConfig():Promise<core.ServerTTSConfig>;
 
 export function GetTTSDictionary(arg1:string):Promise<Record<string, string>>;
 
+export function GetWelcomeState():Promise<core.WelcomeState>;
+
 export function GetToolPattern(arg1:string):Promise<Record<string, string>>;
 
 export function GetUserApiToken(arg1:string):Promise<string>;
@@ -94,6 +100,8 @@ export function Quit():Promise<void>;
 export function ResetMemory(arg1:string):Promise<string>;
 
 export function RestartServer():Promise<void>;
+
+export function RunStorageMigration():Promise<string>;
 
 export function SetAutoStartServer(arg1:boolean):Promise<void>;
 

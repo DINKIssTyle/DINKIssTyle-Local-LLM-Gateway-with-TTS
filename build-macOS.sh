@@ -64,34 +64,18 @@ if [ $? -eq 0 ]; then
     APP_CONTENT_DIR="build/bin/DKST LLM Chat Server.app/Contents/MacOS/"
     APP_RESOURCE_DIR="build/bin/DKST LLM Chat Server.app/Contents/Resources/"
     mkdir -p "$APP_RESOURCE_DIR"
-    
-    # Copy onnxruntime folder but clean out binary files (keep only LICENSE and metadata)
-    cp -r onnxruntime "$APP_CONTENT_DIR"
-    rm -f "$APP_CONTENT_DIR/onnxruntime/"*.so*
-    rm -f "$APP_CONTENT_DIR/onnxruntime/"*.dll
-    rm -f "$APP_CONTENT_DIR/onnxruntime/"*.lib
-    rm -f "$APP_CONTENT_DIR/onnxruntime/"*.dylib
-    
-    # Copy the dylib to root MacOS folder for linking
-    cp onnxruntime/libonnxruntime.dylib "$APP_CONTENT_DIR"
-    
+
+    mkdir -p "$APP_RESOURCE_DIR/assets/runtime/onnxruntime"
+    cp bundle/assets/runtime/onnxruntime/libonnxruntime.dylib "$APP_RESOURCE_DIR/assets/runtime/onnxruntime/"
+    cp bundle/assets/runtime/onnxruntime/LICENSE.txt "$APP_RESOURCE_DIR/assets/runtime/onnxruntime/" 2>/dev/null || true
+    cp bundle/assets/runtime/onnxruntime/README.md "$APP_RESOURCE_DIR/assets/runtime/onnxruntime/" 2>/dev/null || true
+    cp bundle/assets/runtime/onnxruntime/ThirdPartyNotices.txt "$APP_RESOURCE_DIR/assets/runtime/onnxruntime/" 2>/dev/null || true
+    cp -R bundle/dictionary "$APP_RESOURCE_DIR"
     cp bundle/users.json "$APP_RESOURCE_DIR" 2>/dev/null || echo "{}" > "$APP_RESOURCE_DIR/users.json"
     cp bundle/config.json "$APP_RESOURCE_DIR" 2>/dev/null || true
-    cp bundle/dictionary_*.txt "$APP_RESOURCE_DIR" 2>/dev/null || true
-    cp bundle/Dictionary_editor.py "$APP_RESOURCE_DIR" 2>/dev/null || true
     cp bundle/system_prompts.json "$APP_RESOURCE_DIR" 2>/dev/null || true
     cp bundle/ThirdPartyNotices.md "$APP_RESOURCE_DIR" 2>/dev/null || true
     
-    # Clean up unnecessary files from bundle
-    rm -rf "$APP_RESOURCE_DIR/assets/.git"
-    
-    # Fix RPATH and Dylib ID for portability
-    EXE_PATH="$APP_CONTENT_DIR/DKST LLM Chat Server"
-    DYLIB_PATH="$APP_CONTENT_DIR/libonnxruntime.dylib"
-    
-    install_name_tool -add_rpath "@executable_path/" "$EXE_PATH" 2>/dev/null || true
-    install_name_tool -id "@rpath/libonnxruntime.dylib" "$DYLIB_PATH"
-
     # Re-sign binaries to fix "Code Signature Invalid" crash
     echo "Cleaning detritus and re-signing binaries..."
     APP_BUNDLE_PATH="build/bin/DKST LLM Chat Server.app"
@@ -101,7 +85,9 @@ if [ $? -eq 0 ]; then
     
     BUNDLE_ID="com.dinkisstyle.llmchat"
     ENTITLEMENTS="bundle/entitlements.plist"
-    
+    EXE_PATH="$APP_CONTENT_DIR/DKST LLM Chat Server"
+    DYLIB_PATH="$APP_RESOURCE_DIR/assets/runtime/onnxruntime/libonnxruntime.dylib"
+
     codesign --force --sign "$SIGN_IDENTITY" --timestamp=none --identifier "$BUNDLE_ID" --options runtime "$DYLIB_PATH"
     codesign --force --sign "$SIGN_IDENTITY" --timestamp=none --identifier "$BUNDLE_ID" --options runtime --entitlements "$ENTITLEMENTS" "$EXE_PATH"
     codesign --force --sign "$SIGN_IDENTITY" --timestamp=none --identifier "$BUNDLE_ID" --options runtime --entitlements "$ENTITLEMENTS" --deep "$APP_BUNDLE_PATH"

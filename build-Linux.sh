@@ -121,23 +121,17 @@ $WAILS_CMD build -platform linux/amd64 $BUILD_TAGS
 APP_CONTENT_DIR="build/bin"
 if [ -d "$APP_CONTENT_DIR" ]; then
     echo "Organizing artifacts..."
-    # Copy ONNX Runtime lib if exists
-    if [ -f "onnxruntime/libonnxruntime.so" ]; then
-        mkdir -p "$APP_CONTENT_DIR/onnxruntime"
-        cp onnxruntime/libonnxruntime.so "$APP_CONTENT_DIR/onnxruntime/libonnxruntime.so"
-        cp onnxruntime/LICENSE.txt "$APP_CONTENT_DIR/onnxruntime/LICENSE.txt"
-        cp onnxruntime/ThirdPartyNotices.txt "$APP_CONTENT_DIR/onnxruntime/ThirdPartyNotices.txt"
+    if [ -d "bundle/assets" ]; then
+        cp -R bundle/assets "$APP_CONTENT_DIR"
     else
-        echo "Warning: libonnxruntime.so not found in project root."
+        echo "Warning: bundle/assets directory not found in project root."
     fi
-
-    # Copy resources
-    # cp -r assets "$APP_CONTENT_DIR"
+    if [ -d "bundle/dictionary" ]; then
+        cp -R bundle/dictionary "$APP_CONTENT_DIR"
+    fi
 
     cp bundle/users.json "$APP_CONTENT_DIR" 2>/dev/null || echo "{}" > "$APP_CONTENT_DIR/users.json"
     cp -f bundle/config.json "$APP_CONTENT_DIR"
-    cp bundle/dictionary_*.txt "$APP_CONTENT_DIR" 2>/dev/null || true
-    cp bundle/Dictionary_editor.py "$APP_CONTENT_DIR" 2>/dev/null || true
     cp bundle/system_prompts.json "$APP_CONTENT_DIR" 2>/dev/null || true
     cp bundle/ThirdPartyNotices.md "$APP_CONTENT_DIR" 2>/dev/null || true
     

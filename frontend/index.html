@@ -525,6 +525,10 @@
             z-index: 140;
         }
 
+        #welcome-modal {
+            z-index: 150;
+        }
+
         .modal {
             background: var(--card-bg);
             border: 1px solid var(--border-color);
@@ -688,6 +692,82 @@
             padding: 16px;
             border-top: 1px solid var(--border-color);
             text-align: right;
+        }
+
+        .welcome-modal {
+            max-width: 680px;
+        }
+
+        .welcome-intro {
+            display: grid;
+            gap: 8px;
+            margin-bottom: 18px;
+        }
+
+        .welcome-title {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--text-color);
+        }
+
+        .welcome-subtitle {
+            font-size: 14px;
+            line-height: 1.6;
+            color: var(--text-secondary);
+        }
+
+        .welcome-actions-list {
+            display: grid;
+            gap: 14px;
+        }
+
+        .welcome-action-card {
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 16px;
+            background: rgba(255, 255, 255, 0.03);
+            display: grid;
+            gap: 10px;
+        }
+
+        .welcome-action-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        .welcome-action-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text-color);
+        }
+
+        .welcome-action-badge {
+            padding: 4px 9px;
+            border-radius: 999px;
+            font-size: 11px;
+            border: 1px solid rgba(181, 106, 0, 0.35);
+            color: #d28a18;
+            background: rgba(181, 106, 0, 0.08);
+            white-space: nowrap;
+        }
+
+        .welcome-action-body {
+            font-size: 13px;
+            line-height: 1.6;
+            color: var(--text-secondary);
+        }
+
+        .welcome-note {
+            margin-top: 10px;
+            padding: 12px 14px;
+            border-radius: 12px;
+            font-size: 12px;
+            line-height: 1.6;
+            color: #d6e8ff;
+            background: rgba(31, 111, 235, 0.12);
+            border: 1px solid rgba(31, 111, 235, 0.24);
         }
 
         /* Restart Banner */
@@ -903,6 +983,9 @@
                         <input type="text" id="cert-domain" value="localhost" placeholder="localhost or domain.com"
                             autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false"
                             inputmode="url" oninput="saveCertDomain()" />
+                        <div style="margin-top: 8px; font-size: 12px; color: var(--text-secondary);">
+                            Certificates are stored in the <code>cert</code> folder.
+                        </div>
                         <div class="inline-actions" style="margin-top: 10px;">
                             <button class="btn btn-secondary btn-mini" onclick="generateCertificate()">
                                 <span class="material-icons-round">security</span>
@@ -1090,6 +1173,33 @@
                     Copy Payload
                 </button>
                 <button class="btn btn-primary" onclick="closeTracePayloadModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="welcome-modal">
+        <div class="modal welcome-modal">
+            <div class="modal-header">
+                <div class="modal-title">Welcome</div>
+                <button class="icon-btn" onclick="dismissWelcomeModal()">
+                    <span class="material-icons-round">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="welcome-intro">
+                    <div class="welcome-title" id="welcome-primary-message">Welcome to DKST LLM Chat Server.</div>
+                    <div class="welcome-subtitle" id="welcome-secondary-message">A few one-time setup actions may be needed before everything is ready.</div>
+                </div>
+                <div class="welcome-actions-list" id="welcome-actions-list"></div>
+                <div class="welcome-note" id="welcome-restart-note" style="display:none;">
+                    Migration can affect files already in use. If something still looks stale afterward, restart the app once.
+                </div>
+            </div>
+            <div class="modal-footer" style="display:flex; gap:8px; justify-content:flex-end;">
+                <button class="btn btn-secondary btn-compact" id="welcome-skip-btn" onclick="dismissWelcomeModal()">
+                    Continue Later
+                </button>
+                <button class="btn btn-primary" onclick="dismissWelcomeModal(true)">Done</button>
             </div>
         </div>
     </div>
@@ -1348,6 +1458,7 @@
         let openTracePayloadEntry = null;
         let managedModelsRefreshTimer = null;
         let statusRefreshTimer = null;
+        let welcomeState = null;
 
         async function init() {
             if (typeof window.go !== 'undefined') {
@@ -1366,6 +1477,7 @@
                     loadTTSConfig();
                     loadStartupSettings();
                     loadAdvancedConfig();
+                    await refreshWelcomeState();
                     await loadDebugTraceConfig();
                     await updateStatus();
                     if (statusRefreshTimer === null) {
@@ -1378,6 +1490,7 @@
                         checkAssetStatus();
                         // Re-check TTS config (might auto-enable if we want)
                         loadTTSConfig();
+                        refreshWelcomeState();
                     });
 
                     // Listen for Show About menu action
@@ -1433,6 +1546,157 @@
                 document.getElementById('cert-domain').value = domain || 'localhost';
             } catch (e) {
                 console.error('Advanced Config Load Failed:', e);
+            }
+        }
+
+        async function refreshWelcomeState(forceOpen = false) {
+            if (typeof window.go === 'undefined') return;
+            try {
+                welcomeState = await window.go.core.App.GetWelcomeState();
+                renderWelcomeModal(forceOpen);
+            } catch (e) {
+                console.error('Failed to load welcome state:', e);
+            }
+        }
+
+        function renderWelcomeModal(forceOpen = false) {
+            const modal = document.getElementById('welcome-modal');
+            const primaryEl = document.getElementById('welcome-primary-message');
+            const secondaryEl = document.getElementById('welcome-secondary-message');
+            const actionsEl = document.getElementById('welcome-actions-list');
+            const restartNoteEl = document.getElementById('welcome-restart-note');
+            const skipBtn = document.getElementById('welcome-skip-btn');
+            if (!modal || !primaryEl || !secondaryEl || !actionsEl || !restartNoteEl || !skipBtn) return;
+
+            const state = welcomeState || {};
+            primaryEl.textContent = state.primaryMessage || 'Welcome to DKST LLM Chat Server.';
+            secondaryEl.textContent = state.secondaryMessage || 'A few one-time setup actions may be needed before everything is ready.';
+            restartNoteEl.style.display = state.restartRecommended ? '' : 'none';
+            skipBtn.style.display = state.requiresMigration ? '' : '';
+
+            const cards = [];
+            if (state.requiresMigration) {
+                cards.push(`
+                    <div class="welcome-action-card">
+                        <div class="welcome-action-top">
+                            <div class="welcome-action-title">Storage migration</div>
+                            <span class="welcome-action-badge">Required</span>
+                        </div>
+                        <div class="welcome-action-body">${escapeHtml(state.migrationMessage || 'Legacy files were found and should be moved into the new folder layout.')}</div>
+                        <div class="managed-model-actions">
+                            <button class="btn btn-primary btn-compact" id="welcome-migration-btn" onclick="runWelcomeMigration()">
+                                <span class="material-icons-round">drive_file_move</span>
+                                Run Migration
+                            </button>
+                        </div>
+                    </div>
+                `);
+            }
+            if (state.requiresTtsDownload) {
+                cards.push(`
+                    <div class="welcome-action-card">
+                        <div class="welcome-action-top">
+                            <div class="welcome-action-title">Voice runtime download</div>
+                            <span class="welcome-action-badge">Optional</span>
+                        </div>
+                        <div class="welcome-action-body">${escapeHtml(state.ttsDownloadMessage || 'Download the local runtime files to use Supertonic TTS and related local features.')}</div>
+                        <div class="managed-model-actions">
+                            <button class="btn btn-primary btn-compact" id="welcome-download-btn" onclick="runWelcomeDownload()">
+                                <span class="material-icons-round">download</span>
+                                Download Runtime
+                            </button>
+                            ${state.canSkipTTSDownload ? `<button class="btn btn-secondary btn-compact" onclick="dismissWelcomeModal()">Skip for Now</button>` : ''}
+                        </div>
+                    </div>
+                `);
+            }
+            if (!cards.length) {
+                cards.push(`
+                    <div class="welcome-action-card">
+                        <div class="welcome-action-top">
+                            <div class="welcome-action-title">Ready to go</div>
+                        </div>
+                        <div class="welcome-action-body">Everything needed for the current setup is already in place.</div>
+                    </div>
+                `);
+            }
+            actionsEl.innerHTML = cards.join('');
+
+            if (forceOpen || state.showModal) {
+                modal.style.display = 'flex';
+            } else {
+                modal.style.display = 'none';
+            }
+        }
+
+        async function dismissWelcomeModal(markDone = false) {
+            const modal = document.getElementById('welcome-modal');
+            if (!modal) return;
+            const state = welcomeState || {};
+            if (!state.requiresMigration) {
+                try {
+                    await window.go.core.App.DismissWelcome();
+                } catch (e) {
+                    console.error('Failed to dismiss welcome modal:', e);
+                }
+            }
+            modal.style.display = 'none';
+            if (markDone) {
+                await refreshWelcomeState(false);
+            }
+        }
+
+        async function runWelcomeMigration() {
+            const btn = document.getElementById('welcome-migration-btn');
+            const originalContent = btn ? btn.innerHTML : '';
+            try {
+                if (btn) {
+                    btn.disabled = true;
+                    btn.innerHTML = '<span class="material-icons-round">sync</span> Running...';
+                }
+                const summary = await window.go.core.App.RunStorageMigration();
+                await checkAssetStatus();
+                await refreshManagedModels();
+                await refreshWelcomeState(true);
+                showAlert(summary || 'Migration completed.');
+            } catch (e) {
+                console.error('Failed to run welcome migration:', e);
+                showAlert('Failed to run migration: ' + e);
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = originalContent;
+                }
+            }
+        }
+
+        async function runWelcomeDownload() {
+            const btn = document.getElementById('welcome-download-btn');
+            const originalContent = btn ? btn.innerHTML : '';
+            try {
+                if (btn) {
+                    btn.disabled = true;
+                    btn.innerHTML = '<span class="material-icons-round">sync</span> Downloading...';
+                }
+                await window.go.core.App.DownloadAssets();
+                await checkAssetStatus();
+                await refreshManagedModels();
+                await refreshWelcomeState(false);
+                if (!welcomeState?.requiresMigration) {
+                    await window.go.core.App.DismissWelcome();
+                    await refreshWelcomeState(false);
+                    const modal = document.getElementById('welcome-modal');
+                    if (modal) modal.style.display = 'none';
+                }
+                showAlert('Runtime download completed.');
+            } catch (e) {
+                console.error('Failed to download runtime assets:', e);
+                showAlert('Failed to download runtime: ' + e);
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = originalContent;
+                }
             }
         }
 

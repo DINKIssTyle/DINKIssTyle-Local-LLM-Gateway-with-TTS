@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
 
@@ -56,25 +55,6 @@ func normalizeEmbeddingConfig(cfg EmbeddingModelConfig) EmbeddingModelConfig {
 		cfg.ModelID = "multilingual-e5-small"
 	}
 	return cfg
-}
-
-func GetModelsRootDir() string {
-	if runtime.GOOS == "windows" || runtime.GOOS == "linux" {
-		return filepath.Join(GetAppDataDir(), "models")
-	}
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(GetAppDataDir(), "models")
-	}
-	return filepath.Join(homeDir, "Documents", macAppDataDirName, "models")
-}
-
-func getEmbeddingModelInstallDir(modelID string) string {
-	modelID = strings.TrimSpace(modelID)
-	if modelID == "" {
-		modelID = "multilingual-e5-small"
-	}
-	return filepath.Join(GetModelsRootDir(), "embeddings", modelID)
 }
 
 func getEmbeddingModelConfigPath(modelID string) string {
@@ -141,7 +121,7 @@ func getEmbeddingModelStatus(cfg EmbeddingModelConfig) ManagedModelStatus {
 }
 
 func getTTSModelStatus() ManagedModelStatus {
-	assetsDir := filepath.Join(GetAppDataDir(), "assets")
+	assetsDir := getWritableTTSAssetsDir()
 	installed := globalApp != nil && globalApp.CheckAssets()
 	status := "missing"
 	message := "TTS assets are not installed yet."
