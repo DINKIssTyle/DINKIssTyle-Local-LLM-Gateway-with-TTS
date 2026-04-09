@@ -4021,7 +4021,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		})
 
 		// Tool Pattern Logic
-		toolPattern := app.GetToolPattern(modelID)
+		var toolPattern map[string]string = nil
 		var toolRegex = (*regexp.Regexp)(nil)
 
 		// Buffer for handling split tags (e.g., "<", "tool", "_call>")
@@ -4031,20 +4031,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		isBuffering := false
 		var buffer string             // Declare buffer here
 		var bufferingThreshold = 8000 // Buffer size (increased for large JSON args)
-
-		if toolPattern != nil {
-			if regexStr, ok := toolPattern["regex"]; ok {
-				var err error
-				toolRegex, err = regexp.Compile(regexStr)
-				if err != nil {
-					log.Printf("[handleChat] Invalid regex for model %s: %v", modelID, err)
-					toolPattern = nil // Disable if invalid
-				} else {
-					isBuffering = true
-					log.Printf("[handleChat] Enabled Custom Tool Parsing for model: %s", modelID)
-				}
-			}
-		}
 
 		// Extract messages for Memory Analysis (if enabled)
 		if enableMemory {
@@ -4517,7 +4503,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 						// If buffer too long, assume no match and flush
 						if len(buffer) > bufferingThreshold {
-							// 🔍 Self-Evolution Check
+							// 🔍 Self-Correction Check
 							lowerBuf := strings.ToLower(buffer)
 							if (strings.Contains(lowerBuf, "function") || strings.Contains(lowerBuf, "call") || strings.Contains(lowerBuf, "tool")) &&
 								(strings.Contains(lowerBuf, "{") && strings.Contains(lowerBuf, "}")) {
@@ -4617,7 +4603,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 						}
 					}
 
-					// --- D. Self-Evolution for non-buffered models ---
+					// --- D. Self-Correction for non-buffered models ---
 					// This block was previously in an `else if strings.HasPrefix(strings.TrimSpace(line), "data: ")`
 					// It should now be integrated here, after content extraction but before forwarding.
 					if toolPattern == nil { // Only if no tool pattern is active
@@ -4668,7 +4654,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 							continue
 						}
 
-						// 🔍 Self-Evolution for non-buffered models
+						// 🔍 Self-Correction for non-buffered models
 						if len(content) > 5 {
 							lc := strings.ToLower(content)
 							// Broaden trigger keywords: <|, function, tool, execute, {"name":, and tool names
@@ -4696,7 +4682,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 									strings.Contains(lc, "tool_call[") || // Catch array/map access style which is code, not natural language
 									strings.Contains(lc, "tool_call [") ||
 									strings.Contains(lc, "```") {
-									log.Printf("[handleChat] Self-Evolution trigger skipped: detected meta-content (regex/code)")
+									log.Printf("[handleChat] Self-Correction trigger skipped: detected meta-content (regex/code)")
 								} else {
 									// Double check: if it's just a tool name mention without execution context, skip
 									// Real execution usually involves JSON-like structure "{" or special tokens "<|"
@@ -4704,7 +4690,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 									if isRealExecution {
 										log.Printf("[handleChat] Invalid tool pattern detected in content: %s", content)
-										// 🛡️ REPLACEMENT: Instead of Self-Evolution (which loops), mark for Self-Correction
+										// 🛡️ Mark for Self-Correction
 										needsCorrection = true
 										badContentCapture = content // Capture the snippet for the prompt
 									} else {
