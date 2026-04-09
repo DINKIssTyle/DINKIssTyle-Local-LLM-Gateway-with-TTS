@@ -164,7 +164,7 @@ func GetToolList() []Tool {
 	tools := []Tool{
 		{
 			Name:        "search_web",
-			Description: "Search the internet for current information. This tool tries Google first and automatically falls back to DuckDuckGo Lite if needed.",
+			Description: "Search the internet for current information using DuckDuckGo.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
