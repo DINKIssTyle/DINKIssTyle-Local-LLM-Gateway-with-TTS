@@ -699,7 +699,7 @@ const translations = {
         'chat.reconnect.title': '연결이 잠시 멈춘 것 같습니다.',
         'chat.reconnect.body': '백그라운드 복귀 후 동기화가 지연되고 있습니다. 다시 연결을 시도해 주세요.',
         'chat.reconnect.action': '재접속 시도',
-        'chat.passiveSyncWaiting': '다른곳에서 응답이 생성중입니다. 응답이 끝나면 이 곳에 응답내용이 표시됩니다.',
+        'chat.passiveSyncWaiting': '다른 창에서 응답을 생성하고 있습니다...',
         'chat.passiveSyncThinking': '다른 창에서 응답을 생성하고 있습니다...',
         'chat.passiveSyncTool': '다른 창에서 MCP 도구를 사용 중입니다...',
         'input.placeholder': '메시지를 입력하세요...',
@@ -944,7 +944,7 @@ const translations = {
         'chat.reconnect.title': 'Connection seems paused.',
         'chat.reconnect.body': 'Sync has not resumed after returning from the background. Try reconnecting.',
         'chat.reconnect.action': 'Reconnect',
-        'chat.passiveSyncWaiting': 'A response is being generated elsewhere. It will appear here when it finishes.',
+        'chat.passiveSyncWaiting': 'Another window is generating a response...',
         'chat.passiveSyncThinking': 'Another window is generating a reply...',
         'chat.passiveSyncTool': 'Another window is using an MCP tool...',
         'input.placeholder': 'Type a message...',
@@ -4694,14 +4694,14 @@ function applyCurrentChatSessionEvent(entry) {
             const next = typeof payload.full_content === 'string'
                 ? payload.full_content
                 : appendStreamChunkDedup(serverReplayMessageBuffers.get(assistantId) || '', String(payload.content || ''));
-        
-        // Deep Sync Rationale: Do not buffer the "Generation in progress..." placeholder text
-        // so that it doesn't get treated as final content if the server doesn't send a full_content payload later.
-        if (next !== getPassiveSyncWaitingText()) {
-            serverReplayMessageBuffers.set(assistantId, next);
-        }
-        updateSyncedMessageContent(assistantId, next);
-        cleanupAssistantMessagesForTurn(serverReplayCurrentTurnId || entryTurnId, assistantId);
+
+            // Deep Sync Rationale: Do not buffer the "Generation in progress..." placeholder text
+            // so that it doesn't get treated as final content if the server doesn't send a full_content payload later.
+            if (next !== getPassiveSyncWaitingText()) {
+                serverReplayMessageBuffers.set(assistantId, next);
+            }
+            updateSyncedMessageContent(assistantId, next);
+            cleanupAssistantMessagesForTurn(serverReplayCurrentTurnId || entryTurnId, assistantId);
             break;
         }
         case 'reasoning.start':
