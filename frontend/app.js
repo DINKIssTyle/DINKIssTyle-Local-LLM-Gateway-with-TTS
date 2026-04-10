@@ -66,7 +66,33 @@ const AppState = {
     chat: {
         messages: [],
         isGenerating: false,
-        activeLocalTurnId: ''
+        activeLocalTurnId: '',
+        abortController: null,
+        streamLoopWorker: null,
+        streamLoopWorkerFailed: false,
+        streamLoopWorkerMessageId: 0,
+        pendingStreamLoopChecks: new Map(),
+        activeLocalAssistantId: '',
+        assistantTurnIdMap: new Map(),
+        locallyRenderedTurnIds: new Set(),
+        stateful: {
+            lastResponseId: null,
+            turnCount: 0,
+            estimatedChars: 0,
+            summary: '',
+            resetCount: 0,
+            pendingResetReason: null,
+            lastInputTokens: 0,
+            lastOutputTokens: 0,
+            peakInputTokens: 0
+        },
+        passive: {
+            placeholder: '',
+            llmBusy: false,
+            externalLLMBusy: false,
+            externalLLMPhase: '',
+            sessionLLMRunning: false
+        }
     },
     audio: {
         currentAudio: null,
@@ -80,13 +106,88 @@ const AppState = {
         streamingTTSCommittedIndex: 0,
         streamingTTSBuffer: '',
         streamingTTSProcessor: null,
-        ttsSessionId: 0
+        ttsSessionId: 0,
+        dictionary: {},
+        dictionaryRegex: null,
+        dictionaryLang: '',
+        dictionaryLoadPromise: null
     },
     input: {
-        pendingVoiceInputAutoTTS: false
+        pendingVoiceInputAutoTTS: false,
+        isSTTActive: false,
+        recognition: null,
+        sttPlaceholderTimer: null,
+        sttPlaceholderIndex: 0,
+        sttSuppressAutoSend: false,
+        sttStopFallbackTimer: null,
+        pendingImage: null
     },
     ui: {
-        activeStreamingMessageId: null
+        activeStreamingMessageId: null,
+        progress: {
+            active: false,
+            label: '',
+            percent: null,
+            hideTimer: null
+        },
+        scroll: {
+            shouldAutoScroll: true,
+            holdAutoScrollTimeout: null,
+            resizeObserver: null,
+            lockToLatest: false,
+            suppressNextEvent: false,
+            lastObservedHeight: 0,
+            pendingToBottom: false,
+            metrics: {
+                scrollTop: 0,
+                scrollHeight: 0,
+                clientHeight: 0,
+                isNearBottom: true
+            },
+            pendingFrame: null,
+            pendingInputFocusTop: null,
+            pendingFirstInputRepairTop: null
+        },
+        composerBackgroundTasks: new Map(),
+        pin: {
+            activePinnedToTop: false,
+            pinPending: false
+        },
+        wakeLock: null,
+        lastKeyboardViewportSignalAt: 0,
+        location: {
+            currentUserLocation: null,
+            lastErrorMessage: ''
+        },
+        systemPromptPresets: []
+    },
+    session: {
+        currentUser: null,
+        currentCache: null,
+        eventSeq: 0,
+        clearedAt: '',
+        lastCache: null,
+        didInitialBootstrap: false,
+        isRestoring: false,
+        serverRunning: false,
+        lastSyncedConfigSignature: '',
+        syncPromise: null,
+        pendingSync: false,
+        refreshPromise: null,
+        pendingRefresh: false,
+        retryTimer: null,
+        pollTimer: null,
+        reconnectWatchdogTimer: null,
+        reconnectCardVisible: false,
+        localStreamOwnershipReleased: false,
+        lastFetchPromise: null,
+        foregroundSyncTimers: [],
+        replay: {
+            currentTurnId: '',
+            currentAssistantId: '',
+            messageBuffers: new Map(),
+            reasoningBuffers: new Map()
+        }
     }
 };
 
@@ -273,35 +374,35 @@ function detectMessageRunawayRepetitionLocally(text = '') {
 }
 
 function createStreamLoopWorker() {
-    if (streamLoopWorker || streamLoopWorkerFailed || typeof Worker !== 'function') return streamLoopWorker;
+    if (AppState.chat.streamLoopWorker || AppState.chat.streamLoopWorkerFailed || typeof Worker !== 'function') return AppState.chat.streamLoopWorker;
 
     try {
-        streamLoopWorker = new Worker('public/stream-loop-worker.js?v=1');
-        streamLoopWorker.onmessage = (event) => {
+        AppState.chat.streamLoopWorker = new Worker('public/stream-loop-worker.js?v=1');
+        AppState.chat.streamLoopWorker.onmessage = (event) => {
             const data = event?.data || {};
             const id = Number(data.id || 0);
-            const pending = pendingStreamLoopChecks.get(id);
+            const pending = AppState.chat.pendingStreamLoopChecks.get(id);
             if (!pending) return;
-            pendingStreamLoopChecks.delete(id);
+            AppState.chat.pendingStreamLoopChecks.delete(id);
             pending.resolve(data.result || null);
         };
-        streamLoopWorker.onerror = (error) => {
+        AppState.chat.streamLoopWorker.onerror = (error) => {
             console.warn('[Stream] Loop worker failed, falling back to main thread', error);
-            streamLoopWorkerFailed = true;
-            if (streamLoopWorker) {
-                streamLoopWorker.terminate();
-                streamLoopWorker = null;
+            AppState.chat.streamLoopWorkerFailed = true;
+            if (AppState.chat.streamLoopWorker) {
+                AppState.chat.streamLoopWorker.terminate();
+                AppState.chat.streamLoopWorker = null;
             }
-            pendingStreamLoopChecks.forEach((pending) => pending.resolve(null));
-            pendingStreamLoopChecks.clear();
+            AppState.chat.pendingStreamLoopChecks.forEach((pending) => pending.resolve(null));
+            AppState.chat.pendingStreamLoopChecks.clear();
         };
     } catch (error) {
         console.warn('[Stream] Failed to start loop worker, falling back to main thread', error);
-        streamLoopWorkerFailed = true;
-        streamLoopWorker = null;
+        AppState.chat.streamLoopWorkerFailed = true;
+        AppState.chat.streamLoopWorker = null;
     }
 
-    return streamLoopWorker;
+    return AppState.chat.streamLoopWorker;
 }
 
 function detectRunawayRepetitionAsync(text = '', kind = 'message') {
@@ -318,8 +419,8 @@ function detectRunawayRepetitionAsync(text = '', kind = 'message') {
     }
 
     return new Promise((resolve) => {
-        const id = ++streamLoopWorkerMessageId;
-        pendingStreamLoopChecks.set(id, { resolve });
+        const id = ++AppState.chat.streamLoopWorkerMessageId;
+        AppState.chat.pendingStreamLoopChecks.set(id, { resolve });
         worker.postMessage({ id, kind, text: source });
     });
 }
@@ -626,8 +727,6 @@ function setLanguage(lang) {
 // ============================================================================
 // Screen Wake Lock API
 // ============================================================================
-let wakeLock = null;
-let lastKeyboardViewportSignalAt = 0;
 
 // Audio Context & Wake Lock Recovery for iOS/PWA
 document.addEventListener('visibilitychange', async () => {
@@ -707,7 +806,7 @@ async function syncWakeLock() {
     const shouldBeActive = !!(
         AppState.chat.isGenerating
         || AppState.audio.isPlayingQueue
-        || isSTTActive
+        || AppState.input.isSTTActive
         || AppState.audio.streamingTTSActive
     );
     if (shouldBeActive) {
@@ -718,41 +817,41 @@ async function syncWakeLock() {
 }
 
 async function requestWakeLock() {
-    if (!('wakeLock' in navigator)) return;
-    if (wakeLock) return; // Already acquired
+    if (!('AppState.ui.wakeLock' in navigator)) return;
+    if (AppState.ui.wakeLock) return; // Already acquired
 
     try {
-        wakeLock = await navigator.wakeLock.request('screen');
+        AppState.ui.wakeLock = await navigator.wakeLock.request('screen');
         console.info('[WakeLock] Screen Wake Lock acquired');
 
-        wakeLock.addEventListener('release', () => {
+        AppState.ui.wakeLock.addEventListener('release', () => {
             console.info('[WakeLock] Screen Wake Lock released');
             const stillBusy = !!(
                 AppState.chat.isGenerating
                 || AppState.audio.isPlayingQueue
-                || isSTTActive
+                || AppState.input.isSTTActive
                 || AppState.audio.streamingTTSActive
             );
             if (document.visibilityState === 'visible' && stillBusy) {
-                wakeLock = null;
+                AppState.ui.wakeLock = null;
                 setTimeout(() => syncWakeLock(), 1000);
             } else {
-                wakeLock = null;
+                AppState.ui.wakeLock = null;
             }
         });
     } catch (err) {
         if (err.name !== 'NotAllowedError') {
             console.warn('[WakeLock] Request failed:', err);
         }
-        wakeLock = null;
+        AppState.ui.wakeLock = null;
     }
 }
 
 async function releaseWakeLock() {
-    if (!wakeLock) return;
+    if (!AppState.ui.wakeLock) return;
     try {
-        const lock = wakeLock;
-        wakeLock = null;
+        const lock = AppState.ui.wakeLock;
+        AppState.ui.wakeLock = null;
         await lock.release();
     } catch (err) {
         console.warn('[WakeLock] Release failed:', err);
@@ -950,7 +1049,7 @@ function speakSavedTurnResponse(btn) {
 }
 
 function getActiveComposerBackgroundTask() {
-    for (const task of composerBackgroundTasks.values()) {
+    for (const task of AppState.ui.composerBackgroundTasks.values()) {
         if (task?.active) return task;
     }
     return null;
@@ -958,13 +1057,13 @@ function getActiveComposerBackgroundTask() {
 
 function updateComposerBackgroundTaskUI() {
     const hasBackgroundTask = !!getActiveComposerBackgroundTask();
-    inputContainer?.classList.toggle('has-background-task', hasBackgroundTask && !AppState.chat.isGenerating && !composerProgressActive);
+    inputContainer?.classList.toggle('has-background-task', hasBackgroundTask && !AppState.chat.isGenerating && !AppState.ui.progress.active);
     updateMessageInputPlaceholder();
 }
 
 function setComposerBackgroundTask(id, task = {}) {
     if (!id) return;
-    composerBackgroundTasks.set(id, {
+    AppState.ui.composerBackgroundTasks.set(id, {
         id,
         active: true,
         label: task.label || '',
@@ -975,19 +1074,19 @@ function setComposerBackgroundTask(id, task = {}) {
 
 function clearComposerBackgroundTask(id, { abort = false } = {}) {
     if (!id) return;
-    const existing = composerBackgroundTasks.get(id);
+    const existing = AppState.ui.composerBackgroundTasks.get(id);
     if (abort) {
         existing?.abortController?.abort?.();
     }
-    composerBackgroundTasks.delete(id);
+    AppState.ui.composerBackgroundTasks.delete(id);
     updateComposerBackgroundTaskUI();
 }
 
 function cancelComposerBackgroundTasks(reason = 'user-interrupt') {
     savedLibraryController.cancelBackgroundTasks(reason);
-    for (const [id, task] of composerBackgroundTasks.entries()) {
+    for (const [id, task] of AppState.ui.composerBackgroundTasks.entries()) {
         task?.abortController?.abort?.(reason);
-        composerBackgroundTasks.delete(id);
+        AppState.ui.composerBackgroundTasks.delete(id);
     }
     updateComposerBackgroundTaskUI();
 }
@@ -1119,49 +1218,14 @@ async function downloadCertificate() {
 }
 
 // Chat State
-let pendingImage = null;
-let abortController = null;
-let lastResponseId = null; // For Stateful Chat
-let statefulTurnCount = 0;
-let statefulEstimatedChars = 0;
-let statefulSummary = '';
-let statefulResetCount = 0;
-let pendingStatefulResetReason = null;
-let statefulLastInputTokens = 0;
-let statefulLastOutputTokens = 0;
-let statefulPeakInputTokens = 0;
 // Audio State
 // DOM Elements
 const chatMessages = document.getElementById('chat-messages');
 const chatRestoreOverlay = document.getElementById('chat-restore-overlay');
 const AUTO_SCROLL_THRESHOLD_PX = 80;
-let shouldAutoScroll = true;
-let autoScrollHoldTimeout = null;
-let autoScrollResizeObserver = null;
-let lockScrollToLatest = false;
-let suppressNextScrollEvent = false;
-let activeStreamingMessagePinnedToTop = false;
-let activeStreamingMessagePinPending = false;
-let pendingScrollToBottom = false;
-let lastObservedChatScrollHeight = 0;
-let pendingChatScrollMetricsFrame = null;
-let pendingInputFocusChatScrollTop = null;
-let pendingFirstInputScrollRepairTop = null;
-let progressDockHideTimer = null;
-let composerProgressLabel = '';
-let composerProgressActive = false;
-let composerProgressPercent = null;
-const composerBackgroundTasks = new Map();
 const scrollToBottomBtn = document.getElementById('scroll-to-bottom-btn');
-let isRestoringChatSession = false;
-let chatScrollMetrics = {
-    scrollTop: 0,
-    scrollHeight: 0,
-    clientHeight: 0,
-    distanceFromBottom: 0,
-    nearBottom: true,
-    longScrollable: false
-};
+
+
 
 function readChatScrollMetrics() {
     if (!chatMessages) {
@@ -1187,9 +1251,9 @@ function getStreamingScrollMode() {
 }
 
 function commitChatScrollMetrics(metrics) {
-    chatScrollMetrics = metrics;
-    lastObservedChatScrollHeight = metrics.scrollHeight;
-    return chatScrollMetrics;
+    AppState.ui.scroll.metrics = metrics;
+    AppState.ui.scroll.lastObservedHeight = metrics.scrollHeight;
+    return AppState.ui.scroll.metrics;
 }
 
 function refreshChatScrollMetrics() {
@@ -1197,9 +1261,9 @@ function refreshChatScrollMetrics() {
 }
 
 function scheduleChatScrollMetricsRefresh() {
-    if (!chatMessages || pendingChatScrollMetricsFrame != null) return;
-    pendingChatScrollMetricsFrame = requestAnimationFrame(() => {
-        pendingChatScrollMetricsFrame = null;
+    if (!chatMessages || AppState.ui.scroll.pendingFrame != null) return;
+    AppState.ui.scroll.pendingFrame = requestAnimationFrame(() => {
+        AppState.ui.scroll.pendingFrame = null;
         refreshChatScrollMetrics();
         updateScrollToBottomButton();
     });
@@ -1208,28 +1272,28 @@ function scheduleChatScrollMetricsRefresh() {
 if (chatMessages) {
     refreshChatScrollMetrics();
     chatMessages.addEventListener('scroll', () => {
-        if (suppressNextScrollEvent) {
-            suppressNextScrollEvent = false;
+        if (AppState.ui.scroll.suppressNextEvent) {
+            AppState.ui.scroll.suppressNextEvent = false;
             updateScrollToBottomButton();
             return;
         }
 
         const metrics = refreshChatScrollMetrics();
-        shouldAutoScroll = metrics.nearBottom;
-        if (!shouldAutoScroll) {
-            if (autoScrollHoldTimeout) {
-                clearTimeout(autoScrollHoldTimeout);
-                autoScrollHoldTimeout = null;
+        AppState.ui.scroll.shouldAutoScroll = metrics.nearBottom;
+        if (!AppState.ui.scroll.shouldAutoScroll) {
+            if (AppState.ui.scroll.holdAutoScrollTimeout) {
+                clearTimeout(AppState.ui.scroll.holdAutoScrollTimeout);
+                AppState.ui.scroll.holdAutoScrollTimeout = null;
             }
-            lockScrollToLatest = false;
+            AppState.ui.scroll.lockToLatest = false;
         }
 
         if (AppState.chat.isGenerating) {
-            if (shouldAutoScroll) {
-                lockScrollToLatest = true;
+            if (AppState.ui.scroll.shouldAutoScroll) {
+                AppState.ui.scroll.lockToLatest = true;
             } else {
                 if (metrics.distanceFromBottom > AUTO_SCROLL_THRESHOLD_PX * 2) {
-                    lockScrollToLatest = false;
+                    AppState.ui.scroll.lockToLatest = false;
                 }
             }
         }
@@ -1368,7 +1432,7 @@ const savedLibraryController = appSavedLibrary.createSavedLibraryController({
         escapeAttr,
         escapeHtml,
         fallbackCopyTextToClipboard,
-        getCurrentUser: () => currentUser,
+        getCurrentUser: () => AppState.session.currentUser,
         onOpenStateChange: () => updateScrollToBottomButton(),
         renderMarkdownIntoHost,
         setComposerBackgroundTask,
@@ -1381,7 +1445,7 @@ const savedLibraryController = appSavedLibrary.createSavedLibraryController({
 const sessionController = appSession.createSessionController({
     deps: {
         buildSessionFetchOptions,
-        getCurrentUser: () => currentUser,
+        getCurrentUser: () => AppState.session.currentUser,
         onExternalConfigSync: () => syncServerConfig({ log: true }),
         onLLMActivitySyncState: (state) => applyExternalLLMActivityState(state),
         onSavedTurnsExternalSync: () => loadSavedTurns()
@@ -1424,12 +1488,12 @@ function updateViewportMetrics() {
     const wasKeyboardOpen = document.body.classList.contains('keyboard-open');
 
     if (keyboardSignalDetected) {
-        lastKeyboardViewportSignalAt = now;
+        AppState.ui.lastKeyboardViewportSignalAt = now;
     }
 
     const keyboardLikelyOpen = keyboardSignalDetected
         || (wasKeyboardOpen && occupiedBottom > 56)
-        || (isEditable && now - lastKeyboardViewportSignalAt < 420);
+        || (isEditable && now - AppState.ui.lastKeyboardViewportSignalAt < 420);
 
     root.style.setProperty('--app-height', `${Math.round(visibleHeight + offsetTop)}px`);
     root.style.setProperty('--viewport-bottom-offset', `${Math.round(occupiedBottom)}px`);
@@ -1443,7 +1507,7 @@ function restoreChatScrollPosition(scrollTop) {
     const nextTop = Math.max(0, scrollTop);
 
     const apply = () => {
-        suppressNextScrollEvent = true;
+        AppState.ui.scroll.suppressNextEvent = true;
         chatMessages.scrollTop = nextTop;
         updateScrollToBottomButton();
     };
@@ -1614,7 +1678,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     initServerControl();
     if (window.runtime?.EventsOn) {
         window.runtime.EventsOn('llm-activity', (state) => {
-            llmActivityBusy = !!state?.busy;
+            AppState.chat.passive.llmBusy = !!state?.busy;
             syncGlobalLLMComposerUI();
         });
     }
@@ -1694,42 +1758,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 // Current user state
-let currentUser = null;
-let currentUserLocation = null; // Store location: {lat, lon, accuracy}
-let lastLocationErrorMessage = '';
-let lastSessionCache = null;
-let currentChatSessionCache = null;
-let currentChatSessionEventSeq = 0;
-let chatSessionPollTimer = null;
-let reconnectWatchdogTimer = null;
-let reconnectCardVisible = false;
-let currentChatSessionClearedAt = '';
-let serverReplayCurrentTurnId = '';
-let serverReplayCurrentAssistantId = '';
-let serverReplayMessageBuffers = new Map();
-let serverReplayReasoningBuffers = new Map();
-let activeLocalAssistantId = '';
-let assistantTurnIdMap = new Map();
-let locallyRenderedTurnIds = new Set();
-let didInitialChatBootstrap = false;
-let lastSessionRetryTimer = null;
-let lastSessionFetchPromise = null;
-let sessionRefreshPromise = null;
-let pendingSessionRefresh = false;
-let currentChatSessionSyncPromise = null;
-let pendingCurrentChatSessionSync = false;
-let localStreamOwnershipReleased = false;
-let foregroundSyncTimers = [];
-let passiveGenerationPlaceholder = '';
-let llmActivityBusy = false;
-let externalLLMActivityBusy = false;
-let externalLLMActivityPhase = '';
-let sessionLLMActivityRunning = false;
 
-function isPassiveServerSession(session = currentChatSessionCache) {
+function isPassiveServerSession(session = AppState.session.currentCache) {
     return !!session
         && session.Status === 'running'
-        && !abortController;
+        && !AppState.chat.abortController;
 }
 
 function getPassiveSyncWaitingText() {
@@ -1747,39 +1780,39 @@ function getPassiveGenerationLabel(phase = '') {
     return getPassiveSyncWaitingText();
 }
 
-function syncPassiveGenerationUI(session = currentChatSessionCache, phase = '') {
+function syncPassiveGenerationUI(session = AppState.session.currentCache, phase = '') {
     const isPassiveRunning = isPassiveServerSession(session);
     inputContainer?.classList.toggle('is-passive-generating', isPassiveRunning);
     if (!isPassiveRunning) {
-        passiveGenerationPlaceholder = '';
+        AppState.chat.passive.placeholder = '';
         clearComposerBackgroundTask('passive-server-chat');
         updateMessageInputPlaceholder();
         return;
     }
-    passiveGenerationPlaceholder = getPassiveGenerationLabel(phase);
+    AppState.chat.passive.placeholder = getPassiveGenerationLabel(phase);
     setComposerBackgroundTask('passive-server-chat', {
-        label: passiveGenerationPlaceholder
+        label: AppState.chat.passive.placeholder
     });
     updateMessageInputPlaceholder();
 }
 
-function syncGlobalLLMComposerUI(session = currentChatSessionCache) {
-    const localGenerating = !!abortController;
-    const sessionRunning = sessionLLMActivityRunning || String(session?.Status || '').trim().toLowerCase() === 'running';
-    const active = localGenerating || sessionRunning || llmActivityBusy || externalLLMActivityBusy;
+function syncGlobalLLMComposerUI(session = AppState.session.currentCache) {
+    const localGenerating = !!AppState.chat.abortController;
+    const sessionRunning = AppState.chat.passive.sessionLLMRunning || String(session?.Status || '').trim().toLowerCase() === 'running';
+    const active = localGenerating || sessionRunning || AppState.chat.passive.llmBusy || AppState.chat.passive.externalLLMBusy;
     const passiveBusy = sessionRunning && !localGenerating;
 
     inputContainer?.classList.toggle('is-llm-active', active);
 
     if (passiveBusy) {
-        passiveGenerationPlaceholder = getPassiveGenerationLabel(externalLLMActivityPhase);
+        AppState.chat.passive.placeholder = getPassiveGenerationLabel(AppState.chat.passive.externalLLMPhase);
         inputContainer?.classList.add('is-passive-generating');
         setComposerBackgroundTask('passive-server-chat', {
-            label: passiveGenerationPlaceholder
+            label: AppState.chat.passive.placeholder
         });
     } else if (!isPassiveServerSession()) {
         inputContainer?.classList.remove('is-passive-generating');
-        passiveGenerationPlaceholder = '';
+        AppState.chat.passive.placeholder = '';
         clearComposerBackgroundTask('passive-server-chat');
     }
 
@@ -1791,10 +1824,10 @@ function syncGlobalLLMComposerUI(session = currentChatSessionCache) {
 }
 
 function applyExternalLLMActivityState(state = {}) {
-    externalLLMActivityBusy = !!state?.busy;
-    externalLLMActivityPhase = String(state?.phase || '').trim().toLowerCase();
-    if (!externalLLMActivityBusy && !isPassiveServerSession()) {
-        passiveGenerationPlaceholder = '';
+    AppState.chat.passive.externalLLMBusy = !!state?.busy;
+    AppState.chat.passive.externalLLMPhase = String(state?.phase || '').trim().toLowerCase();
+    if (!AppState.chat.passive.externalLLMBusy && !isPassiveServerSession()) {
+        AppState.chat.passive.placeholder = '';
     }
     syncGlobalLLMComposerUI();
 }
@@ -1807,24 +1840,24 @@ function ensurePassiveSyncPlaceholder(turnId = '', sessionId = 'default', eventS
     const resolvedTurnId = String(turnId || `server-turn-${sessionId || 'default'}-${eventSeq || '0'}`).trim();
     if (!resolvedTurnId) return '';
 
-    serverReplayCurrentTurnId = resolvedTurnId;
+    AppState.session.replay.currentTurnId = resolvedTurnId;
     const assistantId = ensureServerReplayAssistant(resolvedTurnId, sessionId, eventSeq);
     if (!assistantId) return '';
 
-    serverReplayCurrentAssistantId = assistantId;
+    AppState.session.replay.currentAssistantId = assistantId;
 
     const assistantEl = document.getElementById(assistantId);
-    const existingContent = serverReplayMessageBuffers.get(assistantId) || assistantEl?._streamRenderState?.committedText || '';
+    const existingContent = AppState.session.replay.messageBuffers.get(assistantId) || assistantEl?._streamRenderState?.committedText || '';
     const isPlaceholder = existingContent === getPassiveSyncWaitingText();
     const hasRealContent = !!existingContent && !isPlaceholder;
 
     if (!hasRealContent) {
-        serverReplayMessageBuffers.delete(assistantId);
-        serverReplayReasoningBuffers.delete(assistantId);
+        AppState.session.replay.messageBuffers.delete(assistantId);
+        AppState.session.replay.reasoningBuffers.delete(assistantId);
         updateSyncedMessageContent(assistantId, getPassiveSyncWaitingText(), { animate: false });
     }
 
-    syncPassiveGenerationUI(currentChatSessionCache, phase);
+    syncPassiveGenerationUI(AppState.session.currentCache, phase);
 
     const actionBar = assistantEl?.querySelector('.message-actions');
     if (actionBar) {
@@ -1834,11 +1867,11 @@ function ensurePassiveSyncPlaceholder(turnId = '', sessionId = 'default', eventS
     return assistantId;
 }
 
-function ensurePassiveSyncPlaceholderForRunningSession(session = currentChatSessionCache) {
+function ensurePassiveSyncPlaceholderForRunningSession(session = AppState.session.currentCache) {
     return '';
 }
 
-function syncSnapshotUserMessages(session = currentChatSessionCache) {
+function syncSnapshotUserMessages(session = AppState.session.currentCache) {
     const sessionUISnapshot = getCurrentChatSessionUISnapshot(session);
     const snapshotTurns = getSessionSnapshotTurns(sessionUISnapshot);
     snapshotTurns.forEach((turn, index) => {
@@ -1903,19 +1936,19 @@ function dismissReconnectNoticeCard() {
             }
         }, 320);
     });
-    reconnectCardVisible = false;
+    AppState.session.reconnectCardVisible = false;
 }
 
 function clearReconnectWatchdog() {
-    if (!reconnectWatchdogTimer) return;
-    clearTimeout(reconnectWatchdogTimer);
-    reconnectWatchdogTimer = null;
+    if (!AppState.session.reconnectWatchdogTimer) return;
+    clearTimeout(AppState.session.reconnectWatchdogTimer);
+    AppState.session.reconnectWatchdogTimer = null;
 }
 
 function clearForegroundSyncTimers() {
-    if (!foregroundSyncTimers.length) return;
-    foregroundSyncTimers.forEach((timerId) => clearTimeout(timerId));
-    foregroundSyncTimers = [];
+    if (!AppState.session.foregroundSyncTimers.length) return;
+    AppState.session.foregroundSyncTimers.forEach((timerId) => clearTimeout(timerId));
+    AppState.session.foregroundSyncTimers = [];
 }
 
 function scheduleForegroundSessionRefresh(reason = 'foreground') {
@@ -1925,7 +1958,7 @@ function scheduleForegroundSessionRefresh(reason = 'foreground') {
     armReconnectWatchdog();
 
     const delays = [0, 900, 2600];
-    foregroundSyncTimers = delays.map((delay, index) => window.setTimeout(async () => {
+    AppState.session.foregroundSyncTimers = delays.map((delay, index) => window.setTimeout(async () => {
         if (document.hidden) return;
         try {
             await refreshSessionStateFromServer();
@@ -1933,14 +1966,14 @@ function scheduleForegroundSessionRefresh(reason = 'foreground') {
             console.warn(`[ChatSession] Foreground sync failed (${reason}, retry ${index + 1}/${delays.length}):`, error);
         } finally {
             if (index === delays.length - 1) {
-                foregroundSyncTimers = [];
+                AppState.session.foregroundSyncTimers = [];
             }
         }
     }, delay));
 }
 
 function showReconnectNoticeCard() {
-    if (reconnectCardVisible || hasSubstantiveChatMessages() === false) return;
+    if (AppState.session.reconnectCardVisible || hasSubstantiveChatMessages() === false) return;
     const reconnectMsg = {
         role: 'assistant',
         startup: {
@@ -1953,14 +1986,14 @@ function showReconnectNoticeCard() {
         }
     };
     appendMessage(reconnectMsg, { skipScroll: true });
-    reconnectCardVisible = true;
+    AppState.session.reconnectCardVisible = true;
 }
 
 function armReconnectWatchdog(delay = 4200) {
     clearReconnectWatchdog();
     if (document.hidden) return;
-    reconnectWatchdogTimer = window.setTimeout(() => {
-        reconnectWatchdogTimer = null;
+    AppState.session.reconnectWatchdogTimer = window.setTimeout(() => {
+        AppState.session.reconnectWatchdogTimer = null;
         showReconnectNoticeCard();
     }, Math.max(1500, delay));
 }
@@ -1993,9 +2026,9 @@ function broadcastSavedTurnsChange(reason = 'updated') {
 }
 
 function restoreLastSessionIntoChatView() {
-    if (!lastSessionCache || hasSubstantiveChatMessages()) return false;
-    const userText = String(lastSessionCache.user_message || '').trim();
-    const assistantText = String(lastSessionCache.assistant_message || '').trim();
+    if (!AppState.session.lastCache || hasSubstantiveChatMessages()) return false;
+    const userText = String(AppState.session.lastCache.user_message || '').trim();
+    const assistantText = String(AppState.session.lastCache.assistant_message || '').trim();
     if (!userText || !assistantText) return false;
 
     const turnId = generateTurnId();
@@ -2010,23 +2043,23 @@ function restoreLastSessionIntoChatView() {
 }
 
 function clearLastSessionRetryTimer() {
-    if (!lastSessionRetryTimer) return;
-    clearTimeout(lastSessionRetryTimer);
-    lastSessionRetryTimer = null;
+    if (!AppState.session.retryTimer) return;
+    clearTimeout(AppState.session.retryTimer);
+    AppState.session.retryTimer = null;
 }
 
 function relinquishLocalStreamOwnership(reason = 'server-sync') {
-    if (!AppState.chat.activeLocalTurnId && !activeLocalAssistantId && !AppState.chat.isGenerating) return false;
+    if (!AppState.chat.activeLocalTurnId && !AppState.chat.activeLocalAssistantId && !AppState.chat.isGenerating) return false;
     console.info('[ChatSession] Relinquishing local stream ownership:', reason, {
         turnId: AppState.chat.activeLocalTurnId,
-        assistantId: activeLocalAssistantId
+        assistantId: AppState.chat.activeLocalAssistantId
     });
     AppState.chat.activeLocalTurnId = '';
-    activeLocalAssistantId = '';
-    locallyRenderedTurnIds = new Set();
+    AppState.chat.activeLocalAssistantId = '';
+    AppState.chat.locallyRenderedTurnIds = new Set();
     AppState.chat.isGenerating = false;
     broadcastLLMActivityState(false, 'finished');
-    localStreamOwnershipReleased = true;
+    AppState.session.localStreamOwnershipReleased = true;
     hideProgressDock();
     updateSendButtonState();
     return true;
@@ -2034,43 +2067,43 @@ function relinquishLocalStreamOwnership(reason = 'server-sync') {
 
 async function ensureLastSessionCacheLoaded(force = false) {
     if (force) {
-        lastSessionFetchPromise = null;
-    } else if (lastSessionCache) {
-        return lastSessionCache;
+        AppState.session.lastFetchPromise = null;
+    } else if (AppState.session.lastCache) {
+        return AppState.session.lastCache;
     }
 
-    if (!lastSessionFetchPromise) {
-        lastSessionFetchPromise = fetchLastSession()
+    if (!AppState.session.lastFetchPromise) {
+        AppState.session.lastFetchPromise = fetchLastSession()
             .then((data) => {
-                lastSessionCache = data;
+                AppState.session.lastCache = data;
                 return data;
             })
             .finally(() => {
-                lastSessionFetchPromise = null;
+                AppState.session.lastFetchPromise = null;
             });
     }
 
-    return lastSessionFetchPromise;
+    return AppState.session.lastFetchPromise;
 }
 
 async function refreshSessionStateFromServer() {
-    if (sessionRefreshPromise) {
-        pendingSessionRefresh = true;
-        return sessionRefreshPromise;
+    if (AppState.session.refreshPromise) {
+        AppState.session.pendingRefresh = true;
+        return AppState.session.refreshPromise;
     }
 
-    sessionRefreshPromise = (async () => {
+    AppState.session.refreshPromise = (async () => {
         try {
             do {
-                pendingSessionRefresh = false;
+                AppState.session.pendingRefresh = false;
 
-                if (!currentUser) {
+                if (!AppState.session.currentUser) {
                     await checkAuth();
                 }
-                if (!currentUser) return;
+                if (!AppState.session.currentUser) return;
 
                 await syncCurrentChatSessionFromServer();
-            } while (pendingSessionRefresh);
+            } while (AppState.session.pendingRefresh);
 
             clearReconnectWatchdog();
             dismissReconnectNoticeCard();
@@ -2080,16 +2113,16 @@ async function refreshSessionStateFromServer() {
             showReconnectNoticeCard();
             throw error;
         } finally {
-            sessionRefreshPromise = null;
+            AppState.session.refreshPromise = null;
         }
     })();
 
-    return sessionRefreshPromise;
+    return AppState.session.refreshPromise;
 }
 
 async function bootstrapInitialChatView() {
-    if (didInitialChatBootstrap) return;
-    didInitialChatBootstrap = true;
+    if (AppState.session.didInitialBootstrap) return;
+    AppState.session.didInitialBootstrap = true;
 
     let restoredFromSession = false;
     try {
@@ -2113,21 +2146,21 @@ function updateUserLocation() {
             const { latitude, longitude, accuracy } = position.coords;
             // Format loosely: "Lat: 37.5, Lon: 127.0 (Acc: 10m)"
             // Or JSON:
-            currentUserLocation = JSON.stringify({
+            AppState.ui.location.currentUserLocation = JSON.stringify({
                 lat: latitude,
                 lon: longitude,
                 acc: accuracy
             });
-            console.log("[Location] Updated:", currentUserLocation);
-            lastLocationErrorMessage = '';
+            console.log("[Location] Updated:", AppState.ui.location.currentUserLocation);
+            AppState.ui.location.lastErrorMessage = '';
         },
         (err) => {
             const nextMessage = String(err?.message || 'Unknown geolocation error');
-            if (nextMessage !== lastLocationErrorMessage) {
+            if (nextMessage !== AppState.ui.location.lastErrorMessage) {
                 console.warn("[Location] Error:", nextMessage);
-                lastLocationErrorMessage = nextMessage;
+                AppState.ui.location.lastErrorMessage = nextMessage;
             }
-            currentUserLocation = null;
+            AppState.ui.location.currentUserLocation = null;
         },
         { enableHighAccuracy: false, timeout: 10000, maximumAge: 600000 } // 10 min cache
     );
@@ -2145,7 +2178,7 @@ async function checkAuth() {
             return;
         }
 
-        currentUser = {
+        AppState.session.currentUser = {
             id: data.user_id,
             role: data.role
         };
@@ -2153,7 +2186,7 @@ async function checkAuth() {
         loadSavedTurns();
 
         // Show admin features if admin
-        if (currentUser.role === 'admin') {
+        if (AppState.session.currentUser.role === 'admin') {
             const adminSection = document.getElementById('admin-section');
             if (adminSection) adminSection.style.display = 'block';
             loadUserList();
@@ -2177,7 +2210,7 @@ async function loadUserList() {
         listEl.innerHTML = users.map(u => `
             <div class="user-item">
                 <span>${u.id} (${u.role})</span>
-                ${u.id !== currentUser.id ? `<button class="icon-btn" onclick="deleteUser('${u.id}')" title="Delete"><span class="material-icons-round">delete</span></button>` : ''}
+                ${u.id !== AppState.session.currentUser.id ? `<button class="icon-btn" onclick="deleteUser('${u.id}')" title="Delete"><span class="material-icons-round">delete</span></button>` : ''}
             </div>
         `).join('');
     } catch (e) {
@@ -2265,7 +2298,6 @@ async function logoutAllSessions() {
 }
 
 // Server state
-let serverRunning = false;
 
 // Initialize server control and check status
 async function initServerControl() {
@@ -2304,7 +2336,7 @@ async function toggleServer() {
     btn.disabled = true;
 
     try {
-        if (serverRunning) {
+        if (AppState.session.serverRunning) {
             await window.go.core.App.StopServer();
             updateServerUI(false, port);
         } else {
@@ -2323,7 +2355,7 @@ async function toggleServer() {
 
 // Update server status UI
 function updateServerUI(running, port) {
-    serverRunning = running;
+    AppState.session.serverRunning = running;
     const statusEl = document.getElementById('server-status');
     const dot = statusEl.querySelector('.status-dot');
     const text = statusEl.querySelector('span:last-child');
@@ -2574,7 +2606,7 @@ function setupSettingsListeners() {
     const openMemBtn = document.getElementById('btn-open-memory');
     if (openMemBtn) {
         openMemBtn.onclick = async () => {
-            const uid = (typeof currentUser !== 'undefined' && currentUser) ? currentUser.id : "default";
+            const uid = (typeof AppState.session.currentUser !== 'undefined' && AppState.session.currentUser) ? AppState.session.currentUser.id : "default";
             try {
                 const err = await window.go.core.App.OpenMemoryFolder(uid);
                 if (err) alert(err);
@@ -2589,7 +2621,7 @@ function setupSettingsListeners() {
         resetMemBtn.onclick = async () => {
             const confirmation = t('setting.memory.reset.confirm') || "Are you sure you want to reset your personal memory? This cannot be undone.";
             if (!confirm(confirmation)) return;
-            const uid = (typeof currentUser !== 'undefined' && currentUser) ? currentUser.id : "default";
+            const uid = (typeof AppState.session.currentUser !== 'undefined' && AppState.session.currentUser) ? AppState.session.currentUser.id : "default";
             try {
                 const res = await window.go.core.App.ResetMemory(uid);
                 alert(t('setting.memory.reset.success') || res);
@@ -2601,11 +2633,6 @@ function setupSettingsListeners() {
 }
 
 // Global Dictionary State
-let ttsDictionary = {};
-let ttsDictionaryRegex = null;
-let ttsDictionaryLang = '';
-let ttsDictionaryLoadPromise = null;
-let lastSyncedServerConfigSignature = '';
 
 function buildServerConfigSignature(serverCfg) {
     try {
@@ -2634,16 +2661,16 @@ async function loadTTSDictionary(lang, options = {}) {
     const forceReload = options.forceReload === true;
     const log = options.log !== false;
 
-    if (!forceReload && ttsDictionaryLang === targetLang && (ttsDictionaryRegex || Object.keys(ttsDictionary).length > 0)) {
-        return ttsDictionary;
+    if (!forceReload && AppState.audio.dictionaryLang === targetLang && (AppState.audio.dictionaryRegex || Object.keys(AppState.audio.dictionary).length > 0)) {
+        return AppState.audio.dictionary;
     }
-    if (!forceReload && ttsDictionaryLoadPromise && ttsDictionaryLang === targetLang) {
-        return ttsDictionaryLoadPromise;
+    if (!forceReload && AppState.audio.dictionaryLoadPromise && AppState.audio.dictionaryLang === targetLang) {
+        return AppState.audio.dictionaryLoadPromise;
     }
 
     let rawDict = {};
 
-    ttsDictionaryLoadPromise = (async () => {
+    AppState.audio.dictionaryLoadPromise = (async () => {
         try {
             if (window.go && window.go.main && window.go.core.App) {
                 rawDict = await window.go.core.App.GetTTSDictionary(targetLang);
@@ -2653,59 +2680,58 @@ async function loadTTSDictionary(lang, options = {}) {
             }
 
             // Normalize keys to lowercase for case-insensitive lookup
-            ttsDictionary = {};
+            AppState.audio.dictionary = {};
             if (rawDict) {
                 for (const [k, v] of Object.entries(rawDict)) {
-                    ttsDictionary[k.toLowerCase()] = v;
+                    AppState.audio.dictionary[k.toLowerCase()] = v;
                 }
             }
 
             // Build optimized regex for performance (O(N) replacement)
-            const keys = Object.keys(ttsDictionary);
+            const keys = Object.keys(AppState.audio.dictionary);
             if (keys.length > 0) {
                 const escapedKeys = keys.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-                ttsDictionaryRegex = new RegExp(`\\b(${escapedKeys.join('|')})\\b`, 'gi');
+                AppState.audio.dictionaryRegex = new RegExp(`\\b(${escapedKeys.join('|')})\\b`, 'gi');
             } else {
-                ttsDictionaryRegex = null;
+                AppState.audio.dictionaryRegex = null;
             }
-            ttsDictionaryLang = targetLang;
+            AppState.audio.dictionaryLang = targetLang;
 
             if (log) {
                 console.log(`[TTS] Dictionary loaded with ${keys.length} entries. (lang=${targetLang})`);
             }
-            return ttsDictionary;
+            return AppState.audio.dictionary;
         } catch (e) {
             console.error("Failed to load dictionary:", e);
             throw e;
         } finally {
-            ttsDictionaryLoadPromise = null;
+            AppState.audio.dictionaryLoadPromise = null;
         }
     })();
 
-    return ttsDictionaryLoadPromise;
+    return AppState.audio.dictionaryLoadPromise;
 }
 
 // 시스템 프롬프트 프리셋 (외부 파일에서 로드)
-let systemPromptPresets = [];
 
 async function loadSystemPrompts() {
     try {
         if (window.go && window.go.main && window.go.core.App) {
-            systemPromptPresets = await window.go.core.App.GetSystemPrompts();
+            AppState.ui.systemPromptPresets = await window.go.core.App.GetSystemPrompts();
         } else {
             const res = await fetch('/api/prompts');
-            if (res.ok) systemPromptPresets = await res.json();
+            if (res.ok) AppState.ui.systemPromptPresets = await res.json();
         }
-        console.log(`[Prompts] Loaded ${systemPromptPresets.length} system prompts.`);
+        console.log(`[Prompts] Loaded ${AppState.ui.systemPromptPresets.length} system prompts.`);
         initSystemPromptPresets(); // Re-initialize dropdown with loaded data
     } catch (e) {
         console.error("Failed to load system prompts:", e);
-        systemPromptPresets = [{ title: "Default", prompt: "You are a helpful AI assistant." }];
+        AppState.ui.systemPromptPresets = [{ title: "Default", prompt: "You are a helpful AI assistant." }];
     }
 }
 
 function applySystemPromptPreset(key) {
-    const preset = systemPromptPresets.find(p => p.title === key);
+    const preset = AppState.ui.systemPromptPresets.find(p => p.title === key);
     if (preset) {
         document.getElementById('cfg-system-prompt').value = preset.prompt;
     }
@@ -2720,7 +2746,7 @@ function initSystemPromptPresets() {
         selector.remove(1);
     }
 
-    for (const preset of systemPromptPresets) {
+    for (const preset of AppState.ui.systemPromptPresets) {
         const option = document.createElement('option');
         option.value = preset.title;
         option.textContent = preset.title;
@@ -2978,23 +3004,23 @@ async function fetchCurrentChatSessionEvents(afterSeq = 0, limit = 400) {
 }
 
 async function fastForwardChatSessionEvents(limit = 400) {
-    if (!currentUser) return;
+    if (!AppState.session.currentUser) return;
 
-    const result = await fetchCurrentChatSessionEvents(currentChatSessionEventSeq, limit);
+    const result = await fetchCurrentChatSessionEvents(AppState.session.eventSeq, limit);
     if (result.session) {
         applyCurrentChatSessionSnapshot(result.session);
     }
     if (Array.isArray(result.items)) {
         for (const entry of result.items) {
-            currentChatSessionEventSeq = Math.max(currentChatSessionEventSeq, Number(entry.EventSeq || 0));
+            AppState.session.eventSeq = Math.max(AppState.session.eventSeq, Number(entry.EventSeq || 0));
         }
     }
 
     const totalCount = Number(result.totalCount || 0);
     let loadedCount = Array.isArray(result.items) ? result.items.length : 0;
     let afterSeq = loadedCount > 0
-        ? Number(result.items[result.items.length - 1].EventSeq || currentChatSessionEventSeq)
-        : currentChatSessionEventSeq;
+        ? Number(result.items[result.items.length - 1].EventSeq || AppState.session.eventSeq)
+        : AppState.session.eventSeq;
 
     while (loadedCount < totalCount) {
         const page = await fetchCurrentChatSessionEvents(afterSeq, limit);
@@ -3004,7 +3030,7 @@ async function fastForwardChatSessionEvents(limit = 400) {
         const pageItems = Array.isArray(page.items) ? page.items : [];
         if (pageItems.length === 0) break;
         for (const entry of pageItems) {
-            currentChatSessionEventSeq = Math.max(currentChatSessionEventSeq, Number(entry.EventSeq || 0));
+            AppState.session.eventSeq = Math.max(AppState.session.eventSeq, Number(entry.EventSeq || 0));
         }
         loadedCount += pageItems.length;
         afterSeq = Number(pageItems[pageItems.length - 1].EventSeq || afterSeq);
@@ -3012,16 +3038,16 @@ async function fastForwardChatSessionEvents(limit = 400) {
 }
 
 function stopChatSessionPolling() {
-    if (chatSessionPollTimer) {
-        clearTimeout(chatSessionPollTimer);
-        chatSessionPollTimer = null;
+    if (AppState.session.pollTimer) {
+        clearTimeout(AppState.session.pollTimer);
+        AppState.session.pollTimer = null;
     }
 }
 
 function scheduleChatSessionPolling(delay = 1000) {
     stopChatSessionPolling();
-    chatSessionPollTimer = window.setTimeout(() => {
-        chatSessionPollTimer = null;
+    AppState.session.pollTimer = window.setTimeout(() => {
+        AppState.session.pollTimer = null;
         syncCurrentChatSessionFromServer().catch((error) => {
             console.warn('Failed to sync chat session from server:', error);
         });
@@ -3029,12 +3055,12 @@ function scheduleChatSessionPolling(delay = 1000) {
 }
 
 function resetServerChatReplayState() {
-    currentChatSessionEventSeq = 0;
-    currentChatSessionClearedAt = '';
-    serverReplayCurrentTurnId = '';
-    serverReplayCurrentAssistantId = '';
-    serverReplayMessageBuffers = new Map();
-    serverReplayReasoningBuffers = new Map();
+    AppState.session.eventSeq = 0;
+    AppState.session.clearedAt = '';
+    AppState.session.replay.currentTurnId = '';
+    AppState.session.replay.currentAssistantId = '';
+    AppState.session.replay.messageBuffers = new Map();
+    AppState.session.replay.reasoningBuffers = new Map();
 }
 
 function extractSessionClearedAt(session) {
@@ -3049,7 +3075,7 @@ function extractSessionClearedAt(session) {
 }
 
 function getCurrentChatSessionUISnapshot(session = null) {
-    const raw = String((session?.UIStateJSON ?? currentChatSessionCache?.UIStateJSON ?? '')).trim();
+    const raw = String((session?.UIStateJSON ?? AppState.session.currentCache?.UIStateJSON ?? '')).trim();
     if (!raw) return { tool_cards: {}, messages: [], turns: [], last_event_seq: 0 };
     try {
         const parsed = JSON.parse(raw);
@@ -3136,7 +3162,7 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
             ensurePassiveSyncPlaceholder(turnId, sessionSnapshot?.ID || 'default', sessionUISnapshot.last_event_seq || 0);
         }
         if (reasoningText && !config.hideThink) {
-            serverReplayReasoningBuffers.set(assistantId, reasoningText);
+            AppState.session.replay.reasoningBuffers.set(assistantId, reasoningText);
             const card = ensureReasoningCard(assistantId);
             const titleEl = card?.querySelector('.reasoning-title');
             const metaEl = card?.querySelector('.section-meta');
@@ -3170,7 +3196,7 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
                 renderToolHistory(card, historyEl, snapshotToolState.state);
             }
         }
-        serverReplayMessageBuffers.set(assistantId, assistantText);
+        AppState.session.replay.messageBuffers.set(assistantId, assistantText);
         updateSyncedMessageContent(assistantId, assistantText, { animate: false });
         finalizeMessageContent(assistantId, assistantText);
         finalizeAssistantStatusCards(assistantId, 'done');
@@ -3178,8 +3204,8 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
         AppState.chat.messages.push({ role: 'assistant', content: assistantText, turnId });
     });
 
-    serverReplayCurrentTurnId = lastTurnId;
-    serverReplayCurrentAssistantId = lastAssistantId;
+    AppState.session.replay.currentTurnId = lastTurnId;
+    AppState.session.replay.currentAssistantId = lastAssistantId;
     return true;
 }
 
@@ -3251,12 +3277,12 @@ function ensureServerReplayAssistant(turnId, sessionId, seq) {
         if (!existingByTurn.id) {
             existingByTurn.id = messageId;
         }
-        serverReplayCurrentAssistantId = existingByTurn.id || messageId;
-        cleanupAssistantMessagesForTurn(resolvedTurnId || fallbackKey, serverReplayCurrentAssistantId);
-        return serverReplayCurrentAssistantId;
+        AppState.session.replay.currentAssistantId = existingByTurn.id || messageId;
+        cleanupAssistantMessagesForTurn(resolvedTurnId || fallbackKey, AppState.session.replay.currentAssistantId);
+        return AppState.session.replay.currentAssistantId;
     }
     const stableMessageId = messageId;
-    serverReplayCurrentAssistantId = stableMessageId;
+    AppState.session.replay.currentAssistantId = stableMessageId;
     if (!document.getElementById(stableMessageId)) {
         appendMessage({
             role: 'assistant',
@@ -3270,14 +3296,14 @@ function ensureServerReplayAssistant(turnId, sessionId, seq) {
 }
 
 function applyCurrentChatSessionSnapshot(session) {
-    if (session && currentChatSessionCache && currentChatSessionCache.ID !== session.ID) {
+    if (session && AppState.session.currentCache && AppState.session.currentCache.ID !== session.ID) {
         resetServerChatReplayState();
     }
     if (!session) {
-        currentChatSessionCache = null;
-        sessionLLMActivityRunning = false;
+        AppState.session.currentCache = null;
+        AppState.chat.passive.sessionLLMRunning = false;
         syncGlobalLLMComposerUI(null);
-        if (!abortController && AppState.chat.isGenerating) {
+        if (!AppState.chat.abortController && AppState.chat.isGenerating) {
             AppState.chat.isGenerating = false;
             updateSendButtonState();
             hideProgressDock();
@@ -3286,21 +3312,21 @@ function applyCurrentChatSessionSnapshot(session) {
     }
 
     const nextClearedAt = extractSessionClearedAt(session);
-    if (nextClearedAt && nextClearedAt !== currentChatSessionClearedAt) {
+    if (nextClearedAt && nextClearedAt !== AppState.session.clearedAt) {
         resetChatViewState();
-        currentChatSessionEventSeq = 0;
-        currentChatSessionClearedAt = nextClearedAt;
-    } else if (!nextClearedAt && currentChatSessionClearedAt) {
-        currentChatSessionClearedAt = '';
+        AppState.session.eventSeq = 0;
+        AppState.session.clearedAt = nextClearedAt;
+    } else if (!nextClearedAt && AppState.session.clearedAt) {
+        AppState.session.clearedAt = '';
     }
 
-    currentChatSessionCache = session;
-    sessionLLMActivityRunning = String(session?.Status || '').trim().toLowerCase() === 'running';
+    AppState.session.currentCache = session;
+    AppState.chat.passive.sessionLLMRunning = String(session?.Status || '').trim().toLowerCase() === 'running';
     syncSnapshotUserMessages(session);
     syncGlobalLLMComposerUI();
 
     const serverGenerating = session.Status === 'running';
-    if (!abortController && AppState.chat.isGenerating !== serverGenerating) {
+    if (!AppState.chat.abortController && AppState.chat.isGenerating !== serverGenerating) {
         AppState.chat.isGenerating = serverGenerating;
         updateSendButtonState();
     }
@@ -3310,13 +3336,13 @@ function applyCurrentChatSessionSnapshot(session) {
     }
 
     if (config.llmMode === 'stateful') {
-        lastResponseId = session.LastResponseID || null;
-        statefulSummary = session.SummaryText || '';
-        statefulTurnCount = Number(session.TurnCount || 0);
-        statefulEstimatedChars = Number(session.EstimatedChars || 0);
-        statefulLastInputTokens = Number(session.LastInputTokens || 0);
-        statefulLastOutputTokens = Number(session.LastOutputTokens || 0);
-        statefulPeakInputTokens = Number(session.PeakInputTokens || 0);
+        AppState.chat.stateful.lastResponseId = session.LastResponseID || null;
+        AppState.chat.stateful.summary = session.SummaryText || '';
+        AppState.chat.stateful.turnCount = Number(session.TurnCount || 0);
+        AppState.chat.stateful.estimatedChars = Number(session.EstimatedChars || 0);
+        AppState.chat.stateful.lastInputTokens = Number(session.LastInputTokens || 0);
+        AppState.chat.stateful.lastOutputTokens = Number(session.LastOutputTokens || 0);
+        AppState.chat.stateful.peakInputTokens = Number(session.PeakInputTokens || 0);
         updateStatefulBudgetIndicator();
     }
 
@@ -3336,7 +3362,7 @@ function applyCurrentChatSessionEvent(entry) {
     const sessionId = entry.SessionID || 'default';
     const entryTurnId = entry.TurnID || payload.turn_id || '';
     const isLocalActiveTurn = isActiveLocalTurn(entryTurnId);
-    const isPassiveRunning = !isLocalActiveTurn && isPassiveServerSession(currentChatSessionCache);
+    const isPassiveRunning = !isLocalActiveTurn && isPassiveServerSession(AppState.session.currentCache);
 
     if (isLocalActiveTurn) {
         switch (entry.EventType) {
@@ -3374,22 +3400,22 @@ function applyCurrentChatSessionEvent(entry) {
     switch (entry.EventType) {
         case 'generation.started':
             if (isPassiveRunning) {
-                syncPassiveGenerationUI(currentChatSessionCache, payload.phase || 'queued');
+                syncPassiveGenerationUI(AppState.session.currentCache, payload.phase || 'queued');
             }
             break;
         case 'generation.first_token':
             if (isPassiveRunning) {
-                syncPassiveGenerationUI(currentChatSessionCache, payload.phase || 'answering');
+                syncPassiveGenerationUI(AppState.session.currentCache, payload.phase || 'answering');
             }
             break;
         case 'generation.phase':
             if (isPassiveRunning) {
-                syncPassiveGenerationUI(currentChatSessionCache, payload.phase || '');
+                syncPassiveGenerationUI(AppState.session.currentCache, payload.phase || '');
             }
             break;
         case 'generation.finished':
-            sessionLLMActivityRunning = false;
-            passiveGenerationPlaceholder = '';
+            AppState.chat.passive.sessionLLMRunning = false;
+            AppState.chat.passive.placeholder = '';
             inputContainer?.classList.remove('is-passive-generating');
             clearComposerBackgroundTask('passive-server-chat');
             syncGlobalLLMComposerUI();
@@ -3401,12 +3427,12 @@ function applyCurrentChatSessionEvent(entry) {
                 if (!userContent) break;
                 const turnId = entryTurnId || `server-turn-${sessionId}-${entry.EventSeq}`;
                 if (isLocalActiveTurn) {
-                    serverReplayCurrentTurnId = turnId;
-                    serverReplayCurrentAssistantId = activeLocalAssistantId || '';
+                    AppState.session.replay.currentTurnId = turnId;
+                    AppState.session.replay.currentAssistantId = AppState.chat.activeLocalAssistantId || '';
                     break;
                 }
-                serverReplayCurrentTurnId = turnId;
-                serverReplayCurrentAssistantId = '';
+                AppState.session.replay.currentTurnId = turnId;
+                AppState.session.replay.currentAssistantId = '';
                 if (!document.querySelector(`.message.user[data-turn-id="${turnId}"]`)) {
                     appendMessage({ role: 'user', content: userContent, turnId });
                 }
@@ -3416,25 +3442,25 @@ function applyCurrentChatSessionEvent(entry) {
         case 'message.delta': {
             let assistantId = '';
             if (isLocalActiveTurn) {
-                serverReplayCurrentTurnId = entryTurnId || serverReplayCurrentTurnId;
-                serverReplayCurrentAssistantId = activeLocalAssistantId || '';
-                assistantId = activeLocalAssistantId || '';
+                AppState.session.replay.currentTurnId = entryTurnId || AppState.session.replay.currentTurnId;
+                AppState.session.replay.currentAssistantId = AppState.chat.activeLocalAssistantId || '';
+                assistantId = AppState.chat.activeLocalAssistantId || '';
             } else {
-                if (!serverReplayCurrentTurnId) {
-                    serverReplayCurrentTurnId = entryTurnId || `server-turn-${sessionId}-${entry.EventSeq}`;
+                if (!AppState.session.replay.currentTurnId) {
+                    AppState.session.replay.currentTurnId = entryTurnId || `server-turn-${sessionId}-${entry.EventSeq}`;
                 }
-                assistantId = ensureServerReplayAssistant(serverReplayCurrentTurnId, sessionId, entry.EventSeq);
+                assistantId = ensureServerReplayAssistant(AppState.session.replay.currentTurnId, sessionId, entry.EventSeq);
             }
             if (!assistantId) break;
             hideProgressDock();
             const next = typeof payload.full_content === 'string'
                 ? payload.full_content
-                : appendStreamChunkDedup(serverReplayMessageBuffers.get(assistantId) || '', String(payload.content || ''));
+                : appendStreamChunkDedup(AppState.session.replay.messageBuffers.get(assistantId) || '', String(payload.content || ''));
 
             // Deep Sync Rationale: Do not buffer the "Generation in progress..." placeholder text
             // so that it doesn't get treated as final content if the server doesn't send a full_content payload later.
             if (next !== getPassiveSyncWaitingText()) {
-                serverReplayMessageBuffers.set(assistantId, next);
+                AppState.session.replay.messageBuffers.set(assistantId, next);
             }
             updateSyncedMessageContent(assistantId, next);
 
@@ -3461,48 +3487,48 @@ function applyCurrentChatSessionEvent(entry) {
                 }
             }
 
-            cleanupAssistantMessagesForTurn(serverReplayCurrentTurnId || entryTurnId, assistantId);
+            cleanupAssistantMessagesForTurn(AppState.session.replay.currentTurnId || entryTurnId, assistantId);
             break;
         }
         case 'reasoning.start':
-            if (!isLocalActiveTurn && !serverReplayCurrentAssistantId && (entryTurnId || serverReplayCurrentTurnId)) {
-                const nextTurnId = entryTurnId || serverReplayCurrentTurnId;
-                serverReplayCurrentTurnId = nextTurnId;
-                serverReplayCurrentAssistantId = ensureServerReplayAssistant(nextTurnId, sessionId, entry.EventSeq);
+            if (!isLocalActiveTurn && !AppState.session.replay.currentAssistantId && (entryTurnId || AppState.session.replay.currentTurnId)) {
+                const nextTurnId = entryTurnId || AppState.session.replay.currentTurnId;
+                AppState.session.replay.currentTurnId = nextTurnId;
+                AppState.session.replay.currentAssistantId = ensureServerReplayAssistant(nextTurnId, sessionId, entry.EventSeq);
             }
             {
-                const reasoningAssistantId = isLocalActiveTurn ? activeLocalAssistantId : serverReplayCurrentAssistantId;
+                const reasoningAssistantId = isLocalActiveTurn ? AppState.chat.activeLocalAssistantId : AppState.session.replay.currentAssistantId;
                 if (reasoningAssistantId) {
-                    if (!serverReplayReasoningBuffers.has(reasoningAssistantId)) {
-                        serverReplayReasoningBuffers.set(reasoningAssistantId, '');
+                    if (!AppState.session.replay.reasoningBuffers.has(reasoningAssistantId)) {
+                        AppState.session.replay.reasoningBuffers.set(reasoningAssistantId, '');
                     }
                 }
             }
             if (payload.started_at) {
-                setReasoningCardStartedAt(isLocalActiveTurn ? activeLocalAssistantId : serverReplayCurrentAssistantId, payload.started_at);
+                setReasoningCardStartedAt(isLocalActiveTurn ? AppState.chat.activeLocalAssistantId : AppState.session.replay.currentAssistantId, payload.started_at);
             }
             if (isLocalActiveTurn) {
-                if (activeLocalAssistantId) showReasoningStatus(activeLocalAssistantId, '...');
+                if (AppState.chat.activeLocalAssistantId) showReasoningStatus(AppState.chat.activeLocalAssistantId, '...');
                 break;
             }
-            if (serverReplayCurrentAssistantId) showReasoningStatus(serverReplayCurrentAssistantId, '...');
+            if (AppState.session.replay.currentAssistantId) showReasoningStatus(AppState.session.replay.currentAssistantId, '...');
             break;
         case 'reasoning.delta':
-            if (!isLocalActiveTurn && !serverReplayCurrentAssistantId && (entryTurnId || serverReplayCurrentTurnId)) {
-                const nextTurnId = entryTurnId || serverReplayCurrentTurnId;
-                serverReplayCurrentTurnId = nextTurnId;
-                serverReplayCurrentAssistantId = ensureServerReplayAssistant(nextTurnId, sessionId, entry.EventSeq);
+            if (!isLocalActiveTurn && !AppState.session.replay.currentAssistantId && (entryTurnId || AppState.session.replay.currentTurnId)) {
+                const nextTurnId = entryTurnId || AppState.session.replay.currentTurnId;
+                AppState.session.replay.currentTurnId = nextTurnId;
+                AppState.session.replay.currentAssistantId = ensureServerReplayAssistant(nextTurnId, sessionId, entry.EventSeq);
             }
             {
-                const reasoningAssistantId = isLocalActiveTurn ? activeLocalAssistantId : serverReplayCurrentAssistantId;
+                const reasoningAssistantId = isLocalActiveTurn ? AppState.chat.activeLocalAssistantId : AppState.session.replay.currentAssistantId;
                 const reasoningText = payload.content || payload.reasoning_content || payload.text || payload.delta?.content || '';
                 const elapsedMs = Number.isFinite(Number(payload.total_elapsed_ms))
                     ? Number(payload.total_elapsed_ms)
                     : (Number.isFinite(Number(payload.elapsed_ms)) ? Number(payload.elapsed_ms) : null);
                 if (reasoningAssistantId) {
-                    const prevReasoning = serverReplayReasoningBuffers.get(reasoningAssistantId) || '';
+                    const prevReasoning = AppState.session.replay.reasoningBuffers.get(reasoningAssistantId) || '';
                     const nextReasoning = appendStreamChunkDedup(prevReasoning, reasoningText);
-                    serverReplayReasoningBuffers.set(reasoningAssistantId, nextReasoning);
+                    AppState.session.replay.reasoningBuffers.set(reasoningAssistantId, nextReasoning);
                     if (isLocalActiveTurn) {
                         showReasoningStatus(reasoningAssistantId, nextReasoning || '...', false, elapsedMs);
                         break;
@@ -3511,19 +3537,19 @@ function applyCurrentChatSessionEvent(entry) {
                     break;
                 }
                 if (isLocalActiveTurn) {
-                    if (activeLocalAssistantId) showReasoningStatus(activeLocalAssistantId, reasoningText || '...', false, elapsedMs);
+                    if (AppState.chat.activeLocalAssistantId) showReasoningStatus(AppState.chat.activeLocalAssistantId, reasoningText || '...', false, elapsedMs);
                     break;
                 }
-                if (serverReplayCurrentAssistantId) showReasoningStatus(serverReplayCurrentAssistantId, reasoningText || '...', false, elapsedMs);
+                if (AppState.session.replay.currentAssistantId) showReasoningStatus(AppState.session.replay.currentAssistantId, reasoningText || '...', false, elapsedMs);
                 break;
             }
         case 'reasoning.end':
             if (isLocalActiveTurn) {
-                if (activeLocalAssistantId) {
+                if (AppState.chat.activeLocalAssistantId) {
                     const reasoningEndDuration = Number.isFinite(Number(payload.total_elapsed_ms || payload.elapsed_ms))
                         ? Number(payload.total_elapsed_ms || payload.elapsed_ms) : null;
                     finalizeReasoningStatus(
-                        activeLocalAssistantId,
+                        AppState.chat.activeLocalAssistantId,
                         'done',
                         '',
                         reasoningEndDuration
@@ -3531,12 +3557,12 @@ function applyCurrentChatSessionEvent(entry) {
                 }
                 break;
             }
-            if (serverReplayCurrentAssistantId) {
+            if (AppState.session.replay.currentAssistantId) {
                 const duration = Number.isFinite(Number(payload.total_elapsed_ms || payload.elapsed_ms))
                     ? Number(payload.total_elapsed_ms || payload.elapsed_ms)
                     : null;
                 finalizeReasoningStatus(
-                    serverReplayCurrentAssistantId,
+                    AppState.session.replay.currentAssistantId,
                     'done',
                     '',
                     duration
@@ -3544,42 +3570,42 @@ function applyCurrentChatSessionEvent(entry) {
             }
             break;
         case 'tool_call.start':
-            if (!isLocalActiveTurn && !serverReplayCurrentAssistantId && (entryTurnId || serverReplayCurrentTurnId)) {
-                const nextTurnId = entryTurnId || serverReplayCurrentTurnId;
-                serverReplayCurrentTurnId = nextTurnId;
-                serverReplayCurrentAssistantId = ensureServerReplayAssistant(nextTurnId, sessionId, entry.EventSeq);
+            if (!isLocalActiveTurn && !AppState.session.replay.currentAssistantId && (entryTurnId || AppState.session.replay.currentTurnId)) {
+                const nextTurnId = entryTurnId || AppState.session.replay.currentTurnId;
+                AppState.session.replay.currentTurnId = nextTurnId;
+                AppState.session.replay.currentAssistantId = ensureServerReplayAssistant(nextTurnId, sessionId, entry.EventSeq);
             }
             if (isLocalActiveTurn) {
-                if (activeLocalAssistantId) setToolCardState(activeLocalAssistantId, 'running', '', null, payload.tool || '');
+                if (AppState.chat.activeLocalAssistantId) setToolCardState(AppState.chat.activeLocalAssistantId, 'running', '', null, payload.tool || '');
                 break;
             }
-            if (serverReplayCurrentAssistantId) setToolCardState(serverReplayCurrentAssistantId, 'running', '', null, payload.tool || '');
+            if (AppState.session.replay.currentAssistantId) setToolCardState(AppState.session.replay.currentAssistantId, 'running', '', null, payload.tool || '');
             break;
         case 'tool_call.arguments':
-            if (!isLocalActiveTurn && !serverReplayCurrentAssistantId && (entryTurnId || serverReplayCurrentTurnId)) {
-                const nextTurnId = entryTurnId || serverReplayCurrentTurnId;
-                serverReplayCurrentTurnId = nextTurnId;
-                serverReplayCurrentAssistantId = ensureServerReplayAssistant(nextTurnId, sessionId, entry.EventSeq);
+            if (!isLocalActiveTurn && !AppState.session.replay.currentAssistantId && (entryTurnId || AppState.session.replay.currentTurnId)) {
+                const nextTurnId = entryTurnId || AppState.session.replay.currentTurnId;
+                AppState.session.replay.currentTurnId = nextTurnId;
+                AppState.session.replay.currentAssistantId = ensureServerReplayAssistant(nextTurnId, sessionId, entry.EventSeq);
             }
             if (isLocalActiveTurn) {
-                if (activeLocalAssistantId) setToolCardState(activeLocalAssistantId, 'running', '', payload.arguments || null, payload.tool || '');
+                if (AppState.chat.activeLocalAssistantId) setToolCardState(AppState.chat.activeLocalAssistantId, 'running', '', payload.arguments || null, payload.tool || '');
                 break;
             }
-            if (serverReplayCurrentAssistantId) setToolCardState(serverReplayCurrentAssistantId, 'running', '', payload.arguments || null, payload.tool || '');
+            if (AppState.session.replay.currentAssistantId) setToolCardState(AppState.session.replay.currentAssistantId, 'running', '', payload.arguments || null, payload.tool || '');
             break;
         case 'tool_call.success':
             if (isLocalActiveTurn) {
-                if (activeLocalAssistantId) setToolCardState(activeLocalAssistantId, 'success', t('tool.executionFinished'), null, payload.tool || '');
+                if (AppState.chat.activeLocalAssistantId) setToolCardState(AppState.chat.activeLocalAssistantId, 'success', t('tool.executionFinished'), null, payload.tool || '');
                 break;
             }
-            if (serverReplayCurrentAssistantId) setToolCardState(serverReplayCurrentAssistantId, 'success', t('tool.executionFinished'), null, payload.tool || '');
+            if (AppState.session.replay.currentAssistantId) setToolCardState(AppState.session.replay.currentAssistantId, 'success', t('tool.executionFinished'), null, payload.tool || '');
             break;
         case 'tool_call.failure':
             if (isLocalActiveTurn) {
-                if (activeLocalAssistantId) setToolCardState(activeLocalAssistantId, 'failure', payload.reason || t('tool.unknownError'), null, payload.tool || '');
+                if (AppState.chat.activeLocalAssistantId) setToolCardState(AppState.chat.activeLocalAssistantId, 'failure', payload.reason || t('tool.unknownError'), null, payload.tool || '');
                 break;
             }
-            if (serverReplayCurrentAssistantId) setToolCardState(serverReplayCurrentAssistantId, 'failure', payload.reason || t('tool.unknownError'), null, payload.tool || '');
+            if (AppState.session.replay.currentAssistantId) setToolCardState(AppState.session.replay.currentAssistantId, 'failure', payload.reason || t('tool.unknownError'), null, payload.tool || '');
             break;
         case 'prompt_processing.progress':
             if (isLocalActiveTurn) {
@@ -3611,89 +3637,89 @@ function applyCurrentChatSessionEvent(entry) {
             break;
         case 'chat.end':
         case 'request.complete':
-            sessionLLMActivityRunning = false;
-            passiveGenerationPlaceholder = '';
+            AppState.chat.passive.sessionLLMRunning = false;
+            AppState.chat.passive.placeholder = '';
             inputContainer?.classList.remove('is-passive-generating');
             clearComposerBackgroundTask('passive-server-chat');
             syncGlobalLLMComposerUI();
             if (isLocalActiveTurn) {
-                if (activeLocalAssistantId) {
+                if (AppState.chat.activeLocalAssistantId) {
                     const payloadToolState = extractToolStateFromPayload(payload);
                     if (isMeaningfulToolState(payloadToolState)) {
-                        const card = ensureToolCard(activeLocalAssistantId, payloadToolState.toolName || 'Tool');
+                        const card = ensureToolCard(AppState.chat.activeLocalAssistantId, payloadToolState.toolName || 'Tool');
                         if (card) {
                             card._history = Array.isArray(payloadToolState.history) ? [...payloadToolState.history] : [];
                         }
-                        setToolCardState(activeLocalAssistantId, payloadToolState.state || 'success', payloadToolState.summary || '', payloadToolState.args || null, payloadToolState.toolName || '');
+                        setToolCardState(AppState.chat.activeLocalAssistantId, payloadToolState.state || 'success', payloadToolState.summary || '', payloadToolState.args || null, payloadToolState.toolName || '');
                     }
                     const payloadReasoningText = extractReasoningContentFromPayload(payload);
-                    if (payloadReasoningText && !serverReplayReasoningBuffers.get(activeLocalAssistantId)) {
-                        serverReplayReasoningBuffers.set(activeLocalAssistantId, payloadReasoningText);
-                        showReasoningStatus(activeLocalAssistantId, payloadReasoningText, false, Number(payload.total_elapsed_ms || payload.elapsed_ms || 0) || null);
+                    if (payloadReasoningText && !AppState.session.replay.reasoningBuffers.get(AppState.chat.activeLocalAssistantId)) {
+                        AppState.session.replay.reasoningBuffers.set(AppState.chat.activeLocalAssistantId, payloadReasoningText);
+                        showReasoningStatus(AppState.chat.activeLocalAssistantId, payloadReasoningText, false, Number(payload.total_elapsed_ms || payload.elapsed_ms || 0) || null);
                     }
                 }
                 const duration = Number.isFinite(Number(payload.total_elapsed_ms || payload.elapsed_ms))
                     ? Number(payload.total_elapsed_ms || payload.elapsed_ms)
                     : null;
-                if (activeLocalAssistantId && !serverReplayReasoningBuffers.has(activeLocalAssistantId) && duration !== null) {
-                    finalizeReasoningStatus(activeLocalAssistantId, 'done', '', duration);
-                } else if (activeLocalAssistantId && serverReplayReasoningBuffers.has(activeLocalAssistantId)) {
-                    finalizeReasoningStatus(activeLocalAssistantId, 'done', '', duration);
+                if (AppState.chat.activeLocalAssistantId && !AppState.session.replay.reasoningBuffers.has(AppState.chat.activeLocalAssistantId) && duration !== null) {
+                    finalizeReasoningStatus(AppState.chat.activeLocalAssistantId, 'done', '', duration);
+                } else if (AppState.chat.activeLocalAssistantId && AppState.session.replay.reasoningBuffers.has(AppState.chat.activeLocalAssistantId)) {
+                    finalizeReasoningStatus(AppState.chat.activeLocalAssistantId, 'done', '', duration);
                 }
-                if (activeLocalAssistantId) {
+                if (AppState.chat.activeLocalAssistantId) {
                     const payloadFinalText = extractFinalAssistantContentFromPayload(payload);
-                    const finalText = payloadFinalText || (serverReplayMessageBuffers.get(activeLocalAssistantId) || '');
+                    const finalText = payloadFinalText || (AppState.session.replay.messageBuffers.get(AppState.chat.activeLocalAssistantId) || '');
                     if (payloadFinalText) {
-                        serverReplayMessageBuffers.set(activeLocalAssistantId, payloadFinalText);
-                        updateSyncedMessageContent(activeLocalAssistantId, payloadFinalText, { animate: false });
+                        AppState.session.replay.messageBuffers.set(AppState.chat.activeLocalAssistantId, payloadFinalText);
+                        updateSyncedMessageContent(AppState.chat.activeLocalAssistantId, payloadFinalText, { animate: false });
                     }
-                    finalizeMessageContent(activeLocalAssistantId, finalText);
-                    finalizeAssistantStatusCards(activeLocalAssistantId, 'done');
-                    setAssistantActionBarReady(activeLocalAssistantId);
+                    finalizeMessageContent(AppState.chat.activeLocalAssistantId, finalText);
+                    finalizeAssistantStatusCards(AppState.chat.activeLocalAssistantId, 'done');
+                    setAssistantActionBarReady(AppState.chat.activeLocalAssistantId);
                 }
                 AppState.chat.activeLocalTurnId = '';
-                activeLocalAssistantId = '';
+                AppState.chat.activeLocalAssistantId = '';
                 hideProgressDock();
                 cleanupTrailingEmptyAssistantMessages();
                 break;
             }
-            const resolvedTurnId = entryTurnId || serverReplayCurrentTurnId || `server-turn-${sessionId}-${entry.EventSeq}`;
+            const resolvedTurnId = entryTurnId || AppState.session.replay.currentTurnId || `server-turn-${sessionId}-${entry.EventSeq}`;
             const currentAssistantTurnId = String(
-                document.getElementById(serverReplayCurrentAssistantId || '')?.dataset?.turnId || ''
+                document.getElementById(AppState.session.replay.currentAssistantId || '')?.dataset?.turnId || ''
             ).trim();
-            serverReplayCurrentTurnId = resolvedTurnId;
-            if (!serverReplayCurrentAssistantId || currentAssistantTurnId !== resolvedTurnId) {
-                serverReplayCurrentAssistantId = ensureServerReplayAssistant(resolvedTurnId, sessionId, entry.EventSeq);
+            AppState.session.replay.currentTurnId = resolvedTurnId;
+            if (!AppState.session.replay.currentAssistantId || currentAssistantTurnId !== resolvedTurnId) {
+                AppState.session.replay.currentAssistantId = ensureServerReplayAssistant(resolvedTurnId, sessionId, entry.EventSeq);
             }
-            if (serverReplayCurrentAssistantId) {
+            if (AppState.session.replay.currentAssistantId) {
                 const payloadToolState = extractToolStateFromPayload(payload);
                 if (isMeaningfulToolState(payloadToolState)) {
-                    const card = ensureToolCard(serverReplayCurrentAssistantId, payloadToolState.toolName || 'Tool');
+                    const card = ensureToolCard(AppState.session.replay.currentAssistantId, payloadToolState.toolName || 'Tool');
                     if (card) {
                         card._history = Array.isArray(payloadToolState.history) ? [...payloadToolState.history] : [];
                     }
-                    setToolCardState(serverReplayCurrentAssistantId, payloadToolState.state || 'success', payloadToolState.summary || '', payloadToolState.args || null, payloadToolState.toolName || '');
+                    setToolCardState(AppState.session.replay.currentAssistantId, payloadToolState.state || 'success', payloadToolState.summary || '', payloadToolState.args || null, payloadToolState.toolName || '');
                 }
                 const payloadReasoningText = extractReasoningContentFromPayload(payload);
-                if (payloadReasoningText && !serverReplayReasoningBuffers.get(serverReplayCurrentAssistantId)) {
-                    serverReplayReasoningBuffers.set(serverReplayCurrentAssistantId, payloadReasoningText);
-                    showReasoningStatus(serverReplayCurrentAssistantId, payloadReasoningText, false, Number(payload.total_elapsed_ms || payload.elapsed_ms || 0) || null);
+                if (payloadReasoningText && !AppState.session.replay.reasoningBuffers.get(AppState.session.replay.currentAssistantId)) {
+                    AppState.session.replay.reasoningBuffers.set(AppState.session.replay.currentAssistantId, payloadReasoningText);
+                    showReasoningStatus(AppState.session.replay.currentAssistantId, payloadReasoningText, false, Number(payload.total_elapsed_ms || payload.elapsed_ms || 0) || null);
                 }
-                if (!serverReplayReasoningBuffers.has(serverReplayCurrentAssistantId) && Number.isFinite(Number(payload.total_elapsed_ms || payload.elapsed_ms))) {
-                    finalizeReasoningStatus(serverReplayCurrentAssistantId, 'done', '', Number(payload.total_elapsed_ms || payload.elapsed_ms));
-                } else if (serverReplayReasoningBuffers.has(serverReplayCurrentAssistantId)) {
-                    finalizeReasoningStatus(serverReplayCurrentAssistantId, 'done', '', Number(payload.total_elapsed_ms || payload.elapsed_ms || 0) || null);
+                if (!AppState.session.replay.reasoningBuffers.has(AppState.session.replay.currentAssistantId) && Number.isFinite(Number(payload.total_elapsed_ms || payload.elapsed_ms))) {
+                    finalizeReasoningStatus(AppState.session.replay.currentAssistantId, 'done', '', Number(payload.total_elapsed_ms || payload.elapsed_ms));
+                } else if (AppState.session.replay.reasoningBuffers.has(AppState.session.replay.currentAssistantId)) {
+                    finalizeReasoningStatus(AppState.session.replay.currentAssistantId, 'done', '', Number(payload.total_elapsed_ms || payload.elapsed_ms || 0) || null);
                 }
                 const payloadFinalText = extractFinalAssistantContentFromPayload(payload);
-                const finalText = payloadFinalText || (serverReplayMessageBuffers.get(serverReplayCurrentAssistantId) || '');
+                const finalText = payloadFinalText || (AppState.session.replay.messageBuffers.get(AppState.session.replay.currentAssistantId) || '');
                 if (payloadFinalText) {
-                    serverReplayMessageBuffers.set(serverReplayCurrentAssistantId, payloadFinalText);
-                    updateSyncedMessageContent(serverReplayCurrentAssistantId, payloadFinalText, { animate: false });
+                    AppState.session.replay.messageBuffers.set(AppState.session.replay.currentAssistantId, payloadFinalText);
+                    updateSyncedMessageContent(AppState.session.replay.currentAssistantId, payloadFinalText, { animate: false });
                 }
-                finalizeMessageContent(serverReplayCurrentAssistantId, finalText);
-                finalizeAssistantStatusCards(serverReplayCurrentAssistantId, 'done');
-                setAssistantActionBarReady(serverReplayCurrentAssistantId);
-                cleanupAssistantMessagesForTurn(serverReplayCurrentTurnId || entryTurnId, serverReplayCurrentAssistantId);
+                finalizeMessageContent(AppState.session.replay.currentAssistantId, finalText);
+                finalizeAssistantStatusCards(AppState.session.replay.currentAssistantId, 'done');
+                setAssistantActionBarReady(AppState.session.replay.currentAssistantId);
+                cleanupAssistantMessagesForTurn(AppState.session.replay.currentTurnId || entryTurnId, AppState.session.replay.currentAssistantId);
                 holdAutoScrollAtBottom(900);
                 scrollToBottom(true);
             }
@@ -3701,18 +3727,18 @@ function applyCurrentChatSessionEvent(entry) {
             cleanupTrailingEmptyAssistantMessages();
             break;
         case 'request.cancelled':
-            sessionLLMActivityRunning = false;
+            AppState.chat.passive.sessionLLMRunning = false;
             if (isLocalActiveTurn) {
-                if (activeLocalAssistantId) {
-                    finalizeAssistantStatusCards(activeLocalAssistantId, 'stopped', t('status.stopped'));
+                if (AppState.chat.activeLocalAssistantId) {
+                    finalizeAssistantStatusCards(AppState.chat.activeLocalAssistantId, 'stopped', t('status.stopped'));
                 }
                 AppState.chat.activeLocalTurnId = '';
-                activeLocalAssistantId = '';
+                AppState.chat.activeLocalAssistantId = '';
                 cleanupTrailingEmptyAssistantMessages();
                 break;
             }
-            if (serverReplayCurrentAssistantId) {
-                finalizeAssistantStatusCards(serverReplayCurrentAssistantId, 'stopped', t('status.stopped'));
+            if (AppState.session.replay.currentAssistantId) {
+                finalizeAssistantStatusCards(AppState.session.replay.currentAssistantId, 'stopped', t('status.stopped'));
             }
             hideProgressDock();
             syncGlobalLLMComposerUI();
@@ -3720,38 +3746,38 @@ function applyCurrentChatSessionEvent(entry) {
             break;
         case 'session.cleared':
             resetChatViewState();
-            pendingStatefulResetReason = 'manual_clear_chat';
-            currentChatSessionClearedAt = payload.cleared_at || currentChatSessionClearedAt;
-            currentChatSessionEventSeq = 0;
+            AppState.chat.stateful.pendingResetReason = 'manual_clear_chat';
+            AppState.session.clearedAt = payload.cleared_at || AppState.session.clearedAt;
+            AppState.session.eventSeq = 0;
             scheduleChatSessionPolling(1200);
             break;
     }
 }
 
 async function syncCurrentChatSessionFromServer() {
-    if (currentChatSessionSyncPromise) {
-        pendingCurrentChatSessionSync = true;
-        return currentChatSessionSyncPromise;
+    if (AppState.session.syncPromise) {
+        AppState.session.pendingSync = true;
+        return AppState.session.syncPromise;
     }
 
-    currentChatSessionSyncPromise = (async () => {
+    AppState.session.syncPromise = (async () => {
         do {
-            pendingCurrentChatSessionSync = false;
+            AppState.session.pendingSync = false;
             await syncCurrentChatSessionFromServerInternal();
-        } while (pendingCurrentChatSessionSync);
+        } while (AppState.session.pendingSync);
     })().finally(() => {
-        currentChatSessionSyncPromise = null;
+        AppState.session.syncPromise = null;
     });
 
-    return currentChatSessionSyncPromise;
+    return AppState.session.syncPromise;
 }
 
 async function syncCurrentChatSessionFromServerInternal() {
-    if (!currentUser) return;
+    if (!AppState.session.currentUser) return;
 
     const session = await fetchCurrentChatSession();
     applyCurrentChatSessionSnapshot(session);
-    if (AppState.chat.activeLocalTurnId || activeLocalAssistantId || AppState.chat.isGenerating) {
+    if (AppState.chat.activeLocalTurnId || AppState.chat.activeLocalAssistantId || AppState.chat.isGenerating) {
         relinquishLocalStreamOwnership(`session-sync:${session?.Status || 'none'}`);
     }
 
@@ -3761,7 +3787,7 @@ async function syncCurrentChatSessionFromServerInternal() {
     }
 
     const hasRenderedMessages = hasSubstantiveAssistantMessages();
-    if (currentChatSessionEventSeq === 0 && !hasRenderedMessages) {
+    if (AppState.session.eventSeq === 0 && !hasRenderedMessages) {
         const sessionUISnapshot = getCurrentChatSessionUISnapshot(session);
         const snapshotMessages = sessionUISnapshot.messages || [];
         if (snapshotMessages.length > 0) {
@@ -3785,7 +3811,7 @@ async function syncCurrentChatSessionFromServerInternal() {
                         }
                         hydrateChatSessionEventsSnapshot(allItems, seedResult.session || session);
                         for (const entry of allItems) {
-                            currentChatSessionEventSeq = Math.max(currentChatSessionEventSeq, Number(entry.EventSeq || 0));
+                            AppState.session.eventSeq = Math.max(AppState.session.eventSeq, Number(entry.EventSeq || 0));
                         }
                     } finally {
                         finishChatSessionRestore();
@@ -3794,7 +3820,7 @@ async function syncCurrentChatSessionFromServerInternal() {
                     return;
                 }
             }
-            if (!isRestoringChatSession) {
+            if (!AppState.session.isRestoring) {
                 beginChatSessionRestore(snapshotMessages.length);
             }
             try {
@@ -3817,10 +3843,10 @@ async function syncCurrentChatSessionFromServerInternal() {
                     dismissStartupCards();
                     for (const entry of trailingItems) {
                         applyCurrentChatSessionEvent(entry);
-                        currentChatSessionEventSeq = Math.max(currentChatSessionEventSeq, Number(entry.EventSeq || 0));
+                        AppState.session.eventSeq = Math.max(AppState.session.eventSeq, Number(entry.EventSeq || 0));
                     }
                 }
-                currentChatSessionEventSeq = Math.max(currentChatSessionEventSeq, snapshotLastEventSeq);
+                AppState.session.eventSeq = Math.max(AppState.session.eventSeq, snapshotLastEventSeq);
                 updateChatSessionRestoreProgress(snapshotMessages.length + trailingItems.length, snapshotMessages.length + trailingItems.length);
             } finally {
                 finishChatSessionRestore();
@@ -3830,15 +3856,15 @@ async function syncCurrentChatSessionFromServerInternal() {
         }
     }
 
-    const result = await fetchCurrentChatSessionEvents(currentChatSessionEventSeq, 200);
+    const result = await fetchCurrentChatSessionEvents(AppState.session.eventSeq, 200);
     if (result.session) {
         applyCurrentChatSessionSnapshot(result.session);
     }
 
     const renderedMessagesNow = hasSubstantiveAssistantMessages();
     const hasRestorableEvents = hasRestorableChatEvents(result.items);
-    const shouldRestoreSnapshot = currentChatSessionEventSeq === 0 && result.totalCount > 0 && hasRestorableEvents && !renderedMessagesNow;
-    const shouldFastForwardSeqOnly = currentChatSessionEventSeq === 0 && result.totalCount > 0 && (!hasRestorableEvents || renderedMessagesNow);
+    const shouldRestoreSnapshot = AppState.session.eventSeq === 0 && result.totalCount > 0 && hasRestorableEvents && !renderedMessagesNow;
+    const shouldFastForwardSeqOnly = AppState.session.eventSeq === 0 && result.totalCount > 0 && (!hasRestorableEvents || renderedMessagesNow);
     if (shouldRestoreSnapshot) {
         beginChatSessionRestore(result.totalCount);
         try {
@@ -3857,20 +3883,20 @@ async function syncCurrentChatSessionFromServerInternal() {
 
             hydrateChatSessionEventsSnapshot(allItems, result.session || session);
             for (const entry of allItems) {
-                currentChatSessionEventSeq = Math.max(currentChatSessionEventSeq, Number(entry.EventSeq || 0));
+                AppState.session.eventSeq = Math.max(AppState.session.eventSeq, Number(entry.EventSeq || 0));
             }
         } finally {
             finishChatSessionRestore();
         }
     } else if (shouldFastForwardSeqOnly) {
         for (const entry of result.items) {
-            currentChatSessionEventSeq = Math.max(currentChatSessionEventSeq, Number(entry.EventSeq || 0));
+            AppState.session.eventSeq = Math.max(AppState.session.eventSeq, Number(entry.EventSeq || 0));
         }
     } else if (Array.isArray(result.items) && result.items.length > 0) {
         dismissStartupCards();
         for (const entry of result.items) {
             applyCurrentChatSessionEvent(entry);
-            currentChatSessionEventSeq = Math.max(currentChatSessionEventSeq, Number(entry.EventSeq || 0));
+            AppState.session.eventSeq = Math.max(AppState.session.eventSeq, Number(entry.EventSeq || 0));
         }
     }
 
@@ -4072,7 +4098,7 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
         const snapshotToolState = sessionUISnapshot.tool_cards?.[user.turnId] || null;
         const mergedToolState = toolState || snapshotToolState;
         if (waitingForRemoteReply) {
-            ensurePassiveSyncPlaceholder(user.turnId, sessionSnapshot?.ID || 'default', currentChatSessionEventSeq || 0);
+            ensurePassiveSyncPlaceholder(user.turnId, sessionSnapshot?.ID || 'default', AppState.session.eventSeq || 0);
             continue;
         }
         if (!hasAssistantSnapshotContent(assistantText, reasoningText, mergedToolState)) continue;
@@ -4083,7 +4109,7 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
             setReasoningCardStartedAt(assistantId, reasoningStartedAtById.get(assistantId));
         }
         if (reasoningText && !config.hideThink) {
-            serverReplayReasoningBuffers.set(assistantId, reasoningText);
+            AppState.session.replay.reasoningBuffers.set(assistantId, reasoningText);
             showReasoningStatus(assistantId, reasoningText);
             const duration = reasoningDurationById.get(assistantId);
             finalizeReasoningStatus(assistantId, 'done', '', Number.isFinite(duration) ? duration : null);
@@ -4100,7 +4126,7 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
             }
         }
 
-        serverReplayMessageBuffers.set(assistantId, assistantText);
+        AppState.session.replay.messageBuffers.set(assistantId, assistantText);
         updateSyncedMessageContent(assistantId, assistantText, { animate: false });
         finalizeMessageContent(assistantId, assistantText);
         finalizeAssistantStatusCards(assistantId, 'done');
@@ -4109,8 +4135,8 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
     }
 
     if (users.length > 0) {
-        serverReplayCurrentTurnId = users[users.length - 1].turnId;
-        serverReplayCurrentAssistantId = assistantByTurn.get(serverReplayCurrentTurnId) || '';
+        AppState.session.replay.currentTurnId = users[users.length - 1].turnId;
+        AppState.session.replay.currentAssistantId = assistantByTurn.get(AppState.session.replay.currentTurnId) || '';
     }
     scrollToBottom(true);
     requestAnimationFrame(() => {
@@ -4133,13 +4159,13 @@ function buildRestoredStatefulSummary(session) {
 
 async function restoreLastSession() {
     await syncCurrentChatSessionFromServer();
-    if (currentChatSessionEventSeq > 0) {
+    if (AppState.session.eventSeq > 0) {
         showToast(t('chat.startup.restoreLoaded'));
         return;
     }
 
     await ensureLastSessionCacheLoaded();
-    if (!lastSessionCache) {
+    if (!AppState.session.lastCache) {
         showToast(t('chat.startup.restoreMissing'), true);
         return;
     }
@@ -4149,12 +4175,12 @@ async function restoreLastSession() {
 
     const restoredUser = {
         role: 'user',
-        content: lastSessionCache.user_message || '',
+        content: AppState.session.lastCache.user_message || '',
         turnId
     };
     const restoredAssistant = {
         role: 'assistant',
-        content: lastSessionCache.assistant_message || '',
+        content: AppState.session.lastCache.assistant_message || '',
         turnId
     };
 
@@ -4165,12 +4191,12 @@ async function restoreLastSession() {
     ensureChatRestoredToLatest();
 
     if (config.llmMode === 'stateful') {
-        statefulSummary = buildRestoredStatefulSummary(lastSessionCache);
-        statefulEstimatedChars = statefulSummary.length;
-        statefulTurnCount = 1;
-        statefulLastInputTokens = estimateTokensFromText(statefulSummary);
-        statefulLastOutputTokens = estimateTokensFromText(restoredAssistant.content);
-        statefulPeakInputTokens = Math.max(statefulPeakInputTokens, statefulLastInputTokens);
+        AppState.chat.stateful.summary = buildRestoredStatefulSummary(AppState.session.lastCache);
+        AppState.chat.stateful.estimatedChars = AppState.chat.stateful.summary.length;
+        AppState.chat.stateful.turnCount = 1;
+        AppState.chat.stateful.lastInputTokens = estimateTokensFromText(AppState.chat.stateful.summary);
+        AppState.chat.stateful.lastOutputTokens = estimateTokensFromText(restoredAssistant.content);
+        AppState.chat.stateful.peakInputTokens = Math.max(AppState.chat.stateful.peakInputTokens, AppState.chat.stateful.lastInputTokens);
         updateStatefulBudgetIndicator();
     }
 
@@ -4197,11 +4223,11 @@ async function syncServerConfig(options = {}) {
         if (response.ok) {
             const serverCfg = await response.json();
             const nextSignature = buildServerConfigSignature(serverCfg);
-            const configChanged = forceApply || nextSignature !== lastSyncedServerConfigSignature;
+            const configChanged = forceApply || nextSignature !== AppState.session.lastSyncedConfigSignature;
             if (!configChanged) {
                 return false;
             }
-            lastSyncedServerConfigSignature = nextSignature;
+            AppState.session.lastSyncedConfigSignature = nextSignature;
             if (log) {
                 console.log('[Config] Synced from server:', serverCfg);
             }
@@ -4421,27 +4447,27 @@ function setupEventListeners() {
 
     messageInput.addEventListener('touchstart', () => {
         savedLibraryController.resetSwipeState();
-        pendingInputFocusChatScrollTop = chatMessages?.scrollTop ?? null;
-        pendingFirstInputScrollRepairTop = pendingInputFocusChatScrollTop;
+        AppState.ui.scroll.pendingInputFocusTop = chatMessages?.scrollTop ?? null;
+        AppState.ui.scroll.pendingFirstInputRepairTop = AppState.ui.scroll.pendingInputFocusTop;
     }, { passive: true });
 
     messageInput.addEventListener('pointerdown', () => {
-        pendingInputFocusChatScrollTop = chatMessages?.scrollTop ?? null;
-        pendingFirstInputScrollRepairTop = pendingInputFocusChatScrollTop;
+        AppState.ui.scroll.pendingInputFocusTop = chatMessages?.scrollTop ?? null;
+        AppState.ui.scroll.pendingFirstInputRepairTop = AppState.ui.scroll.pendingInputFocusTop;
     }, { passive: true });
 
     messageInput.addEventListener('focus', () => {
         document.body.classList.add('keyboard-open');
-        if (pendingInputFocusChatScrollTop != null) {
-            scheduleInputScrollRepair(pendingInputFocusChatScrollTop);
-            pendingInputFocusChatScrollTop = null;
+        if (AppState.ui.scroll.pendingInputFocusTop != null) {
+            scheduleInputScrollRepair(AppState.ui.scroll.pendingInputFocusTop);
+            AppState.ui.scroll.pendingInputFocusTop = null;
         }
         updateViewportMetrics();
     });
 
     messageInput.addEventListener('blur', () => {
-        pendingInputFocusChatScrollTop = null;
-        pendingFirstInputScrollRepairTop = null;
+        AppState.ui.scroll.pendingInputFocusTop = null;
+        AppState.ui.scroll.pendingFirstInputRepairTop = null;
         window.setTimeout(() => {
             updateViewportMetrics();
         }, 120);
@@ -4460,9 +4486,9 @@ function setupEventListeners() {
     });
 
     messageInput.addEventListener('input', () => {
-        if (pendingFirstInputScrollRepairTop != null) {
-            scheduleInputScrollRepair(pendingFirstInputScrollRepairTop, [0, 90, 220]);
-            pendingFirstInputScrollRepairTop = null;
+        if (AppState.ui.scroll.pendingFirstInputRepairTop != null) {
+            scheduleInputScrollRepair(AppState.ui.scroll.pendingFirstInputRepairTop, [0, 90, 220]);
+            AppState.ui.scroll.pendingFirstInputRepairTop = null;
         }
         autoResizeInput();
         updateInlineComposerActionVisibility();
@@ -4479,8 +4505,8 @@ function setupEventListeners() {
                 const blob = item.getAsFile();
                 const reader = new FileReader();
                 reader.onload = function (event) {
-                    pendingImage = event.target.result; // Base64 string
-                    imagePreviewVal.src = pendingImage;
+                    AppState.input.pendingImage = event.target.result; // Base64 string
+                    imagePreviewVal.src = AppState.input.pendingImage;
                     previewContainer.style.display = 'block';
                     updateInlineComposerActionVisibility();
                 };
@@ -4513,9 +4539,9 @@ function setupEventListeners() {
 
     // Stop handling
     sendBtn.addEventListener('click', () => {
-        const session = currentChatSessionCache;
-        const sessionRunning = sessionLLMActivityRunning || String(session?.Status || '').trim().toLowerCase() === 'running';
-        const isCurrentlyActive = AppState.chat.isGenerating || sessionRunning || llmActivityBusy;
+        const session = AppState.session.currentCache;
+        const sessionRunning = AppState.chat.passive.sessionLLMRunning || String(session?.Status || '').trim().toLowerCase() === 'running';
+        const isCurrentlyActive = AppState.chat.isGenerating || sessionRunning || AppState.chat.passive.llmBusy;
 
         if (isCurrentlyActive) {
             stopGeneration();
@@ -4542,8 +4568,8 @@ function handleImageUpload(input) {
     if (input.files && input.files[0]) {
         const reader = new FileReader();
         reader.onload = function (e) {
-            pendingImage = e.target.result; // Base64 string
-            imagePreviewVal.src = pendingImage;
+            AppState.input.pendingImage = e.target.result; // Base64 string
+            imagePreviewVal.src = AppState.input.pendingImage;
             previewContainer.style.display = 'block';
             updateInlineComposerActionVisibility();
         };
@@ -4557,7 +4583,7 @@ function triggerImagePicker() {
 }
 
 function removeImage() {
-    pendingImage = null;
+    AppState.input.pendingImage = null;
     document.getElementById('image-upload').value = '';
     previewContainer.style.display = 'none';
     updateInlineComposerActionVisibility();
@@ -4565,26 +4591,26 @@ function removeImage() {
 
 function resetChatViewState() {
     stopAllAudio();
-    statefulSummary = '';
-    lastResponseId = null;
-    statefulTurnCount = 0;
-    statefulEstimatedChars = 0;
-    statefulResetCount = 0;
-    statefulLastInputTokens = 0;
-    statefulLastOutputTokens = 0;
-    statefulPeakInputTokens = 0;
+    AppState.chat.stateful.summary = '';
+    AppState.chat.stateful.lastResponseId = null;
+    AppState.chat.stateful.turnCount = 0;
+    AppState.chat.stateful.estimatedChars = 0;
+    AppState.chat.stateful.resetCount = 0;
+    AppState.chat.stateful.lastInputTokens = 0;
+    AppState.chat.stateful.lastOutputTokens = 0;
+    AppState.chat.stateful.peakInputTokens = 0;
     AppState.chat.messages = [];
-    pendingScrollToBottom = false;
+    AppState.ui.scroll.pendingToBottom = false;
     chatMessages.innerHTML = '';
     updateScrollToBottomButton();
     resetServerChatReplayState();
-    currentChatSessionCache = null;
+    AppState.session.currentCache = null;
     stopChatSessionPolling();
     AppState.chat.activeLocalTurnId = '';
-    activeLocalAssistantId = '';
-    locallyRenderedTurnIds = new Set();
+    AppState.chat.activeLocalAssistantId = '';
+    AppState.chat.locallyRenderedTurnIds = new Set();
     AppState.chat.isGenerating = false;
-    abortController = null;
+    AppState.chat.abortController = null;
     broadcastLLMActivityState(false, 'finished');
     hideProgressDock();
     updateSendButtonState();
@@ -4614,7 +4640,7 @@ function renderSessionRestoreSkeleton(cardCount = 5) {
 }
 
 function beginChatSessionRestore(totalCount = 0) {
-    isRestoringChatSession = true;
+    AppState.session.isRestoring = true;
     resetChatViewState();
     chatMessages?.classList.add('is-session-hydrating');
     renderSessionRestoreSkeleton(totalCount);
@@ -4624,7 +4650,7 @@ function beginChatSessionRestore(totalCount = 0) {
 }
 
 function updateChatSessionRestoreProgress(loadedCount, totalCount) {
-    if (!isRestoringChatSession) return;
+    if (!AppState.session.isRestoring) return;
     const total = Math.max(1, Number(totalCount) || 1);
     const loaded = Math.max(0, Math.min(total, Number(loadedCount) || 0));
     renderProgressDock(t('progress.restoringHistory'), (loaded / total) * 100, 'prompt-processing', false);
@@ -4632,7 +4658,7 @@ function updateChatSessionRestoreProgress(loadedCount, totalCount) {
 }
 
 function finishChatSessionRestore() {
-    isRestoringChatSession = false;
+    AppState.session.isRestoring = false;
     hideProgressDock();
     requestAnimationFrame(() => {
         if (chatRestoreOverlay) {
@@ -4657,7 +4683,7 @@ async function clearChat() {
         await stopGeneration();
     }
 
-    pendingStatefulResetReason = 'manual_clear_chat';
+    AppState.chat.stateful.pendingResetReason = 'manual_clear_chat';
 
     try {
         await fetch('/api/chat-session/clear', {
@@ -4668,18 +4694,18 @@ async function clearChat() {
         console.warn('Failed to clear current chat session on server:', e);
     }
 
-    lastSessionCache = null;
-    lastSessionFetchPromise = null;
+    AppState.session.lastCache = null;
+    AppState.session.lastFetchPromise = null;
     resetChatViewState();
 }
 
 function clearContext() {
-    lastResponseId = null;
-    statefulTurnCount = 0;
-    statefulEstimatedChars = statefulSummary.length;
-    pendingStatefulResetReason = 'manual_context_reset';
-    statefulLastInputTokens = 0;
-    statefulLastOutputTokens = 0;
+    AppState.chat.stateful.lastResponseId = null;
+    AppState.chat.stateful.turnCount = 0;
+    AppState.chat.stateful.estimatedChars = AppState.chat.stateful.summary.length;
+    AppState.chat.stateful.pendingResetReason = 'manual_context_reset';
+    AppState.chat.stateful.lastInputTokens = 0;
+    AppState.chat.stateful.lastOutputTokens = 0;
     showAlert(t('setting.memory.reset.success') + ' (Context/Session ID Cleared)');
     console.log('[Context] Manual context reset trigger.');
     updateStatefulBudgetIndicator();
@@ -4691,8 +4717,8 @@ function getBaseSystemPrompt() {
 
 function buildClientStatefulPrompt() {
     let prompt = getBaseSystemPrompt();
-    if (usesStatefulConversationContext() && statefulSummary) {
-        prompt += `\n\n### Conversation Summary ###\n${statefulSummary}\n\nUse this summary as compressed context from earlier turns.`;
+    if (usesStatefulConversationContext() && AppState.chat.stateful.summary) {
+        prompt += `\n\n### Conversation Summary ###\n${AppState.chat.stateful.summary}\n\nUse this summary as compressed context from earlier turns.`;
     }
     return prompt;
 }
@@ -4720,8 +4746,8 @@ function summarizeMessagesForStatefulReset() {
     }).filter(Boolean);
 
     let summary = lines.join('\n');
-    if (statefulSummary) {
-        summary = `Previous summary:\n${statefulSummary}\n\nRecent turns:\n${summary}`;
+    if (AppState.chat.stateful.summary) {
+        summary = `Previous summary:\n${AppState.chat.stateful.summary}\n\nRecent turns:\n${summary}`;
     }
 
     const maxLen = 1800;
@@ -4740,9 +4766,9 @@ function getStatefulRiskMetrics(nextUserText = '') {
     const limitTurns = parseInt(config.statefulTurnLimit, 10) || DEFAULT_STATEFUL_TURN_LIMIT;
     const charBudget = parseInt(config.statefulCharBudget, 10) || DEFAULT_STATEFUL_CHAR_BUDGET;
     const tokenBudget = parseInt(config.statefulTokenBudget, 10) || DEFAULT_STATEFUL_TOKEN_BUDGET;
-    const projectedChars = statefulEstimatedChars + (nextUserText ? nextUserText.length : 0);
-    const projectedTokens = statefulLastInputTokens + estimateTokensFromText(nextUserText);
-    const turnFactor = Math.min(1, statefulTurnCount / Math.max(limitTurns, 1));
+    const projectedChars = AppState.chat.stateful.estimatedChars + (nextUserText ? nextUserText.length : 0);
+    const projectedTokens = AppState.chat.stateful.lastInputTokens + estimateTokensFromText(nextUserText);
+    const turnFactor = Math.min(1, AppState.chat.stateful.turnCount / Math.max(limitTurns, 1));
     const charFactor = Math.min(1, projectedChars / Math.max(charBudget, 1));
     const tokenFactor = Math.min(1, projectedTokens / Math.max(tokenBudget, 1));
     const score = Math.round((turnFactor * 20 + charFactor * 15 + tokenFactor * 65) * 100) / 100;
@@ -4800,8 +4826,8 @@ function shouldResetStatefulContext(nextUserText = '') {
     }
     const risk = getStatefulRiskMetrics(nextUserText);
     const reasons = [];
-    if (statefulTurnCount >= risk.turnLimit) {
-        reasons.push(`turns ${statefulTurnCount}/${risk.turnLimit}`);
+    if (AppState.chat.stateful.turnCount >= risk.turnLimit) {
+        reasons.push(`turns ${AppState.chat.stateful.turnCount}/${risk.turnLimit}`);
     }
     if (risk.projectedChars >= risk.charBudget) {
         reasons.push(`chars ${risk.projectedChars}/${risk.charBudget}`);
@@ -4809,8 +4835,8 @@ function shouldResetStatefulContext(nextUserText = '') {
     if (risk.projectedTokens >= risk.tokenBudget) {
         reasons.push(`projected tokens ${risk.projectedTokens}/${risk.tokenBudget}`);
     }
-    if (statefulLastInputTokens >= risk.tokenBudget) {
-        reasons.push(`input tokens ${statefulLastInputTokens}/${risk.tokenBudget}`);
+    if (AppState.chat.stateful.lastInputTokens >= risk.tokenBudget) {
+        reasons.push(`input tokens ${AppState.chat.stateful.lastInputTokens}/${risk.tokenBudget}`);
     }
     return {
         shouldReset: reasons.length > 0,
@@ -4950,8 +4976,8 @@ function buildChatPayload({ text, currentImage, temperatureOverride = null, repe
             payload.store = false;
         }
 
-        if (contextStrategy === 'stateful' && lastResponseId) {
-            payload.previous_response_id = lastResponseId;
+        if (contextStrategy === 'stateful' && AppState.chat.stateful.lastResponseId) {
+            payload.previous_response_id = AppState.chat.stateful.lastResponseId;
         }
         if (reasoningSelection) {
             payload.reasoning = reasoningSelection;
@@ -5005,29 +5031,29 @@ async function ensureStatefulContextBudget(nextUserText = '') {
         return;
     }
 
-    const compactedFrom = statefulPeakInputTokens || statefulLastInputTokens || 0;
+    const compactedFrom = AppState.chat.stateful.peakInputTokens || AppState.chat.stateful.lastInputTokens || 0;
     const compactReasons = resetDecision.reasons.join(', ');
     console.log('[Stateful] Auto compact triggered', {
         reasons: resetDecision.reasons,
-        turnCount: statefulTurnCount,
+        turnCount: AppState.chat.stateful.turnCount,
         projectedChars: resetDecision.risk.projectedChars,
         projectedTokens: resetDecision.risk.projectedTokens,
         tokenBudget: resetDecision.risk.tokenBudget,
         charBudget: resetDecision.risk.charBudget,
         turnLimit: resetDecision.risk.turnLimit
     });
-    statefulSummary = summarizeMessagesForStatefulReset();
-    lastResponseId = null;
-    statefulTurnCount = 0;
-    statefulEstimatedChars = statefulSummary.length;
-    statefulResetCount += 1;
-    pendingStatefulResetReason = 'auto_summary_reset';
-    statefulLastInputTokens = estimateTokensFromText(statefulSummary);
-    statefulLastOutputTokens = 0;
+    AppState.chat.stateful.summary = summarizeMessagesForStatefulReset();
+    AppState.chat.stateful.lastResponseId = null;
+    AppState.chat.stateful.turnCount = 0;
+    AppState.chat.stateful.estimatedChars = AppState.chat.stateful.summary.length;
+    AppState.chat.stateful.resetCount += 1;
+    AppState.chat.stateful.pendingResetReason = 'auto_summary_reset';
+    AppState.chat.stateful.lastInputTokens = estimateTokensFromText(AppState.chat.stateful.summary);
+    AppState.chat.stateful.lastOutputTokens = 0;
     updateStatefulBudgetIndicator(nextUserText);
     appendMessage({
         role: 'system',
-        content: `Stateful context compacted ${compactedFrom} -> ~${statefulLastInputTokens}`
+        content: `Stateful context compacted ${compactedFrom} -> ~${AppState.chat.stateful.lastInputTokens}`
     });
 }
 
@@ -5043,7 +5069,7 @@ async function sendMessage(options = {}) {
     unlockAudioContext();
 
     let text = messageInput.value.trim();
-    const currentImage = pendingImage; // Capture early
+    const currentImage = AppState.input.pendingImage; // Capture early
 
     if (!text && !currentImage) return;
     if (AppState.chat.isGenerating) {
@@ -5071,13 +5097,13 @@ async function sendMessage(options = {}) {
     if (isLabelTop) {
         pinTurnToTop(turnId);
     } else {
-        lockScrollToLatest = true;
-        shouldAutoScroll = true;
+        AppState.ui.scroll.lockToLatest = true;
+        AppState.ui.scroll.shouldAutoScroll = true;
         holdAutoScrollAtBottom(600);
     }
     AppState.chat.messages.push(userMsg);
     if (usesStatefulConversationContext()) {
-        statefulEstimatedChars += text.length;
+        AppState.chat.stateful.estimatedChars += text.length;
         updateStatefulBudgetIndicator();
     }
 
@@ -5090,17 +5116,17 @@ async function sendMessage(options = {}) {
     AppState.chat.isGenerating = true;
     syncWakeLock(); // Request wake lock for generation
     broadcastLLMActivityState(true, 'answering');
-    lockScrollToLatest = true;
+    AppState.ui.scroll.lockToLatest = true;
     updateSendButtonState();
 
     // Create new AbortController
-    abortController = new AbortController();
+    AppState.chat.abortController = new AbortController();
 
     const assistantId = buildServerAssistantMessageId(turnId, '');
     AppState.ui.activeStreamingMessageId = assistantId;
     AppState.chat.activeLocalTurnId = turnId;
-    activeLocalAssistantId = assistantId;
-    assistantTurnIdMap.set(assistantId, turnId);
+    AppState.chat.activeLocalAssistantId = assistantId;
+    AppState.chat.assistantTurnIdMap.set(assistantId, turnId);
     ensureAssistantMessageElement(assistantId, turnId);
     const assistantActionBar = document.getElementById(assistantId)?.querySelector('.message-actions');
     if (assistantActionBar) {
@@ -5172,10 +5198,10 @@ async function sendMessage(options = {}) {
         AppState.chat.isGenerating = false;
         syncWakeLock(); // Release wake lock if nothing else is active
         broadcastLLMActivityState(false, 'finished');
-        lockScrollToLatest = false;
+        AppState.ui.scroll.lockToLatest = false;
         stopStreamingMessageAutoScroll();
         AppState.ui.activeStreamingMessageId = null;
-        abortController = null;
+        AppState.chat.abortController = null;
         updateSendButtonState();
         fastForwardChatSessionEvents().catch(console.warn);
         scheduleChatSessionPolling(600);
@@ -5203,16 +5229,16 @@ async function stopCurrentChatSessionOnServer() {
 }
 
 async function stopGeneration({ preserveAssistantUI = false } = {}) {
-    if (abortController) {
-        abortController.abort();
-        abortController = null;
+    if (AppState.chat.abortController) {
+        AppState.chat.abortController.abort();
+        AppState.chat.abortController = null;
     }
     await stopCurrentChatSessionOnServer();
     hideProgressDock();
     if (!preserveAssistantUI) {
         relinquishLocalStreamOwnership('stop-generation');
     } else {
-        localStreamOwnershipReleased = true;
+        AppState.session.localStreamOwnershipReleased = true;
     }
     // Stop any currently playing audio/TTS
     stopAllAudio();
@@ -5258,9 +5284,9 @@ function updateSendButtonState() {
  * Core logic for updating button icon and labels without triggering full UI sync
  */
 function updateSendButtonStateCore() {
-    const session = currentChatSessionCache;
-    const sessionRunning = sessionLLMActivityRunning || String(session?.Status || '').trim().toLowerCase() === 'running';
-    const isCurrentlyActive = AppState.chat.isGenerating || sessionRunning || llmActivityBusy;
+    const session = AppState.session.currentCache;
+    const sessionRunning = AppState.chat.passive.sessionLLMRunning || String(session?.Status || '').trim().toLowerCase() === 'running';
+    const isCurrentlyActive = AppState.chat.isGenerating || sessionRunning || AppState.chat.passive.llmBusy;
 
     if (isCurrentlyActive) {
         sendBtn.disabled = false; // Enabled so we can Click to Stop
@@ -5283,7 +5309,7 @@ function updateSendButtonStateCore() {
 
 function hasComposableUserInput() {
     const text = messageInput?.value?.trim() || '';
-    return !!text || !!pendingImage;
+    return !!text || !!AppState.input.pendingImage;
 }
 
 function setComposerPrimaryButtons({ showSend, showInlineMic }) {
@@ -5324,11 +5350,11 @@ async function streamResponse(payload, elementId, turnId = '', streamOptions = {
     if (turnId) {
         headers['X-Client-Turn-Id'] = turnId;
     }
-    if (currentUserLocation) {
-        headers['X-User-Location'] = currentUserLocation;
+    if (AppState.ui.location.currentUserLocation) {
+        headers['X-User-Location'] = AppState.ui.location.currentUserLocation;
     }
-    if (pendingStatefulResetReason) {
-        headers['X-Stateful-Reset-Reason'] = pendingStatefulResetReason;
+    if (AppState.chat.stateful.pendingResetReason) {
+        headers['X-Stateful-Reset-Reason'] = AppState.chat.stateful.pendingResetReason;
     }
     headers['X-Context-Strategy'] = getNormalizedContextStrategy();
 
@@ -5337,7 +5363,7 @@ async function streamResponse(payload, elementId, turnId = '', streamOptions = {
         method: 'POST',
         headers: headers,
         body: JSON.stringify(payload),
-        signal: abortController.signal
+        signal: AppState.chat.abortController.signal
     });
 
     if (!response.ok) {
@@ -5352,14 +5378,14 @@ async function streamResponse(payload, elementId, turnId = '', streamOptions = {
 
             if (errorBody.includes("Could not find stored response for previous_response_id")) {
                 console.warn("[Stateful] previous_response_id became invalid. Resetting and retrying without it...");
-                lastResponseId = null;
-                statefulTurnCount = 0;
-                statefulEstimatedChars = statefulSummary.length;
-                statefulLastInputTokens = estimateTokensFromText(statefulSummary);
-                statefulLastOutputTokens = 0;
-                statefulResetCount += 1;
-                pendingStatefulResetReason = 'invalid_previous_response_id';
-                // Re-attempt without current lastResponseId
+                AppState.chat.stateful.lastResponseId = null;
+                AppState.chat.stateful.turnCount = 0;
+                AppState.chat.stateful.estimatedChars = AppState.chat.stateful.summary.length;
+                AppState.chat.stateful.lastInputTokens = estimateTokensFromText(AppState.chat.stateful.summary);
+                AppState.chat.stateful.lastOutputTokens = 0;
+                AppState.chat.stateful.resetCount += 1;
+                AppState.chat.stateful.pendingResetReason = 'invalid_previous_response_id';
+                // Re-attempt without current AppState.chat.stateful.lastResponseId
                 delete payload.previous_response_id;
                 return await streamResponse(payload, elementId);
             }
@@ -5369,7 +5395,7 @@ async function streamResponse(payload, elementId, turnId = '', streamOptions = {
         }
         throw new Error(errorDetails);
     }
-    pendingStatefulResetReason = null;
+    AppState.chat.stateful.pendingResetReason = null;
 
     return await processStream(response, elementId, turnId, streamOptions);
 }
@@ -5437,8 +5463,8 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
 
                     // Capture response_id if present (Stateful Chat)
                     if (json.response_id) {
-                        lastResponseId = json.response_id;
-                        console.log(`[Stateful] Captured response_id: ${lastResponseId}`);
+                        AppState.chat.stateful.lastResponseId = json.response_id;
+                        console.log(`[Stateful] Captured response_id: ${AppState.chat.stateful.lastResponseId}`);
                     }
 
                     // Check for explicit error in stream (Context Overflow etc)
@@ -5559,7 +5585,7 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
                             : null;
 
                         // Sync to global buffer for passive window / snapshot compatibility
-                        serverReplayReasoningBuffers.set(elementId, reasoningBuffer);
+                        AppState.session.replay.reasoningBuffers.set(elementId, reasoningBuffer);
 
                         if (!deferToServerChatSession) showReasoningStatus(elementId, reasoningBuffer, false, elapsedMs); // Update with full buffer
                     }
@@ -5573,7 +5599,7 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
                         reasoningStartMs = 0;
                         reasoningSource = null;
 
-                        serverReplayReasoningBuffers.set(elementId, reasoningBuffer);
+                        AppState.session.replay.reasoningBuffers.set(elementId, reasoningBuffer);
                         if (!deferToServerChatSession) finalizeReasoningStatus(elementId, 'done', reasoningBuffer, elapsedMs);
                     }
 
@@ -5599,17 +5625,17 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
                     else if (json.type === 'chat.end' && json.result) {
                         if (!deferToServerChatSession) hideProgressDock();
                         if (json.result.response_id) {
-                            lastResponseId = json.result.response_id;
-                            console.log(`[Stateful] Captured response_id from chat.end: ${lastResponseId}`);
+                            AppState.chat.stateful.lastResponseId = json.result.response_id;
+                            console.log(`[Stateful] Captured response_id from chat.end: ${AppState.chat.stateful.lastResponseId}`);
                         }
                         const stats = json.result.stats || {};
                         if (typeof stats.input_tokens === 'number' && Number.isFinite(stats.input_tokens)) {
-                            statefulLastInputTokens = stats.input_tokens;
-                            statefulPeakInputTokens = Math.max(statefulPeakInputTokens, stats.input_tokens);
-                            console.log(`[Stateful] Captured input_tokens: ${statefulLastInputTokens}`);
+                            AppState.chat.stateful.lastInputTokens = stats.input_tokens;
+                            AppState.chat.stateful.peakInputTokens = Math.max(AppState.chat.stateful.peakInputTokens, stats.input_tokens);
+                            console.log(`[Stateful] Captured input_tokens: ${AppState.chat.stateful.lastInputTokens}`);
                         }
                         if (typeof stats.total_output_tokens === 'number' && Number.isFinite(stats.total_output_tokens)) {
-                            statefulLastOutputTokens = stats.total_output_tokens;
+                            AppState.chat.stateful.lastOutputTokens = stats.total_output_tokens;
                         }
                         const chatEndPayload = {
                             result: json.result,
@@ -5632,7 +5658,7 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
                         }
                         const chatEndReasoningText = extractReasoningContentFromPayload(chatEndPayload);
                         if (chatEndReasoningText) {
-                            serverReplayReasoningBuffers.set(elementId, chatEndReasoningText);
+                            AppState.session.replay.reasoningBuffers.set(elementId, chatEndReasoningText);
                             if (!deferToServerChatSession) {
                                 const chatEndDuration = Number.isFinite(Number(chatEndPayload.total_elapsed_ms || chatEndPayload.elapsed_ms))
                                     ? Number(chatEndPayload.total_elapsed_ms || chatEndPayload.elapsed_ms)
@@ -5725,7 +5751,7 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
                                     statusText = fullReasoningText;
                                 }
 
-                                serverReplayReasoningBuffers.set(elementId, fullReasoningText);
+                                AppState.session.replay.reasoningBuffers.set(elementId, fullReasoningText);
 
                                 // Limit status text length for display in the status line (full text is in bodyEl)
                                 if (statusText.length > 150) statusText = "..." + statusText.slice(-147);
@@ -5741,7 +5767,7 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
                                     if (parts.length > 1) fullReasoningText = parts[parts.length - 1].split('</think>')[0].trim();
                                 }
                                 if (fullReasoningText) {
-                                    serverReplayReasoningBuffers.set(elementId, fullReasoningText);
+                                    AppState.session.replay.reasoningBuffers.set(elementId, fullReasoningText);
                                     showReasoningStatus(elementId, fullReasoningText, true);
                                 } else {
                                     showReasoningStatus(elementId, null, true);
@@ -5811,11 +5837,11 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
         // Finalize (Save to history even if aborted)
         // Keep only the user-visible answer in history to avoid ballooning context.
         historyContent = sanitizeAssistantRenderText(fullText).trim();
-        if (historyContent && !streamDetached && !streamRestartRequested && !localStreamOwnershipReleased) {
+        if (historyContent && !streamDetached && !streamRestartRequested && !AppState.session.localStreamOwnershipReleased) {
             AppState.chat.messages.push({ role: 'assistant', content: historyContent, turnId });
             if (config.llmMode === 'stateful') {
-                statefulTurnCount += 1;
-                statefulEstimatedChars += historyContent.length;
+                AppState.chat.stateful.turnCount += 1;
+                AppState.chat.stateful.estimatedChars += historyContent.length;
             }
         }
 
@@ -5824,15 +5850,15 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
         if (useStreamingTTS) {
             finalizeStreamingTTS(speechBuffer); // Pass final speech buffer
         }
-        if (historyContent && !deferToServerChatSession && !streamRestartRequested && !localStreamOwnershipReleased) {
+        if (historyContent && !deferToServerChatSession && !streamRestartRequested && !AppState.session.localStreamOwnershipReleased) {
             finalizeMessageContent(elementId, historyContent);
             setAssistantActionBarReady(elementId);
         }
-        if (activeLocalAssistantId === elementId) {
+        if (AppState.chat.activeLocalAssistantId === elementId) {
             AppState.chat.activeLocalTurnId = '';
-            activeLocalAssistantId = '';
+            AppState.chat.activeLocalAssistantId = '';
         }
-        localStreamOwnershipReleased = false;
+        AppState.session.localStreamOwnershipReleased = false;
         syncWakeLock();
     }
 
@@ -6008,12 +6034,12 @@ function getSnapshotReasoningDuration(item) {
 function ensureAssistantMessageElement(id, turnId = '') {
     const resolvedTurnId = String(
         turnId
-        || assistantTurnIdMap.get(id)
-        || (id === activeLocalAssistantId ? AppState.chat.activeLocalTurnId : '')
+        || AppState.chat.assistantTurnIdMap.get(id)
+        || (id === AppState.chat.activeLocalAssistantId ? AppState.chat.activeLocalTurnId : '')
         || ''
     ).trim();
     if (id && resolvedTurnId) {
-        assistantTurnIdMap.set(id, resolvedTurnId);
+        AppState.chat.assistantTurnIdMap.set(id, resolvedTurnId);
     }
     let el = document.getElementById(id);
     if (el) {
@@ -6150,17 +6176,17 @@ function reconcileVisibleAssistantActionBars() {
 
 function renderProgressDock(label, percent = null, mode = 'prompt-processing', indeterminate = false) {
     if (!chatProgressDock) return;
-    if (progressDockHideTimer) {
-        clearTimeout(progressDockHideTimer);
-        progressDockHideTimer = null;
+    if (AppState.ui.progress.hideTimer) {
+        clearTimeout(AppState.ui.progress.hideTimer);
+        AppState.ui.progress.hideTimer = null;
     }
     const clamped = typeof percent === 'number' ? Math.max(0, Math.min(100, percent)) : null;
     const cardClass = `llm-progress-card ${mode}${indeterminate ? ' indeterminate' : ''}`;
     const percentLabel = clamped === null ? '' : `${clamped.toFixed(2)}%`;
     const width = indeterminate ? '32%' : `${clamped || 0}%`;
-    composerProgressLabel = label || '';
-    composerProgressActive = true;
-    composerProgressPercent = percentLabel;
+    AppState.ui.progress.label = label || '';
+    AppState.ui.progress.active = true;
+    AppState.ui.progress.percent = percentLabel;
 
     updateMessageInputPlaceholder();
     // Explicitly refresh send button to ensure Stop icon is visible during prompt processing
@@ -6190,20 +6216,20 @@ function renderProgressDock(label, percent = null, mode = 'prompt-processing', i
 function hideProgressDock() {
     if (!chatProgressDock) return;
     chatProgressDock.classList.remove('is-visible');
-    if (progressDockHideTimer) {
-        clearTimeout(progressDockHideTimer);
+    if (AppState.ui.progress.hideTimer) {
+        clearTimeout(AppState.ui.progress.hideTimer);
     }
-    progressDockHideTimer = setTimeout(() => {
+    AppState.ui.progress.hideTimer = setTimeout(() => {
         chatProgressDock.hidden = true;
         chatProgressDock.innerHTML = '';
-        composerProgressLabel = '';
-        composerProgressActive = false;
-        composerProgressPercent = null;
+        AppState.ui.progress.label = '';
+        AppState.ui.progress.active = false;
+        AppState.ui.progress.percent = null;
         if (!AppState.chat.isGenerating) {
             inputContainer?.classList.remove('has-progress');
         }
         updateMessageInputPlaceholder();
-        progressDockHideTimer = null;
+        AppState.ui.progress.hideTimer = null;
     }, 180);
 }
 
@@ -6860,7 +6886,7 @@ function finalizeReasoningStatus(elementId, outcome = 'done', detail = '', durat
     if (bodyEl) {
         let cleanText = (detail || '').replace(/<think>/g, '').replace(/<\/think>/g, '').trim();
         if (!cleanText) {
-            cleanText = (serverReplayReasoningBuffers.get(elementId) || '').replace(/<think>/g, '').replace(/<\/think>/g, '').trim();
+            cleanText = (AppState.session.replay.reasoningBuffers.get(elementId) || '').replace(/<think>/g, '').replace(/<\/think>/g, '').trim();
         }
         if (cleanText) {
             bodyEl.textContent = cleanText;
@@ -7194,7 +7220,7 @@ function hasLongScrollableChat() {
 }
 
 function updateScrollToBottomButton() {
-    if (isRestoringChatSession || !chatUIController) return;
+    if (AppState.session.isRestoring || !chatUIController) return;
     return chatUIController.updateScrollToBottomButton();
 }
 
@@ -7427,7 +7453,7 @@ async function checkSystemHealth() {
                     title: issues.length === 0 ? t('chat.startup.welcomeTitle') : t('health.checkRequired'),
                     body: issues.length === 0 ? t('chat.startup.welcomeBody') : t('chat.startup.issueBody'),
                     issues,
-                    showRestoreButton: !!lastSessionCache,
+                    showRestoreButton: !!AppState.session.lastCache,
                     restoreLabel: t('chat.startup.restore')
                 }
             };
@@ -7475,8 +7501,6 @@ function updateMicLayout() {
 }
 
 // Global STT state
-let recognition = null;
-let isSTTActive = false;
 
 /**
  * Helper to detect iOS/iPadOS for platform-specific bug workarounds
@@ -7493,13 +7517,9 @@ function isIOS() {
         || (navigator.userAgent.includes("Mac") && "ontouchend" in document);
 }
 
-let sttPlaceholderTimer = null;
-let sttPlaceholderIndex = 0;
-let sttSuppressAutoSend = false;
-let sttStopFallbackTimer = null;
 
 /**
- * Toggles Speech-to-Text (STT) recognition
+ * Toggles Speech-to-Text (STT) AppState.input.recognition
  */
 function toggleSTT() {
     triggerHaptic('nudge');
@@ -7515,7 +7535,7 @@ function toggleSTT() {
     }
 
     // 3. STT Logic
-    if (isSTTActive) {
+    if (AppState.input.isSTTActive) {
         stopSTT();
     } else {
         startSTT();
@@ -7523,24 +7543,24 @@ function toggleSTT() {
 }
 
 function clearSTTStopFallbackTimer() {
-    if (!sttStopFallbackTimer) return;
-    clearTimeout(sttStopFallbackTimer);
-    sttStopFallbackTimer = null;
+    if (!AppState.input.sttStopFallbackTimer) return;
+    clearTimeout(AppState.input.sttStopFallbackTimer);
+    AppState.input.sttStopFallbackTimer = null;
 }
 
 function finalizeSTTSession(options = {}) {
     const suppressAutoSend = options.suppressAutoSend === true;
     const resetRecognition = options.resetRecognition !== false;
-    const instance = options.instance || (resetRecognition ? recognition : null);
+    const instance = options.instance || (resetRecognition ? AppState.input.recognition : null);
 
     clearSTTStopFallbackTimer();
-    isSTTActive = false;
+    AppState.input.isSTTActive = false;
     stopSTTPlaceholderAnimation();
     syncMicRecordingUI();
     syncWakeLock();
 
     if (suppressAutoSend) {
-        sttSuppressAutoSend = true;
+        AppState.input.sttSuppressAutoSend = true;
     }
 
     // Aggressive cleanup for iOS/Safari to release microphone hardware
@@ -7556,29 +7576,29 @@ function finalizeSTTSession(options = {}) {
     }
 
     if (resetRecognition) {
-        recognition = null;
+        AppState.input.recognition = null;
     }
 }
 
 function stopSTT(options = {}) {
     const suppressAutoSend = options.suppressAutoSend === true;
     const forceAbort = options.forceAbort === true;
-    if (!recognition) {
+    if (!AppState.input.recognition) {
         finalizeSTTSession({ suppressAutoSend, resetRecognition: true });
         return;
     }
 
     if (suppressAutoSend) {
-        sttSuppressAutoSend = true;
+        AppState.input.sttSuppressAutoSend = true;
     }
 
-    const activeRecognition = recognition;
+    const activeRecognition = AppState.input.recognition;
     clearSTTStopFallbackTimer();
 
     // Shorter fallback for more responsive hardware release
-    sttStopFallbackTimer = setTimeout(() => {
-        if (recognition === activeRecognition || !recognition) {
-            finalizeSTTSession({ instance: activeRecognition, suppressAutoSend: true, resetRecognition: recognition === activeRecognition });
+    AppState.input.sttStopFallbackTimer = setTimeout(() => {
+        if (AppState.input.recognition === activeRecognition || !AppState.input.recognition) {
+            finalizeSTTSession({ instance: activeRecognition, suppressAutoSend: true, resetRecognition: AppState.input.recognition === activeRecognition });
             console.warn('[STT] Forced cleanup after stop timeout');
         }
     }, 800);
@@ -7603,21 +7623,21 @@ function startSTT() {
         return;
     }
 
-    if (recognition) {
+    if (AppState.input.recognition) {
         stopSTT({ suppressAutoSend: true, forceAbort: true });
     }
 
     const nextRecognition = new webkitSpeechRecognition();
-    recognition = nextRecognition;
-    sttSuppressAutoSend = false;
+    AppState.input.recognition = nextRecognition;
+    AppState.input.sttSuppressAutoSend = false;
     nextRecognition.continuous = false;
     nextRecognition.interimResults = true;
     nextRecognition.lang = config.language === 'ko' ? 'ko-KR' : 'en-US';
 
     nextRecognition.onstart = () => {
-        if (recognition !== nextRecognition) return;
+        if (AppState.input.recognition !== nextRecognition) return;
         clearSTTStopFallbackTimer();
-        isSTTActive = true;
+        AppState.input.isSTTActive = true;
         startSTTPlaceholderAnimation();
         syncMicRecordingUI();
         syncWakeLock();
@@ -7625,7 +7645,7 @@ function startSTT() {
     };
 
     nextRecognition.onresult = (event) => {
-        if (recognition !== nextRecognition) return;
+        if (AppState.input.recognition !== nextRecognition) return;
         let interimTranscript = '';
         let finalTranscript = '';
 
@@ -7646,7 +7666,7 @@ function startSTT() {
     };
 
     nextRecognition.onerror = (event) => {
-        if (recognition !== nextRecognition) return;
+        if (AppState.input.recognition !== nextRecognition) return;
         console.error("[STT] Error:", event.error);
         finalizeSTTSession({
             suppressAutoSend: event.error === 'aborted' || event.error === 'not-allowed' || event.error === 'service-not-allowed',
@@ -7655,8 +7675,8 @@ function startSTT() {
     };
 
     nextRecognition.onend = () => {
-        if (recognition !== nextRecognition) return;
-        const shouldAutoSend = !sttSuppressAutoSend;
+        if (AppState.input.recognition !== nextRecognition) return;
+        const shouldAutoSend = !AppState.input.sttSuppressAutoSend;
         finalizeSTTSession({ suppressAutoSend: true, resetRecognition: true });
         console.log("[STT] Recording ended");
 
@@ -7664,7 +7684,7 @@ function startSTT() {
         if (shouldAutoSend && input.value.trim()) {
             sendMessage({ fromVoiceInput: true });
         }
-        sttSuppressAutoSend = false;
+        AppState.input.sttSuppressAutoSend = false;
     };
 
     try {
@@ -7683,44 +7703,44 @@ function updateMessageInputPlaceholder() {
         t('input.placeholder.sttB')
     ];
     const backgroundTask = getActiveComposerBackgroundTask();
-    const nextPlaceholder = isSTTActive
-        ? listeningPhrases[sttPlaceholderIndex % listeningPhrases.length]
-        : isRestoringChatSession
+    const nextPlaceholder = AppState.input.isSTTActive
+        ? listeningPhrases[AppState.input.sttPlaceholderIndex % listeningPhrases.length]
+        : AppState.session.isRestoring
             ? t('input.placeholder.restoring')
-            : (composerProgressActive
-                ? [composerProgressLabel, composerProgressPercent].filter(Boolean).join(' - ')
-                : (passiveGenerationPlaceholder || backgroundTask?.label || t('input.placeholder')));
+            : (AppState.ui.progress.active
+                ? [AppState.ui.progress.label, AppState.ui.progress.percent].filter(Boolean).join(' - ')
+                : (AppState.chat.passive.placeholder || backgroundTask?.label || t('input.placeholder')));
 
     messageInput.placeholder = nextPlaceholder;
-    messageInput.classList.toggle('stt-listening', isSTTActive);
+    messageInput.classList.toggle('stt-listening', AppState.input.isSTTActive);
 }
 
 function startSTTPlaceholderAnimation() {
     stopSTTPlaceholderAnimation();
-    sttPlaceholderIndex = 0;
+    AppState.input.sttPlaceholderIndex = 0;
     updateMessageInputPlaceholder();
-    sttPlaceholderTimer = window.setInterval(() => {
-        sttPlaceholderIndex = (sttPlaceholderIndex + 1) % 2;
+    AppState.input.sttPlaceholderTimer = window.setInterval(() => {
+        AppState.input.sttPlaceholderIndex = (AppState.input.sttPlaceholderIndex + 1) % 2;
         updateMessageInputPlaceholder();
     }, 1400);
 }
 
 function stopSTTPlaceholderAnimation() {
-    if (sttPlaceholderTimer) {
-        window.clearInterval(sttPlaceholderTimer);
-        sttPlaceholderTimer = null;
+    if (AppState.input.sttPlaceholderTimer) {
+        window.clearInterval(AppState.input.sttPlaceholderTimer);
+        AppState.input.sttPlaceholderTimer = null;
     }
-    sttPlaceholderIndex = 0;
+    AppState.input.sttPlaceholderIndex = 0;
     updateMessageInputPlaceholder();
 }
 
 function syncMicRecordingUI() {
     const giantMicBtn = document.getElementById('giant-mic-btn');
     if (giantMicBtn) {
-        giantMicBtn.classList.toggle('stt-active', isSTTActive);
+        giantMicBtn.classList.toggle('stt-active', AppState.input.isSTTActive);
     }
     if (inlineMicBtn) {
-        inlineMicBtn.classList.toggle('stt-active', isSTTActive);
+        inlineMicBtn.classList.toggle('stt-active', AppState.input.isSTTActive);
     }
 }
 
