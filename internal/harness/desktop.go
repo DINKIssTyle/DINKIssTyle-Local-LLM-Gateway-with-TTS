@@ -6,6 +6,7 @@ import (
 	"log"
 	"runtime"
 
+	"dinkisstyle-chat/internal/config"
 	"dinkisstyle-chat/internal/core"
 	"dinkisstyle-chat/internal/mcp"
 
@@ -55,10 +56,10 @@ func (d *Desktop) trayIcon() []byte {
 func (d *Desktop) options() *options.App {
 	return &options.App{
 		Title:     "DKST LLM Chat Server",
-		Width:     755,
-		Height:    800,
-		MinWidth:  755,
-		MinHeight: 800,
+		Width:     config.NormalWindowWidth,
+		Height:    config.NormalWindowHeight,
+		MinWidth:  config.NormalWindowWidth,
+		MinHeight: config.NormalWindowHeight,
 		AssetServer: &assetserver.Options{
 			Assets: d.assets.Frontend,
 		},
