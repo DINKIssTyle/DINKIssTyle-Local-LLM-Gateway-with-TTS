@@ -7309,6 +7309,13 @@ async function sendMessage(options = {}) {
     activeLocalTurnId = turnId;
     activeLocalAssistantId = assistantId;
     assistantTurnIdMap.set(assistantId, turnId);
+    ensureAssistantMessageElement(assistantId, turnId);
+    const assistantActionBar = document.getElementById(assistantId)?.querySelector('.message-actions');
+    if (assistantActionBar) {
+        assistantActionBar.hidden = true;
+        assistantActionBar.classList.remove('is-ready');
+        assistantActionBar.classList.add('is-pending');
+    }
     stopChatSessionPolling();
 
     let assistantContent = '';
