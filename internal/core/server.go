@@ -548,9 +548,27 @@ type chatSessionMessageSnapshot struct {
 	ReasoningCurrentPhaseMS int64  `json:"reasoning_current_phase_ms,omitempty"`
 }
 
+type chatSessionReasoningSnapshot struct {
+	State          string `json:"state,omitempty"`
+	Content        string `json:"content,omitempty"`
+	DurationMS     int64  `json:"duration_ms,omitempty"`
+	AccumulatedMS  int64  `json:"accumulated_ms,omitempty"`
+	CurrentPhaseMS int64  `json:"current_phase_ms,omitempty"`
+}
+
+type chatSessionTurnSnapshot struct {
+	TurnID           string                       `json:"turn_id"`
+	Status           string                       `json:"status,omitempty"`
+	UserContent      string                       `json:"user_content,omitempty"`
+	AssistantContent string                       `json:"assistant_content,omitempty"`
+	Reasoning        chatSessionReasoningSnapshot `json:"reasoning,omitempty"`
+	Tool             *chatSessionToolCardSnapshot `json:"tool,omitempty"`
+}
+
 type chatSessionUISnapshot struct {
 	ToolCards    map[string]chatSessionToolCardSnapshot `json:"tool_cards"`
 	Messages     []chatSessionMessageSnapshot           `json:"messages,omitempty"`
+	Turns        []chatSessionTurnSnapshot              `json:"turns,omitempty"`
 	LastEventSeq int                                    `json:"last_event_seq,omitempty"`
 }
 
@@ -582,13 +600,14 @@ func parseChatSessionUISnapshot(raw string) chatSessionUISnapshot {
 	snapshot := chatSessionUISnapshot{
 		ToolCards: map[string]chatSessionToolCardSnapshot{},
 		Messages:  []chatSessionMessageSnapshot{},
+		Turns:     []chatSessionTurnSnapshot{},
 	}
 	raw = strings.TrimSpace(raw)
 	if raw == "" || raw == "{}" {
 		return snapshot
 	}
 	if err := json.Unmarshal([]byte(raw), &snapshot); err != nil {
-		return chatSessionUISnapshot{ToolCards: map[string]chatSessionToolCardSnapshot{}, Messages: []chatSessionMessageSnapshot{}}
+		return chatSessionUISnapshot{ToolCards: map[string]chatSessionToolCardSnapshot{}, Messages: []chatSessionMessageSnapshot{}, Turns: []chatSessionTurnSnapshot{}}
 	}
 	if snapshot.ToolCards == nil {
 		snapshot.ToolCards = map[string]chatSessionToolCardSnapshot{}
@@ -596,6 +615,10 @@ func parseChatSessionUISnapshot(raw string) chatSessionUISnapshot {
 	if snapshot.Messages == nil {
 		snapshot.Messages = []chatSessionMessageSnapshot{}
 	}
+	if snapshot.Turns == nil {
+		snapshot.Turns = []chatSessionTurnSnapshot{}
+	}
+	hydrateLegacyChatSessionViews(&snapshot)
 	return snapshot
 }
 
@@ -606,11 +629,69 @@ func encodeChatSessionUISnapshot(snapshot chatSessionUISnapshot) string {
 	if snapshot.Messages == nil {
 		snapshot.Messages = []chatSessionMessageSnapshot{}
 	}
+	if snapshot.Turns == nil {
+		snapshot.Turns = []chatSessionTurnSnapshot{}
+	}
+	hydrateLegacyChatSessionViews(&snapshot)
 	bytes, err := json.Marshal(snapshot)
 	if err != nil {
 		return "{}"
 	}
 	return string(bytes)
+}
+
+func hydrateLegacyChatSessionViews(snapshot *chatSessionUISnapshot) {
+	if snapshot == nil {
+		return
+	}
+	if snapshot.ToolCards == nil {
+		snapshot.ToolCards = map[string]chatSessionToolCardSnapshot{}
+	}
+	if snapshot.Messages == nil {
+		snapshot.Messages = []chatSessionMessageSnapshot{}
+	}
+	if snapshot.Turns == nil {
+		snapshot.Turns = []chatSessionTurnSnapshot{}
+	}
+	if len(snapshot.Turns) == 0 && (len(snapshot.Messages) > 0 || len(snapshot.ToolCards) > 0) {
+		for _, msg := range snapshot.Messages {
+			turn := chatSessionTurnSnapshot{
+				TurnID:           msg.TurnID,
+				UserContent:      msg.UserContent,
+				AssistantContent: msg.AssistantContent,
+				Reasoning: chatSessionReasoningSnapshot{
+					Content:        msg.ReasoningContent,
+					DurationMS:     msg.ReasoningDurationMS,
+					AccumulatedMS:  msg.ReasoningAccumulatedMS,
+					CurrentPhaseMS: msg.ReasoningCurrentPhaseMS,
+				},
+			}
+			if tool, ok := snapshot.ToolCards[msg.TurnID]; ok {
+				toolCopy := tool
+				turn.Tool = &toolCopy
+			}
+			if strings.TrimSpace(turn.AssistantContent) != "" || strings.TrimSpace(turn.Reasoning.Content) != "" || turn.Tool != nil {
+				turn.Status = "completed"
+			}
+			snapshot.Turns = append(snapshot.Turns, turn)
+		}
+	}
+	if len(snapshot.Messages) == 0 && len(snapshot.Turns) > 0 {
+		for _, turn := range snapshot.Turns {
+			snapshot.Messages = append(snapshot.Messages, chatSessionMessageSnapshot{
+				TurnID:                  turn.TurnID,
+				UserContent:             turn.UserContent,
+				AssistantContent:        turn.AssistantContent,
+				ReasoningContent:        turn.Reasoning.Content,
+				ReasoningDurationMS:     turn.Reasoning.DurationMS,
+				ReasoningAccumulatedMS:  turn.Reasoning.AccumulatedMS,
+				ReasoningCurrentPhaseMS: turn.Reasoning.CurrentPhaseMS,
+			})
+			if turn.Tool != nil {
+				snapshot.ToolCards[turn.TurnID] = *turn.Tool
+			}
+		}
+	}
 }
 
 func deriveLastSessionFromChatSession(entry mcp.ChatSessionEntry) (map[string]interface{}, bool) {
@@ -1236,6 +1317,56 @@ func compactToolSnapshotDetail(toolName string, args interface{}, summary string
 	return compactText(strings.TrimSpace(summary), 220)
 }
 
+func hasMeaningfulChatSessionToolSnapshot(card chatSessionToolCardSnapshot) bool {
+	if strings.TrimSpace(card.Summary) != "" {
+		return true
+	}
+	if name := strings.TrimSpace(card.ToolName); name != "" && !strings.EqualFold(name, "Tool") {
+		return true
+	}
+	if card.Args != nil {
+		if bytes, err := json.Marshal(card.Args); err != nil {
+			return true
+		} else {
+			serialized := strings.TrimSpace(string(bytes))
+			if serialized != "" && serialized != "{}" && serialized != "[]" && serialized != "null" {
+				return true
+			}
+		}
+	}
+	for _, entry := range card.History {
+		if strings.TrimSpace(entry.Tool) != "" || strings.TrimSpace(entry.Detail) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasMeaningfulTurnToolSnapshot(card chatharness.SessionToolCardSnapshot) bool {
+	if strings.TrimSpace(card.Summary) != "" {
+		return true
+	}
+	if name := strings.TrimSpace(card.ToolName); name != "" && !strings.EqualFold(name, "Tool") {
+		return true
+	}
+	if card.Args != nil {
+		if bytes, err := json.Marshal(card.Args); err != nil {
+			return true
+		} else {
+			serialized := strings.TrimSpace(string(bytes))
+			if serialized != "" && serialized != "{}" && serialized != "[]" && serialized != "null" {
+				return true
+			}
+		}
+	}
+	for _, entry := range card.History {
+		if strings.TrimSpace(entry.Tool) != "" || strings.TrimSpace(entry.Detail) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func extractStringValue(obj map[string]interface{}, keys []string) string {
 	for _, key := range keys {
 		if value, ok := obj[key].(string); ok && strings.TrimSpace(value) != "" {
@@ -1262,6 +1393,17 @@ func updateChatSessionToolSnapshot(snapshot *chatSessionUISnapshot, turnID, even
 	toolName, _ := payloadMap["tool"].(string)
 	summary, _ := payloadMap["reason"].(string)
 	args := payloadMap["arguments"]
+	if toolObj, ok := payloadMap["tool"].(map[string]interface{}); ok {
+		if v, ok := toolObj["tool_name"].(string); ok && strings.TrimSpace(v) != "" {
+			toolName = strings.TrimSpace(v)
+		}
+		if v, ok := toolObj["summary"].(string); ok {
+			summary = strings.TrimSpace(v)
+		}
+		if v, exists := toolObj["args"]; exists {
+			args = v
+		}
+	}
 
 	switch eventType {
 	case "tool_call.start":
@@ -1304,12 +1446,47 @@ func updateChatSessionToolSnapshot(snapshot *chatSessionUISnapshot, turnID, even
 		}
 		card.Summary = strings.TrimSpace(summary)
 	case "chat.end", "request.complete":
+		if toolObj, ok := payloadMap["tool"].(map[string]interface{}); ok {
+			card.State = strings.TrimSpace(extractStringValue(toolObj, []string{"state"}))
+			card.Summary = strings.TrimSpace(extractStringValue(toolObj, []string{"summary"}))
+			if strings.TrimSpace(toolName) != "" {
+				card.ToolName = strings.TrimSpace(toolName)
+			}
+			card.Args = args
+			if historyRaw, ok := toolObj["history"].([]interface{}); ok {
+				history := make([]chatSessionToolHistorySnapshot, 0, len(historyRaw))
+				for _, raw := range historyRaw {
+					item, _ := raw.(map[string]interface{})
+					if item == nil {
+						continue
+					}
+					entry := chatSessionToolHistorySnapshot{
+						Tool:   strings.TrimSpace(extractStringValue(item, []string{"tool"})),
+						Detail: strings.TrimSpace(extractStringValue(item, []string{"detail"})),
+					}
+					if entry.Tool != "" || entry.Detail != "" {
+						history = append(history, entry)
+					}
+				}
+				card.History = history
+			}
+			if card.State == "" {
+				card.State = "success"
+			}
+			if card.ToolName == "" {
+				card.ToolName = "Tool"
+			}
+			break
+		}
 		if extracted := extractToolCardSnapshotFromPayload(payloadMap); extracted != nil {
 			card = *extracted
 		}
 	}
-
-	snapshot.ToolCards[turnID] = card
+	if hasMeaningfulChatSessionToolSnapshot(card) {
+		snapshot.ToolCards[turnID] = card
+	} else {
+		delete(snapshot.ToolCards, turnID)
+	}
 }
 
 func ensureChatSessionMessageSnapshot(snapshot *chatSessionUISnapshot, turnID string) *chatSessionMessageSnapshot {
@@ -1529,6 +1706,15 @@ func updateChatSessionMessageSnapshot(snapshot *chatSessionUISnapshot, turnID, r
 		}
 		if reasoningContent := extractReasoningContent(payloadMap); reasoningContent != "" {
 			msg.ReasoningContent = reasoningContent
+		}
+		if totalMS, ok := payloadInt64(payloadMap["total_elapsed_ms"]); ok && totalMS > 0 {
+			msg.ReasoningDurationMS = totalMS
+			msg.ReasoningAccumulatedMS = totalMS
+			msg.ReasoningCurrentPhaseMS = 0
+		} else if elapsedMS, ok := payloadInt64(payloadMap["elapsed_ms"]); ok && elapsedMS > 0 {
+			msg.ReasoningDurationMS = elapsedMS
+			msg.ReasoningAccumulatedMS = elapsedMS
+			msg.ReasoningCurrentPhaseMS = 0
 		}
 	case "reasoning.delta":
 		if content, ok := payloadMap["content"].(string); ok && content != "" {
@@ -3486,6 +3672,9 @@ func handleModelUnload(w http.ResponseWriter, r *http.Request, app *App, authMgr
 // handleChat proxies chat requests to LM Studio with SSE streaming
 func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthManager) {
 	requestStart := time.Now()
+	requestElapsedMs := func() int64 {
+		return time.Since(requestStart).Milliseconds()
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -4353,7 +4542,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 									appendChatEvent("assistant", "reasoning.end", map[string]interface{}{
 										"type":             "reasoning.end",
 										"elapsed_ms":       time.Since(reasoningStartedAt).Milliseconds(),
-										"total_elapsed_ms": totalReasoningMs,
+										"total_elapsed_ms": requestElapsedMs(),
 									})
 									reasoningAccumulatedMs = totalReasoningMs
 									reasoningActive = false
@@ -4398,6 +4587,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 								reasoningActive = true
 								reasoningStartedAt = time.Now()
 								eventPayload["started_at"] = reasoningStartedAt.Format(time.RFC3339Nano)
+								eventPayload["total_elapsed_ms"] = requestElapsedMs()
 							case "reasoning.delta":
 								if !generationFirstTokenEmitted {
 									generationFirstTokenEmitted = true
@@ -4412,7 +4602,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 									reasoningStartedAt = time.Now()
 								}
 								eventPayload["elapsed_ms"] = time.Since(reasoningStartedAt).Milliseconds()
-								eventPayload["total_elapsed_ms"] = reasoningAccumulatedMs + time.Since(reasoningStartedAt).Milliseconds()
+								eventPayload["total_elapsed_ms"] = requestElapsedMs()
 							case "reasoning.end":
 								if !reasoningActive {
 									reasoningActive = true
@@ -4420,7 +4610,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 								}
 								totalReasoningMs := reasoningAccumulatedMs + time.Since(reasoningStartedAt).Milliseconds()
 								eventPayload["elapsed_ms"] = time.Since(reasoningStartedAt).Milliseconds()
-								eventPayload["total_elapsed_ms"] = totalReasoningMs
+								eventPayload["total_elapsed_ms"] = requestElapsedMs()
 								reasoningAccumulatedMs = totalReasoningMs
 								reasoningActive = false
 								reasoningStartedAt = time.Time{}
@@ -4783,16 +4973,16 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 										reasoningActive = true
 										reasoningStartedAt = time.Now()
 										appendChatEvent("assistant", "reasoning.start", map[string]interface{}{
-											"type":       "reasoning.start",
-											"started_at": reasoningStartedAt.Format(time.RFC3339Nano),
+											"type":             "reasoning.start",
+											"started_at":       reasoningStartedAt.Format(time.RFC3339Nano),
+											"total_elapsed_ms": requestElapsedMs(),
 										})
 									}
-									totalReasoningMs := reasoningAccumulatedMs + time.Since(reasoningStartedAt).Milliseconds()
 									appendChatEvent("assistant", "reasoning.delta", map[string]interface{}{
 										"type":             "reasoning.delta",
 										"content":          reasoningText,
 										"elapsed_ms":       time.Since(reasoningStartedAt).Milliseconds(),
-										"total_elapsed_ms": totalReasoningMs,
+										"total_elapsed_ms": requestElapsedMs(),
 									})
 								}
 								if c, ok := delta["content"].(string); ok {
@@ -4818,7 +5008,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 										appendChatEvent("assistant", "reasoning.end", map[string]interface{}{
 											"type":             "reasoning.end",
 											"elapsed_ms":       time.Since(reasoningStartedAt).Milliseconds(),
-											"total_elapsed_ms": totalReasoningMs,
+											"total_elapsed_ms": requestElapsedMs(),
 										})
 										reasoningAccumulatedMs = totalReasoningMs
 										reasoningActive = false
@@ -5046,7 +5236,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			appendChatEvent("assistant", "reasoning.end", map[string]interface{}{
 				"type":             "reasoning.end",
 				"elapsed_ms":       time.Since(reasoningStartedAt).Milliseconds(),
-				"total_elapsed_ms": totalReasoningMs,
+				"total_elapsed_ms": requestElapsedMs(),
 			})
 			reasoningAccumulatedMs = totalReasoningMs
 			reasoningActive = false
@@ -5239,24 +5429,50 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		statefulRiskLevel = statefulRiskLevelValue
 	}
 	sessionStatus = "idle"
+	var finalReasoningContent string
+	var finalToolPayload map[string]interface{}
+	for _, turn := range sessionTracker.Snapshot.Turns {
+		if strings.TrimSpace(turn.TurnID) != strings.TrimSpace(clientTurnID) {
+			continue
+		}
+		finalReasoningContent = strings.TrimSpace(turn.Reasoning.Content)
+		if turn.Tool != nil && hasMeaningfulTurnToolSnapshot(*turn.Tool) {
+			finalToolPayload = map[string]interface{}{
+				"state":     strings.TrimSpace(turn.Tool.State),
+				"summary":   strings.TrimSpace(turn.Tool.Summary),
+				"args":      turn.Tool.Args,
+				"tool_name": strings.TrimSpace(turn.Tool.ToolName),
+				"history":   turn.Tool.History,
+			}
+		}
+		break
+	}
 	emitGenerationEvent("generation.finished", map[string]interface{}{
 		"phase":      "finished",
-		"elapsed_ms": time.Since(requestStart).Milliseconds(),
+		"elapsed_ms": requestElapsedMs(),
 		"turn_id":    clientTurnID,
 	})
-	appendChatEvent("assistant", "request.complete", map[string]interface{}{
+	requestCompletePayload := map[string]interface{}{
 		"response_chars":          len(fullResponse),
 		"response_id":             sessionLastResponseID,
 		"mode":                    llmMode,
-		"elapsed_ms":              time.Since(requestStart).Milliseconds(),
+		"elapsed_ms":              requestElapsedMs(),
+		"total_elapsed_ms":        requestElapsedMs(),
 		"turn_id":                 clientTurnID,
 		"final_assistant_content": fullResponse,
 		"final_assistant_chars":   len(fullResponse),
 		"final_assistant_hash":    buildAssistantContentHash(fullResponse),
-	})
+	}
+	if finalReasoningContent != "" {
+		requestCompletePayload["reasoning_content"] = finalReasoningContent
+	}
+	if finalToolPayload != nil {
+		requestCompletePayload["tool"] = finalToolPayload
+	}
+	appendChatEvent("assistant", "request.complete", requestCompletePayload)
 	AddDebugTrace("chat", "request.complete", "Chat request finished", map[string]interface{}{
 		"user":           userID,
-		"elapsed_ms":     time.Since(requestStart).Milliseconds(),
+		"elapsed_ms":     requestElapsedMs(),
 		"response_chars": len(fullResponse),
 		"memory_logged":  enableMemory && len(messagesForMemory) > 0 && fullResponse != "",
 		"stateful_turns": statefulTurnCount,

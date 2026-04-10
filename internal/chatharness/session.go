@@ -32,9 +32,27 @@ type SessionMessageSnapshot struct {
 	ReasoningCurrentPhaseMS int64  `json:"reasoning_current_phase_ms,omitempty"`
 }
 
+type SessionReasoningSnapshot struct {
+	State          string `json:"state,omitempty"`
+	Content        string `json:"content,omitempty"`
+	DurationMS     int64  `json:"duration_ms,omitempty"`
+	AccumulatedMS  int64  `json:"accumulated_ms,omitempty"`
+	CurrentPhaseMS int64  `json:"current_phase_ms,omitempty"`
+}
+
+type SessionTurnSnapshot struct {
+	TurnID           string                   `json:"turn_id"`
+	Status           string                   `json:"status,omitempty"`
+	UserContent      string                   `json:"user_content,omitempty"`
+	AssistantContent string                   `json:"assistant_content,omitempty"`
+	Reasoning        SessionReasoningSnapshot `json:"reasoning,omitempty"`
+	Tool             *SessionToolCardSnapshot `json:"tool,omitempty"`
+}
+
 type SessionUISnapshot struct {
 	ToolCards    map[string]SessionToolCardSnapshot `json:"tool_cards"`
 	Messages     []SessionMessageSnapshot           `json:"messages,omitempty"`
+	Turns        []SessionTurnSnapshot              `json:"turns,omitempty"`
 	LastEventSeq int                                `json:"last_event_seq,omitempty"`
 }
 
@@ -69,13 +87,14 @@ func ParseUISnapshot(raw string) SessionUISnapshot {
 	snapshot := SessionUISnapshot{
 		ToolCards: map[string]SessionToolCardSnapshot{},
 		Messages:  []SessionMessageSnapshot{},
+		Turns:     []SessionTurnSnapshot{},
 	}
 	raw = strings.TrimSpace(raw)
 	if raw == "" || raw == "{}" {
 		return snapshot
 	}
 	if err := json.Unmarshal([]byte(raw), &snapshot); err != nil {
-		return SessionUISnapshot{ToolCards: map[string]SessionToolCardSnapshot{}, Messages: []SessionMessageSnapshot{}}
+		return SessionUISnapshot{ToolCards: map[string]SessionToolCardSnapshot{}, Messages: []SessionMessageSnapshot{}, Turns: []SessionTurnSnapshot{}}
 	}
 	if snapshot.ToolCards == nil {
 		snapshot.ToolCards = map[string]SessionToolCardSnapshot{}
@@ -83,6 +102,10 @@ func ParseUISnapshot(raw string) SessionUISnapshot {
 	if snapshot.Messages == nil {
 		snapshot.Messages = []SessionMessageSnapshot{}
 	}
+	if snapshot.Turns == nil {
+		snapshot.Turns = []SessionTurnSnapshot{}
+	}
+	hydrateLegacySnapshotViews(&snapshot)
 	return snapshot
 }
 
@@ -93,6 +116,10 @@ func EncodeUISnapshot(snapshot SessionUISnapshot) string {
 	if snapshot.Messages == nil {
 		snapshot.Messages = []SessionMessageSnapshot{}
 	}
+	if snapshot.Turns == nil {
+		snapshot.Turns = []SessionTurnSnapshot{}
+	}
+	hydrateLegacySnapshotViews(&snapshot)
 	bytes, err := json.Marshal(snapshot)
 	if err != nil {
 		return "{}"
@@ -135,6 +162,9 @@ func (t *SessionTracker) AppendEvent(state SessionPersistState, role, eventType 
 	if shouldUpdateSessionToolSnapshot(eventType) {
 		updateToolSnapshot(&t.Snapshot, t.ClientTurnID, eventType, payload)
 	}
+	if shouldUpdateSessionTurnSnapshot(eventType) {
+		updateTurnSnapshot(&t.Snapshot, t.ClientTurnID, role, eventType, payload)
+	}
 	if shouldPersistSessionUISnapshot(eventType) {
 		t.UIStateJSON = EncodeUISnapshot(t.Snapshot)
 		state.UIStateJSON = t.UIStateJSON
@@ -147,7 +177,7 @@ func (t *SessionTracker) AppendEvent(state SessionPersistState, role, eventType 
 
 func shouldUpdateSessionMessageSnapshot(eventType string) bool {
 	switch strings.TrimSpace(eventType) {
-	case "message.created", "chat.end", "request.complete", "request.cancelled", "session.cleared":
+	case "message.created", "message.delta", "reasoning.start", "reasoning.delta", "reasoning.end", "chat.end", "request.complete", "request.cancelled", "session.cleared":
 		return true
 	default:
 		return false
@@ -156,7 +186,7 @@ func shouldUpdateSessionMessageSnapshot(eventType string) bool {
 
 func shouldPersistChatEvent(eventType string) bool {
 	switch strings.TrimSpace(eventType) {
-	case "message.created", "chat.end", "request.complete", "generation.started", "generation.first_token", "generation.phase", "generation.finished":
+	case "chat.end", "request.complete", "request.cancelled", "session.cleared", "generation.finished":
 		return true
 	default:
 		return false
@@ -165,11 +195,25 @@ func shouldPersistChatEvent(eventType string) bool {
 
 func shouldUpdateSessionToolSnapshot(eventType string) bool {
 	eventType = strings.TrimSpace(eventType)
-	return eventType == "tool_call.success" || eventType == "tool_call.failure" || eventType == "chat.end" || eventType == "request.complete"
+	return eventType == "tool_call.start" || eventType == "tool_call.arguments" || eventType == "tool_call.success" || eventType == "tool_call.failure" || eventType == "chat.end" || eventType == "request.complete"
 }
 
 func shouldPersistSessionUISnapshot(eventType string) bool {
-	return shouldUpdateSessionMessageSnapshot(eventType) || shouldUpdateSessionToolSnapshot(eventType)
+	switch strings.TrimSpace(eventType) {
+	case "message.created", "chat.end", "request.complete", "request.cancelled", "session.cleared":
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldUpdateSessionTurnSnapshot(eventType string) bool {
+	switch strings.TrimSpace(eventType) {
+	case "message.created", "message.delta", "reasoning.start", "reasoning.delta", "reasoning.end", "tool_call.start", "tool_call.arguments", "tool_call.success", "tool_call.failure", "chat.end", "request.complete", "request.cancelled", "session.cleared":
+		return true
+	default:
+		return false
+	}
 }
 
 func (t *SessionTracker) Finalize(state SessionPersistState) {
@@ -247,6 +291,31 @@ func compactToolSnapshotDetail(toolName string, args interface{}, summary string
 	return compactText(strings.TrimSpace(summary), 220)
 }
 
+func hasMeaningfulToolSnapshot(card SessionToolCardSnapshot) bool {
+	if strings.TrimSpace(card.Summary) != "" {
+		return true
+	}
+	if name := strings.TrimSpace(card.ToolName); name != "" && !strings.EqualFold(name, "Tool") {
+		return true
+	}
+	if card.Args != nil {
+		if bytes, err := json.Marshal(card.Args); err != nil {
+			return true
+		} else {
+			serialized := strings.TrimSpace(string(bytes))
+			if serialized != "" && serialized != "{}" && serialized != "[]" && serialized != "null" {
+				return true
+			}
+		}
+	}
+	for _, entry := range card.History {
+		if strings.TrimSpace(entry.Tool) != "" || strings.TrimSpace(entry.Detail) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func extractStringValue(obj map[string]interface{}, keys []string) string {
 	for _, key := range keys {
 		if value, ok := obj[key].(string); ok && strings.TrimSpace(value) != "" {
@@ -271,6 +340,17 @@ func updateToolSnapshot(snapshot *SessionUISnapshot, turnID, eventType string, p
 	toolName, _ := payloadMap["tool"].(string)
 	summary, _ := payloadMap["reason"].(string)
 	args := payloadMap["arguments"]
+	if toolObj, ok := payloadMap["tool"].(map[string]interface{}); ok {
+		if v, ok := toolObj["tool_name"].(string); ok && strings.TrimSpace(v) != "" {
+			toolName = strings.TrimSpace(v)
+		}
+		if v, ok := toolObj["summary"].(string); ok {
+			summary = strings.TrimSpace(v)
+		}
+		if v, exists := toolObj["args"]; exists {
+			args = v
+		}
+	}
 
 	switch eventType {
 	case "tool_call.start":
@@ -310,12 +390,48 @@ func updateToolSnapshot(snapshot *SessionUISnapshot, turnID, eventType string, p
 		}
 		card.Summary = strings.TrimSpace(summary)
 	case "chat.end", "request.complete":
+		if toolObj, ok := payloadMap["tool"].(map[string]interface{}); ok {
+			card.State = strings.TrimSpace(extractStringValue(toolObj, []string{"state"}))
+			card.Summary = strings.TrimSpace(extractStringValue(toolObj, []string{"summary"}))
+			if strings.TrimSpace(toolName) != "" {
+				card.ToolName = strings.TrimSpace(toolName)
+			}
+			card.Args = args
+			if historyRaw, ok := toolObj["history"].([]interface{}); ok {
+				history := make([]SessionToolHistorySnapshot, 0, len(historyRaw))
+				for _, raw := range historyRaw {
+					item, _ := raw.(map[string]interface{})
+					if item == nil {
+						continue
+					}
+					entry := SessionToolHistorySnapshot{
+						Tool:   strings.TrimSpace(extractStringValue(item, []string{"tool"})),
+						Detail: strings.TrimSpace(extractStringValue(item, []string{"detail"})),
+					}
+					if entry.Tool != "" || entry.Detail != "" {
+						history = append(history, entry)
+					}
+				}
+				card.History = history
+			}
+			if card.State == "" {
+				card.State = "success"
+			}
+			if card.ToolName == "" {
+				card.ToolName = "Tool"
+			}
+			break
+		}
 		if extracted := extractToolCardSnapshotFromPayload(payloadMap); extracted != nil {
 			card = *extracted
 		}
 	}
 
-	snapshot.ToolCards[turnID] = card
+	if hasMeaningfulToolSnapshot(card) {
+		snapshot.ToolCards[turnID] = card
+	} else {
+		delete(snapshot.ToolCards, turnID)
+	}
 }
 
 func ensureMessageSnapshot(snapshot *SessionUISnapshot, turnID string) *SessionMessageSnapshot {
@@ -332,6 +448,22 @@ func ensureMessageSnapshot(snapshot *SessionUISnapshot, turnID string) *SessionM
 	}
 	snapshot.Messages = append(snapshot.Messages, SessionMessageSnapshot{TurnID: turnID})
 	return &snapshot.Messages[len(snapshot.Messages)-1]
+}
+
+func ensureTurnSnapshot(snapshot *SessionUISnapshot, turnID string) *SessionTurnSnapshot {
+	if snapshot == nil || strings.TrimSpace(turnID) == "" {
+		return nil
+	}
+	if snapshot.Turns == nil {
+		snapshot.Turns = []SessionTurnSnapshot{}
+	}
+	for i := range snapshot.Turns {
+		if snapshot.Turns[i].TurnID == turnID {
+			return &snapshot.Turns[i]
+		}
+	}
+	snapshot.Turns = append(snapshot.Turns, SessionTurnSnapshot{TurnID: turnID})
+	return &snapshot.Turns[len(snapshot.Turns)-1]
 }
 
 func payloadInt64(value interface{}) (int64, bool) {
@@ -536,6 +668,15 @@ func updateMessageSnapshot(snapshot *SessionUISnapshot, turnID, role, eventType 
 		if reasoningContent := extractReasoningContent(payloadMap); reasoningContent != "" {
 			msg.ReasoningContent = reasoningContent
 		}
+		if totalMS, ok := payloadInt64(payloadMap["total_elapsed_ms"]); ok && totalMS > 0 {
+			msg.ReasoningDurationMS = totalMS
+			msg.ReasoningAccumulatedMS = totalMS
+			msg.ReasoningCurrentPhaseMS = 0
+		} else if elapsedMS, ok := payloadInt64(payloadMap["elapsed_ms"]); ok && elapsedMS > 0 {
+			msg.ReasoningDurationMS = elapsedMS
+			msg.ReasoningAccumulatedMS = elapsedMS
+			msg.ReasoningCurrentPhaseMS = 0
+		}
 	case "reasoning.delta":
 		if content, ok := payloadMap["content"].(string); ok && content != "" {
 			msg.ReasoningContent += content
@@ -572,6 +713,122 @@ func updateMessageSnapshot(snapshot *SessionUISnapshot, turnID, role, eventType 
 		msg.ReasoningAccumulatedMS += msg.ReasoningCurrentPhaseMS
 		msg.ReasoningCurrentPhaseMS = 0
 		msg.ReasoningDurationMS = msg.ReasoningAccumulatedMS
+	}
+}
+
+func updateTurnSnapshot(snapshot *SessionUISnapshot, turnID, role, eventType string, payload interface{}) {
+	if snapshot == nil || strings.TrimSpace(turnID) == "" {
+		return
+	}
+	turn := ensureTurnSnapshot(snapshot, turnID)
+	if turn == nil {
+		return
+	}
+	msg := ensureMessageSnapshot(snapshot, turnID)
+	turn.UserContent = msg.UserContent
+	turn.AssistantContent = msg.AssistantContent
+	turn.Reasoning = SessionReasoningSnapshot{
+		Content:        msg.ReasoningContent,
+		DurationMS:     msg.ReasoningDurationMS,
+		AccumulatedMS:  msg.ReasoningAccumulatedMS,
+		CurrentPhaseMS: msg.ReasoningCurrentPhaseMS,
+	}
+
+	if tool, ok := snapshot.ToolCards[turnID]; ok {
+		toolCopy := tool
+		turn.Tool = &toolCopy
+	} else {
+		turn.Tool = nil
+	}
+
+	switch strings.TrimSpace(eventType) {
+	case "reasoning.start", "reasoning.delta":
+		turn.Status = "running"
+		turn.Reasoning.State = "running"
+	case "reasoning.end":
+		turn.Reasoning.State = "completed"
+		if strings.TrimSpace(turn.Status) == "" {
+			turn.Status = "running"
+		}
+	case "tool_call.start", "tool_call.arguments":
+		turn.Status = "running"
+	case "tool_call.success":
+		turn.Status = "running"
+	case "tool_call.failure":
+		turn.Status = "running"
+	case "message.delta":
+		turn.Status = "running"
+	case "chat.end", "request.complete":
+		turn.Status = "completed"
+		if turn.Reasoning.DurationMS > 0 || strings.TrimSpace(turn.Reasoning.Content) != "" {
+			turn.Reasoning.State = "completed"
+		}
+	case "request.cancelled":
+		turn.Status = "cancelled"
+	case "session.cleared":
+		turn.Status = ""
+		turn.UserContent = ""
+		turn.AssistantContent = ""
+		turn.Reasoning = SessionReasoningSnapshot{}
+		turn.Tool = nil
+	default:
+		if strings.TrimSpace(turn.Status) == "" && (strings.TrimSpace(turn.AssistantContent) != "" || strings.TrimSpace(turn.Reasoning.Content) != "") {
+			turn.Status = "running"
+		}
+	}
+}
+
+func hydrateLegacySnapshotViews(snapshot *SessionUISnapshot) {
+	if snapshot == nil {
+		return
+	}
+	if snapshot.ToolCards == nil {
+		snapshot.ToolCards = map[string]SessionToolCardSnapshot{}
+	}
+	if snapshot.Messages == nil {
+		snapshot.Messages = []SessionMessageSnapshot{}
+	}
+	if snapshot.Turns == nil {
+		snapshot.Turns = []SessionTurnSnapshot{}
+	}
+	if len(snapshot.Turns) == 0 && (len(snapshot.Messages) > 0 || len(snapshot.ToolCards) > 0) {
+		for _, msg := range snapshot.Messages {
+			turn := SessionTurnSnapshot{
+				TurnID:           msg.TurnID,
+				UserContent:      msg.UserContent,
+				AssistantContent: msg.AssistantContent,
+				Reasoning: SessionReasoningSnapshot{
+					Content:        msg.ReasoningContent,
+					DurationMS:     msg.ReasoningDurationMS,
+					AccumulatedMS:  msg.ReasoningAccumulatedMS,
+					CurrentPhaseMS: msg.ReasoningCurrentPhaseMS,
+				},
+			}
+			if tool, ok := snapshot.ToolCards[msg.TurnID]; ok {
+				toolCopy := tool
+				turn.Tool = &toolCopy
+			}
+			if strings.TrimSpace(turn.AssistantContent) != "" || strings.TrimSpace(turn.Reasoning.Content) != "" || turn.Tool != nil {
+				turn.Status = "completed"
+			}
+			snapshot.Turns = append(snapshot.Turns, turn)
+		}
+	}
+	if len(snapshot.Messages) == 0 && len(snapshot.Turns) > 0 {
+		for _, turn := range snapshot.Turns {
+			snapshot.Messages = append(snapshot.Messages, SessionMessageSnapshot{
+				TurnID:                  turn.TurnID,
+				UserContent:             turn.UserContent,
+				AssistantContent:        turn.AssistantContent,
+				ReasoningContent:        turn.Reasoning.Content,
+				ReasoningDurationMS:     turn.Reasoning.DurationMS,
+				ReasoningAccumulatedMS:  turn.Reasoning.AccumulatedMS,
+				ReasoningCurrentPhaseMS: turn.Reasoning.CurrentPhaseMS,
+			})
+			if turn.Tool != nil {
+				snapshot.ToolCards[turn.TurnID] = *turn.Tool
+			}
+		}
 	}
 }
 

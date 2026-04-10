@@ -424,6 +424,9 @@ function extractFinalAssistantContentFromPayload(payload = {}) {
 
 function extractReasoningContentFromPayload(payload = {}) {
     const payloadMap = payload && typeof payload === 'object' ? payload : {};
+    if (typeof payloadMap.reasoning_content === 'string' && payloadMap.reasoning_content.trim()) {
+        return payloadMap.reasoning_content;
+    }
     const result = payloadMap.result && typeof payloadMap.result === 'object' ? payloadMap.result : null;
     const output = Array.isArray(result?.output) ? result.output : [];
     const reasoningParts = output
@@ -439,6 +442,17 @@ function extractReasoningContentFromPayload(payload = {}) {
 
 function extractToolStateFromPayload(payload = {}) {
     const payloadMap = payload && typeof payload === 'object' ? payload : {};
+    if (payloadMap.tool && typeof payloadMap.tool === 'object') {
+        const tool = payloadMap.tool;
+        const directState = {
+            state: String(tool.state || 'success').trim() || 'success',
+            summary: String(tool.summary || '').trim(),
+            args: tool.args ?? null,
+            toolName: String(tool.tool_name || tool.toolName || 'Tool').trim() || 'Tool',
+            history: Array.isArray(tool.history) ? tool.history : []
+        };
+        return isMeaningfulToolState(directState) ? directState : null;
+    }
     const result = payloadMap.result && typeof payloadMap.result === 'object' ? payloadMap.result : null;
     const output = Array.isArray(result?.output) ? result.output : [];
     const toolCalls = output.filter((item) => item && item.type === 'tool_call');
@@ -475,13 +489,110 @@ function extractToolStateFromPayload(payload = {}) {
         }
     });
 
-    return {
+    const extractedState = {
         state,
         summary: state === 'failure' ? t('tool.unknownError') : t('tool.executionFinished'),
         args,
         toolName: toolName || 'Tool',
         history
     };
+    return isMeaningfulToolState(extractedState) ? extractedState : null;
+}
+
+function isMeaningfulToolState(toolState = null) {
+    if (!toolState || typeof toolState !== 'object') return false;
+    if (String(toolState.summary || '').trim()) return true;
+    if (String(toolState.toolName || '').trim() && String(toolState.toolName || '').trim().toLowerCase() !== 'tool') return true;
+    if (Array.isArray(toolState.history) && toolState.history.some((entry) => String(entry?.tool || '').trim() || String(entry?.detail || '').trim())) return true;
+    if (toolState.args != null) {
+        if (typeof toolState.args === 'string') return toolState.args.trim().length > 0;
+        if (typeof toolState.args === 'object') {
+            try {
+                const serialized = JSON.stringify(toolState.args);
+                return !!serialized && serialized !== '{}' && serialized !== '[]' && serialized !== 'null';
+            } catch (_) {
+                return true;
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
+function normalizeSessionTurnSnapshot(turn = {}) {
+    const raw = turn && typeof turn === 'object' ? turn : {};
+    const reasoningRaw = raw.reasoning && typeof raw.reasoning === 'object' ? raw.reasoning : {};
+    const toolRaw = raw.tool && typeof raw.tool === 'object' ? raw.tool : null;
+    return {
+        turn_id: String(raw.turn_id || raw.turnId || '').trim(),
+        status: String(raw.status || '').trim(),
+        user_content: String(raw.user_content || '').trim(),
+        assistant_content: String(raw.assistant_content || ''),
+        reasoning: {
+            state: String(reasoningRaw.state || '').trim(),
+            content: String(reasoningRaw.content || raw.reasoning_content || ''),
+            duration_ms: Number(reasoningRaw.duration_ms || raw.reasoning_duration_ms || 0),
+            accumulated_ms: Number(reasoningRaw.accumulated_ms || raw.reasoning_accumulated_ms || 0),
+            current_phase_ms: Number(reasoningRaw.current_phase_ms || raw.reasoning_current_phase_ms || 0)
+        },
+        tool: toolRaw ? {
+            state: String(toolRaw.state || '').trim(),
+            summary: String(toolRaw.summary || '').trim(),
+            args: toolRaw.args ?? null,
+            tool_name: String(toolRaw.tool_name || toolRaw.toolName || '').trim(),
+            history: Array.isArray(toolRaw.history) ? toolRaw.history : []
+        } : null
+    };
+}
+
+function buildLegacySessionViewsFromTurns(turns = []) {
+    const messages = [];
+    const tool_cards = {};
+    turns.forEach((turn) => {
+        const normalized = normalizeSessionTurnSnapshot(turn);
+        if (!normalized.turn_id) return;
+        messages.push({
+            turn_id: normalized.turn_id,
+            user_content: normalized.user_content,
+            assistant_content: normalized.assistant_content,
+            reasoning_content: normalized.reasoning.content,
+            reasoning_duration_ms: normalized.reasoning.duration_ms,
+            reasoning_accumulated_ms: normalized.reasoning.accumulated_ms,
+            reasoning_current_phase_ms: normalized.reasoning.current_phase_ms
+        });
+        if (normalized.tool) {
+            tool_cards[normalized.turn_id] = {
+                state: normalized.tool.state,
+                summary: normalized.tool.summary,
+                args: normalized.tool.args,
+                tool_name: normalized.tool.tool_name,
+                history: normalized.tool.history
+            };
+        }
+    });
+    return { messages, tool_cards };
+}
+
+function getSessionSnapshotTurns(sessionUISnapshot = {}) {
+    const turns = Array.isArray(sessionUISnapshot?.turns) ? sessionUISnapshot.turns : [];
+    if (turns.length > 0) {
+        return turns.map((turn) => normalizeSessionTurnSnapshot(turn)).filter((turn) => turn.turn_id);
+    }
+    const messages = Array.isArray(sessionUISnapshot?.messages) ? sessionUISnapshot.messages : [];
+    return messages.map((item) => {
+        const turnId = String(item?.turn_id || '').trim();
+        const toolState = sessionUISnapshot?.tool_cards?.[turnId] || null;
+        return normalizeSessionTurnSnapshot({
+            turn_id: turnId,
+            user_content: item?.user_content || '',
+            assistant_content: item?.assistant_content || '',
+            reasoning_content: item?.reasoning_content || '',
+            reasoning_duration_ms: item?.reasoning_duration_ms || 0,
+            reasoning_accumulated_ms: item?.reasoning_accumulated_ms || 0,
+            reasoning_current_phase_ms: item?.reasoning_current_phase_ms || 0,
+            tool: toolState
+        });
+    }).filter((turn) => turn.turn_id);
 }
 
 // ============================================================================
@@ -3408,39 +3519,57 @@ function ensurePassiveSyncPlaceholder(turnId = '', sessionId = 'default', eventS
 }
 
 function ensurePassiveSyncPlaceholderForRunningSession(session = currentChatSessionCache) {
-    if (!isPassiveServerSession(session)) return '';
+    return '';
+}
 
+function syncSnapshotUserMessages(session = currentChatSessionCache) {
     const sessionUISnapshot = getCurrentChatSessionUISnapshot(session);
-    const snapshotMessages = Array.isArray(sessionUISnapshot.messages) ? sessionUISnapshot.messages : [];
-    let turnId = '';
-    const lastSnapshotItem = snapshotMessages[snapshotMessages.length - 1];
-    if (lastSnapshotItem && !hasAssistantSnapshotContent(lastSnapshotItem.assistant_content, lastSnapshotItem.reasoning_content, sessionUISnapshot.tool_cards?.[lastSnapshotItem.turn_id])) {
-        turnId = String(lastSnapshotItem.turn_id).trim();
-    }
+    const snapshotTurns = getSessionSnapshotTurns(sessionUISnapshot);
+    snapshotTurns.forEach((turn, index) => {
+        const turnId = String(turn?.turn_id || '').trim();
+        const userContent = String(turn?.user_content || '').trim();
+        if (!turnId || !userContent) return;
+        let userEl = document.querySelector(`.message.user[data-turn-id="${turnId}"]`);
+        if (!userEl) {
+            userEl = createMessageElement({ role: 'user', content: userContent, turnId });
+        }
 
-    if (!turnId) {
-        const userNodes = chatMessages ? Array.from(chatMessages.querySelectorAll('.message.user[data-turn-id]')) : [];
-        const lastUserMessage = userNodes[userNodes.length - 1] || null;
-        if (lastUserMessage) {
-            const lastUserTurnId = String(lastUserMessage.dataset.turnId || '').trim();
-            const lastAssistantId = buildServerAssistantMessageId(lastUserTurnId, '');
-            const assistantEl = document.getElementById(lastAssistantId);
-            const hasContent = !!(serverReplayMessageBuffers.get(lastAssistantId) || assistantEl?._streamRenderState?.committedText || assistantEl?.querySelector('.assistant-response-card:not([hidden])'));
-            
-            if (!hasContent) {
-                turnId = lastUserTurnId;
+        const assistantEl = document.querySelector(`.message.assistant[data-turn-id="${turnId}"]`);
+        let anchor = assistantEl?.parentNode === chatMessages ? assistantEl : null;
+        if (!anchor) {
+            for (let nextIndex = index + 1; nextIndex < snapshotTurns.length; nextIndex += 1) {
+                const nextTurnId = String(snapshotTurns[nextIndex]?.turn_id || '').trim();
+                if (!nextTurnId) continue;
+                anchor = document.querySelector(`.message.user[data-turn-id="${nextTurnId}"]`)
+                    || document.querySelector(`.message.assistant[data-turn-id="${nextTurnId}"]`);
+                if (anchor?.parentNode === chatMessages) break;
+                anchor = null;
             }
         }
-    }
 
-    if (!turnId) turnId = String(serverReplayCurrentTurnId || '').trim();
-    if (!turnId) return '';
-
-    const latestMessage = snapshotMessages[snapshotMessages.length - 1] || null;
-    const hasFinalAssistantContent = !!String(latestMessage?.assistant_content || '').trim();
-    if (hasFinalAssistantContent) return '';
-
-    return ensurePassiveSyncPlaceholder(turnId, session?.ID || 'default', sessionUISnapshot.last_event_seq || currentChatSessionEventSeq || 0);
+        if (userEl.parentNode !== chatMessages) {
+            if (anchor) {
+                chatMessages.insertBefore(userEl, anchor);
+            } else {
+                chatMessages.appendChild(userEl);
+            }
+            updateScrollToBottomButton();
+        } else if (assistantEl?.parentNode === chatMessages) {
+            const children = Array.from(chatMessages.children);
+            const userIndex = children.indexOf(userEl);
+            const assistantIndex = children.indexOf(assistantEl);
+            if (userIndex > assistantIndex) {
+                chatMessages.insertBefore(userEl, assistantEl);
+                updateScrollToBottomButton();
+            }
+        } else if (anchor && !!(userEl.compareDocumentPosition(anchor) & Node.DOCUMENT_POSITION_PRECEDING)) {
+            chatMessages.insertBefore(userEl, anchor);
+            updateScrollToBottomButton();
+        }
+        if (!messages.some((entry) => entry?.role === 'user' && entry?.turnId === turnId && entry?.content === userContent)) {
+            messages.push({ role: 'user', content: userContent, turnId });
+        }
+    });
 }
 
 function broadcastConfigSync() {
@@ -4734,26 +4863,29 @@ function extractSessionClearedAt(session) {
 
 function getCurrentChatSessionUISnapshot(session = null) {
     const raw = String((session?.UIStateJSON ?? currentChatSessionCache?.UIStateJSON ?? '')).trim();
-    if (!raw) return { tool_cards: {}, messages: [], last_event_seq: 0 };
+    if (!raw) return { tool_cards: {}, messages: [], turns: [], last_event_seq: 0 };
     try {
         const parsed = JSON.parse(raw);
+        const turns = Array.isArray(parsed?.turns) ? parsed.turns.map((turn) => normalizeSessionTurnSnapshot(turn)).filter((turn) => turn.turn_id) : [];
+        const legacyFromTurns = turns.length > 0 ? buildLegacySessionViewsFromTurns(turns) : null;
         return {
-            tool_cards: parsed?.tool_cards && typeof parsed.tool_cards === 'object' ? parsed.tool_cards : {},
-            messages: Array.isArray(parsed?.messages) ? parsed.messages : [],
+            tool_cards: legacyFromTurns?.tool_cards || (parsed?.tool_cards && typeof parsed.tool_cards === 'object' ? parsed.tool_cards : {}),
+            messages: legacyFromTurns?.messages || (Array.isArray(parsed?.messages) ? parsed.messages : []),
+            turns,
             last_event_seq: Number(parsed?.last_event_seq || 0)
         };
     } catch (_) {
-        return { tool_cards: {}, messages: [], last_event_seq: 0 };
+        return { tool_cards: {}, messages: [], turns: [], last_event_seq: 0 };
     }
 }
 
 function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
     const sessionUISnapshot = getCurrentChatSessionUISnapshot(sessionSnapshot);
-    const snapshotMessages = Array.isArray(sessionUISnapshot.messages) ? sessionUISnapshot.messages : [];
-    if (snapshotMessages.length === 0) return false;
+    const snapshotTurns = getSessionSnapshotTurns(sessionUISnapshot);
+    if (snapshotTurns.length === 0) return false;
     const passiveRunningSession = isPassiveServerSession(sessionSnapshot);
-    const lastItem = snapshotMessages[snapshotMessages.length - 1];
-    const pendingTurnId = (passiveRunningSession && lastItem && !hasAssistantSnapshotContent(lastItem.assistant_content, lastItem.reasoning_content, sessionUISnapshot.tool_cards?.[lastItem.turn_id]))
+    const lastItem = snapshotTurns[snapshotTurns.length - 1];
+    const pendingTurnId = (passiveRunningSession && lastItem && !hasAssistantSnapshotContent(lastItem.assistant_content, lastItem.reasoning.content, lastItem.tool))
         ? String(lastItem.turn_id).trim()
         : '';
 
@@ -4763,12 +4895,12 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
     let lastTurnId = '';
     let lastAssistantId = '';
 
-    snapshotMessages.forEach((item, index) => {
+    snapshotTurns.forEach((item, index) => {
         const turnId = String(item?.turn_id || `snapshot-turn-${index + 1}`);
         const assistantId = buildServerAssistantMessageId(turnId, `snapshot-turn-${index + 1}`);
-        const snapshotToolState = sessionUISnapshot.tool_cards?.[turnId] || null;
+        const snapshotToolState = item.tool || sessionUISnapshot.tool_cards?.[turnId] || null;
         const waitingForRemoteReply = passiveRunningSession && turnId === pendingTurnId;
-        const hasAssistantContent = waitingForRemoteReply || hasAssistantSnapshotContent(item?.assistant_content, item?.reasoning_content, snapshotToolState);
+        const hasAssistantContent = waitingForRemoteReply || hasAssistantSnapshotContent(item?.assistant_content, item?.reasoning?.content, snapshotToolState);
         lastTurnId = turnId;
         if (hasAssistantContent) {
             lastAssistantId = assistantId;
@@ -4786,16 +4918,28 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
     if (fragment.childNodes.length > 0) {
         chatMessages.appendChild(fragment);
     }
-    updateChatSessionRestoreProgress(snapshotMessages.length, snapshotMessages.length);
+    updateChatSessionRestoreProgress(snapshotTurns.length, snapshotTurns.length);
 
-    snapshotMessages.forEach((item, index) => {
+    snapshotTurns.forEach((item, index) => {
         const turnId = String(item?.turn_id || `snapshot-turn-${index + 1}`);
         const assistantId = buildServerAssistantMessageId(turnId, `snapshot-turn-${index + 1}`);
         const waitingForRemoteReply = passiveRunningSession && turnId === pendingTurnId;
-        const assistantText = String(item?.assistant_content || '');
-        const reasoningText = String(item?.reasoning_content || '');
-        const reasoningDuration = getSnapshotReasoningDuration(item);
-        const snapshotToolState = sessionUISnapshot.tool_cards?.[turnId] || null;
+        let assistantText = String(item?.assistant_content || '');
+        let reasoningText = String(item?.reasoning?.content || '');
+        let reasoningDuration = getSnapshotReasoningDuration(item);
+        const snapshotToolState = item.tool || sessionUISnapshot.tool_cards?.[turnId] || null;
+        
+        // Fallback: If no reasoning_content is explicitly defined but <think> exists in the text
+        if (!reasoningText && assistantText.includes('<think>')) {
+            const parts = assistantText.split(/<think>([\s\S]*?)<\/think>/);
+            if (parts.length >= 3) {
+                reasoningText = parts[1].trim();
+            } else {
+                const openParts = assistantText.split('<think>');
+                if (openParts.length > 1) reasoningText = openParts[openParts.length - 1].trim();
+            }
+        }
+
         if (!waitingForRemoteReply && !hasAssistantSnapshotContent(assistantText, reasoningText, snapshotToolState)) {
             return;
         }
@@ -4829,7 +4973,7 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
                 if (bodyEl) bodyEl.textContent = reasoningText;
             }
         }
-        if (snapshotToolState) {
+        if (isMeaningfulToolState(snapshotToolState)) {
             ensureToolCard(assistantId, snapshotToolState.toolName || 'Tool');
             setToolCardState(assistantId, snapshotToolState.state, snapshotToolState.summary, snapshotToolState.args, snapshotToolState.toolName);
             const card = getActiveToolCard(assistantId);
@@ -4863,6 +5007,11 @@ function hasSubstantiveChatMessages() {
     );
 }
 
+function hasSubstantiveAssistantMessages() {
+    if (!chatMessages) return false;
+    return !!chatMessages.querySelector('.message.assistant:not(.has-startup-card)');
+}
+
 function hasRestorableChatEvents(items = []) {
     return Array.isArray(items) && items.some((entry) => {
         const eventType = String(entry?.EventType || '').trim();
@@ -4878,14 +5027,7 @@ function buildServerAssistantMessageId(turnId = '', fallbackKey = '') {
 function hasAssistantSnapshotContent(assistantText = '', reasoningText = '', toolState = null) {
     if (String(assistantText || '').trim()) return true;
     if (String(reasoningText || '').trim() && !config.hideThink) return true;
-    if (toolState && typeof toolState === 'object') {
-        if (String(toolState.summary || '').trim()) return true;
-        if (String(toolState.toolName || '').trim()) return true;
-        if (toolState.args != null) return true;
-        if (Array.isArray(toolState.history) && toolState.history.length > 0) return true;
-        if (String(toolState.state || '').trim()) return true;
-    }
-    return false;
+    return isMeaningfulToolState(toolState);
 }
 
 function findAssistantMessageByTurnId(turnId = '') {
@@ -4926,10 +5068,8 @@ function ensureServerReplayAssistant(turnId, sessionId, seq) {
         cleanupAssistantMessagesForTurn(resolvedTurnId || fallbackKey, serverReplayCurrentAssistantId);
         return serverReplayCurrentAssistantId;
     }
-    if (!serverReplayCurrentAssistantId) {
-        serverReplayCurrentAssistantId = messageId;
-    }
-    const stableMessageId = serverReplayCurrentAssistantId || messageId;
+    const stableMessageId = messageId;
+    serverReplayCurrentAssistantId = stableMessageId;
     if (!document.getElementById(stableMessageId)) {
         appendMessage({
             role: 'assistant',
@@ -4969,6 +5109,7 @@ function applyCurrentChatSessionSnapshot(session) {
 
     currentChatSessionCache = session;
     sessionLLMActivityRunning = String(session?.Status || '').trim().toLowerCase() === 'running';
+    syncSnapshotUserMessages(session);
     syncGlobalLLMComposerUI();
 
     const serverGenerating = session.Status === 'running';
@@ -4993,7 +5134,6 @@ function applyCurrentChatSessionSnapshot(session) {
     }
 
     syncPassiveGenerationUI(session);
-    ensurePassiveSyncPlaceholderForRunningSession(session);
 }
 
 function applyCurrentChatSessionEvent(entry) {
@@ -5024,25 +5164,40 @@ function applyCurrentChatSessionEvent(entry) {
         }
     }
 
+    if (!isLocalActiveTurn) {
+        switch (entry.EventType) {
+            case 'message.delta':
+            case 'reasoning.start':
+            case 'reasoning.delta':
+            case 'reasoning.end':
+            case 'tool_call.start':
+            case 'tool_call.arguments':
+            case 'tool_call.success':
+            case 'tool_call.failure':
+            case 'prompt_processing.progress':
+            case 'model_load.start':
+            case 'model_load.progress':
+            case 'model_load.end':
+                return;
+            default:
+                break;
+        }
+    }
+
     switch (entry.EventType) {
         case 'generation.started':
             if (isPassiveRunning) {
                 syncPassiveGenerationUI(currentChatSessionCache, payload.phase || 'queued');
-                ensurePassiveSyncPlaceholder(entryTurnId || serverReplayCurrentTurnId, sessionId, entry.EventSeq);
             }
             break;
         case 'generation.first_token':
             if (isPassiveRunning) {
                 syncPassiveGenerationUI(currentChatSessionCache, payload.phase || 'answering');
-                ensurePassiveSyncPlaceholder(entryTurnId || serverReplayCurrentTurnId, sessionId, entry.EventSeq);
             }
             break;
         case 'generation.phase':
             if (isPassiveRunning) {
                 syncPassiveGenerationUI(currentChatSessionCache, payload.phase || '');
-                if (payload.phase === 'tool_call' || payload.phase === 'thinking') {
-                    ensurePassiveSyncPlaceholder(entryTurnId || serverReplayCurrentTurnId, sessionId, entry.EventSeq);
-                }
             }
             break;
         case 'generation.finished':
@@ -5067,9 +5222,6 @@ function applyCurrentChatSessionEvent(entry) {
                 serverReplayCurrentAssistantId = '';
                 if (!document.querySelector(`.message.user[data-turn-id="${turnId}"]`)) {
                     appendMessage({ role: 'user', content: userContent, turnId });
-                }
-                if (isPassiveRunning) {
-                    ensurePassiveSyncPlaceholder(turnId, sessionId, entry.EventSeq);
                 }
             }
             break;
@@ -5181,11 +5333,13 @@ function applyCurrentChatSessionEvent(entry) {
         case 'reasoning.end':
             if (isLocalActiveTurn) {
                 if (activeLocalAssistantId) {
+                    const reasoningEndDuration = Number.isFinite(Number(payload.total_elapsed_ms || payload.elapsed_ms))
+                        ? Number(payload.total_elapsed_ms || payload.elapsed_ms) : null;
                     finalizeReasoningStatus(
                         activeLocalAssistantId,
                         'done',
                         '',
-                        Number(payload.total_elapsed_ms || payload.elapsed_ms || 0)
+                        reasoningEndDuration
                     );
                 }
                 break;
@@ -5215,10 +5369,6 @@ function applyCurrentChatSessionEvent(entry) {
             if (serverReplayCurrentAssistantId) setToolCardState(serverReplayCurrentAssistantId, 'running', '', null, payload.tool || '');
             break;
         case 'tool_call.arguments':
-            if (isPassiveRunning) {
-                ensurePassiveSyncPlaceholder(entryTurnId || serverReplayCurrentTurnId, sessionId, entry.EventSeq);
-                break;
-            }
             if (!isLocalActiveTurn && !serverReplayCurrentAssistantId && (entryTurnId || serverReplayCurrentTurnId)) {
                 const nextTurnId = entryTurnId || serverReplayCurrentTurnId;
                 serverReplayCurrentTurnId = nextTurnId;
@@ -5282,7 +5432,7 @@ function applyCurrentChatSessionEvent(entry) {
             if (isLocalActiveTurn) {
                 if (activeLocalAssistantId) {
                     const payloadToolState = extractToolStateFromPayload(payload);
-                    if (payloadToolState) {
+                    if (isMeaningfulToolState(payloadToolState)) {
                         const card = ensureToolCard(activeLocalAssistantId, payloadToolState.toolName || 'Tool');
                         if (card) {
                             card._history = Array.isArray(payloadToolState.history) ? [...payloadToolState.history] : [];
@@ -5320,14 +5470,17 @@ function applyCurrentChatSessionEvent(entry) {
                 cleanupTrailingEmptyAssistantMessages();
                 break;
             }
-            if (!serverReplayCurrentAssistantId) {
-                const resolvedTurnId = entryTurnId || serverReplayCurrentTurnId || `server-turn-${sessionId}-${entry.EventSeq}`;
-                serverReplayCurrentTurnId = resolvedTurnId;
+            const resolvedTurnId = entryTurnId || serverReplayCurrentTurnId || `server-turn-${sessionId}-${entry.EventSeq}`;
+            const currentAssistantTurnId = String(
+                document.getElementById(serverReplayCurrentAssistantId || '')?.dataset?.turnId || ''
+            ).trim();
+            serverReplayCurrentTurnId = resolvedTurnId;
+            if (!serverReplayCurrentAssistantId || currentAssistantTurnId !== resolvedTurnId) {
                 serverReplayCurrentAssistantId = ensureServerReplayAssistant(resolvedTurnId, sessionId, entry.EventSeq);
             }
             if (serverReplayCurrentAssistantId) {
                 const payloadToolState = extractToolStateFromPayload(payload);
-                if (payloadToolState) {
+                if (isMeaningfulToolState(payloadToolState)) {
                     const card = ensureToolCard(serverReplayCurrentAssistantId, payloadToolState.toolName || 'Tool');
                     if (card) {
                         card._history = Array.isArray(payloadToolState.history) ? [...payloadToolState.history] : [];
@@ -5420,7 +5573,7 @@ async function syncCurrentChatSessionFromServerInternal() {
         return;
     }
 
-    const hasRenderedMessages = hasSubstantiveChatMessages();
+    const hasRenderedMessages = hasSubstantiveAssistantMessages();
     if (currentChatSessionEventSeq === 0 && !hasRenderedMessages) {
         const sessionUISnapshot = getCurrentChatSessionUISnapshot(session);
         const snapshotMessages = sessionUISnapshot.messages || [];
@@ -5495,7 +5648,7 @@ async function syncCurrentChatSessionFromServerInternal() {
         applyCurrentChatSessionSnapshot(result.session);
     }
 
-    const renderedMessagesNow = hasSubstantiveChatMessages();
+    const renderedMessagesNow = hasSubstantiveAssistantMessages();
     const hasRestorableEvents = hasRestorableChatEvents(result.items);
     const shouldRestoreSnapshot = currentChatSessionEventSeq === 0 && result.totalCount > 0 && hasRestorableEvents && !renderedMessagesNow;
     const shouldFastForwardSeqOnly = currentChatSessionEventSeq === 0 && result.totalCount > 0 && (!hasRestorableEvents || renderedMessagesNow);
@@ -5749,7 +5902,7 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
             finalizeReasoningStatus(assistantId, 'done', '', Number.isFinite(duration) ? duration : null);
         }
 
-        if (mergedToolState) {
+        if (isMeaningfulToolState(mergedToolState)) {
             ensureToolCard(assistantId, mergedToolState.toolName || 'Tool');
             setToolCardState(assistantId, mergedToolState.state, mergedToolState.summary, mergedToolState.args, mergedToolState.toolName);
             const card = getActiveToolCard(assistantId);
@@ -7151,7 +7304,7 @@ async function sendMessage(options = {}) {
     // Create new AbortController
     abortController = new AbortController();
 
-    const assistantId = 'msg-' + Date.now();
+    const assistantId = buildServerAssistantMessageId(turnId, '');
     activeStreamingMessageId = assistantId;
     activeLocalTurnId = turnId;
     activeLocalAssistantId = assistantId;
@@ -7204,6 +7357,7 @@ async function sendMessage(options = {}) {
         if (e.name === 'AbortError') {
             finalizeAssistantStatusCards(assistantId, 'stopped', t('status.stopped'));
             updateMessageContent(assistantId, `**[Stopped by User]**`);
+            setAssistantActionBarReady(assistantId);
         } else if (e?.streamDetached || isLikelyStreamDetachError(e)) {
             setComposerBackgroundTask('server-chat-detached', {
                 label: t('background.serverChatContinuing')
@@ -7212,6 +7366,7 @@ async function sendMessage(options = {}) {
         } else {
             finalizeAssistantStatusCards(assistantId, 'failed', e.message || t('status.failed'));
             updateMessageContent(assistantId, `**Error:** ${e.message}`);
+            setAssistantActionBarReady(assistantId);
         }
     } finally {
         pendingVoiceInputAutoTTS = false;
@@ -7541,13 +7696,13 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
                                 currentlyReasoning = true;
                                 reasoningStartMs = Date.now();
                                 reasoningSource = 'field';
-                                if (!deferToServerChatSession) showReasoningStatus(elementId, '...', false, 0); // Start status
+                                if (!deferToServerChatSession) showReasoningStatus(elementId, '...'); // Start status — let card compute from startedAt
                             }
                             // Prioritize SSE if both present (LM Studio)
                             if (reasoningSource !== 'sse') {
                                 reasoningBuffer += delta.reasoning_content;
-                                const elapsedMs = reasoningStartMs > 0 ? Date.now() - reasoningStartMs : 0;
-                                if (!deferToServerChatSession) showReasoningStatus(elementId, reasoningBuffer, false, elapsedMs); // Update status with full buffer
+                                // No local timer — let card compute from its own startedAt + accumulatedDurationMs
+                                if (!deferToServerChatSession) showReasoningStatus(elementId, reasoningBuffer); // Update status with full buffer
                             }
                         }
 
@@ -7558,10 +7713,10 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
                             // If we see actual content and we were in reasoning, close the block
                             reasoningBuffer += '</think>\n';
                             currentlyReasoning = false;
-                            const elapsedMs = reasoningStartMs > 0 ? Date.now() - reasoningStartMs : 0;
                             reasoningStartMs = 0;
                             reasoningSource = null;
-                            if (!deferToServerChatSession) finalizeReasoningStatus(elementId, 'done', '', elapsedMs);
+                            // No local timer override — let card compute from its own startedAt + accumulatedDurationMs
+                            if (!deferToServerChatSession) finalizeReasoningStatus(elementId, 'done', '');
                         }
 
                         if (!currentlyReasoning) {
@@ -7604,7 +7759,10 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
                         }
                         reasoningSource = 'sse';
                         if (!deferToServerChatSession) {
-                            showReasoningStatus(elementId, '...', false, Number(json.total_elapsed_ms || json.elapsed_ms || 0));
+                            // Pass server total_elapsed_ms if available, else null for local computation
+                            const startElapsed = Number.isFinite(Number(json.total_elapsed_ms || json.elapsed_ms))
+                                ? Number(json.total_elapsed_ms || json.elapsed_ms) : null;
+                            showReasoningStatus(elementId, '...', false, startElapsed);
                         }
                     }
                     else if (json.type === 'reasoning.delta' && json.content) {
@@ -7625,9 +7783,10 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
                         }
                         currentlyReasoning = true;
                         reasoningSource = 'sse';
+                        // Use server total_elapsed_ms as absolute total, or null for local computation
                         const elapsedMs = Number.isFinite(Number(json.total_elapsed_ms || json.elapsed_ms))
                             ? Number(json.total_elapsed_ms || json.elapsed_ms)
-                            : (reasoningStartMs > 0 ? Date.now() - reasoningStartMs : 0);
+                            : null;
                         
                         // Sync to global buffer for passive window / snapshot compatibility
                         serverReplayReasoningBuffers.set(elementId, reasoningBuffer);
@@ -7637,9 +7796,10 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
                     else if (json.type === 'reasoning.end') {
                         reasoningBuffer += '</think>\n';
                         currentlyReasoning = false;
+                        // Use server total_elapsed_ms as absolute total, or null for local computation
                         const elapsedMs = Number.isFinite(Number(json.total_elapsed_ms || json.elapsed_ms))
                             ? Number(json.total_elapsed_ms || json.elapsed_ms)
-                            : (reasoningStartMs > 0 ? Date.now() - reasoningStartMs : 0);
+                            : null;
                         reasoningStartMs = 0;
                         reasoningSource = null;
                         
@@ -7680,6 +7840,36 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
                         }
                         if (typeof stats.total_output_tokens === 'number' && Number.isFinite(stats.total_output_tokens)) {
                             statefulLastOutputTokens = stats.total_output_tokens;
+                        }
+                        const chatEndPayload = {
+                            result: json.result,
+                            elapsed_ms: Number.isFinite(Number(json.elapsed_ms)) ? Number(json.elapsed_ms) : undefined,
+                            total_elapsed_ms: Number.isFinite(Number(json.total_elapsed_ms)) ? Number(json.total_elapsed_ms) : undefined
+                        };
+                        const chatEndToolState = extractToolStateFromPayload(chatEndPayload);
+                        if (isMeaningfulToolState(chatEndToolState) && !deferToServerChatSession) {
+                            const card = ensureToolCard(elementId, chatEndToolState.toolName || 'Tool');
+                            if (card) {
+                                card._history = Array.isArray(chatEndToolState.history) ? [...chatEndToolState.history] : [];
+                            }
+                            setToolCardState(
+                                elementId,
+                                chatEndToolState.state || 'success',
+                                chatEndToolState.summary || '',
+                                chatEndToolState.args || null,
+                                chatEndToolState.toolName || ''
+                            );
+                        }
+                        const chatEndReasoningText = extractReasoningContentFromPayload(chatEndPayload);
+                        if (chatEndReasoningText) {
+                            serverReplayReasoningBuffers.set(elementId, chatEndReasoningText);
+                            if (!deferToServerChatSession) {
+                                const chatEndDuration = Number.isFinite(Number(chatEndPayload.total_elapsed_ms || chatEndPayload.elapsed_ms))
+                                    ? Number(chatEndPayload.total_elapsed_ms || chatEndPayload.elapsed_ms)
+                                    : null;
+                                showReasoningStatus(elementId, chatEndReasoningText, false, chatEndDuration);
+                                finalizeReasoningStatus(elementId, 'done', '', chatEndDuration);
+                            }
                         }
                     }
                     // Handle Prompt Processing Progress
@@ -7745,9 +7935,9 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
                         const rawDisplayText = fullText;
                         let displayText = stripHiddenAssistantProtocolText(fullText);
 
-                        // LM Studio Reasoning Status Detection (Text-based fallback for tags)
-                        // Only run if not already handled by SSE/reasoning_content events
-                        if (config.llmMode === 'lm-studio' && !currentlyReasoning && !config.hideThink) {
+                        // Reasoning Status Detection (Text-based fallback for <think> or <|channel|>)
+                        // Run universally if not already handled by SSE/reasoning_content events
+                        if (!currentlyReasoning && !config.hideThink) {
                             const hasAnalysis = rawDisplayText.includes('<|channel|>analysis');
 
                             const hasFinal = rawDisplayText.includes('<|channel|>final');
@@ -7774,7 +7964,21 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
                                 if (statusText.length > 150) statusText = "..." + statusText.slice(-147);
                                 showReasoningStatus(elementId, statusText, false);
                             } else if (hasFinal || hasThinkEnd) {
-                                showReasoningStatus(elementId, null, true);
+                                // Extract final block to set as body text
+                                let fullReasoningText = "";
+                                if (hasFinal) {
+                                    const parts = rawDisplayText.split('<|channel|>analysis');
+                                    if (parts.length > 1) fullReasoningText = parts[parts.length - 1].split('<|channel|>final')[0].trim();
+                                } else if (hasThinkEnd) {
+                                    const parts = rawDisplayText.split('<think>');
+                                    if (parts.length > 1) fullReasoningText = parts[parts.length - 1].split('</think>')[0].trim();
+                                }
+                                if (fullReasoningText) {
+                                    serverReplayReasoningBuffers.set(elementId, fullReasoningText);
+                                    showReasoningStatus(elementId, fullReasoningText, true);
+                                } else {
+                                    showReasoningStatus(elementId, null, true);
+                                }
                             }
                         }
 
@@ -7826,8 +8030,8 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
         if (!deferToServerChatSession) hideProgressDock();
         if (!streamAborted && !streamDetached && !streamRestartRequested) {
             if (currentlyReasoning) {
-                const elapsedMs = reasoningStartMs > 0 ? Date.now() - reasoningStartMs : 0;
-                if (!deferToServerChatSession) finalizeReasoningStatus(elementId, 'failed', t('status.unexpectedStop'), elapsedMs);
+                // No local timer — let card compute from its own startedAt + accumulatedDurationMs
+                if (!deferToServerChatSession) finalizeReasoningStatus(elementId, 'failed', t('status.unexpectedStop'));
             }
             if (getRunningToolCards(elementId).length > 0) {
                 if (!deferToServerChatSession) finalizeAssistantStatusCards(elementId, 'failed', t('status.failed'));
@@ -8023,9 +8227,10 @@ function formatThoughtDuration(durationMs = 0) {
 }
 
 function getSnapshotReasoningDuration(item) {
-    const total = Number(item?.reasoning_duration_ms || 0);
-    const accumulated = Number(item?.reasoning_accumulated_ms || 0);
-    const currentPhase = Number(item?.reasoning_current_phase_ms || 0);
+    const reasoning = item?.reasoning && typeof item.reasoning === 'object' ? item.reasoning : {};
+    const total = Number(reasoning?.duration_ms || item?.reasoning_duration_ms || 0);
+    const accumulated = Number(reasoning?.accumulated_ms || item?.reasoning_accumulated_ms || 0);
+    const currentPhase = Number(reasoning?.current_phase_ms || item?.reasoning_current_phase_ms || 0);
     return Math.max(0, total, accumulated + currentPhase);
 }
 
@@ -8059,6 +8264,11 @@ function isAssistantMessageVisiblyEmpty(msgEl) {
     const markdownHost = msgEl.querySelector('.assistant-response-card .markdown-body');
     const markdownSource = String(markdownHost?.dataset?.markdownSource || '').trim();
     const markdownText = String(markdownHost?.textContent || '').trim();
+    // Also check the committed host's markdownSource and the element's stream render state,
+    // because after finalizeMessageContent the content lives in .markdown-committed and _streamRenderState.
+    const committedHost = msgEl.querySelector('.assistant-response-card .markdown-committed');
+    const committedSource = String(committedHost?.dataset?.markdownSource || '').trim();
+    const streamStateText = String(msgEl._streamRenderState?.committedText || '').trim();
     const reasoningText = String(msgEl.querySelector('.assistant-reasoning')?.textContent || '').trim();
     // Corrected selector from .tool-card to .tool-status-card
     const hasToolCards = msgEl.querySelectorAll('.assistant-tools .tool-status-card').length > 0;
@@ -8066,7 +8276,7 @@ function isAssistantMessageVisiblyEmpty(msgEl) {
     const responseCard = msgEl.querySelector('.assistant-response-card');
     // If the response card is NOT hidden and has content, it's not empty.
     // Also, if it has an image (which is inside the response card but might be shown even if text is empty), it's not empty.
-    const hasVisibleResponse = (!responseCard?.hidden && (!!markdownSource || !!markdownText)) || hasImage;
+    const hasVisibleResponse = (!responseCard?.hidden && (!!markdownSource || !!markdownText || !!committedSource || !!streamStateText)) || hasImage;
     const hasVisibleReasoning = !!reasoningText;
     return !hasVisibleResponse && !hasVisibleReasoning && !hasToolCards;
 }
@@ -8365,6 +8575,14 @@ function formatStripDuration(startedAt, fallbackMs = 0) {
 function ensureToolCard(elementId, toolName = 'Tool') {
     const { msgEl, toolsHost } = getAssistantMessageParts(elementId);
     if (!msgEl || !toolsHost) return null;
+
+    const activeCard = getActiveToolCard(elementId);
+    if (activeCard) {
+        if (toolName) {
+            activeCard.dataset.toolName = toolName;
+        }
+        return activeCard;
+    }
 
     const card = document.createElement('section');
     card.className = 'tool-status-card is-running collapsed';
@@ -8862,10 +9080,11 @@ function showReasoningStatus(elementId, text, isFinal = false, elapsedOverrideMs
 
     const startedAt = Number(card.dataset.startedAt || Date.now());
     const accumulatedMs = Math.max(0, Number(card.dataset.accumulatedDurationMs || 0));
-    const segmentDurationMs = Number.isFinite(Number(elapsedOverrideMs))
+    // When server provides total_elapsed_ms (non-null), use it directly as the absolute total.
+    // When null, compute locally: accumulated previous phases + current segment duration.
+    const durationMs = (elapsedOverrideMs !== null && elapsedOverrideMs !== undefined && Number.isFinite(Number(elapsedOverrideMs)))
         ? Math.max(0, Number(elapsedOverrideMs))
-        : Math.max(0, Date.now() - startedAt);
-    const durationMs = accumulatedMs + segmentDurationMs;
+        : accumulatedMs + Math.max(0, Date.now() - startedAt);
 
     if (isFinal) {
         finalizeReasoningStatus(elementId, 'done', '', durationMs);
@@ -8918,10 +9137,11 @@ function finalizeReasoningStatus(elementId, outcome = 'done', detail = '', durat
     const bodyEl = card.querySelector('.reasoning-body');
     const startedAt = Number(card.dataset.startedAt || Date.now());
     const accumulatedMs = Math.max(0, Number(card.dataset.accumulatedDurationMs || 0));
-    const segmentDurationMs = Number.isFinite(Number(durationOverrideMs))
+    // When server provides total_elapsed_ms (non-null), use it directly as the absolute total.
+    // When null, compute locally: accumulated previous phases + current segment duration.
+    const durationMs = (durationOverrideMs !== null && durationOverrideMs !== undefined && Number.isFinite(Number(durationOverrideMs)))
         ? Math.max(0, Number(durationOverrideMs))
-        : Math.max(0, Date.now() - startedAt);
-    const durationMs = accumulatedMs + segmentDurationMs;
+        : accumulatedMs + Math.max(0, Date.now() - startedAt);
     const shouldKeepExpanded = card.dataset.userExpanded === 'true';
 
     card.classList.remove('completed', 'failed');
@@ -8977,7 +9197,13 @@ function finalizeAssistantStatusCards(elementId, outcome = 'done', detail = '') 
 
     const reasoningCard = getAssistantMessageParts(elementId).reasoningHost?.querySelector('.reasoning-status');
     if (reasoningCard && reasoningCard.querySelector('.reasoning-title')?.classList.contains('is-live')) {
-        finalizeReasoningStatus(elementId, outcome, detail);
+        const storedDuration = Number(reasoningCard.dataset.durationMs || reasoningCard.dataset.accumulatedDurationMs || 0);
+        finalizeReasoningStatus(
+            elementId,
+            outcome,
+            detail,
+            Number.isFinite(storedDuration) && storedDuration > 0 ? storedDuration : null
+        );
     }
 
     // Comprehensive refresh on finalization
@@ -9432,8 +9658,7 @@ function finalizeMessageContent(id, text) {
     if (responseCard) responseCard.hidden = !hasVisibleContent;
 
     if (actionBar) {
-        const visiblyEmpty = isAssistantMessageVisiblyEmpty(el);
-        actionBar.hidden = visiblyEmpty;
+        actionBar.hidden = !hasVisibleContent;
 
         // Ensure buttons are revealed/hidden based on text availability
         const copyBtn = actionBar.querySelector('.copy-btn');
@@ -9441,8 +9666,13 @@ function finalizeMessageContent(id, text) {
         if (copyBtn) copyBtn.hidden = !hasVisibleContent;
         if (speakBtn) speakBtn.hidden = !hasVisibleContent;
 
-        if (!visiblyEmpty) {
-            reconcileAssistantActionBarForMessage(el);
+        // Directly transition to ready state when content exists.
+        // This avoids a timing issue where reconcileAssistantActionBarForMessage
+        // could bail early if isAssistantMessageVisiblyEmpty hadn't caught up yet.
+        if (hasVisibleContent) {
+            actionBar.classList.add('is-ready');
+            actionBar.classList.remove('is-pending');
+            attachStreamingAudioButtonToMessage(el);
         }
     }
     syncAssistantMessageShellState(el);
