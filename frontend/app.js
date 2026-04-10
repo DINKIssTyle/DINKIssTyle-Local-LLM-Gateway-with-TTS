@@ -559,7 +559,7 @@ const translations = {
         'setting.llmMode.label': '연결 모드',
         'setting.llmMode.desc': 'OpenAI 호환 모드 또는 LM Studio 모드를 선택하세요.',
         'setting.llmMode.option.standard': 'OpenAI 호환',
-        'setting.llmMode.option.stateful': 'LM Studio',
+        'setting.llmMode.option.stateful': 'LM Studio (권장)',
         'setting.contextStrategy.label': '배경 / 문맥 기억 방법',
         'setting.contextStrategy.desc': '모드에 따라 문맥 유지 방식을 선택합니다.',
         'setting.contextStrategy.option.retrieval': 'FTS5 + Vector',
@@ -809,7 +809,7 @@ const translations = {
         'setting.llmMode.label': 'Connection Mode',
         'setting.llmMode.desc': 'Select between OpenAI Compatible or LM Studio',
         'setting.llmMode.option.standard': 'OpenAI Compatible',
-        'setting.llmMode.option.stateful': 'LM Studio',
+        'setting.llmMode.option.stateful': 'LM Studio (Recommended)',
         'setting.contextStrategy.label': 'Background / Context Memory',
         'setting.contextStrategy.desc': 'Choose how the app keeps conversational context for the current connection mode.',
         'setting.contextStrategy.option.retrieval': 'FTS5 + Vector',
@@ -1570,7 +1570,7 @@ async function requestWakeLock() {
     try {
         wakeLock = await navigator.wakeLock.request('screen');
         console.info('[WakeLock] Screen Wake Lock acquired');
-        
+
         wakeLock.addEventListener('release', () => {
             console.info('[WakeLock] Screen Wake Lock released');
             const stillBusy = !!(isGenerating || isPlayingQueue || isSTTActive || streamingTTSActive);
@@ -8055,7 +8055,7 @@ function renderProgressDock(label, percent = null, mode = 'prompt-processing', i
     composerProgressLabel = label || '';
     composerProgressActive = true;
     composerProgressPercent = percentLabel;
-    
+
     updateMessageInputPlaceholder();
     // Explicitly refresh send button to ensure Stop icon is visible during prompt processing
     updateSendButtonStateCore();
@@ -8323,7 +8323,7 @@ function setToolCardState(elementId, state, summary = '', args = null, toolName 
     }
     renderToolHistory(card, historyEl, state);
     syncAssistantMessageShellState(card.closest('.message.assistant'));
-    
+
     // Explicitly refresh send button to ensure Stop icon is visible during tool use
     updateSendButtonStateCore();
 }
@@ -8742,7 +8742,7 @@ function showReasoningStatus(elementId, text, isFinal = false, elapsedOverrideMs
     }
     bodyEl.textContent = cleanText;
     syncAssistantMessageShellState(card.closest('.message.assistant'));
-    
+
     // Refresh send button during active reasoning
     updateSendButtonStateCore();
 }
@@ -8794,7 +8794,7 @@ function finalizeReasoningStatus(elementId, outcome = 'done', detail = '', durat
         bodyEl.textContent = detail;
     }
     syncAssistantMessageShellState(card.closest('.message.assistant'));
-    
+
     // Refresh send button when reasoning ends
     updateSendButtonStateCore();
 }
