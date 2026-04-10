@@ -28,6 +28,7 @@ import (
 	"log"
 	"math"
 	"math/big"
+	"mime"
 	"net"
 	"net/http"
 	"os"
@@ -2592,9 +2593,6 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 			authMgr.mu.RUnlock()
 
 			if user != nil {
-				if user.Settings.ApiEndpoint != nil {
-					resp["llm_endpoint"] = *user.Settings.ApiEndpoint
-				}
 				if user.Settings.LLMMode != nil {
 					resp["llm_mode"] = *user.Settings.LLMMode
 					resp["context_strategy"] = defaultContextStrategyForMode(*user.Settings.LLMMode)
@@ -2679,6 +2677,8 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	if err != nil {
 		log.Fatal("Failed to get frontend FS:", err)
 	}
+	_ = mime.AddExtensionType(".mjs", "application/javascript; charset=utf-8")
+	_ = mime.AddExtensionType(".wasm", "application/wasm")
 	webFS := http.FileServer(http.FS(frontendFS))
 
 	// Serve web.html at root (Chat UI for web)
@@ -2695,6 +2695,12 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 			stat, _ := f.Stat()
 			http.ServeContent(w, r, "web.html", stat.ModTime(), f.(io.ReadSeeker))
 			return
+		}
+		switch strings.ToLower(filepath.Ext(r.URL.Path)) {
+		case ".mjs", ".js":
+			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		case ".wasm":
+			w.Header().Set("Content-Type", "application/wasm")
 		}
 		webFS.ServeHTTP(w, r)
 	})
@@ -3538,9 +3544,6 @@ func resolveModelAPIConfig(r *http.Request, app *App, authMgr *AuthManager, requ
 		user := authMgr.users[userID]
 		authMgr.mu.RUnlock()
 		if user != nil {
-			if user.Settings.ApiEndpoint != nil && strings.TrimSpace(*user.Settings.ApiEndpoint) != "" {
-				endpoint = *user.Settings.ApiEndpoint
-			}
 			if user.Settings.ApiToken != nil {
 				token = *user.Settings.ApiToken
 			}
@@ -3737,9 +3740,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		user := authMgr.users[userID]
 		authMgr.mu.RUnlock()
 		if user != nil {
-			if user.Settings.ApiEndpoint != nil {
-				endpointRaw = *user.Settings.ApiEndpoint
-			}
 			if user.Settings.ApiToken != nil {
 				tokenRaw = *user.Settings.ApiToken
 			}

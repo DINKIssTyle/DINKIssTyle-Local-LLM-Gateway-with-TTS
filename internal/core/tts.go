@@ -995,6 +995,10 @@ func InitializeONNXRuntime() error {
 	// 	log.SetOutput(io.MultiWriter(os.Stdout, logFile))
 	// }
 
+	if err := ensureONNXRuntimeLibraryPresent(); err != nil {
+		return fmt.Errorf("failed to prepare ONNX Runtime library: %w", err)
+	}
+
 	libPath := getONNXRuntimeLibraryPath()
 	log.Printf("Attempting to load ONNX Runtime library from: %s", libPath)
 

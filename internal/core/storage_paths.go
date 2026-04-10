@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
+	"strings"
 )
 
 const (
@@ -134,6 +136,11 @@ func getDictionaryEditorSourcePath() string {
 }
 
 func getTTSAssetsDir() string {
+	writable := getWritableTTSAssetsDir()
+	if fileExists(filepath.Join(writable, legacyTTSOnnxDirName, "vocoder.onnx")) {
+		return writable
+	}
+
 	primary := GetResourcePath(filepath.Join(assetsDirName, ttsDirName, supertonic2DirName))
 	if fileExists(filepath.Join(primary, legacyTTSOnnxDirName, "vocoder.onnx")) {
 		return primary
@@ -159,6 +166,11 @@ func getONNXRuntimeLibraryFileName() string {
 }
 
 func getONNXRuntimeDir() string {
+	writable := getWritableONNXRuntimeDir()
+	if fileExists(filepath.Join(writable, getONNXRuntimeLibraryFileName())) {
+		return writable
+	}
+
 	primary := GetResourcePath(filepath.Join(assetsDirName, runtimeDirName, onnxRuntimeDirName))
 	if fileExists(filepath.Join(primary, getONNXRuntimeLibraryFileName())) {
 		return primary
@@ -196,4 +208,106 @@ func getONNXRuntimeLibraryPath() string {
 	}
 
 	return candidates[0]
+}
+
+func getGoModuleCacheDir() string {
+	if value := strings.TrimSpace(os.Getenv("GOMODCACHE")); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(os.Getenv("GOPATH")); value != "" {
+		return filepath.Join(value, "pkg", "mod")
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(homeDir, "go", "pkg", "mod")
+}
+
+func getONNXRuntimeModuleVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok || info == nil {
+		return ""
+	}
+	for _, dep := range info.Deps {
+		if dep == nil || dep.Path != "github.com/yalue/onnxruntime_go" {
+			continue
+		}
+		version := strings.TrimSpace(dep.Version)
+		if version != "" {
+			return version
+		}
+	}
+	return ""
+}
+
+func getONNXRuntimeLibraryCandidates() []string {
+	libName := getONNXRuntimeLibraryFileName()
+	candidates := []string{
+		filepath.Join(GetResourcePath(filepath.Join(assetsDirName, runtimeDirName, onnxRuntimeDirName)), libName),
+		GetResourcePath(filepath.Join(onnxRuntimeDirName, libName)),
+	}
+
+	exePath, err := os.Executable()
+	if err == nil {
+		exeDir := filepath.Dir(exePath)
+		candidates = append(candidates,
+			filepath.Join(exeDir, libName),
+			filepath.Join(exeDir, onnxRuntimeDirName, libName),
+			filepath.Join(exeDir, assetsDirName, runtimeDirName, onnxRuntimeDirName, libName),
+		)
+	}
+
+	modCache := getGoModuleCacheDir()
+	if modCache != "" {
+		if version := getONNXRuntimeModuleVersion(); version != "" {
+			candidates = append(candidates,
+				filepath.Join(modCache, "github.com", "yalue", "onnxruntime_go@"+version, "test_data", libName),
+			)
+		}
+		if matches, err := filepath.Glob(filepath.Join(modCache, "github.com", "yalue", "onnxruntime_go@*", "test_data", libName)); err == nil {
+			candidates = append(candidates, matches...)
+		}
+	}
+
+	seen := make(map[string]struct{}, len(candidates))
+	deduped := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		deduped = append(deduped, candidate)
+	}
+	return deduped
+}
+
+func ensureONNXRuntimeLibraryPresent() error {
+	libName := getONNXRuntimeLibraryFileName()
+	destDir := getWritableONNXRuntimeDir()
+	destPath := filepath.Join(destDir, libName)
+	if fileExists(destPath) {
+		return nil
+	}
+
+	for _, candidate := range getONNXRuntimeLibraryCandidates() {
+		if !fileExists(candidate) {
+			continue
+		}
+		if err := copyRecursive(candidate, destPath); err != nil {
+			return err
+		}
+		licenseSrc := filepath.Join(filepath.Dir(candidate), "LICENSE.txt")
+		licenseDest := filepath.Join(destDir, "LICENSE.txt")
+		if fileExists(licenseSrc) && !fileExists(licenseDest) {
+			_ = copyRecursive(licenseSrc, licenseDest)
+		}
+		return nil
+	}
+
+	return fmt.Errorf("onnx runtime library %q was not found in app assets, bundle, executable, or Go module cache", libName)
 }
