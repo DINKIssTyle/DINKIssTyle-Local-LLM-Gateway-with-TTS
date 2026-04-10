@@ -424,6 +424,388 @@ function detectRunawayRepetitionAsync(text = '', kind = 'message') {
         worker.postMessage({ id, kind, text: source });
     });
 }
+/**
+ * SSEParser: raw bytes -> JSON events
+ */
+class SSEParser {
+    constructor() {
+        this.decoder = new TextDecoder();
+        this.buffer = '';
+    }
+
+    parse(value) {
+        this.buffer += this.decoder.decode(value, { stream: true });
+        const lines = this.buffer.split('\n\n');
+        this.buffer = lines.pop(); // Keep partial line
+
+        const events = [];
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+
+            let json = null;
+            if (trimmed.startsWith('data: ')) {
+                const dataStr = trimmed.substring(6);
+                if (dataStr === '[DONE]') continue;
+                try { json = JSON.parse(dataStr); } catch (e) { console.warn('[SSE] JSON Parse Error', e); }
+            } else if (trimmed.startsWith('{')) {
+                try { json = JSON.parse(trimmed); } catch (e) {}
+            }
+            if (json) events.push(json);
+        }
+        return events;
+    }
+}
+
+/**
+ * StreamState: Maintains state for a single streaming response
+ */
+class StreamState {
+    constructor(elementId, turnId, options = {}) {
+        this.elementId = elementId;
+        this.turnId = turnId;
+        this.options = options;
+
+        this.fullText = '';           
+        this.reasoningBuffer = '';    
+        this.speechBuffer = '';       
+        this.currentlyReasoning = false;
+        this.reasoningSource = null;   
+        this.lastToolCallHtml = '';
+        this.loopDetected = false;
+        this.streamRestartRequested = false;
+        this.streamAborted = false;
+        this.streamDetached = false;
+
+        this.useStreamingTTS = shouldAutoPlayTTSForRequest({
+            fromVoiceInput: options.fromVoiceInput === true || AppState.input.pendingVoiceInputAutoTTS
+        });
+
+        if (this.useStreamingTTS) {
+            initStreamingTTS(this.elementId);
+            requestWakeLock();
+        }
+    }
+}
+
+/**
+ * handleChatEndEvent: Process metadata and stats at the end of a stream
+ */
+function handleChatEndEvent(json, ctx) {
+    if (AppState.ui.progress.active) hideProgressDock();
+    
+    if (json.result.response_id) {
+        AppState.chat.stateful.lastResponseId = json.result.response_id;
+    }
+
+    const stats = json.result.stats || {};
+    if (typeof stats.input_tokens === 'number' && Number.isFinite(stats.input_tokens)) {
+        AppState.chat.stateful.lastInputTokens = stats.input_tokens;
+        AppState.chat.stateful.peakInputTokens = Math.max(AppState.chat.stateful.peakInputTokens, stats.input_tokens);
+    }
+    if (typeof stats.total_output_tokens === 'number' && Number.isFinite(stats.total_output_tokens)) {
+        AppState.chat.stateful.lastOutputTokens = stats.total_output_tokens;
+    }
+
+    const payload = {
+        result: json.result,
+        elapsed_ms: json.elapsed_ms,
+        total_elapsed_ms: json.total_elapsed_ms
+    };
+
+    // Tool state extraction
+    const toolState = extractToolStateFromPayload(payload);
+    if (isMeaningfulToolState(toolState)) {
+        const card = ensureToolCard(ctx.elementId, toolState.toolName || 'Tool');
+        if (card) card._history = Array.isArray(toolState.history) ? [...toolState.history] : [];
+        setToolCardState(ctx.elementId, toolState.state || 'success', toolState.summary || '', toolState.args || null, toolState.toolName || '');
+    }
+
+    // Reasoning extraction
+    const reasoningText = extractReasoningContentFromPayload(payload);
+    if (reasoningText) {
+        AppState.session.replay.reasoningBuffers.set(ctx.elementId, reasoningText);
+        const duration = Number.isFinite(Number(payload.total_elapsed_ms || payload.elapsed_ms)) ? Number(payload.total_elapsed_ms || payload.elapsed_ms) : null;
+        showReasoningStatus(ctx.elementId, reasoningText, false, duration);
+        finalizeReasoningStatus(ctx.elementId, 'done', '', duration);
+    }
+}
+
+/**
+ * handleModelLoadEvent: Process model loading progress
+ */
+function handleModelLoadEvent(json, ctx) {
+    switch (json.type) {
+        case 'model_load.start':
+            renderProgressDock(t('progress.loadingModel'), null, 'model-loading', true);
+            break;
+        case 'model_load.progress':
+            renderProgressDock(t('progress.loadingModel'), json.progress * 100, 'model-loading', false);
+            break;
+        case 'model_load.end':
+            renderProgressDock(`${t('progress.modelLoaded')} (${json.load_time_seconds?.toFixed(1) || '?'}s)`, 100, 'model-loading', false);
+            setTimeout(() => hideProgressDock(), 1200);
+            break;
+    }
+}
+
+/**
+ * handleErrorEvent: Show generative errors in bubble or tool card
+ */
+function handleErrorEvent(json, ctx) {
+    if (AppState.ui.progress.active) hideProgressDock();
+    const errMsg = getLocalizedRuntimeErrorMessage(json.error) || extractRuntimeErrorMessage(json.error) || t('tool.unknownError');
+
+    if (ctx.lastToolCallHtml) {
+        setToolCardState(ctx.elementId, 'failure', errMsg);
+    } else {
+        ctx.fullText += `\n\n**Error:** ${errMsg}\n`;
+    }
+}
+
+/**
+ * handleContentAddition: Append text, check for loops, detect text-based reasoning, and feed TTS
+ */
+async function handleContentAddition(contentToAdd, speechToAdd, ctx) {
+    hideProgressDock();
+    ctx.fullText += contentToAdd;
+
+    // Loop detection
+    if (!ctx.loopDetected && ctx.fullText.length >= 100) {
+        const loopMatch = await detectRunawayRepetitionAsync(ctx.fullText, 'message');
+        if (loopMatch) {
+            ctx.loopDetected = true;
+            const repetitionError = new Error(config.llmMode === 'stateful' && !ctx.options.repeatRecoveryApplied ? t('warning.repeatRetrying') : t('warning.repeatStopped'));
+            repetitionError.code = 'LMSTUDIO_RUNAWAY_REPETITION';
+            repetitionError.phase = 'message';
+            repetitionError.snippet = loopMatch.snippet;
+            ctx.streamRestartRequested = true;
+            throw repetitionError;
+        }
+    }
+
+    // Text-based Reasoning Detection fallback (e.g. <think>)
+    if (!ctx.currentlyReasoning && !config.hideThink) {
+        processTextBasedReasoning(ctx.fullText, ctx.elementId);
+    }
+
+    // UI rendering
+    const displayText = stripHiddenAssistantProtocolText(ctx.fullText);
+    scheduleStreamMessageRender(ctx.elementId, displayText);
+
+    // TTS handling
+    if (ctx.useStreamingTTS && speechToAdd) {
+        handleSpeechAddition(speechToAdd, ctx);
+    }
+}
+
+/**
+ * processTextBasedReasoning: Detect and handle <think> tags in the main content stream
+ */
+function processTextBasedReasoning(rawText, elementId) {
+    const hasAnalysis = rawText.includes('<|channel|>analysis');
+    const hasFinal = rawText.includes('<|channel|>final');
+    const hasThink = rawText.includes('<think>');
+    const hasThinkEnd = rawText.includes('</think>');
+
+    if ((hasAnalysis && !hasFinal) || (hasThink && !hasThinkEnd)) {
+        let fullReasoningText = "";
+        if (hasAnalysis) {
+            const parts = rawText.split('<|channel|>analysis');
+            fullReasoningText = parts[parts.length - 1].split('<|channel|>')[0].trim();
+        } else if (hasThink) {
+            const parts = rawText.split('<think>');
+            fullReasoningText = parts[parts.length - 1].split('</think>')[0].trim();
+        }
+        AppState.session.replay.reasoningBuffers.set(elementId, fullReasoningText);
+        let statusText = fullReasoningText;
+        if (statusText.length > 150) statusText = "..." + statusText.slice(-147);
+        showReasoningStatus(elementId, statusText, false);
+    } else if (hasFinal || hasThinkEnd) {
+        let fullReasoningText = "";
+        if (hasFinal) {
+            const parts = rawText.split('<|channel|>analysis');
+            if (parts.length > 1) fullReasoningText = parts[parts.length - 1].split('<|channel|>final')[0].trim();
+        } else if (hasThinkEnd) {
+            const parts = rawText.split('<think>');
+            if (parts.length > 1) fullReasoningText = parts[parts.length - 1].split('</think>')[0].trim();
+        }
+        if (fullReasoningText) {
+            AppState.session.replay.reasoningBuffers.set(elementId, fullReasoningText);
+            showReasoningStatus(elementId, fullReasoningText, true);
+        } else {
+            showReasoningStatus(elementId, null, true);
+        }
+    }
+}
+
+/**
+ * handleSpeechAddition: Clean and feed text to TTS engine
+ */
+function handleSpeechAddition(speechToAdd, ctx) {
+    let cleaned = speechToAdd;
+    if (cleaned.includes('<think>') || cleaned.includes('<|channel|>')) {
+        cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/g, '');
+        cleaned = cleaned.replace(/<\|channel\|>analysis[\s\S]*?(?=<\|channel\|>final|$)/g, '');
+        cleaned = cleaned.replace(/<\|channel\|>(analysis|final|message)/g, '');
+        cleaned = cleaned.replace(/<\|end\|>/g, '');
+        cleaned = cleaned.replace(/<think>/g, '').replace(/<\/think>/g, '');
+    }
+    if (cleaned) {
+        ctx.speechBuffer += cleaned;
+        feedStreamingTTS(ctx.speechBuffer);
+    }
+}
+
+async function handleStreamEvent(json, ctx) {
+    const elementId = ctx.elementId;
+
+    if (json.response_id) { AppState.chat.stateful.lastResponseId = json.response_id; }
+
+    if (json.error) {
+        const errorMsg = getLocalizedRuntimeErrorMessage(json.error) || extractRuntimeErrorMessage(json.error) || t('tool.unknownError');
+        throw new Error(errorMsg);
+    }
+
+    let contentToAdd = '';
+    let speechToAdd = '';
+
+    if (json.choices && json.choices.length > 0) {
+        const delta = json.choices[0].delta || {};
+        const message = json.choices[0].message || {};
+
+        if (delta.reasoning_content) {
+            if (!ctx.currentlyReasoning) {
+                ctx.reasoningBuffer += '<think>';
+                ctx.currentlyReasoning = true;
+                ctx.reasoningSource = 'field';
+                showReasoningStatus(elementId, '...');
+            }
+            if (ctx.reasoningSource !== 'sse') {
+                ctx.reasoningBuffer += delta.reasoning_content;
+                showReasoningStatus(elementId, ctx.reasoningBuffer);
+            }
+        }
+
+        const part = delta.content || message.content || '';
+        if (part && ctx.currentlyReasoning && !delta.reasoning_content) {
+            ctx.reasoningBuffer += '</think>\n';
+            ctx.currentlyReasoning = false;
+            ctx.reasoningSource = null;
+            finalizeReasoningStatus(elementId, 'done', '');
+        }
+
+        if (!ctx.currentlyReasoning) {
+            contentToAdd += part;
+            speechToAdd += part;
+        }
+    }
+    else if (json.output && Array.isArray(json.output)) {
+        for (const item of json.output) {
+            if (item.type === 'reasoning') continue;
+            if (item.content && item.type === 'message') {
+                contentToAdd += item.content;
+                if (!ctx.currentlyReasoning) speechToAdd += item.content;
+            }
+        }
+    }
+    else if (json.type === 'message.delta' && json.content) {
+        contentToAdd = json.content;
+        if (!ctx.currentlyReasoning) speechToAdd = json.content;
+    }
+    else if (json.type === 'reasoning.start') {
+        if (!ctx.currentlyReasoning) { ctx.reasoningBuffer += '<think>'; ctx.currentlyReasoning = true; }
+        ctx.reasoningSource = 'sse';
+        const startElapsed = Number.isFinite(Number(json.total_elapsed_ms || json.elapsed_ms)) ? Number(json.total_elapsed_ms || json.elapsed_ms) : null;
+        showReasoningStatus(elementId, '...', false, startElapsed);
+    }
+    else if (json.type === 'reasoning.delta' && json.content) {
+        ctx.reasoningBuffer += json.content;
+        const reasoningLoop = await detectRunawayRepetitionAsync(ctx.reasoningBuffer, 'reasoning');
+        if (reasoningLoop) {
+            const repetitionError = new Error(config.llmMode === 'stateful' && !ctx.options.repeatRecoveryApplied ? t('warning.repeatRetrying') : t('warning.repeatStopped'));
+            repetitionError.code = 'LMSTUDIO_RUNAWAY_REPETITION';
+            ctx.streamRestartRequested = true;
+            throw repetitionError;
+        }
+        ctx.currentlyReasoning = true;
+        ctx.reasoningSource = 'sse';
+        const elapsedMs = Number.isFinite(Number(json.total_elapsed_ms || json.elapsed_ms)) ? Number(json.total_elapsed_ms || json.elapsed_ms) : null;
+        AppState.session.replay.reasoningBuffers.set(elementId, ctx.reasoningBuffer);
+        showReasoningStatus(elementId, ctx.reasoningBuffer, false, elapsedMs);
+    }
+    else if (json.type === 'reasoning.end') {
+        ctx.reasoningBuffer += '</think>\n';
+        ctx.currentlyReasoning = false;
+        const elapsedMs = Number.isFinite(Number(json.total_elapsed_ms || json.elapsed_ms)) ? Number(json.total_elapsed_ms || json.elapsed_ms) : null;
+        ctx.reasoningSource = null;
+        AppState.session.replay.reasoningBuffers.set(elementId, ctx.reasoningBuffer);
+        finalizeReasoningStatus(elementId, 'done', ctx.reasoningBuffer, elapsedMs);
+    }
+    else if (json.type.startsWith('tool_call.')) {
+        if (json.type === 'tool_call.start') {
+            ctx.lastToolCallHtml = json.tool || 'Tool';
+            setToolCardState(elementId, 'running', '', null, json.tool || 'Tool');
+        } else if (json.type === 'tool_call.arguments') {
+            setToolCardState(elementId, 'running', '', json.arguments, json.tool || 'Tool');
+        } else if (json.type === 'tool_call.success') {
+            setToolCardState(elementId, 'success', t('tool.executionFinished'));
+        } else if (json.type === 'tool_call.failure') {
+            setToolCardState(elementId, 'failure', json.reason || t('tool.unknownError'));
+        }
+    }
+    else if (json.type === 'chat.end') { handleChatEndEvent(json, ctx); }
+    else if (json.type === 'prompt_processing.progress') { renderProgressDock(t('progress.processingPrompt'), json.progress * 100, 'prompt-processing', false); }
+    else if (json.type.startsWith('model_load.')) { handleModelLoadEvent(json, ctx); }
+    else if (json.type === 'error') { handleErrorEvent(json, ctx); }
+
+    if (contentToAdd) {
+        await handleContentAddition(contentToAdd, speechToAdd, ctx);
+    }
+}
+
+function finalizeStream(ctx) {
+    if (AppState.ui.progress.active) hideProgressDock();
+
+    if (!ctx.streamAborted && !ctx.streamDetached && !ctx.streamRestartRequested) {
+        if (ctx.currentlyReasoning) {
+            finalizeReasoningStatus(ctx.elementId, 'failed', t('status.unexpectedStop'));
+        }
+        if (getRunningToolCards(ctx.elementId).length > 0) {
+            finalizeAssistantStatusCards(ctx.elementId, 'failed', t('status.failed'));
+        }
+    }
+
+    const historyContent = sanitizeAssistantRenderText(ctx.fullText).trim();
+    const ownershipReserved = AppState.session.localStreamOwnershipReleased;
+
+    if (historyContent && !ctx.streamDetached && !ctx.streamRestartRequested && !ownershipReserved) {
+        AppState.chat.messages.push({ role: 'assistant', content: historyContent, turnId: ctx.turnId });
+        if (config.llmMode === 'stateful') {
+            AppState.chat.stateful.turnCount += 1;
+            AppState.chat.stateful.estimatedChars += historyContent.length;
+        }
+    }
+
+    if (ctx.useStreamingTTS) {
+        finalizeStreamingTTS(ctx.speechBuffer);
+    }
+
+    if (historyContent && !ctx.streamRestartRequested && !ownershipReserved) {
+        finalizeMessageContent(ctx.elementId, historyContent);
+        setAssistantActionBarReady(ctx.elementId);
+    }
+
+    if (AppState.chat.activeLocalAssistantId === ctx.elementId) {
+        AppState.chat.activeLocalTurnId = '';
+        AppState.chat.activeLocalAssistantId = '';
+    }
+
+    AppState.session.localStreamOwnershipReleased = false;
+    syncWakeLock();
+
+    return historyContent;
+}
 
 function extractFinalAssistantContentFromPayload(payload = {}) {
     const payloadMap = payload && typeof payload === 'object' ? payload : {};
@@ -5402,467 +5784,36 @@ async function streamResponse(payload, elementId, turnId = '', streamOptions = {
 
 // Helper to process the stream reader (shared by direct and proxy)
 async function processStream(response, elementId, turnId = '', streamOptions = {}) {
-    const deferToServerChatSession = false;
     const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let fullText = '';           // Content to display (no reasoning)
-    let loopDetected = false;    // Loop detection state
-    let reasoningBuffer = '';     // Separate buffer for reasoning content (for history only)
-    let speechBuffer = '';        // Dedicated buffer for speech content (no HTML/Tools)
-    let currentlyReasoning = false; // State track for reasoning blocks
-    let reasoningStartMs = 0;
-    let reasoningSource = null;    // 'sse' or 'field' to prevent duplication
-    let historyContent = '';
-    let lastToolCallHtml = '';
-    let streamAborted = false;
-    let streamDetached = false;
-    let streamRestartRequested = false;
-
-
-
-
-    // Initialize streaming TTS if enabled
-    const useStreamingTTS = shouldAutoPlayTTSForRequest({
-        fromVoiceInput: streamOptions.fromVoiceInput === true || AppState.input.pendingVoiceInputAutoTTS
-    });
-    if (useStreamingTTS) {
-        initStreamingTTS(elementId);
-        requestWakeLock(); // Request wake lock when TTS streaming starts
-    }
+    const parser = new SSEParser();
+    const ctx = new StreamState(elementId, turnId, streamOptions);
 
     try {
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
 
-            buffer += decoder.decode(value, { stream: true });
-
-            const lines = buffer.split('\n\n');
-            buffer = lines.pop();
-
-            for (const line of lines) {
-                const trimmed = line.trim();
-                if (!trimmed) continue;
-
-                let json = null;
-                try {
-                    if (trimmed.startsWith('data: ')) {
-                        const dataStr = trimmed.substring(6);
-                        if (dataStr === '[DONE]') break;
-                        json = JSON.parse(dataStr);
-                    } else if (trimmed.startsWith('{')) {
-                        // Handle raw JSON (non-streaming or Stateful response)
-                        json = JSON.parse(trimmed);
-                    } else {
-                        continue;
-                    }
-
-                    // DEBUG: Log all event types
-                    // console.log('[SSE Event]', json.type); 
-
-                    // Capture response_id if present (Stateful Chat)
-                    if (json.response_id) {
-                        AppState.chat.stateful.lastResponseId = json.response_id;
-                        console.log(`[Stateful] Captured response_id: ${AppState.chat.stateful.lastResponseId}`);
-                    }
-
-                    // Check for explicit error in stream (Context Overflow etc)
-                    if (json.error) {
-                        let errorMsg = getLocalizedRuntimeErrorMessage(json.error) || extractRuntimeErrorMessage(json.error);
-                        if (!errorMsg) {
-                            errorMsg = t('tool.unknownError');
-                        }
-                        // Throw to stop generation and show error in bubble
-                        throw new Error(errorMsg);
-                    }
-
-                    let contentToAdd = '';
-                    let speechToAdd = ''; // Content that should be spoken
-
-                    // Handle Standard/SSE format
-                    if (json.choices && json.choices.length > 0) {
-                        const delta = json.choices[0].delta || {};
-                        const message = json.choices[0].message || {}; // Non-streaming fallback
-
-                        // Support for OpenAI-style reasoning_content - store in reasoningBuffer, not contentToAdd
-                        if (delta.reasoning_content) {
-                            if (!currentlyReasoning) {
-                                reasoningBuffer += '<think>';
-                                currentlyReasoning = true;
-                                reasoningStartMs = Date.now();
-                                reasoningSource = 'field';
-                                if (!deferToServerChatSession) showReasoningStatus(elementId, '...'); // Start status — let card compute from startedAt
-                            }
-                            // Prioritize SSE if both present (LM Studio)
-                            if (reasoningSource !== 'sse') {
-                                reasoningBuffer += delta.reasoning_content;
-                                // No local timer — let card compute from its own startedAt + accumulatedDurationMs
-                                if (!deferToServerChatSession) showReasoningStatus(elementId, reasoningBuffer); // Update status with full buffer
-                            }
-                        }
-
-                        const part = delta.content || message.content || '';
-
-                        // Auto-close reasoning block if we transition to normal content
-                        if (part && currentlyReasoning && !delta.reasoning_content) {
-                            // If we see actual content and we were in reasoning, close the block
-                            reasoningBuffer += '</think>\n';
-                            currentlyReasoning = false;
-                            reasoningStartMs = 0;
-                            reasoningSource = null;
-                            // No local timer override — let card compute from its own startedAt + accumulatedDurationMs
-                            if (!deferToServerChatSession) finalizeReasoningStatus(elementId, 'done', '');
-                        }
-
-                        if (!currentlyReasoning) {
-                            contentToAdd += part;
-                            speechToAdd += part;
-                        }
-
-                    }
-
-
-                    // Handle Stateful Chat JSON format (output array mechanism - legacy/alternative?)
-                    else if (json.output && Array.isArray(json.output)) {
-                        for (const item of json.output) {
-                            // Skip reasoning type items - they should not be displayed in bubble
-                            if (item.type === 'reasoning') continue;
-
-                            if (item.content && item.type === 'message') {
-                                contentToAdd += item.content;
-                                if (!currentlyReasoning) {
-                                    speechToAdd += item.content;
-                                }
-                            }
-                        }
-                    }
-
-                    // Handle LM Studio Stateful Chat Streaming Format (based on logs)
-                    else if (json.type === 'message.delta' && json.content) {
-                        contentToAdd = json.content;
-                        if (!currentlyReasoning) {
-                            speechToAdd = json.content;
-                        }
-                    }
-
-                    // Handle Reasoning (Thinking) - Status indicator only, NO display in bubble
-                    else if (json.type === 'reasoning.start') {
-                        if (!currentlyReasoning) {
-                            reasoningBuffer += '<think>';
-                            currentlyReasoning = true;
-                            reasoningStartMs = Date.now();
-                        }
-                        reasoningSource = 'sse';
-                        if (!deferToServerChatSession) {
-                            // Pass server total_elapsed_ms if available, else null for local computation
-                            const startElapsed = Number.isFinite(Number(json.total_elapsed_ms || json.elapsed_ms))
-                                ? Number(json.total_elapsed_ms || json.elapsed_ms) : null;
-                            showReasoningStatus(elementId, '...', false, startElapsed);
-                        }
-                    }
-                    else if (json.type === 'reasoning.delta' && json.content) {
-                        // Add to reasoning buffer, NOT to contentToAdd/fullText
-                        reasoningBuffer += json.content;
-                        const reasoningLoop = await detectRunawayRepetitionAsync(reasoningBuffer, 'reasoning');
-                        if (reasoningLoop) {
-                            const repetitionError = new Error(
-                                config.llmMode === 'stateful' && !streamOptions.repeatRecoveryApplied
-                                    ? t('warning.repeatRetrying')
-                                    : t('warning.repeatStopped')
-                            );
-                            repetitionError.code = 'LMSTUDIO_RUNAWAY_REPETITION';
-                            repetitionError.phase = 'reasoning';
-                            repetitionError.snippet = reasoningLoop.snippet;
-                            streamRestartRequested = true;
-                            throw repetitionError;
-                        }
-                        currentlyReasoning = true;
-                        reasoningSource = 'sse';
-                        // Use server total_elapsed_ms as absolute total, or null for local computation
-                        const elapsedMs = Number.isFinite(Number(json.total_elapsed_ms || json.elapsed_ms))
-                            ? Number(json.total_elapsed_ms || json.elapsed_ms)
-                            : null;
-
-                        // Sync to global buffer for passive window / snapshot compatibility
-                        AppState.session.replay.reasoningBuffers.set(elementId, reasoningBuffer);
-
-                        if (!deferToServerChatSession) showReasoningStatus(elementId, reasoningBuffer, false, elapsedMs); // Update with full buffer
-                    }
-                    else if (json.type === 'reasoning.end') {
-                        reasoningBuffer += '</think>\n';
-                        currentlyReasoning = false;
-                        // Use server total_elapsed_ms as absolute total, or null for local computation
-                        const elapsedMs = Number.isFinite(Number(json.total_elapsed_ms || json.elapsed_ms))
-                            ? Number(json.total_elapsed_ms || json.elapsed_ms)
-                            : null;
-                        reasoningStartMs = 0;
-                        reasoningSource = null;
-
-                        AppState.session.replay.reasoningBuffers.set(elementId, reasoningBuffer);
-                        if (!deferToServerChatSession) finalizeReasoningStatus(elementId, 'done', reasoningBuffer, elapsedMs);
-                    }
-
-
-
-
-                    // Handle MCP Tool Calls - Display only, NO SPEECH
-                    else if (json.type === 'tool_call.start') {
-                        const toolName = json.tool || 'Tool';
-                        lastToolCallHtml = toolName;
-                        if (!deferToServerChatSession) setToolCardState(elementId, 'running', '', null, toolName);
-                    }
-                    else if (json.type === 'tool_call.arguments' && json.arguments) {
-                        const toolName = json.tool || 'Tool';
-                        if (!deferToServerChatSession) setToolCardState(elementId, 'running', '', json.arguments, toolName);
-                    }
-                    else if (json.type === 'tool_call.success') {
-                        if (!deferToServerChatSession) setToolCardState(elementId, 'success', t('tool.executionFinished'));
-                    }
-                    else if (json.type === 'tool_call.failure') {
-                        if (!deferToServerChatSession) setToolCardState(elementId, 'failure', json.reason || t('tool.unknownError'));
-                    }
-                    else if (json.type === 'chat.end' && json.result) {
-                        if (!deferToServerChatSession) hideProgressDock();
-                        if (json.result.response_id) {
-                            AppState.chat.stateful.lastResponseId = json.result.response_id;
-                            console.log(`[Stateful] Captured response_id from chat.end: ${AppState.chat.stateful.lastResponseId}`);
-                        }
-                        const stats = json.result.stats || {};
-                        if (typeof stats.input_tokens === 'number' && Number.isFinite(stats.input_tokens)) {
-                            AppState.chat.stateful.lastInputTokens = stats.input_tokens;
-                            AppState.chat.stateful.peakInputTokens = Math.max(AppState.chat.stateful.peakInputTokens, stats.input_tokens);
-                            console.log(`[Stateful] Captured input_tokens: ${AppState.chat.stateful.lastInputTokens}`);
-                        }
-                        if (typeof stats.total_output_tokens === 'number' && Number.isFinite(stats.total_output_tokens)) {
-                            AppState.chat.stateful.lastOutputTokens = stats.total_output_tokens;
-                        }
-                        const chatEndPayload = {
-                            result: json.result,
-                            elapsed_ms: Number.isFinite(Number(json.elapsed_ms)) ? Number(json.elapsed_ms) : undefined,
-                            total_elapsed_ms: Number.isFinite(Number(json.total_elapsed_ms)) ? Number(json.total_elapsed_ms) : undefined
-                        };
-                        const chatEndToolState = extractToolStateFromPayload(chatEndPayload);
-                        if (isMeaningfulToolState(chatEndToolState) && !deferToServerChatSession) {
-                            const card = ensureToolCard(elementId, chatEndToolState.toolName || 'Tool');
-                            if (card) {
-                                card._history = Array.isArray(chatEndToolState.history) ? [...chatEndToolState.history] : [];
-                            }
-                            setToolCardState(
-                                elementId,
-                                chatEndToolState.state || 'success',
-                                chatEndToolState.summary || '',
-                                chatEndToolState.args || null,
-                                chatEndToolState.toolName || ''
-                            );
-                        }
-                        const chatEndReasoningText = extractReasoningContentFromPayload(chatEndPayload);
-                        if (chatEndReasoningText) {
-                            AppState.session.replay.reasoningBuffers.set(elementId, chatEndReasoningText);
-                            if (!deferToServerChatSession) {
-                                const chatEndDuration = Number.isFinite(Number(chatEndPayload.total_elapsed_ms || chatEndPayload.elapsed_ms))
-                                    ? Number(chatEndPayload.total_elapsed_ms || chatEndPayload.elapsed_ms)
-                                    : null;
-                                showReasoningStatus(elementId, chatEndReasoningText, false, chatEndDuration);
-                                finalizeReasoningStatus(elementId, 'done', '', chatEndDuration);
-                            }
-                        }
-                    }
-                    // Handle Prompt Processing Progress
-                    else if (json.type === 'prompt_processing.progress') {
-                        if (!deferToServerChatSession) renderProgressDock(t('progress.processingPrompt'), json.progress * 100, 'prompt-processing', false);
-                    }
-                    // Handle Model Loading Progress (LM Studio Mode)
-                    else if (json.type === 'model_load.start') {
-                        console.log('[Model Load] Start:', json.model_instance_id);
-                        if (!deferToServerChatSession) renderProgressDock(t('progress.loadingModel'), null, 'model-loading', true);
-                    }
-                    else if (json.type === 'model_load.progress') {
-                        if (!deferToServerChatSession) renderProgressDock(t('progress.loadingModel'), json.progress * 100, 'model-loading', false);
-                    }
-                    else if (json.type === 'model_load.end') {
-                        console.log('[Model Load] End:', json.model_instance_id, 'Time:', json.load_time_seconds);
-                        if (!deferToServerChatSession) {
-                            renderProgressDock(`${t('progress.modelLoaded')} (${json.load_time_seconds?.toFixed(1) || '?'}s)`, 100, 'model-loading', false);
-                            setTimeout(() => hideProgressDock(), 1200);
-                        }
-                    }
-                    // Handle Generative Errors (Tool Parsing, etc.)
-                    else if (json.type === 'error') {
-                        console.error('[SSE Error]', json.error);
-                        if (!deferToServerChatSession) hideProgressDock();
-                        let errMsg = getLocalizedRuntimeErrorMessage(json.error)
-                            || extractRuntimeErrorMessage(json.error)
-                            || t('tool.unknownError');
-
-                        if (lastToolCallHtml) {
-                            setToolCardState(elementId, 'failure', errMsg);
-                        } else {
-                            contentToAdd = `\n\n**Error:** ${errMsg}\n`;
-                        }
-                    }
-
-                    if (contentToAdd) {
-                        hideProgressDock();
-
-                        fullText += contentToAdd;
-
-                        if (!loopDetected && fullText.length >= 100) {
-                            const loopMatch = await detectRunawayRepetitionAsync(fullText, 'message');
-                            if (loopMatch) {
-                                console.warn(`[Loop Detection] Pattern detected: "${loopMatch.snippet.substring(0, 30)}..." repeated ${loopMatch.repetitions || '?'}+ times`);
-                                loopDetected = true;
-                                const repetitionError = new Error(
-                                    config.llmMode === 'stateful' && !streamOptions.repeatRecoveryApplied
-                                        ? t('warning.repeatRetrying')
-                                        : t('warning.repeatStopped')
-                                );
-                                repetitionError.code = 'LMSTUDIO_RUNAWAY_REPETITION';
-                                repetitionError.phase = 'message';
-                                repetitionError.snippet = loopMatch.snippet;
-                                streamRestartRequested = true;
-                                throw repetitionError;
-                            }
-                        }
-
-                        const rawDisplayText = fullText;
-                        let displayText = stripHiddenAssistantProtocolText(fullText);
-
-                        // Reasoning Status Detection (Text-based fallback for <think> or <|channel|>)
-                        // Run universally if not already handled by SSE/reasoning_content events
-                        if (!currentlyReasoning && !config.hideThink) {
-                            const hasAnalysis = rawDisplayText.includes('<|channel|>analysis');
-
-                            const hasFinal = rawDisplayText.includes('<|channel|>final');
-                            const hasThink = rawDisplayText.includes('<think>');
-                            const hasThinkEnd = rawDisplayText.includes('</think>');
-
-                            if ((hasAnalysis && !hasFinal) || (hasThink && !hasThinkEnd)) {
-                                // Extract the "new" content part for status update
-                                let statusText = "Thinking...";
-                                let fullReasoningText = "";
-                                if (hasAnalysis) {
-                                    const parts = rawDisplayText.split('<|channel|>analysis');
-                                    fullReasoningText = parts[parts.length - 1].split('<|channel|>')[0].trim();
-                                    statusText = fullReasoningText;
-                                } else if (hasThink) {
-                                    const parts = rawDisplayText.split('<think>');
-                                    fullReasoningText = parts[parts.length - 1].split('</think>')[0].trim();
-                                    statusText = fullReasoningText;
-                                }
-
-                                AppState.session.replay.reasoningBuffers.set(elementId, fullReasoningText);
-
-                                // Limit status text length for display in the status line (full text is in bodyEl)
-                                if (statusText.length > 150) statusText = "..." + statusText.slice(-147);
-                                showReasoningStatus(elementId, statusText, false);
-                            } else if (hasFinal || hasThinkEnd) {
-                                // Extract final block to set as body text
-                                let fullReasoningText = "";
-                                if (hasFinal) {
-                                    const parts = rawDisplayText.split('<|channel|>analysis');
-                                    if (parts.length > 1) fullReasoningText = parts[parts.length - 1].split('<|channel|>final')[0].trim();
-                                } else if (hasThinkEnd) {
-                                    const parts = rawDisplayText.split('<think>');
-                                    if (parts.length > 1) fullReasoningText = parts[parts.length - 1].split('</think>')[0].trim();
-                                }
-                                if (fullReasoningText) {
-                                    AppState.session.replay.reasoningBuffers.set(elementId, fullReasoningText);
-                                    showReasoningStatus(elementId, fullReasoningText, true);
-                                } else {
-                                    showReasoningStatus(elementId, null, true);
-                                }
-                            }
-                        }
-
-                        if (!deferToServerChatSession) scheduleStreamMessageRender(elementId, displayText);
-
-                    }
-
-                    // Separate TTS Logic using speechBuffer
-                    if (useStreamingTTS && speechToAdd) {
-                        // Ultimate safety: Ensure no <think> or channel tags ever reach TTS
-                        let cleanedSpeech = speechToAdd;
-                        if (cleanedSpeech.includes('<think>') || cleanedSpeech.includes('<|channel|>')) {
-                            cleanedSpeech = cleanedSpeech.replace(/<think>[\s\S]*?<\/think>/g, '');
-                            cleanedSpeech = cleanedSpeech.replace(/<\|channel\|>analysis[\s\S]*?(?=<\|channel\|>final|$)/g, '');
-                            cleanedSpeech = cleanedSpeech.replace(/<\|channel\|>(analysis|final|message)/g, '');
-                            cleanedSpeech = cleanedSpeech.replace(/<\|end\|>/g, '');
-                            // Remove standalone partial tags
-                            cleanedSpeech = cleanedSpeech.replace(/<think>/g, '').replace(/<\/think>/g, '');
-                        }
-
-                        if (cleanedSpeech) {
-                            speechBuffer += cleanedSpeech;
-                            feedStreamingTTS(speechBuffer);
-                        }
-                    }
-
-                } catch (e) {
-                    if (e?.code === 'LMSTUDIO_RUNAWAY_REPETITION') {
-                        throw e;
-                    }
-                    if (e instanceof SyntaxError) {
-                        console.error('JSON Parse Error', e);
-                        continue;
-                    }
-                    throw e;
-                }
+            const events = parser.parse(value);
+            for (const event of events) {
+                await handleStreamEvent(event, ctx);
             }
         }
     } catch (err) {
         if (err.name === 'AbortError') {
-            streamAborted = true;
+            ctx.streamAborted = true;
             console.log('Stream aborted by user');
         } else if (isLikelyStreamDetachError(err)) {
-            streamDetached = true;
+            ctx.streamDetached = true;
             err.streamDetached = true;
-            console.warn('Stream detached from client while server may still be running:', err);
+            console.warn('Stream detached while server may still be running:', err);
             throw err;
         } else {
             console.error('Stream Error:', err);
-            throw err; // Re-throw other errors
+            throw err;
         }
     } finally {
-        if (!deferToServerChatSession) hideProgressDock();
-        if (!streamAborted && !streamDetached && !streamRestartRequested) {
-            if (currentlyReasoning) {
-                // No local timer — let card compute from its own startedAt + accumulatedDurationMs
-                if (!deferToServerChatSession) finalizeReasoningStatus(elementId, 'failed', t('status.unexpectedStop'));
-            }
-            if (getRunningToolCards(elementId).length > 0) {
-                if (!deferToServerChatSession) finalizeAssistantStatusCards(elementId, 'failed', t('status.failed'));
-            }
-        }
-        // Finalize (Save to history even if aborted)
-        // Keep only the user-visible answer in history to avoid ballooning context.
-        historyContent = sanitizeAssistantRenderText(fullText).trim();
-        if (historyContent && !streamDetached && !streamRestartRequested && !AppState.session.localStreamOwnershipReleased) {
-            AppState.chat.messages.push({ role: 'assistant', content: historyContent, turnId });
-            if (config.llmMode === 'stateful') {
-                AppState.chat.stateful.turnCount += 1;
-                AppState.chat.stateful.estimatedChars += historyContent.length;
-            }
-        }
-
-
-        // Finalize streaming TTS (commit any remaining text)
-        if (useStreamingTTS) {
-            finalizeStreamingTTS(speechBuffer); // Pass final speech buffer
-        }
-        if (historyContent && !deferToServerChatSession && !streamRestartRequested && !AppState.session.localStreamOwnershipReleased) {
-            finalizeMessageContent(elementId, historyContent);
-            setAssistantActionBarReady(elementId);
-        }
-        if (AppState.chat.activeLocalAssistantId === elementId) {
-            AppState.chat.activeLocalTurnId = '';
-            AppState.chat.activeLocalAssistantId = '';
-        }
-        AppState.session.localStreamOwnershipReleased = false;
-        syncWakeLock();
+        return finalizeStream(ctx);
     }
-
-    return historyContent;
 }
 
 function createMessageElement(msg) {
