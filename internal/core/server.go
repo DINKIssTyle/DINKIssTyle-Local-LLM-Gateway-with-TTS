@@ -2334,6 +2334,47 @@ type ServerTTSConfig struct {
 func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	globalApp = app // Initialize the global instance for all handlers
 	mux := http.NewServeMux()
+	mcp.SetRequestContextResolver(func(r *http.Request) mcp.ToolContext {
+		ctx := mcp.ToolContext{}
+		if r == nil {
+			return ctx
+		}
+
+		if userID := strings.TrimSpace(r.Header.Get("X-User-ID")); userID != "" && authMgr != nil {
+			authMgr.mu.RLock()
+			user := authMgr.users[userID]
+			authMgr.mu.RUnlock()
+			if user != nil {
+				ctx.UserID = user.ID
+				if user.Settings.EnableMemory != nil {
+					ctx.EnableMemory = *user.Settings.EnableMemory
+				}
+				ctx.DisabledTools = append([]string(nil), user.Settings.DisabledTools...)
+				ctx.DisallowedCmds = append([]string(nil), user.Settings.DisallowedCommands...)
+				ctx.DisallowedDirs = append([]string(nil), user.Settings.DisallowedDirectories...)
+				ctx.LocationInfo = strings.TrimSpace(r.Header.Get("X-DKST-Location"))
+				return ctx
+			}
+		}
+
+		token := extractSessionTokenFromRequest(r)
+		if token == "" || authMgr == nil {
+			return ctx
+		}
+		user, valid := authMgr.ValidateSession(token)
+		if !valid || user == nil {
+			return ctx
+		}
+		ctx.UserID = user.ID
+		if user.Settings.EnableMemory != nil {
+			ctx.EnableMemory = *user.Settings.EnableMemory
+		}
+		ctx.DisabledTools = append([]string(nil), user.Settings.DisabledTools...)
+		ctx.DisallowedCmds = append([]string(nil), user.Settings.DisallowedCommands...)
+		ctx.DisallowedDirs = append([]string(nil), user.Settings.DisallowedDirectories...)
+		ctx.LocationInfo = strings.TrimSpace(r.Header.Get("X-DKST-Location"))
+		return ctx
+	})
 
 	// Public endpoints (no auth required)
 	mux.HandleFunc("/api/login", handleLogin(authMgr))
@@ -2455,10 +2496,6 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 					if newCfg.EnableMemory != nil {
 						user.Settings.EnableMemory = newCfg.EnableMemory
 						updated = true
-						// Sync to MCP context
-						// We need disallowed lists here too, but handleConfig is partial update.
-						// Let's retrieve full user settings to be safe.
-						mcp.SetContext(user.ID, *newCfg.EnableMemory, user.Settings.DisabledTools, "", user.Settings.DisallowedCommands, user.Settings.DisallowedDirectories)
 					}
 					if newCfg.StatefulTurnLimit != nil {
 						value := *newCfg.StatefulTurnLimit
@@ -3785,10 +3822,15 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		enableMCP = false
 	}
 
-	// Set MCP Context for this user interaction
-	// This ensures that when LM Studio calls back to MCP, it has the correct context
-	mcp.SetContext(userID, enableMemory, disabledTools, locationInfo, disallowedCmds, disallowedDirs)
-	log.Printf("[handleChat-DEBUG] userID=%s, enableMemory=%v, disabledTools=%v, Location=%s, DisallowedCmds=%v, DisallowedDirs=%v", userID, enableMemory, disabledTools, locationInfo, disallowedCmds, disallowedDirs)
+	toolCtx := mcp.ToolContext{
+		UserID:         userID,
+		EnableMemory:   enableMemory,
+		DisabledTools:  append([]string(nil), disabledTools...),
+		LocationInfo:   locationInfo,
+		DisallowedCmds: append([]string(nil), disallowedCmds...),
+		DisallowedDirs: append([]string(nil), disallowedDirs...),
+	}
+	log.Printf("[handleChat-DEBUG] userID=%s, enableMemory=%v, disabledTools=%v, Location=%s, DisallowedCmds=%v, DisallowedDirs=%v", toolCtx.UserID, toolCtx.EnableMemory, toolCtx.DisabledTools, toolCtx.LocationInfo, toolCtx.DisallowedCmds, toolCtx.DisallowedDirs)
 	AddDebugTrace("chat", "request.context", "Resolved chat execution context", map[string]interface{}{
 		"user":                userID,
 		"memory":              enableMemory,
@@ -5307,7 +5349,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 					"count": toolSignatureCounts[toolSig],
 				})
 			} else {
-				result, err = mcp.ExecuteToolByName(lastToolName, []byte(lastToolArgsStr), userID, enableMemory, disabledTools)
+				result, err = mcp.ExecuteToolByName(lastToolName, []byte(lastToolArgsStr), toolCtx)
 			}
 			var toolResultEvt map[string]interface{}
 			if err != nil {
