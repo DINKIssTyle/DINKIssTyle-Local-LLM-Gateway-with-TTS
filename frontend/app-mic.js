@@ -40,6 +40,12 @@
             if (micLayoutContainer) {
                 micLayoutContainer.classList.toggle('active', isActive);
             }
+            if (inlineMicBtn) {
+                inlineMicBtn.title = isActive
+                    ? (t('action.stopGeneration') || 'Stop')
+                    : (t('action.voiceInput') || 'Voice Input');
+                inlineMicBtn.innerHTML = `<span class="material-icons-round">${isActive ? 'stop' : 'mic'}</span>`;
+            }
 
             if (isActive) {
                 if (messageInput) messageInput.classList.add('stt-active');
@@ -49,6 +55,7 @@
                 stopPlaceholderAnimation();
                 updateMessageInputPlaceholder?.();
             }
+            updateSendButtonState?.();
         }
 
         function startPlaceholderAnimation() {
@@ -116,6 +123,7 @@
                     if (finalTranscript) {
                         const currentText = messageInput.value.trim();
                         messageInput.value = currentText ? `${currentText} ${finalTranscript}` : finalTranscript;
+                        updateSendButtonState?.();
                         
                         // Auto-send if configured (logic simplified here, app.js will handle final send)
                         if (!AppState.input.sttSuppressAutoSend) {
@@ -168,21 +176,30 @@
             const container = micLayoutContainer;
             if (!container) return;
             
-            global.document.body.classList.remove('layout-mic-bottom');
-            container.className = '';
+            const layout = config.micLayout || 'none';
             
-            if (!config.micLayout || config.micLayout === 'none') {
-                container.hidden = true;
-            } else if (config.micLayout === 'inline') {
-                container.hidden = true;
-                if (inlineMicBtn) inlineMicBtn.hidden = false;
+            // Clear all previous layout classes and specific styles
+            global.document.body.classList.remove('layout-mic-bottom');
+            container.classList.remove('mic-layout-left', 'mic-layout-right', 'mic-layout-bottom', 'mic-layout-inline');
+            if (inlineMicBtn) {
+                inlineMicBtn.hidden = true;
+                inlineMicBtn.classList.remove('is-visible');
+            }
+            
+            if (layout === 'none') {
+                container.style.display = 'none';
+            } else if (layout === 'inline') {
+                container.style.display = 'none';
+                if (inlineMicBtn) {
+                    inlineMicBtn.hidden = false;
+                    inlineMicBtn.classList.add('is-visible');
+                }
             } else {
-                container.hidden = false;
-                container.classList.add(`mic-layout-${config.micLayout}`);
-                if (config.micLayout === 'bottom') {
+                container.style.display = 'flex';
+                container.classList.add(`mic-layout-${layout}`);
+                if (layout === 'bottom') {
                     global.document.body.classList.add('layout-mic-bottom');
                 }
-                if (inlineMicBtn) inlineMicBtn.hidden = true;
             }
         }
 
