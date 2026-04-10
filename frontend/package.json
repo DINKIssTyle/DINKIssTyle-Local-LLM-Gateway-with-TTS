@@ -1,9 +1,9 @@
 {
-    "name": "dinkisstyle-chat-frontend",
-    "version": "3.0.1",
-    "description": "Frontend for DINKIssTyle Chat",
-    "scripts": {
-        "dev": "echo 'No dev build needed'",
-        "build": "echo 'Static frontend - no build step'"
-    }
+    "name":  "dinkisstyle-chat-frontend",
+    "version":  "3.0.1",
+    "description":  "Frontend for DINKIssTyle Chat",
+    "scripts":  {
+                    "dev":  "echo \u0027No dev build needed\u0027",
+                    "build":  "echo \u0027Static frontend - no build step\u0027"
+                }
 }

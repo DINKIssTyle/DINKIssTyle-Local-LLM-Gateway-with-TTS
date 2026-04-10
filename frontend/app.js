@@ -838,7 +838,7 @@ const translations = {
         'health.mode': '모드',
         'health.checkToken': ' -> **API Token**을 확인해주세요.',
         'health.checkServer': ' -> **LM Studio 서버**가 실행 중인지 확인해주세요.',
-        'health.checkServer': ' -> **LM Studio 서버**가 실행 중인지 확인해주세요.',
+
         // Errors
         'error.authFailed': 'LM Studio 인증 실패.\n\n해결 방법:\n1. LM Studio -> Developer(사이드바) -> Server Settings\n2. \'Require Authentication\' 끄기\n3. 또는 \'Manage Tokens\'에서 \'Create new token\' API Key를 생성해서 우측 상단 설정(⚙️)에 입력하세요.\n\n원본 오류: ',
         'error.mcpFailed': 'LM Studio MCP 연결 실패.\n\n해결 방법:\n1. LM Studio -> Developer(사이드바) -> Server Settings\n2. \'Allow calling servers from mcp.json\' 옵션 켜기\n3. 또는 우측 상단 설정(⚙️)에서 \'MCP 기능 활성화\' 옵션을 꺼주세요.\n\n원본 오류: ',
@@ -1092,6 +1092,7 @@ const translations = {
         // Errors
         'error.authFailed': 'LM Studio Authentication Failed.\n\nSolution:\n1. Open LM Studio -> Developer (sidebar) -> Server Settings\n2. Turn OFF \'Require Authentication\'\n3. Or go to \'Manage Tokens\' -> \'Create new token\' and enter it in Settings.\n\nOriginal Error: ',
         'error.mcpFailed': 'LM Studio MCP Connection Failed.\n\nSolution:\n1. Open LM Studio -> Developer (sidebar) -> Server Settings\n2. Turn ON \'Allow calling servers from mcp.json\'\n3. Or turn OFF \'Enable MCP Features\' in the top right settings (⚙️).\n\nOriginal Error: ',
+        'error.mcpPluginToolsUnavailable': 'LM Studio cannot call MCP tools right now. Please check your `mcp.json`.\n\nUse the server address shown in the server window like this:\n```json\n{\n  "mcpServers": {\n    "dinkisstyle-gateway": {\n      "url": "{url}"\n    }\n  }\n}\n```',
         'warning.loopDetected': '[⚠️ Repeated responses were detected, and the response was stopped.]',
         'warning.repeatRetrying': '[⚠️ Repetition was detected, so the request is being retried with adjusted LM Studio weights.]',
         'warning.repeatStopped': '[⚠️ Repetition was detected, so the response was stopped.]',
@@ -1269,6 +1270,7 @@ const translations = {
         'health.checkServer': ' -> **LM Studio 서버**가 켜져 있는지 확인하세요.',
         'error.authFailed': 'LM Studio 인증 실패.\n\n해결 방법:\n1. LM Studio -> Developer -> Server Settings\n2. \'Require Authentication\' 끄기\n3. 또는 토큰을 생성해 설정에 입력하세요.\n\n오류: ',
         'error.mcpFailed': 'LM Studio MCP 연결 실패.\n\n해결 방법:\n1. LM Studio -> Developer -> Server Settings\n2. \'Allow calling servers from mcp.json\' 켜기\n3. 또는 설정에서 MCP 기능을 끄세요.\n\n오류: ',
+        'error.mcpPluginToolsUnavailable': '현재 LM Studio에서 MCP 도구를 호출할 수 없습니다. `mcp.json`를 확인해주세요.\n\n아래는 현재 서버 설정값을 참조한 예시입니다.\n```json\n{\n  "mcpServers": {\n    "dinkisstyle-gateway": {\n      "url": "{url}"\n    }\n  }\n}\n```',
         'warning.loopDetected': '[⚠️ 반복적인 응답이 감지되어 중단되었습니다.]',
         'warning.repeatRetrying': '[⚠️ 반복이 감지되어 LM Studio 가중치를 조정해 다시 시도합니다.]',
         'warning.repeatStopped': '[⚠️ 반복이 감지되어 응답을 중단했습니다.]',
@@ -1280,6 +1282,83 @@ const translations = {
 function t(key) {
     const lang = config.language || 'ko';
     return translations[lang]?.[key] || translations['en']?.[key] || key;
+}
+
+function extractRuntimeErrorMessage(errorLike) {
+    if (typeof errorLike === 'string') {
+        return errorLike.trim();
+    }
+    if (errorLike && typeof errorLike === 'object' && typeof errorLike.message === 'string') {
+        return errorLike.message.trim();
+    }
+    return '';
+}
+
+function getSuggestedMcpServerUrl() {
+    const defaultUrl = 'http://127.0.0.1:8081/mcp/sse';
+
+    try {
+        const protocol = String(window?.location?.protocol || '').toLowerCase();
+        const host = String(window?.location?.host || '').trim();
+        if ((protocol === 'http:' || protocol === 'https:') && host) {
+            return `http://${host}/mcp/sse`;
+        }
+    } catch (_) {
+        // Ignore window/location access failures and fall back below.
+    }
+
+    const configuredPort = String(
+        document.getElementById('server-port')?.value
+        || ''
+    ).trim();
+    if (configuredPort) {
+        return `http://127.0.0.1:${configuredPort}/mcp/sse`;
+    }
+
+    return defaultUrl;
+}
+
+function isLMStudioPluginToolConnectionError(errorLike, rawMessage = '') {
+    const errorType = errorLike && typeof errorLike === 'object'
+        ? String(errorLike.type || '').trim()
+        : '';
+    const errorParam = errorLike && typeof errorLike === 'object'
+        ? String(errorLike.param || '').trim()
+        : '';
+    const normalizedMessage = String(rawMessage || '').toLowerCase();
+
+    return errorType === 'plugin_connection_error'
+        || (
+            errorParam === 'integrations'
+            && normalizedMessage.includes('unable to get plugin tools')
+        )
+        || normalizedMessage.includes("unable to get plugin tools for 'mcp/dinkisstyle-gateway'")
+        || normalizedMessage.includes("plugin identifier 'mcp/dinkisstyle-gateway'")
+        || normalizedMessage.includes('plugin process exited with code 1');
+}
+
+function getLocalizedRuntimeErrorMessage(errorLike) {
+    const rawMessage = extractRuntimeErrorMessage(errorLike);
+    if (!rawMessage) return '';
+
+    if (rawMessage.startsWith('LM_STUDIO_AUTH_ERROR: ')) {
+        return t('error.authFailed') + rawMessage.replace('LM_STUDIO_AUTH_ERROR: ', '');
+    }
+    if (rawMessage.startsWith('LM_STUDIO_MCP_ERROR: ')) {
+        return t('error.mcpFailed') + rawMessage.replace('LM_STUDIO_MCP_ERROR: ', '');
+    }
+    if (rawMessage.startsWith('LM_STUDIO_CONTEXT_ERROR: ')) {
+        return t('error.contextExceeded');
+    }
+    if (rawMessage.startsWith('LM_STUDIO_VISION_ERROR: ')) {
+        return t('error.visionNotSupported');
+    }
+    if (isLMStudioPluginToolConnectionError(errorLike, rawMessage)) {
+        return t('error.mcpPluginToolsUnavailable')
+            .replace('{url}', getSuggestedMcpServerUrl());
+    }
+
+    return '';
 }
 
 function normalizeInlineMarkdownSpacing(segment) {
@@ -2890,7 +2969,7 @@ function restoreChatScrollPosition(scrollTop) {
 }
 
 function runAfterViewportStabilizes(callback, { maxWaitMs = 420, requiredStableFrames = 2 } = {}) {
-    if (typeof callback !== 'function') return () => {};
+    if (typeof callback !== 'function') return () => { };
 
     const controller = new AbortController();
     let finished = false;
@@ -4928,7 +5007,7 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
         let reasoningText = String(item?.reasoning?.content || '');
         let reasoningDuration = getSnapshotReasoningDuration(item);
         const snapshotToolState = item.tool || sessionUISnapshot.tool_cards?.[turnId] || null;
-        
+
         // Fallback: If no reasoning_content is explicitly defined but <think> exists in the text
         if (!reasoningText && assistantText.includes('<think>')) {
             const parts = assistantText.split(/<think>([\s\S]*?)<\/think>/);
@@ -7552,38 +7631,9 @@ async function streamResponse(payload, elementId, turnId = '', streamOptions = {
         let errorDetails = `Server Error ${response.status}: ${response.statusText}`;
         const errorBody = await response.text();
         if (errorBody) {
-            // Check for localized auth error
-            if (errorBody.startsWith("LM_STUDIO_AUTH_ERROR: ")) {
-                const originalMsg = errorBody.replace("LM_STUDIO_AUTH_ERROR: ", "");
-                // Translate using i18n key 'error.authFailed'
-                // t() function is available globally
-                const localizedMsg = t('error.authFailed');
-                errorDetails = localizedMsg + originalMsg;
-
-                // Throwing here will be caught by sendMessage catch block
-                throw new Error(errorDetails);
-            }
-
-            // Check for localized MCP permission error
-            if (errorBody.startsWith("LM_STUDIO_MCP_ERROR: ")) {
-                const originalMsg = errorBody.replace("LM_STUDIO_MCP_ERROR: ", "");
-                const localizedMsg = t('error.mcpFailed');
-                errorDetails = localizedMsg + originalMsg;
-                throw new Error(errorDetails);
-            }
-
-            // Check for Context Overflow error (from non-200 check)
-            if (errorBody.startsWith("LM_STUDIO_CONTEXT_ERROR: ")) {
-                // "LM_STUDIO_CONTEXT_ERROR: Context size exceeded."
-                // Use localized message
-                errorDetails = t('error.contextExceeded');
-                errorDetails = t('error.contextExceeded');
-                throw new Error(errorDetails);
-            }
-
-            // Check for Vision Support Error
-            if (errorBody.startsWith("LM_STUDIO_VISION_ERROR: ")) {
-                errorDetails = t('error.visionNotSupported');
+            const localizedError = getLocalizedRuntimeErrorMessage(errorBody);
+            if (localizedError) {
+                errorDetails = localizedError;
                 throw new Error(errorDetails);
             }
 
@@ -7680,9 +7730,9 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
 
                     // Check for explicit error in stream (Context Overflow etc)
                     if (json.error) {
-                        let errorMsg = json.error;
-                        if (errorMsg.startsWith("LM_STUDIO_CONTEXT_ERROR: ")) {
-                            errorMsg = t('error.contextExceeded');
+                        let errorMsg = getLocalizedRuntimeErrorMessage(json.error) || extractRuntimeErrorMessage(json.error);
+                        if (!errorMsg) {
+                            errorMsg = t('tool.unknownError');
                         }
                         // Throw to stop generation and show error in bubble
                         throw new Error(errorMsg);
@@ -7794,10 +7844,10 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
                         const elapsedMs = Number.isFinite(Number(json.total_elapsed_ms || json.elapsed_ms))
                             ? Number(json.total_elapsed_ms || json.elapsed_ms)
                             : null;
-                        
+
                         // Sync to global buffer for passive window / snapshot compatibility
                         serverReplayReasoningBuffers.set(elementId, reasoningBuffer);
-                        
+
                         if (!deferToServerChatSession) showReasoningStatus(elementId, reasoningBuffer, false, elapsedMs); // Update with full buffer
                     }
                     else if (json.type === 'reasoning.end') {
@@ -7809,7 +7859,7 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
                             : null;
                         reasoningStartMs = 0;
                         reasoningSource = null;
-                        
+
                         serverReplayReasoningBuffers.set(elementId, reasoningBuffer);
                         if (!deferToServerChatSession) finalizeReasoningStatus(elementId, 'done', reasoningBuffer, elapsedMs);
                     }
@@ -7902,12 +7952,9 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
                     else if (json.type === 'error') {
                         console.error('[SSE Error]', json.error);
                         if (!deferToServerChatSession) hideProgressDock();
-                        let errMsg = t('tool.unknownError');
-                        if (json.error && json.error.message) {
-                            errMsg = json.error.message;
-                        } else if (typeof json.error === 'string') {
-                            errMsg = json.error;
-                        }
+                        let errMsg = getLocalizedRuntimeErrorMessage(json.error)
+                            || extractRuntimeErrorMessage(json.error)
+                            || t('tool.unknownError');
 
                         if (lastToolCallHtml) {
                             setToolCardState(elementId, 'failure', errMsg);
@@ -8016,7 +8063,11 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
                     if (e?.code === 'LMSTUDIO_RUNAWAY_REPETITION') {
                         throw e;
                     }
-                    console.error('JSON Parse Error', e);
+                    if (e instanceof SyntaxError) {
+                        console.error('JSON Parse Error', e);
+                        continue;
+                    }
+                    throw e;
                 }
             }
         }
