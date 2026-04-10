@@ -235,6 +235,17 @@
                             aria-label="User bubble theme"></div>
                     </div>
                     <div class="setting-item">
+                        <label data-i18n="setting.streamingScrollMode.label">Scroll Behavior</label>
+                        <p class="setting-desc" data-i18n="setting.streamingScrollMode.desc">Choose how the chat view
+                            behaves while the assistant response is streaming.</p>
+                        <select id="cfg-streaming-scroll-mode">
+                            <option value="auto" data-i18n="setting.streamingScrollMode.option.auto">Auto Scroll
+                            </option>
+                            <option value="label-top" data-i18n="setting.streamingScrollMode.option.labelTop">No Auto
+                                Scroll</option>
+                        </select>
+                    </div>
+                    <div class="setting-item">
                         <label data-i18n="setting.markdownRenderMode.label">Markdown Rendering Mode</label>
                         <p class="setting-desc" data-i18n="setting.markdownRenderMode.desc">Choose how aggressively
                             markdown is rendered while the response is still streaming.</p>
