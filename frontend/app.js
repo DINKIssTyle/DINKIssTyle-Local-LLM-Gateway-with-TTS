@@ -57,6 +57,7 @@ let config = {
     micLayout: 'none', // 'none', 'left', 'right', 'bottom', 'inline'
     chatFontSize: 16,
     userBubbleTheme: 'ocean', // Options: 'ocean', 'lime', 'sunset', 'amber', 'magenta'
+    streamingScrollMode: 'auto', // Options: 'auto', 'label-top'
     markdownRenderMode: 'fast', // Options: 'fast', 'balanced', 'final'
     hapticsEnabled: true
 };
@@ -698,6 +699,10 @@ const translations = {
         'setting.memory.reset.success': '메모리가 초기화되었습니다.',
         'setting.userBubbleTheme.label': '사용자 버블 스타일',
         'setting.userBubbleTheme.desc': '내 메시지 버블의 그라데이션 색상을 선택합니다.',
+        'setting.streamingScrollMode.label': '스크롤 방식',
+        'setting.streamingScrollMode.desc': '어시스턴트 응답이 스트리밍되는 동안 채팅 화면 스크롤 방식을 선택합니다.',
+        'setting.streamingScrollMode.option.auto': '자동 스크롤',
+        'setting.streamingScrollMode.option.labelTop': '자동 스크롤 안함',
         'setting.markdownRenderMode.label': '마크다운 랜더링 방식',
         'setting.markdownRenderMode.desc': '응답 스트리밍 중 마크다운을 얼마나 적극적으로 랜더링할지 선택합니다.',
         'setting.markdownRenderMode.option.fast': '빠르게 랜더링',
@@ -948,6 +953,10 @@ const translations = {
         'setting.memory.reset.success': 'Memory reset successfully.',
         'setting.userBubbleTheme.label': 'User Bubble Style',
         'setting.userBubbleTheme.desc': 'Choose the gradient preset for your message bubbles.',
+        'setting.streamingScrollMode.label': 'Scroll Behavior',
+        'setting.streamingScrollMode.desc': 'Choose how the chat view behaves while the assistant response is streaming.',
+        'setting.streamingScrollMode.option.auto': 'Auto Scroll',
+        'setting.streamingScrollMode.option.labelTop': 'No Auto Scroll',
         'setting.markdownRenderMode.label': 'Markdown Rendering Mode',
         'setting.markdownRenderMode.desc': 'Choose how aggressively markdown is rendered while the response is still streaming.',
         'setting.markdownRenderMode.option.fast': 'Fast Rendering',
@@ -1136,6 +1145,10 @@ const translations = {
         'setting.memory.reset.success': '메모리가 성공적으로 초기화되었습니다.',
         'setting.userBubbleTheme.label': '사용자 말풍선 스타일',
         'setting.userBubbleTheme.desc': '사용자 메시지 말풍선의 그라데이션 프리셋을 선택합니다.',
+        'setting.streamingScrollMode.label': '스크롤 방식',
+        'setting.streamingScrollMode.desc': '어시스턴트 응답이 스트리밍되는 동안 채팅 화면 스크롤 동작을 선택합니다.',
+        'setting.streamingScrollMode.option.auto': '자동 스크롤',
+        'setting.streamingScrollMode.option.labelTop': '자동 스크롤 안 함',
         'setting.markdownRenderMode.label': '마크다운 렌더링 모드',
         'setting.markdownRenderMode.desc': '응답 스트리밍 중 마크다운 렌더링의 공격성을 선택합니다.',
         'setting.markdownRenderMode.option.fast': '빠른 렌더링',
@@ -2792,6 +2805,8 @@ let autoScrollResizeObserver = null;
 let lockScrollToLatest = false;
 let suppressNextScrollEvent = false;
 let activeStreamingMessageId = null;
+let activeStreamingMessagePinnedToTop = false;
+let activeStreamingMessagePinPending = false;
 let pendingScrollToBottom = false;
 let lastObservedChatScrollHeight = 0;
 let pendingChatScrollMetricsFrame = null;
@@ -2828,6 +2843,11 @@ function readChatScrollMetrics() {
         nearBottom: distanceFromBottom <= AUTO_SCROLL_THRESHOLD_PX,
         longScrollable: (scrollHeight - clientHeight) > Math.max(320, Math.round(window.innerHeight * 0.45))
     };
+}
+
+function getStreamingScrollMode() {
+    const mode = String(config.streamingScrollMode || 'auto').trim().toLowerCase();
+    return mode === 'label-top' ? 'label-top' : 'auto';
 }
 
 function commitChatScrollMetrics(metrics) {
@@ -4278,9 +4298,12 @@ function loadConfig() {
     updateMicLayout();
 
     config.userBubbleTheme = USER_BUBBLE_THEMES[config.userBubbleTheme] ? config.userBubbleTheme : 'ocean';
+    config.streamingScrollMode = ['auto', 'label-top'].includes(config.streamingScrollMode) ? config.streamingScrollMode : 'auto';
     config.markdownRenderMode = ['fast', 'balanced', 'final'].includes(config.markdownRenderMode) ? config.markdownRenderMode : 'balanced';
     applyUserBubbleTheme();
     renderUserBubbleThemeOptions();
+    const streamingScrollModeEl = document.getElementById('cfg-streaming-scroll-mode');
+    if (streamingScrollModeEl) streamingScrollModeEl.value = config.streamingScrollMode;
     const markdownRenderModeEl = document.getElementById('cfg-markdown-render-mode');
     if (markdownRenderModeEl) markdownRenderModeEl.value = config.markdownRenderMode;
     const hapticsEl = document.getElementById('cfg-enable-haptics');
@@ -4397,7 +4420,7 @@ function setupSettingsListeners() {
     });
 
     // Selects & Inputs: save on change
-    const autoSaveIds = ['cfg-api', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-os-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-context-strategy', 'cfg-show-reasoning-control', 'cfg-force-show-reasoning-control', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model', 'cfg-tts-engine', 'cfg-markdown-render-mode', 'cfg-enable-haptics', 'cfg-embedding-model', 'cfg-mic-layout'];
+    const autoSaveIds = ['cfg-api', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-os-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-context-strategy', 'cfg-show-reasoning-control', 'cfg-force-show-reasoning-control', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model', 'cfg-tts-engine', 'cfg-streaming-scroll-mode', 'cfg-markdown-render-mode', 'cfg-enable-haptics', 'cfg-embedding-model', 'cfg-mic-layout'];
     autoSaveIds.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.onchange = () => saveConfig(false);
@@ -4658,6 +4681,7 @@ function saveConfig(closeModal = true) {
     config.statefulTokenBudget = Math.max(1000, parseInt(document.getElementById('cfg-stateful-token-budget')?.value, 10) || DEFAULT_STATEFUL_TOKEN_BUDGET);
     config.micLayout = document.getElementById('cfg-mic-layout').value;
     config.userBubbleTheme = USER_BUBBLE_THEMES[config.userBubbleTheme] ? config.userBubbleTheme : 'ocean';
+    config.streamingScrollMode = document.getElementById('cfg-streaming-scroll-mode')?.value === 'label-top' ? 'label-top' : 'auto';
     config.markdownRenderMode = document.getElementById('cfg-markdown-render-mode')?.value || 'balanced';
     config.hapticsEnabled = document.getElementById('cfg-enable-haptics')?.checked !== false;
     config.chatFontSize = Math.max(12, Math.min(24, parseInt(config.chatFontSize, 10) || 16));
@@ -7358,10 +7382,15 @@ async function sendMessage(options = {}) {
         turnId
     };
 
-    appendMessage(userMsg);
-    lockScrollToLatest = true;
-    shouldAutoScroll = true;
-    holdAutoScrollAtBottom(600);
+    const isLabelTop = getStreamingScrollMode() === 'label-top';
+    appendMessage(userMsg, { skipScroll: isLabelTop });
+    if (isLabelTop) {
+        pinTurnToTop(turnId);
+    } else {
+        lockScrollToLatest = true;
+        shouldAutoScroll = true;
+        holdAutoScrollAtBottom(600);
+    }
     messages.push(userMsg);
     if (usesStatefulConversationContext()) {
         statefulEstimatedChars += text.length;
@@ -8666,6 +8695,7 @@ function ensureToolCard(elementId, toolName = 'Tool') {
         </div>`;
     toolsHost.appendChild(card);
     msgEl.dataset.activeToolCard = card.id;
+    checkAndTriggerLabelPin(); // Transition to assistant view when tool starts
     return card;
 }
 
@@ -9176,6 +9206,7 @@ function showReasoningStatus(elementId, text, isFinal = false, elapsedOverrideMs
     if (titleEl) {
         titleEl.classList.add('is-live');
         titleEl.textContent = formatThoughtDuration(durationMs);
+        if (text && text.trim()) checkAndTriggerLabelPin();
     }
     bodyEl.textContent = cleanText;
     syncAssistantMessageShellState(card.closest('.message.assistant'));
@@ -9734,6 +9765,9 @@ function finalizeMessageContent(id, text) {
         }
     }
     syncAssistantMessageShellState(el);
+    if (hasVisibleContent) {
+        checkAndTriggerLabelPin();
+    }
 }
 
 function updateSyncedMessageContent(id, text, options = {}) {
@@ -9770,6 +9804,7 @@ function updateSyncedMessageContent(id, text, options = {}) {
             // or if TTS starts (via attachStreamingAudioButtonToMessage).
         }
         syncAssistantMessageShellState(el);
+        if (cleanText.trim()) checkAndTriggerLabelPin();
         scrollToBottom(wasNearBottom);
         return;
     }
@@ -9801,6 +9836,7 @@ function updateSyncedMessageContent(id, text, options = {}) {
     }
     syncAssistantMessageShellState(el);
     if (hasVisibleContent) {
+        checkAndTriggerLabelPin();
         reconcileAssistantActionBarForMessage(el);
     }
 
@@ -9811,7 +9847,7 @@ function updateSyncedMessageContent(id, text, options = {}) {
 
     scrollToBottom(wasNearBottom);
     const codeBlocks = mdBody.querySelectorAll('pre code');
-    if (wasNearBottom && codeBlocks.length > 0) {
+    if (wasNearBottom && codeBlocks.length > 0 && getStreamingScrollMode() !== 'label-top') {
         holdAutoScrollAtBottom(900);
         observeAutoScrollResizes([el, bubble, mdBody, ...mdBody.querySelectorAll('pre')]);
     }
@@ -9909,6 +9945,7 @@ function updateMessageContent(id, text) {
         renderStreamingPreviewIntoHost(committedHost, cleanText);
         renderStreamingPreviewIntoHost(pendingHost, '');
         syncAssistantMessageShellState(el);
+        if (cleanText.trim()) checkAndTriggerLabelPin();
         scrollToBottom(wasNearBottom);
         return;
     }
@@ -9943,6 +9980,7 @@ function updateMessageContent(id, text) {
         }
     }
     syncAssistantMessageShellState(el);
+    if (hasVisibleContent) checkAndTriggerLabelPin();
 
     if (!previousCommittedText.trim() && hasVisibleContent) {
         pulseMessageRender(el.querySelector('.assistant-response-card'));
@@ -9950,7 +9988,7 @@ function updateMessageContent(id, text) {
 
     scrollToBottom(wasNearBottom);
     const codeBlocks = mdBody.querySelectorAll('pre code');
-    if (wasNearBottom && codeBlocks.length > 0) {
+    if (wasNearBottom && codeBlocks.length > 0 && getStreamingScrollMode() !== 'label-top') {
         holdAutoScrollAtBottom(900);
         observeAutoScrollResizes([el, bubble, mdBody, ...mdBody.querySelectorAll('pre')]);
     }
@@ -10000,6 +10038,14 @@ function jumpToLatestMessages() {
 
 function scrollToBottom(force = false) {
     if (!chatMessages) return;
+
+    // Respect No Auto Scroll (label-top) mode:
+    // If pinned to top, don't scroll to bottom UNLESS manually override (lockScrollToLatest)
+    if (!lockScrollToLatest && getStreamingScrollMode() === 'label-top' && activeStreamingMessagePinnedToTop) {
+        scheduleChatScrollMetricsRefresh(); // Update metrics for the "Go to bottom" button state
+        return;
+    }
+
     if (!force && !shouldAutoScroll && !lockScrollToLatest) return;
     scheduleChatScrollToBottom();
     shouldAutoScroll = true;
@@ -10062,6 +10108,14 @@ function observeAutoScrollResizes(elements) {
         if (shouldAutoScroll || lockScrollToLatest) {
             scheduleChatScrollToBottom();
         } else if (Math.abs(delta) > 1) {
+            // Respect No Auto Scroll (label-top) mode: 
+            // Don't follow the height change if we are pinned to the message top.
+            if (getStreamingScrollMode() === 'label-top' && activeStreamingMessagePinnedToTop) {
+                commitChatScrollMetrics(currentMetrics);
+                updateScrollToBottomButton();
+                return;
+            }
+
             suppressNextScrollEvent = true;
             chatMessages.scrollTop += delta;
             commitChatScrollMetrics({
@@ -10099,10 +10153,101 @@ function scrollActiveMessageIntoView() {
     }
 }
 
+function pinActiveMessageLabelToTop() {
+    if (!chatMessages || !activeStreamingMessageId) return;
+    const activeMessage = document.getElementById(activeStreamingMessageId);
+    if (!activeMessage) return;
+    const label = activeMessage.querySelector('.message-label');
+    const target = label || activeMessage;
+    const containerRect = chatMessages.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const topPadding = 12;
+    const delta = targetRect.top - containerRect.top - topPadding;
+    if (Math.abs(delta) > 1) {
+        suppressNextScrollEvent = true;
+        chatMessages.scrollTop += delta;
+        refreshChatScrollMetrics();
+        updateScrollToBottomButton();
+    }
+}
+
+function checkAndTriggerLabelPin() {
+    if (!activeStreamingMessagePinPending || getStreamingScrollMode() !== 'label-top' || !activeStreamingMessageId) {
+        return;
+    }
+
+    const activeMessage = document.getElementById(activeStreamingMessageId);
+    if (!activeMessage) return;
+
+    // Assistant Response Visibility
+    const responseCard = activeMessage.querySelector('.assistant-response-card');
+    const hasResponseContent = responseCard && !responseCard.hidden && !!responseCard.querySelector('.markdown-body')?.textContent.trim();
+
+    // Tool Visibility
+    const toolsHost = activeMessage.querySelector('.assistant-tools');
+    const hasToolsContent = toolsHost && toolsHost.children.length > 0;
+
+    // Reasoning Visibility (Ignore initial "Thinking..." placeholder)
+    const reasoningBody = activeMessage.querySelector('.reasoning-body');
+    const reasoningText = reasoningBody ? reasoningBody.textContent.trim() : '';
+    // We only trigger if there are actual thoughts, not just the "Thinking..." status
+    const hasReasoningContent = reasoningText.length > 0 && reasoningText !== 'Thinking...';
+
+    if (hasResponseContent || hasToolsContent || hasReasoningContent) {
+        // Use double RAF to ensure the content is rendered and layout is ready
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                if (activeStreamingMessagePinPending) {
+                    pinActiveMessageLabelToTop();
+                    activeStreamingMessagePinnedToTop = true;
+                    activeStreamingMessagePinPending = false;
+                }
+            });
+        });
+    }
+}
+
+function pinTurnToTop(turnId) {
+    if (!chatMessages || !turnId) return;
+    const el = document.querySelector(`.message[data-turn-id="${turnId}"]`);
+    if (!el) return;
+    const label = el.querySelector('.message-label');
+    const target = label || el;
+    const containerRect = chatMessages.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const topPadding = 12;
+    const delta = targetRect.top - containerRect.top - topPadding;
+    if (Math.abs(delta) > 1) {
+        suppressNextScrollEvent = true;
+        chatMessages.scrollTop += delta;
+        refreshChatScrollMetrics();
+        updateScrollToBottomButton();
+    }
+}
+
 function startStreamingMessageAutoScroll(messageId) {
     activeStreamingMessageId = messageId;
+    activeStreamingMessagePinnedToTop = false;
     const activeMessage = document.getElementById(messageId);
-    if (!activeMessage) return;
+    if (!activeMessage || !chatMessages) return;
+
+    if (getStreamingScrollMode() === 'label-top') {
+        // Fix: Add a dummy class to allow scrolling the last message to the top
+        chatMessages.classList.add('is-label-top-streaming');
+
+        // Note: We don't pin here anymore. We wait for the first content.
+        // But we must set PinnedToTop to true to block auto-scrolls during the waiting phase.
+        activeStreamingMessagePinPending = true;
+        activeStreamingMessagePinnedToTop = true; 
+
+        shouldAutoScroll = false;
+        lockScrollToLatest = false;
+        if (autoScrollResizeObserver) {
+            autoScrollResizeObserver.disconnect();
+            autoScrollResizeObserver = null;
+        }
+        return;
+    }
     const responseCard = activeMessage.querySelector('.assistant-response-card');
     const markdownBody = activeMessage.querySelector('.markdown-body');
     const codeBlocks = activeMessage.querySelectorAll('pre');
@@ -10110,6 +10255,11 @@ function startStreamingMessageAutoScroll(messageId) {
 }
 
 function stopStreamingMessageAutoScroll() {
+    activeStreamingMessagePinnedToTop = false;
+    activeStreamingMessagePinPending = false;
+    if (chatMessages) {
+        chatMessages.classList.remove('is-label-top-streaming');
+    }
     if (autoScrollResizeObserver) {
         autoScrollResizeObserver.disconnect();
         autoScrollResizeObserver = null;

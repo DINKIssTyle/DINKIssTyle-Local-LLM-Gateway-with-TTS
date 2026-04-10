@@ -362,6 +362,11 @@ body.keyboard-open #chat-header {
   min-width: 0;
 }
 
+#chat-messages.is-label-top-streaming {
+  padding-bottom: 85vh !important;
+  overflow-anchor: none !important;
+}
+
 .chat-restore-overlay {
   position: absolute;
   inset: 0;
