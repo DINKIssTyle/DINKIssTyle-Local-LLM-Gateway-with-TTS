@@ -62,7 +62,7 @@ let config = {
     hapticsEnabled: true
 };
 
-const AppState = {
+let AppState = {
     chat: {
         messages: [],
         isGenerating: false,
@@ -190,6 +190,50 @@ const AppState = {
         }
     }
 };
+
+/**
+ * AppState Subscription System
+ * Simple Pub/Sub for state changes.
+ */
+const AppStateEvents = {
+    _listeners: new Map(),
+    on(path, callback) {
+        if (!this._listeners.has(path)) this._listeners.set(path, []);
+        this._listeners.get(path).push(callback);
+    },
+    emit(path, value) {
+        if (this._listeners.has(path)) {
+            this._listeners.get(path).forEach(cb => cb(value));
+        }
+    }
+};
+
+/**
+ * createReactiveObject: Recursively wrap object in Proxy to detect changes
+ */
+function createReactiveObject(obj, path = '') {
+    return new Proxy(obj, {
+        set(target, key, value) {
+            const currentPath = path ? `${path}.${key}` : key;
+            const oldValue = target[key];
+            target[key] = value;
+            if (oldValue !== value) {
+                AppStateEvents.emit(currentPath, value);
+            }
+            return true;
+        },
+        get(target, key) {
+            const val = target[key];
+            if (val !== null && typeof val === 'object' && !Array.isArray(val) && !(val instanceof Map) && !(val instanceof Set)) {
+                return createReactiveObject(val, path ? `${path}.${key}` : key);
+            }
+            return typeof val === 'function' ? val.bind(target) : val;
+        }
+    });
+}
+
+// Transform AppState into a reactive proxy
+AppState = createReactiveObject(AppState);
 
 let streamLoopWorker = null;
 let streamLoopWorkerFailed = false;
@@ -2116,7 +2160,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             clearReconnectWatchdog();
             clearForegroundSyncTimers();
         } else {
-            scheduleSavedTitleRefresh(800);
+            savedLibraryController.scheduleSavedTitleRefresh(800);
             scheduleForegroundSessionRefresh('visibility-visible');
         }
     });
@@ -6113,6 +6157,60 @@ chatStreamingController = appChatStreaming.createChatStreamingController({
     }
 });
 
+progressController = DKSTProgressUI.createProgressController({
+    refs: {
+        chatProgressDock,
+        inputContainer
+    },
+    deps: {
+        AppState,
+        updateMessageInputPlaceholder,
+        updateSendButtonStateCore
+    }
+});
+
+micController = DKSTMic.createMicController({
+    refs: {
+        messageInput,
+        inlineMicBtn,
+        giantMicBtn: document.getElementById('giant-mic-btn'),
+        micLayoutContainer: document.getElementById('mic-layout-container')
+    },
+    deps: {
+        AppState,
+        config,
+        t,
+        triggerHaptic,
+        sendMessage,
+        updateSendButtonState,
+        updateMessageInputPlaceholder
+    }
+});
+
+/**
+ * Register AppState Reactors (Automatic UI Updates)
+ */
+function registerReactors() {
+    // 1. Chat Generation State
+    AppStateEvents.on('chat.isGenerating', () => {
+        updateSendButtonState();
+        updateMessageInputPlaceholder();
+        if (config.micLayout !== 'none') micController.updateLayout();
+    });
+
+    // 2. Audio Playback State
+    AppStateEvents.on('audio.isPlaying', () => {
+        updateStopButtonVisibility();
+    });
+
+    // 3. STT State
+    AppStateEvents.on('input.isSTTActive', () => {
+        // Handled by controller internally or via reactors if needed
+    });
+}
+
+registerReactors();
+
 function setAssistantActionBarReady(elementId) {
     return chatUIController.setAssistantActionBarReady(elementId);
 }
@@ -6126,62 +6224,11 @@ function reconcileVisibleAssistantActionBars() {
 }
 
 function renderProgressDock(label, percent = null, mode = 'prompt-processing', indeterminate = false) {
-    if (!chatProgressDock) return;
-    if (AppState.ui.progress.hideTimer) {
-        clearTimeout(AppState.ui.progress.hideTimer);
-        AppState.ui.progress.hideTimer = null;
-    }
-    const clamped = typeof percent === 'number' ? Math.max(0, Math.min(100, percent)) : null;
-    const cardClass = `llm-progress-card ${mode}${indeterminate ? ' indeterminate' : ''}`;
-    const percentLabel = clamped === null ? '' : `${clamped.toFixed(2)}%`;
-    const width = indeterminate ? '32%' : `${clamped || 0}%`;
-    AppState.ui.progress.label = label || '';
-    AppState.ui.progress.active = true;
-    AppState.ui.progress.percent = percentLabel;
-
-    updateMessageInputPlaceholder();
-    // Explicitly refresh send button to ensure Stop icon is visible during prompt processing
-    updateSendButtonStateCore();
-
-    inputContainer?.classList.add('has-progress');
-
-    const wasHidden = chatProgressDock.hidden;
-    chatProgressDock.hidden = false;
-    chatProgressDock.innerHTML = `
-        <div class="${cardClass}">
-            <div class="llm-progress-track">
-                <div class="llm-progress-fill" style="width: ${width};"></div>
-            </div>
-        </div>`;
-    if (wasHidden) {
-        requestAnimationFrame(() => {
-            if (!chatProgressDock.hidden) {
-                chatProgressDock.classList.add('is-visible');
-            }
-        });
-    } else {
-        chatProgressDock.classList.add('is-visible');
-    }
+    return progressController.render(label, percent, mode, indeterminate);
 }
 
 function hideProgressDock() {
-    if (!chatProgressDock) return;
-    chatProgressDock.classList.remove('is-visible');
-    if (AppState.ui.progress.hideTimer) {
-        clearTimeout(AppState.ui.progress.hideTimer);
-    }
-    AppState.ui.progress.hideTimer = setTimeout(() => {
-        chatProgressDock.hidden = true;
-        chatProgressDock.innerHTML = '';
-        AppState.ui.progress.label = '';
-        AppState.ui.progress.active = false;
-        AppState.ui.progress.percent = null;
-        if (!AppState.chat.isGenerating) {
-            inputContainer?.classList.remove('has-progress');
-        }
-        updateMessageInputPlaceholder();
-        AppState.ui.progress.hideTimer = null;
-    }, 180);
+    return progressController.hide();
 }
 
 function isToolExecutionFinishedSummary(text = '') {
@@ -7421,53 +7468,8 @@ async function checkSystemHealth() {
  * Updates UI layout based on mic layout setting
  */
 function updateMicLayout() {
-    const container = document.getElementById('mic-layout-container');
-    if (!container) return;
-
-    // Reset classes
-    container.className = '';
-    document.body.classList.remove('layout-mic-bottom');
-    if (inlineMicBtn) {
-        inlineMicBtn.classList.remove('is-visible');
-    }
-
-    if (!config.micLayout || config.micLayout === 'none') {
-        container.style.display = 'none';
-    } else if (config.micLayout === 'inline') {
-        container.style.display = 'none';
-        if (inlineMicBtn) {
-            inlineMicBtn.classList.add('is-visible');
-        }
-    } else {
-        container.style.display = 'flex';
-        container.classList.add(`mic-layout-${config.micLayout}`);
-        if (config.micLayout === 'bottom') {
-            document.body.classList.add('layout-mic-bottom');
-        }
-    }
-
-    updateMicUIForGeneration(AppState.chat.isGenerating);
-    syncMicRecordingUI();
-    updateInlineComposerActionVisibility();
+    return micController.updateLayout();
 }
-
-// Global STT state
-
-/**
- * Helper to detect iOS/iPadOS for platform-specific bug workarounds
- */
-function isIOS() {
-    return [
-        'iPad Simulator',
-        'iPhone Simulator',
-        'iPod Simulator',
-        'iPad',
-        'iPhone',
-        'iPod'
-    ].includes(navigator.platform)
-        || (navigator.userAgent.includes("Mac") && "ontouchend" in document);
-}
-
 
 /**
  * Toggles Speech-to-Text (STT) AppState.input.recognition
@@ -7476,8 +7478,7 @@ function toggleSTT() {
     triggerHaptic('nudge');
     // 1. If generating response, stop it (Mic acts as stop button)
     if (AppState.chat.isGenerating) {
-        stopGeneration();
-        return;
+        return stopGeneration();
     }
 
     // 2. If TTS is currently playing, stop it (interruption support)
@@ -7486,176 +7487,32 @@ function toggleSTT() {
     }
 
     // 3. STT Logic
-    if (AppState.input.isSTTActive) {
-        stopSTT();
-    } else {
-        startSTT();
-    }
-}
-
-function clearSTTStopFallbackTimer() {
-    if (!AppState.input.sttStopFallbackTimer) return;
-    clearTimeout(AppState.input.sttStopFallbackTimer);
-    AppState.input.sttStopFallbackTimer = null;
-}
-
-function finalizeSTTSession(options = {}) {
-    const suppressAutoSend = options.suppressAutoSend === true;
-    const resetRecognition = options.resetRecognition !== false;
-    const instance = options.instance || (resetRecognition ? AppState.input.recognition : null);
-
-    clearSTTStopFallbackTimer();
-    AppState.input.isSTTActive = false;
-    stopSTTPlaceholderAnimation();
-    syncMicRecordingUI();
-    syncWakeLock();
-
-    if (suppressAutoSend) {
-        AppState.input.sttSuppressAutoSend = true;
-    }
-
-    // Aggressive cleanup for iOS/Safari to release microphone hardware
-    if (instance) {
-        try {
-            instance.onstart = null;
-            instance.onresult = null;
-            instance.onerror = null;
-            instance.onend = null;
-            // Ensure it's absolutely stopped
-            instance.abort();
-        } catch (_) { }
-    }
-
-    if (resetRecognition) {
-        AppState.input.recognition = null;
-    }
-}
-
-function stopSTT(options = {}) {
-    const suppressAutoSend = options.suppressAutoSend === true;
-    const forceAbort = options.forceAbort === true;
-    if (!AppState.input.recognition) {
-        finalizeSTTSession({ suppressAutoSend, resetRecognition: true });
-        return;
-    }
-
-    if (suppressAutoSend) {
-        AppState.input.sttSuppressAutoSend = true;
-    }
-
-    const activeRecognition = AppState.input.recognition;
-    clearSTTStopFallbackTimer();
-
-    // Shorter fallback for more responsive hardware release
-    AppState.input.sttStopFallbackTimer = setTimeout(() => {
-        if (AppState.input.recognition === activeRecognition || !AppState.input.recognition) {
-            finalizeSTTSession({ instance: activeRecognition, suppressAutoSend: true, resetRecognition: AppState.input.recognition === activeRecognition });
-            console.warn('[STT] Forced cleanup after stop timeout');
-        }
-    }, 800);
-
-    try {
-        // iOS works much better with abort() for immediate hardware release
-        if (forceAbort || isIOS()) {
-            activeRecognition.abort();
-        } else {
-            activeRecognition.stop();
-        }
-    } catch (error) {
-        console.warn('[STT] stop failed, aborting instead:', error);
-        finalizeSTTSession({ instance: activeRecognition, suppressAutoSend: true, resetRecognition: true });
-    }
+    return micController.toggle();
 }
 
 function startSTT() {
-    cancelComposerBackgroundTasks('user-stt');
-    if (!('webkitSpeechRecognition' in window)) {
-        alert("Speech Recognition is not supported by this browser.");
-        return;
-    }
+    return micController.start();
+}
 
-    if (AppState.input.recognition) {
-        stopSTT({ suppressAutoSend: true, forceAbort: true });
-    }
+function stopSTT(options = {}) {
+    return micController.stop(options);
+}
 
-    const nextRecognition = new webkitSpeechRecognition();
-    AppState.input.recognition = nextRecognition;
-    AppState.input.sttSuppressAutoSend = false;
-    nextRecognition.continuous = false;
-    nextRecognition.interimResults = true;
-    nextRecognition.lang = config.language === 'ko' ? 'ko-KR' : 'en-US';
+function updateSTTButtonState() {
+    // Legacy wrapper if still called elsewhere
+}
 
-    nextRecognition.onstart = () => {
-        if (AppState.input.recognition !== nextRecognition) return;
-        clearSTTStopFallbackTimer();
-        AppState.input.isSTTActive = true;
-        startSTTPlaceholderAnimation();
-        syncMicRecordingUI();
-        syncWakeLock();
-        console.log("[STT] Recording started");
-    };
-
-    nextRecognition.onresult = (event) => {
-        if (AppState.input.recognition !== nextRecognition) return;
-        let interimTranscript = '';
-        let finalTranscript = '';
-
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-            if (event.results[i].isFinal) {
-                finalTranscript += event.results[i][0].transcript;
-            } else {
-                interimTranscript += event.results[i][0].transcript;
-            }
-        }
-
-        if (finalTranscript || interimTranscript) {
-            const input = document.getElementById('message-input');
-            input.value = finalTranscript || interimTranscript;
-            input.dispatchEvent(new Event('input'));
-            updateInlineComposerActionVisibility();
-        }
-    };
-
-    nextRecognition.onerror = (event) => {
-        if (AppState.input.recognition !== nextRecognition) return;
-        console.error("[STT] Error:", event.error);
-        finalizeSTTSession({
-            suppressAutoSend: event.error === 'aborted' || event.error === 'not-allowed' || event.error === 'service-not-allowed',
-            resetRecognition: true
-        });
-    };
-
-    nextRecognition.onend = () => {
-        if (AppState.input.recognition !== nextRecognition) return;
-        const shouldAutoSend = !AppState.input.sttSuppressAutoSend;
-        finalizeSTTSession({ suppressAutoSend: true, resetRecognition: true });
-        console.log("[STT] Recording ended");
-
-        const input = document.getElementById('message-input');
-        if (shouldAutoSend && input.value.trim()) {
-            sendMessage({ fromVoiceInput: true });
-        }
-        AppState.input.sttSuppressAutoSend = false;
-    };
-
-    try {
-        nextRecognition.start();
-    } catch (error) {
-        console.error('[STT] Failed to start recognition:', error);
-        finalizeSTTSession({ suppressAutoSend: true, resetRecognition: true });
-    }
+function updateMicUIForGeneration(generating) {
+    // Legacy wrapper if still called elsewhere
+    return micController.updateLayout();
 }
 
 function updateMessageInputPlaceholder() {
     if (!messageInput) return;
 
-    const listeningPhrases = [
-        t('input.placeholder.sttA'),
-        t('input.placeholder.sttB')
-    ];
     const backgroundTask = getActiveComposerBackgroundTask();
     const nextPlaceholder = AppState.input.isSTTActive
-        ? listeningPhrases[AppState.input.sttPlaceholderIndex % listeningPhrases.length]
+        ? `${t('input.listening')}...`
         : AppState.session.isRestoring
             ? t('input.placeholder.restoring')
             : (AppState.ui.progress.active
@@ -7664,73 +7521,4 @@ function updateMessageInputPlaceholder() {
 
     messageInput.placeholder = nextPlaceholder;
     messageInput.classList.toggle('stt-listening', AppState.input.isSTTActive);
-}
-
-function startSTTPlaceholderAnimation() {
-    stopSTTPlaceholderAnimation();
-    AppState.input.sttPlaceholderIndex = 0;
-    updateMessageInputPlaceholder();
-    AppState.input.sttPlaceholderTimer = window.setInterval(() => {
-        AppState.input.sttPlaceholderIndex = (AppState.input.sttPlaceholderIndex + 1) % 2;
-        updateMessageInputPlaceholder();
-    }, 1400);
-}
-
-function stopSTTPlaceholderAnimation() {
-    if (AppState.input.sttPlaceholderTimer) {
-        window.clearInterval(AppState.input.sttPlaceholderTimer);
-        AppState.input.sttPlaceholderTimer = null;
-    }
-    AppState.input.sttPlaceholderIndex = 0;
-    updateMessageInputPlaceholder();
-}
-
-function syncMicRecordingUI() {
-    const giantMicBtn = document.getElementById('giant-mic-btn');
-    if (giantMicBtn) {
-        giantMicBtn.classList.toggle('stt-active', AppState.input.isSTTActive);
-    }
-    if (inlineMicBtn) {
-        inlineMicBtn.classList.toggle('stt-active', AppState.input.isSTTActive);
-    }
-}
-
-
-/**
- * Hook into global state to update giant mic icon if generating
- */
-function updateMicUIForGeneration(generating) {
-    const giantMicBtn = document.getElementById('giant-mic-btn');
-    const isInlineLayout = config.micLayout === 'inline';
-
-    if (giantMicBtn) {
-        giantMicBtn.classList.toggle('gen-active', generating && !isInlineLayout);
-        const giantIcon = giantMicBtn.querySelector('.material-icons-round');
-        if (giantIcon) {
-            giantIcon.textContent = generating && !isInlineLayout ? 'stop' : 'mic';
-        }
-    }
-
-    if (inlineMicBtn) {
-        inlineMicBtn.classList.toggle('gen-active', false);
-        const inlineIcon = inlineMicBtn.querySelector('.material-icons-round');
-        if (inlineIcon) {
-            inlineIcon.textContent = 'mic';
-        }
-    }
-
-    const micContainer = document.getElementById('mic-layout-container');
-    if (micContainer) {
-        if (generating && !isInlineLayout) {
-            micContainer.style.pointerEvents = '';
-            micContainer.style.opacity = '';
-        } else {
-            micContainer.style.pointerEvents = '';
-            micContainer.style.opacity = '';
-        }
-    }
-
-    if (!generating) {
-        syncMicRecordingUI();
-    }
 }
