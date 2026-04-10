@@ -159,6 +159,7 @@ let AppState = {
             currentUserLocation: null,
             lastErrorMessage: ''
         },
+        micLayout: 'none',
         systemPromptPresets: []
     },
     session: {
@@ -208,6 +209,18 @@ const AppStateEvents = {
     }
 };
 
+function isReactivePlainObject(val) {
+    if (val === null || typeof val !== 'object') return false;
+    if (Array.isArray(val)) return false;
+    if (val instanceof Map || val instanceof Set) return false;
+    if (window.Node && val instanceof window.Node) return false;
+    if (val instanceof Date || val instanceof RegExp) return false;
+    if (typeof AbortController !== 'undefined' && val instanceof AbortController) return false;
+    if (typeof AbortSignal !== 'undefined' && val instanceof AbortSignal) return false;
+    const proto = Object.getPrototypeOf(val);
+    return proto === Object.prototype || proto === null;
+}
+
 /**
  * createReactiveObject: Recursively wrap object in Proxy to detect changes
  */
@@ -224,7 +237,7 @@ function createReactiveObject(obj, path = '') {
         },
         get(target, key) {
             const val = target[key];
-            if (val !== null && typeof val === 'object' && !Array.isArray(val) && !(val instanceof Map) && !(val instanceof Set)) {
+            if (isReactivePlainObject(val)) {
                 return createReactiveObject(val, path ? `${path}.${key}` : key);
             }
             return typeof val === 'function' ? val.bind(target) : val;
@@ -1749,6 +1762,8 @@ const savedTurnModalTitleCancelBtn = document.getElementById('saved-turn-inline-
 const osTTSVoiceSelect = document.getElementById('cfg-os-tts-voice');
 let chatUIController = null;
 let chatStreamingController = null;
+let progressController = null;
+let micController = null;
 
 function getTTSPlaybackState() {
     return {
@@ -2802,7 +2817,9 @@ function loadConfig() {
     const saved = localStorage.getItem('appConfig');
     if (saved) {
         try {
-            config = { ...config, ...JSON.parse(saved) };
+            // Keep the original config object reference so controllers created
+            // before loadConfig() continue observing the latest settings.
+            Object.assign(config, JSON.parse(saved));
         } catch (e) {
             console.error('Failed to parse saved config:', e);
             // Optional: localStorage.removeItem('appConfig');
@@ -2887,7 +2904,7 @@ function loadConfig() {
 
     // Mic Layout
     document.getElementById('cfg-mic-layout').value = config.micLayout || 'none';
-    updateMicLayout();
+    AppState.ui.micLayout = config.micLayout;
 
     config.userBubbleTheme = USER_BUBBLE_THEMES[config.userBubbleTheme] ? config.userBubbleTheme : 'ocean';
     config.streamingScrollMode = ['auto', 'label-top'].includes(config.streamingScrollMode) ? config.streamingScrollMode : 'auto';
@@ -3194,6 +3211,8 @@ async function reloadExternalFiles() {
 }
 
 function saveConfig(closeModal = true) {
+    const previousVoice = config.ttsVoice;
+    const previousEngine = config.ttsEngine;
     const previousDictionaryLang = getEffectiveTTSDictionaryLang();
     const cfgApiEl = document.getElementById('cfg-api');
     // Sanitize Endpoint: Trim whitespace and trailing slash
@@ -3255,15 +3274,6 @@ function saveConfig(closeModal = true) {
     config.hapticsEnabled = document.getElementById('cfg-enable-haptics')?.checked !== false;
     config.chatFontSize = Math.max(12, Math.min(24, parseInt(config.chatFontSize, 10) || 16));
 
-    // Update visibility immediately
-    updateSettingsVisibility();
-    updateTTSSettingsVisibility();
-    updateMicLayout();
-    applyUserBubbleTheme();
-    applyChatFontSize();
-    syncHapticsPreference();
-    renderReasoningControl();
-
     config.chunkSize = parseInt(document.getElementById('cfg-chunk-size').value) || 300;
     config.systemPrompt = document.getElementById('cfg-system-prompt').value.trim() || 'You are a helpful AI assistant.';
     config.ttsVoice = document.getElementById('cfg-tts-voice').value;
@@ -3273,6 +3283,21 @@ function saveConfig(closeModal = true) {
     config.ttsFormat = document.getElementById('cfg-tts-format').value;
     config.osTtsRate = parseFloat(document.getElementById('cfg-os-tts-rate').value) || 1.0;
     config.osTtsPitch = parseFloat(document.getElementById('cfg-os-tts-pitch').value) || 1.0;
+
+    // Update visibility immediately
+    updateSettingsVisibility();
+    updateTTSSettingsVisibility();
+    
+    if (config.ttsVoice !== previousVoice || config.ttsEngine !== previousEngine) {
+        clearTTSAudioCache();
+    }
+    
+    AppState.ui.micLayout = config.micLayout;
+    applyUserBubbleTheme();
+    applyChatFontSize();
+    syncHapticsPreference();
+    renderReasoningControl();
+
     if (osTTSVoiceSelect) {
         config.osTtsVoiceURI = osTTSVoiceSelect.value || '';
         const selectedVoice = ttsController.getVoices().find((voice) => voice.voiceURI === config.osTtsVoiceURI) || null;
@@ -4203,7 +4228,9 @@ async function syncCurrentChatSessionFromServerInternal() {
 
     const session = await fetchCurrentChatSession();
     applyCurrentChatSessionSnapshot(session);
-    if (AppState.chat.activeLocalTurnId || AppState.chat.activeLocalAssistantId || AppState.chat.isGenerating) {
+    const hasLocalInFlightResponse = !!AppState.chat.activeLocalTurnId || !!AppState.chat.activeLocalAssistantId || !!AppState.chat.isGenerating;
+    const hasServerOwnedSession = !!session && String(session?.Status || '').trim().length > 0;
+    if (hasLocalInFlightResponse && hasServerOwnedSession) {
         relinquishLocalStreamOwnership(`session-sync:${session?.Status || 'none'}`);
     }
 
@@ -4965,11 +4992,7 @@ function setupEventListeners() {
 
     // Stop handling
     sendBtn.addEventListener('click', () => {
-        const session = AppState.session.currentCache;
-        const sessionRunning = AppState.chat.passive.sessionLLMRunning || String(session?.Status || '').trim().toLowerCase() === 'running';
-        const isCurrentlyActive = AppState.chat.isGenerating || sessionRunning || AppState.chat.passive.llmBusy;
-
-        if (isCurrentlyActive) {
+        if (isComposerStopActionActive()) {
             stopGeneration();
         } else {
             unlockAudioContext(); // Unlock audio on user interaction
@@ -5706,13 +5729,17 @@ function updateSendButtonState() {
     syncGlobalLLMComposerUI(); // Calls updateMessageInputPlaceholder internally
 }
 
+function isComposerStopActionActive(session = AppState.session.currentCache) {
+    const sessionRunning = AppState.chat.passive.sessionLLMRunning || String(session?.Status || '').trim().toLowerCase() === 'running';
+    const localGenerating = !!AppState.chat.abortController || !!AppState.chat.isGenerating;
+    return localGenerating || sessionRunning;
+}
+
 /**
  * Core logic for updating button icon and labels without triggering full UI sync
  */
 function updateSendButtonStateCore() {
-    const session = AppState.session.currentCache;
-    const sessionRunning = AppState.chat.passive.sessionLLMRunning || String(session?.Status || '').trim().toLowerCase() === 'running';
-    const isCurrentlyActive = AppState.chat.isGenerating || sessionRunning || AppState.chat.passive.llmBusy;
+    const isCurrentlyActive = isComposerStopActionActive();
 
     if (isCurrentlyActive) {
         sendBtn.disabled = false; // Enabled so we can Click to Stop
@@ -5761,7 +5788,7 @@ function updateInlineComposerActionVisibility() {
         return;
     }
 
-    if (AppState.chat.isGenerating) {
+    if (isComposerStopActionActive()) {
         setComposerPrimaryButtons({ showSend: true, showInlineMic: false });
         return;
     }
@@ -5784,13 +5811,22 @@ async function streamResponse(payload, elementId, turnId = '', streamOptions = {
     }
     headers['X-Context-Strategy'] = getNormalizedContextStrategy();
 
-    // Use the Go server's API endpoint
-    const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: headers,
-        body: JSON.stringify(payload),
-        signal: AppState.chat.abortController.signal
-    });
+    let response;
+    try {
+        response = await fetch('/api/chat', buildSessionFetchOptions({
+            method: 'POST',
+            headers,
+            body: JSON.stringify(payload),
+            signal: AppState.chat.abortController?.signal
+        }));
+    } catch (error) {
+        console.warn('[Chat] Primary /api/chat request failed before response. Retrying with minimal request options.', error);
+        response = await fetch('/api/chat', buildSessionFetchOptions({
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        }));
+    }
 
     if (!response.ok) {
         let errorDetails = `Server Error ${response.status}: ${response.statusText}`;
@@ -6199,17 +6235,28 @@ function registerReactors() {
     });
 
     // 2. Audio Playback State
-    AppStateEvents.on('audio.isPlaying', () => {
-        updateStopButtonVisibility();
+    AppStateEvents.on('audio.isPlayingQueue', () => {
+        syncCurrentAudioButtonUI();
+        updateSendButtonState();
+    });
+    AppStateEvents.on('audio.streamingTTSActive', () => {
+        syncCurrentAudioButtonUI();
+        updateSendButtonState();
     });
 
     // 3. STT State
     AppStateEvents.on('input.isSTTActive', () => {
         // Handled by controller internally or via reactors if needed
     });
+
+    // 4. Mic Layout State
+    AppStateEvents.on('ui.micLayout', () => {
+        updateMicLayout();
+    });
 }
 
 registerReactors();
+updateMicLayout();
 
 function setAssistantActionBarReady(elementId) {
     return chatUIController.setAssistantActionBarReady(elementId);
@@ -7468,7 +7515,8 @@ async function checkSystemHealth() {
  * Updates UI layout based on mic layout setting
  */
 function updateMicLayout() {
-    return micController.updateLayout();
+    micController.updateLayout();
+    updateInlineComposerActionVisibility();
 }
 
 /**

@@ -467,29 +467,39 @@
 
         function syncCurrentAudioButtonUI() {
             const state = getPlaybackState?.() || {};
-            const btn = state.currentAudioBtn;
-            if (!btn) return;
-            const iconEl = btn.querySelector('.material-icons-round');
-            if (!iconEl) return;
-
-            const queue = Array.isArray(state.ttsQueue) ? state.ttsQueue : [];
-            if (state.isPlayingQueue) {
-                iconEl.textContent = 'stop';
-                btn.title = 'Stop';
-                btn.disabled = false;
-                return;
-            }
-
-            if (state.streamingTTSActive || queue.length > 0) {
-                iconEl.textContent = 'hourglass_empty';
-                btn.title = 'Preparing audio';
-                btn.disabled = true;
-                return;
-            }
-
-            iconEl.textContent = 'volume_up';
-            btn.title = 'Speak';
-            btn.disabled = false;
+            const activeBtn = state.currentAudioBtn;
+            
+            // Find all toggle-able audio buttons in the chat
+            const allBtns = global.document.querySelectorAll('.message-actions .icon-btn .material-icons-round');
+            
+            allBtns.forEach(iconEl => {
+                const btn = iconEl.closest('button');
+                if (!btn) return;
+                
+                if (activeBtn && btn === activeBtn) {
+                    const queue = Array.isArray(state.ttsQueue) ? state.ttsQueue : [];
+                    if (state.isPlayingQueue) {
+                        iconEl.textContent = 'stop';
+                        btn.title = 'Stop';
+                        btn.disabled = false;
+                    } else if (state.streamingTTSActive || queue.length > 0) {
+                        iconEl.textContent = 'hourglass_empty';
+                        btn.title = 'Preparing audio';
+                        btn.disabled = true;
+                    } else {
+                        iconEl.textContent = 'volume_up';
+                        btn.title = 'Speak';
+                        btn.disabled = false;
+                    }
+                } else {
+                    // Reset other buttons
+                    if (iconEl.textContent === 'stop' || iconEl.textContent === 'hourglass_empty') {
+                        iconEl.textContent = 'volume_up';
+                        btn.title = 'Speak';
+                        btn.disabled = false;
+                    }
+                }
+            });
         }
 
         function attachStreamingAudioButtonToMessage(msgEl) {
@@ -554,7 +564,8 @@
             if (!text) return null;
             const cache = getAudioCache?.();
             if (!cache) return null;
-            if (cache.has(text)) return cache.get(text);
+            const cacheKey = `${config.ttsEngine}:${config.ttsVoice}:${config.ttsSpeed}:${text}`;
+            if (cache.has(cacheKey)) return cache.get(cacheKey);
 
             const promise = (async () => {
                 const state = getPlaybackState?.() || {};
@@ -571,7 +582,7 @@
                         format: config.ttsFormat || 'wav'
                     };
 
-                    console.log(`[TTS] Prefetching: "${text.substring(0, 25)}..."`);
+                    console.log(`[TTS] Prefetching (${config.ttsVoice}): "${text.substring(0, 25)}..."`);
                     const response = await global.fetch('/api/tts', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -599,7 +610,7 @@
                 }
             })();
 
-            cache.set(text, promise);
+            cache.set(cacheKey, promise);
             return promise;
         }
 
@@ -843,7 +854,8 @@
                     console.error('Prefetch failed', e);
                 }
 
-                getAudioCache?.()?.delete(text);
+                const cacheKey = `${config.ttsEngine}:${config.ttsVoice}:${config.ttsSpeed}:${text}`;
+                getAudioCache?.()?.delete(cacheKey);
 
                 if (!audioUrl) {
                     continue;
