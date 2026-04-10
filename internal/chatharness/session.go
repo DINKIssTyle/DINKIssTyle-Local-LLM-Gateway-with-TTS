@@ -544,27 +544,27 @@ func updateMessageSnapshot(snapshot *SessionUISnapshot, turnID, role, eventType 
 		} else if text, ok := payloadMap["text"].(string); ok && text != "" {
 			msg.ReasoningContent += text
 		}
-		if totalMS, ok := payloadInt64(payloadMap["total_elapsed_ms"]); ok && totalMS > 0 {
+		if totalMS, ok := payloadInt64(payloadMap["total_elapsed_ms"]); ok {
 			msg.ReasoningDurationMS = totalMS
 			if totalMS >= msg.ReasoningAccumulatedMS {
 				msg.ReasoningCurrentPhaseMS = totalMS - msg.ReasoningAccumulatedMS
 			}
 			break
 		}
-		if elapsedMS, ok := payloadInt64(payloadMap["elapsed_ms"]); ok && elapsedMS > 0 {
+		if elapsedMS, ok := payloadInt64(payloadMap["elapsed_ms"]); ok {
 			if elapsedMS > msg.ReasoningCurrentPhaseMS {
 				msg.ReasoningCurrentPhaseMS = elapsedMS
 			}
 			msg.ReasoningDurationMS = msg.ReasoningAccumulatedMS + msg.ReasoningCurrentPhaseMS
 		}
 	case "reasoning.end":
-		if totalMS, ok := payloadInt64(payloadMap["total_elapsed_ms"]); ok && totalMS > 0 {
+		if totalMS, ok := payloadInt64(payloadMap["total_elapsed_ms"]); ok {
 			msg.ReasoningDurationMS = totalMS
 			msg.ReasoningAccumulatedMS = totalMS
 			msg.ReasoningCurrentPhaseMS = 0
 			break
 		}
-		if elapsedMS, ok := payloadInt64(payloadMap["elapsed_ms"]); ok && elapsedMS > 0 {
+		if elapsedMS, ok := payloadInt64(payloadMap["elapsed_ms"]); ok {
 			if elapsedMS > msg.ReasoningCurrentPhaseMS {
 				msg.ReasoningCurrentPhaseMS = elapsedMS
 			}

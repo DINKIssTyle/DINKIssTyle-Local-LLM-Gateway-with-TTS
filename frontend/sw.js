@@ -3,7 +3,7 @@
  * Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
  */
 
-const CACHE_NAME = 'dkst-chat-v11';
+const CACHE_NAME = 'dkst-chat-v12';
 const ASSETS = [
     '/',
     '/index.html',
@@ -38,6 +38,9 @@ const ASSETS = [
     '/vendor/fonts/inter-600-latin.woff2',
     '/vendor/fonts/jetbrains-mono-400-latin.woff2',
     '/vendor/fonts/material-icons-round.woff2',
+    '/vendor/fonts/KaTeX_Main-Regular.woff2',
+    '/vendor/fonts/KaTeX_Main-Regular.woff',
+    '/vendor/fonts/KaTeX_Main-Regular.ttf',
     '/fonts/MaterialIconsRound-Regular.otf',
     '/public/favicon-32.png',
     '/public/favicon-16.png',

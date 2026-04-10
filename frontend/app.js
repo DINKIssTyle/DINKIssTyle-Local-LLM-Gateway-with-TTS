@@ -2577,6 +2577,7 @@ let currentAudioBtn = null;
 let audioWarmup = null; // Used to bypass auto-play blocks
 let ttsQueue = [];
 let activeTTSSessionLabel = "";
+let currentAudioPlaybackController = null;
 
 let isPlayingQueue = false;
 
@@ -2771,16 +2772,77 @@ function restoreChatScrollPosition(scrollTop) {
         updateScrollToBottomButton();
     };
 
-    requestAnimationFrame(apply);
-    window.setTimeout(apply, 80);
+    requestAnimationFrame(() => {
+        apply();
+        requestAnimationFrame(apply);
+    });
 }
 
-function scheduleInputScrollRepair(scrollTop, delays = [0, 80, 180, 320]) {
+function runAfterViewportStabilizes(callback, { maxWaitMs = 420, requiredStableFrames = 2 } = {}) {
+    if (typeof callback !== 'function') return () => {};
+
+    const controller = new AbortController();
+    let finished = false;
+    let rafId = 0;
+    let stableFrames = 0;
+    let lastSignature = '';
+    let timeoutId = 0;
+
+    const getSignature = () => {
+        const viewportHeight = Math.round(window.visualViewport?.height || window.innerHeight || 0);
+        const viewportOffsetTop = Math.round(window.visualViewport?.offsetTop || 0);
+        const scrollHeight = Math.round(chatMessages?.scrollHeight || 0);
+        return `${viewportHeight}:${viewportOffsetTop}:${scrollHeight}`;
+    };
+
+    const cleanup = () => {
+        controller.abort();
+        if (rafId) cancelAnimationFrame(rafId);
+        if (timeoutId) clearTimeout(timeoutId);
+    };
+
+    const finish = () => {
+        if (finished) return;
+        finished = true;
+        cleanup();
+    };
+
+    const tick = () => {
+        if (finished) return;
+        callback();
+        const signature = getSignature();
+        if (signature === lastSignature) {
+            stableFrames += 1;
+        } else {
+            stableFrames = 0;
+            lastSignature = signature;
+        }
+        if (stableFrames >= requiredStableFrames) {
+            finish();
+            return;
+        }
+        rafId = requestAnimationFrame(tick);
+    };
+
+    if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', callback, { signal: controller.signal });
+        window.visualViewport.addEventListener('scroll', callback, { signal: controller.signal });
+    }
+    window.addEventListener('resize', callback, { passive: true, signal: controller.signal });
+
+    timeoutId = window.setTimeout(() => {
+        callback();
+        finish();
+    }, maxWaitMs);
+
+    rafId = requestAnimationFrame(tick);
+    return finish;
+}
+
+function scheduleInputScrollRepair(scrollTop) {
     if (!Number.isFinite(scrollTop)) return;
-    delays.forEach((delay) => {
-        window.setTimeout(() => {
-            restoreChatScrollPosition(scrollTop);
-        }, delay);
+    runAfterViewportStabilizes(() => {
+        restoreChatScrollPosition(scrollTop);
     });
 }
 
@@ -2809,18 +2871,9 @@ function maintainInputFocusAfterTouch() {
 }
 
 function ensureChatRestoredToLatest() {
-    let attempts = 0;
-
-    const settleScroll = () => {
-        attempts += 1;
+    runAfterViewportStabilizes(() => {
         scrollToBottom(true);
-        if (attempts >= 4) return;
-        window.setTimeout(() => {
-            requestAnimationFrame(settleScroll);
-        }, 90);
-    };
-
-    requestAnimationFrame(settleScroll);
+    }, { maxWaitMs: 360, requiredStableFrames: 1 });
 }
 
 if (window.visualViewport) {
@@ -3094,7 +3147,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     await loadVoiceStyles(); // Fetch voice styles
     initOSTTSVoiceLoading();
-    await syncServerConfig(); // Sync with server
+    await syncServerConfig({ log: true, forceDictionaryReload: true }); // Sync with server
     setupEventListeners();
     initServerControl();
     if (window.runtime?.EventsOn) {
@@ -3154,7 +3207,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Register Service Worker for PWA
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-            navigator.serviceWorker.register('/sw.js?v=4')
+            navigator.serviceWorker.register('/sw.js?v=6')
                 .then(reg => console.log('[PWA] Service Worker registered:', reg.scope))
                 .catch(err => console.warn('[PWA] Service Worker failed:', err));
         });
@@ -3194,6 +3247,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 // Current user state
 let currentUser = null;
 let currentUserLocation = null; // Store location: {lat, lon, accuracy}
+let lastLocationErrorMessage = '';
 let lastSessionCache = null;
 let currentChatSessionCache = null;
 let currentChatSessionEventSeq = 0;
@@ -3322,7 +3376,7 @@ function broadcastLLMActivityState(busy, phase = 'answering') {
     }
 }
 
-function ensurePassiveSyncPlaceholder(turnId = '', sessionId = 'default', eventSeq = 0) {
+function ensurePassiveSyncPlaceholder(turnId = '', sessionId = 'default', eventSeq = 0, phase = '') {
     const resolvedTurnId = String(turnId || `server-turn-${sessionId || 'default'}-${eventSeq || '0'}`).trim();
     if (!resolvedTurnId) return '';
 
@@ -3331,12 +3385,20 @@ function ensurePassiveSyncPlaceholder(turnId = '', sessionId = 'default', eventS
     if (!assistantId) return '';
 
     serverReplayCurrentAssistantId = assistantId;
-    serverReplayMessageBuffers.delete(assistantId);
-    serverReplayReasoningBuffers.delete(assistantId);
-    updateSyncedMessageContent(assistantId, getPassiveSyncWaitingText(), { animate: false });
-    syncPassiveGenerationUI(currentChatSessionCache);
 
     const assistantEl = document.getElementById(assistantId);
+    const existingContent = serverReplayMessageBuffers.get(assistantId) || assistantEl?._streamRenderState?.committedText || '';
+    const isPlaceholder = existingContent === getPassiveSyncWaitingText();
+    const hasRealContent = !!existingContent && !isPlaceholder;
+
+    if (!hasRealContent) {
+        serverReplayMessageBuffers.delete(assistantId);
+        serverReplayReasoningBuffers.delete(assistantId);
+        updateSyncedMessageContent(assistantId, getPassiveSyncWaitingText(), { animate: false });
+    }
+
+    syncPassiveGenerationUI(currentChatSessionCache, phase);
+
     const actionBar = assistantEl?.querySelector('.message-actions');
     if (actionBar) {
         actionBar.hidden = true;
@@ -3350,13 +3412,28 @@ function ensurePassiveSyncPlaceholderForRunningSession(session = currentChatSess
 
     const sessionUISnapshot = getCurrentChatSessionUISnapshot(session);
     const snapshotMessages = Array.isArray(sessionUISnapshot.messages) ? sessionUISnapshot.messages : [];
-    let turnId = String(snapshotMessages[snapshotMessages.length - 1]?.turn_id || '').trim();
+    let turnId = '';
+    const lastSnapshotItem = snapshotMessages[snapshotMessages.length - 1];
+    if (lastSnapshotItem && !hasAssistantSnapshotContent(lastSnapshotItem.assistant_content, lastSnapshotItem.reasoning_content, sessionUISnapshot.tool_cards?.[lastSnapshotItem.turn_id])) {
+        turnId = String(lastSnapshotItem.turn_id).trim();
+    }
 
     if (!turnId) {
         const userNodes = chatMessages ? Array.from(chatMessages.querySelectorAll('.message.user[data-turn-id]')) : [];
         const lastUserMessage = userNodes[userNodes.length - 1] || null;
-        turnId = String(lastUserMessage?.dataset?.turnId || serverReplayCurrentTurnId || '').trim();
+        if (lastUserMessage) {
+            const lastUserTurnId = String(lastUserMessage.dataset.turnId || '').trim();
+            const lastAssistantId = buildServerAssistantMessageId(lastUserTurnId, '');
+            const assistantEl = document.getElementById(lastAssistantId);
+            const hasContent = !!(serverReplayMessageBuffers.get(lastAssistantId) || assistantEl?._streamRenderState?.committedText || assistantEl?.querySelector('.assistant-response-card:not([hidden])'));
+            
+            if (!hasContent) {
+                turnId = lastUserTurnId;
+            }
+        }
     }
+
+    if (!turnId) turnId = String(serverReplayCurrentTurnId || '').trim();
     if (!turnId) return '';
 
     const latestMessage = snapshotMessages[snapshotMessages.length - 1] || null;
@@ -3385,7 +3462,7 @@ function broadcastConfigSync() {
 
 async function handleExternalConfigSync() {
     try {
-        await syncServerConfig();
+        await syncServerConfig({ log: true });
     } catch (err) {
         console.warn('Failed to sync config from external event:', err);
     }
@@ -3630,7 +3707,6 @@ async function refreshSessionStateFromServer() {
                 }
                 if (!currentUser) return;
 
-                await syncServerConfig();
                 await syncCurrentChatSessionFromServer();
             } while (pendingSessionRefresh);
 
@@ -3681,9 +3757,14 @@ function updateUserLocation() {
                 acc: accuracy
             });
             console.log("[Location] Updated:", currentUserLocation);
+            lastLocationErrorMessage = '';
         },
         (err) => {
-            console.warn("[Location] Error:", err.message);
+            const nextMessage = String(err?.message || 'Unknown geolocation error');
+            if (nextMessage !== lastLocationErrorMessage) {
+                console.warn("[Location] Error:", nextMessage);
+                lastLocationErrorMessage = nextMessage;
+            }
             currentUserLocation = null;
         },
         { enableHighAccuracy: false, timeout: 10000, maximumAge: 600000 } // 10 min cache
@@ -4174,46 +4255,86 @@ function setupSettingsListeners() {
 // Global Dictionary State
 let ttsDictionary = {};
 let ttsDictionaryRegex = null;
+let ttsDictionaryLang = '';
+let ttsDictionaryLoadPromise = null;
+let lastSyncedServerConfigSignature = '';
 
-async function loadTTSDictionary(lang) {
+function buildServerConfigSignature(serverCfg) {
+    try {
+        return JSON.stringify({
+            llm_endpoint: serverCfg?.llm_endpoint || '',
+            llm_mode: serverCfg?.llm_mode || '',
+            context_strategy: serverCfg?.context_strategy || '',
+            secondary_model: serverCfg?.secondary_model || '',
+            enable_tts: serverCfg?.enable_tts === true,
+            enable_mcp: serverCfg?.enable_mcp === true,
+            enable_memory: serverCfg?.enable_memory === true,
+            stateful_turn_limit: Number(serverCfg?.stateful_turn_limit || 0),
+            stateful_char_budget: Number(serverCfg?.stateful_char_budget || 0),
+            stateful_token_budget: Number(serverCfg?.stateful_token_budget || 0),
+            embedding_config: serverCfg?.embedding_config || null,
+            tts_config: serverCfg?.tts_config || null
+        });
+    } catch (_) {
+        return '';
+    }
+}
+
+async function loadTTSDictionary(lang, options = {}) {
     // Default to config language or 'ko' if undefined
     const targetLang = lang || config.ttsLang || 'ko';
-    let rawDict = {};
-    try {
-        if (window.go && window.go.main && window.go.core.App) {
-            rawDict = await window.go.core.App.GetTTSDictionary(targetLang);
-        } else {
-            const res = await fetch(`/api/dictionary?lang=${targetLang}`);
-            if (res.ok) rawDict = await res.json();
-        }
+    const forceReload = options.forceReload === true;
+    const log = options.log !== false;
 
-        // Normalize keys to lowercase for case-insensitive lookup
-        ttsDictionary = {};
-        if (rawDict) {
-            for (const [k, v] of Object.entries(rawDict)) {
-                ttsDictionary[k.toLowerCase()] = v;
-            }
-        }
-
-        // Build optimized regex for performance (O(N) replacement)
-        const keys = Object.keys(ttsDictionary);
-        if (keys.length > 0) {
-            // Escape special chars in keys
-            const escapedKeys = keys.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-            // Create regex matching any of the keys with word boundaries
-            // Note: If keys contain spaces (e.g. "Mac OS"), \b might behave differently depending on chars
-            // But user example "macOS" -> "Mac OS" is single word key. 
-            // If user has "Mobile Phone", \bMobile Phone\b works.
-
-            // 대소문자 구분을 하지 않기 위해 'g' 대신 'gi' 플래그 사용
-            // ttsDictionaryRegex = new RegExp(`\\b(${escapedKeys.join('|')})\\b`, 'g');
-            ttsDictionaryRegex = new RegExp(`\\b(${escapedKeys.join('|')})\\b`, 'gi');
-
-            console.log(`[TTS] Dictionary loaded with ${keys.length} entries.`);
-        }
-    } catch (e) {
-        console.error("Failed to load dictionary:", e);
+    if (!forceReload && ttsDictionaryLang === targetLang && (ttsDictionaryRegex || Object.keys(ttsDictionary).length > 0)) {
+        return ttsDictionary;
     }
+    if (!forceReload && ttsDictionaryLoadPromise && ttsDictionaryLang === targetLang) {
+        return ttsDictionaryLoadPromise;
+    }
+
+    let rawDict = {};
+
+    ttsDictionaryLoadPromise = (async () => {
+        try {
+            if (window.go && window.go.main && window.go.core.App) {
+                rawDict = await window.go.core.App.GetTTSDictionary(targetLang);
+            } else {
+                const res = await fetch(`/api/dictionary?lang=${targetLang}`);
+                if (res.ok) rawDict = await res.json();
+            }
+
+            // Normalize keys to lowercase for case-insensitive lookup
+            ttsDictionary = {};
+            if (rawDict) {
+                for (const [k, v] of Object.entries(rawDict)) {
+                    ttsDictionary[k.toLowerCase()] = v;
+                }
+            }
+
+            // Build optimized regex for performance (O(N) replacement)
+            const keys = Object.keys(ttsDictionary);
+            if (keys.length > 0) {
+                const escapedKeys = keys.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+                ttsDictionaryRegex = new RegExp(`\\b(${escapedKeys.join('|')})\\b`, 'gi');
+            } else {
+                ttsDictionaryRegex = null;
+            }
+            ttsDictionaryLang = targetLang;
+
+            if (log) {
+                console.log(`[TTS] Dictionary loaded with ${keys.length} entries. (lang=${targetLang})`);
+            }
+            return ttsDictionary;
+        } catch (e) {
+            console.error("Failed to load dictionary:", e);
+            throw e;
+        } finally {
+            ttsDictionaryLoadPromise = null;
+        }
+    })();
+
+    return ttsDictionaryLoadPromise;
 }
 
 // 시스템 프롬프트 프리셋 (외부 파일에서 로드)
@@ -4273,6 +4394,7 @@ async function reloadExternalFiles() {
 }
 
 function saveConfig(closeModal = true) {
+    const previousDictionaryLang = getEffectiveTTSDictionaryLang();
     const cfgApiEl = document.getElementById('cfg-api');
     // Sanitize Endpoint: Trim whitespace and trailing slash
     let endpoint = cfgApiEl ? cfgApiEl.value.trim() : config.apiEndpoint;
@@ -4341,9 +4463,6 @@ function saveConfig(closeModal = true) {
     syncHapticsPreference();
     renderReasoningControl();
 
-    // Reload dictionary since language changes
-    loadTTSDictionary(getEffectiveTTSDictionaryLang());
-
     config.chunkSize = parseInt(document.getElementById('cfg-chunk-size').value) || 300;
     config.systemPrompt = document.getElementById('cfg-system-prompt').value.trim() || 'You are a helpful AI assistant.';
     config.ttsVoice = document.getElementById('cfg-tts-voice').value;
@@ -4361,6 +4480,11 @@ function saveConfig(closeModal = true) {
     }
 
     persistClientConfig();
+
+    const nextDictionaryLang = getEffectiveTTSDictionaryLang();
+    if (nextDictionaryLang !== previousDictionaryLang) {
+        loadTTSDictionary(nextDictionaryLang, { log: true });
+    }
 
     // Sync configs to server
     if (window.go && window.go.main && window.go.core.App) {
@@ -4628,8 +4752,9 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
     const snapshotMessages = Array.isArray(sessionUISnapshot.messages) ? sessionUISnapshot.messages : [];
     if (snapshotMessages.length === 0) return false;
     const passiveRunningSession = isPassiveServerSession(sessionSnapshot);
-    const pendingTurnId = passiveRunningSession
-        ? String(snapshotMessages[snapshotMessages.length - 1]?.turn_id || '').trim()
+    const lastItem = snapshotMessages[snapshotMessages.length - 1];
+    const pendingTurnId = (passiveRunningSession && lastItem && !hasAssistantSnapshotContent(lastItem.assistant_content, lastItem.reasoning_content, sessionUISnapshot.tool_cards?.[lastItem.turn_id]))
+        ? String(lastItem.turn_id).trim()
         : '';
 
     messages = [];
@@ -4678,7 +4803,6 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
         ensureAssistantMessageElement(assistantId, turnId);
         if (waitingForRemoteReply) {
             ensurePassiveSyncPlaceholder(turnId, sessionSnapshot?.ID || 'default', sessionUISnapshot.last_event_seq || 0);
-            return;
         }
         if (reasoningText && !config.hideThink) {
             serverReplayReasoningBuffers.set(assistantId, reasoningText);
@@ -4698,7 +4822,10 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
                     titleEl.classList.remove('is-live');
                     titleEl.textContent = formatThoughtDuration(Math.max(0, reasoningDuration));
                 }
-                if (metaEl) metaEl.textContent = t('status.done');
+                if (metaEl) {
+                    metaEl.textContent = t('status.done');
+                    metaEl.classList.remove('is-live');
+                }
                 if (bodyEl) bodyEl.textContent = reasoningText;
             }
         }
@@ -4971,6 +5098,30 @@ function applyCurrentChatSessionEvent(entry) {
                 serverReplayMessageBuffers.set(assistantId, next);
             }
             updateSyncedMessageContent(assistantId, next);
+
+            // Handle text-based reasoning tags for passive sync (DeepSeek / LM Studio)
+            if (config.llmMode === 'lm-studio' && !config.hideThink) {
+                const hasAnalysis = next.includes('<|channel|>analysis');
+                const hasFinal = next.includes('<|channel|>final');
+                const hasThink = next.includes('<think>');
+                const hasThinkEnd = next.includes('</think>');
+
+                if ((hasAnalysis && !hasFinal) || (hasThink && !hasThinkEnd)) {
+                    let statusText = "Thinking...";
+                    if (hasAnalysis) {
+                        const parts = next.split('<|channel|>analysis');
+                        statusText = parts[parts.length - 1].split('<|channel|>')[0].trim();
+                    } else if (hasThink) {
+                        const parts = next.split('<think>');
+                        statusText = parts[parts.length - 1].split('</think>')[0].trim();
+                    }
+                    if (statusText.length > 150) statusText = "..." + statusText.slice(-147);
+                    showReasoningStatus(assistantId, statusText, false);
+                } else if (hasFinal || hasThinkEnd) {
+                    showReasoningStatus(assistantId, null, true);
+                }
+            }
+
             cleanupAssistantMessagesForTurn(serverReplayCurrentTurnId || entryTurnId, assistantId);
             break;
         }
@@ -5040,11 +5191,14 @@ function applyCurrentChatSessionEvent(entry) {
                 break;
             }
             if (serverReplayCurrentAssistantId) {
+                const duration = Number.isFinite(Number(payload.total_elapsed_ms || payload.elapsed_ms))
+                    ? Number(payload.total_elapsed_ms || payload.elapsed_ms)
+                    : null;
                 finalizeReasoningStatus(
                     serverReplayCurrentAssistantId,
                     'done',
                     '',
-                    Number(payload.total_elapsed_ms || payload.elapsed_ms || 0)
+                    duration
                 );
             }
             break;
@@ -5141,10 +5295,13 @@ function applyCurrentChatSessionEvent(entry) {
                         showReasoningStatus(activeLocalAssistantId, payloadReasoningText, false, Number(payload.total_elapsed_ms || payload.elapsed_ms || 0) || null);
                     }
                 }
-                if (activeLocalAssistantId && !serverReplayReasoningBuffers.has(activeLocalAssistantId) && Number.isFinite(Number(payload.total_elapsed_ms || payload.elapsed_ms))) {
-                    finalizeReasoningStatus(activeLocalAssistantId, 'done', '', Number(payload.total_elapsed_ms || payload.elapsed_ms));
+                const duration = Number.isFinite(Number(payload.total_elapsed_ms || payload.elapsed_ms))
+                    ? Number(payload.total_elapsed_ms || payload.elapsed_ms)
+                    : null;
+                if (activeLocalAssistantId && !serverReplayReasoningBuffers.has(activeLocalAssistantId) && duration !== null) {
+                    finalizeReasoningStatus(activeLocalAssistantId, 'done', '', duration);
                 } else if (activeLocalAssistantId && serverReplayReasoningBuffers.has(activeLocalAssistantId)) {
-                    finalizeReasoningStatus(activeLocalAssistantId, 'done', '', Number(payload.total_elapsed_ms || payload.elapsed_ms || 0) || null);
+                    finalizeReasoningStatus(activeLocalAssistantId, 'done', '', duration);
                 }
                 if (activeLocalAssistantId) {
                     const payloadFinalText = extractFinalAssistantContentFromPayload(payload);
@@ -5588,7 +5745,8 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
         if (reasoningText && !config.hideThink) {
             serverReplayReasoningBuffers.set(assistantId, reasoningText);
             showReasoningStatus(assistantId, reasoningText);
-            finalizeReasoningStatus(assistantId, 'done', '', reasoningDurationById.get(assistantId) || null);
+            const duration = reasoningDurationById.get(assistantId);
+            finalizeReasoningStatus(assistantId, 'done', '', Number.isFinite(duration) ? duration : null);
         }
 
         if (mergedToolState) {
@@ -5690,12 +5848,23 @@ function adjustChatFontSize(delta) {
     localStorage.setItem('appConfig', JSON.stringify(config));
 }
 
-async function syncServerConfig() {
+async function syncServerConfig(options = {}) {
+    const forceApply = options.forceApply === true;
+    const forceDictionaryReload = options.forceDictionaryReload === true;
+    const log = options.log === true;
     try {
         const response = await fetch('/api/config', { credentials: 'include' }); // Fetch current server config
         if (response.ok) {
             const serverCfg = await response.json();
-            console.log('[Config] Synced from server:', serverCfg);
+            const nextSignature = buildServerConfigSignature(serverCfg);
+            const configChanged = forceApply || nextSignature !== lastSyncedServerConfigSignature;
+            if (!configChanged) {
+                return false;
+            }
+            lastSyncedServerConfigSignature = nextSignature;
+            if (log) {
+                console.log('[Config] Synced from server:', serverCfg);
+            }
 
             if (serverCfg.llm_endpoint) {
                 config.apiEndpoint = serverCfg.llm_endpoint;
@@ -5805,11 +5974,16 @@ async function syncServerConfig() {
 
             // Save to localStorage so next reload uses these
             localStorage.setItem('appConfig', JSON.stringify(config));
-            loadTTSDictionary(getEffectiveTTSDictionaryLang());
+            await loadTTSDictionary(getEffectiveTTSDictionaryLang(), {
+                forceReload: forceDictionaryReload,
+                log
+            });
+            return true;
         }
     } catch (e) {
         console.warn('Failed to sync server config:', e);
     }
+    return false;
 }
 
 async function loadVoiceStyles() {
@@ -7562,26 +7736,27 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
                             }
                         }
 
-                        let displayText = fullText;
+                        const rawDisplayText = fullText;
+                        let displayText = stripHiddenAssistantProtocolText(fullText);
 
                         // LM Studio Reasoning Status Detection (Text-based fallback for tags)
                         // Only run if not already handled by SSE/reasoning_content events
                         if (config.llmMode === 'lm-studio' && !currentlyReasoning && !config.hideThink) {
-                            const hasAnalysis = displayText.includes('<|channel|>analysis');
+                            const hasAnalysis = rawDisplayText.includes('<|channel|>analysis');
 
-                            const hasFinal = displayText.includes('<|channel|>final');
-                            const hasThink = displayText.includes('<think>');
-                            const hasThinkEnd = displayText.includes('</think>');
+                            const hasFinal = rawDisplayText.includes('<|channel|>final');
+                            const hasThink = rawDisplayText.includes('<think>');
+                            const hasThinkEnd = rawDisplayText.includes('</think>');
 
                             if ((hasAnalysis && !hasFinal) || (hasThink && !hasThinkEnd)) {
                                 // Extract the "new" content part for status update
                                 // This is tricky during streaming, but we can show the last part of fullText
                                 let statusText = "Thinking...";
                                 if (hasAnalysis) {
-                                    const parts = fullText.split('<|channel|>analysis');
+                                    const parts = rawDisplayText.split('<|channel|>analysis');
                                     statusText = parts[parts.length - 1].split('<|channel|>')[0].trim();
                                 } else if (hasThink) {
-                                    const parts = fullText.split('<think>');
+                                    const parts = rawDisplayText.split('<think>');
                                     statusText = parts[parts.length - 1].split('</think>')[0].trim();
                                 }
 
@@ -7591,32 +7766,6 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
                             } else if (hasFinal || hasThinkEnd) {
                                 showReasoningStatus(elementId, null, true);
                             }
-                        }
-
-                        // UI Display Logic - ALWAYS hide <think> content from bubble
-                        // (Status indicator shows thinking progress instead)
-                        // 1. Remove complete <think>...</think> blocks
-                        displayText = displayText.replace(/<think>[\s\S]*?<\/think>/g, '');
-                        // 2. Remove complete <|channel|>analysis...<|channel|> blocks
-                        displayText = displayText.replace(/<\|channel\|>analysis[\s\S]*?(?=<\|channel\|>final|$)/g, '');
-                        // 3. Remove standalone tags
-                        displayText = displayText.replace(/<\|channel\|>(analysis|final|message)/g, '');
-                        displayText = displayText.replace(/<\|end\|>/g, '');
-
-                        // 4. Remove text-based tool call JSON patterns (for models without native function calling)
-                        // Pattern 1: {"name": "tool_name", "arguments": {...}}
-                        // Pattern 2: {"name": "tool_name", "query": "..."}  (alternative format)
-                        displayText = displayText.replace(/\{"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*\{[^}]*\}\}/g, '');
-                        displayText = displayText.replace(/\{"name"\s*:\s*"[^"]+"[^}]*\}/g, '');
-
-
-                        // Handle case where </think> exists without opening tag (remove everything before it)
-                        if (displayText.includes('</think>')) {
-                            displayText = displayText.split('</think>').pop().trim();
-                        }
-                        // Handle incomplete <think> tag (still being streamed)
-                        if (displayText.includes('<think>')) {
-                            displayText = displayText.split('<think>')[0];
                         }
 
                         if (!deferToServerChatSession) scheduleStreamMessageRender(elementId, displayText);
@@ -7676,7 +7825,7 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
         }
         // Finalize (Save to history even if aborted)
         // Keep only the user-visible answer in history to avoid ballooning context.
-        historyContent = fullText.trim();
+        historyContent = sanitizeAssistantRenderText(fullText).trim();
         if (historyContent && !streamDetached && !streamRestartRequested && !localStreamOwnershipReleased) {
             messages.push({ role: 'assistant', content: historyContent, turnId });
             if (config.llmMode === 'stateful') {
@@ -8652,6 +8801,7 @@ function stopAllAudio() {
     // Stop current audio source
     if (currentAudio) {
         try {
+            detachCurrentAudioPlaybackListeners();
             currentAudio.pause();
             currentAudio.src = '';
             currentAudio.load(); // Forces resource release
@@ -8708,7 +8858,7 @@ function showReasoningStatus(elementId, text, isFinal = false, elapsedOverrideMs
     const durationMs = accumulatedMs + segmentDurationMs;
 
     if (isFinal) {
-        finalizeReasoningStatus(elementId, 'done');
+        finalizeReasoningStatus(elementId, 'done', '', durationMs);
         return;
     }
 
@@ -8824,7 +8974,7 @@ function renderInitialAssistantMarkdown(text) {
         return '<div class="markdown-committed"></div><div class="markdown-pending"></div>';
     }
     return `
-        <div class="markdown-committed">${marked.parse(normalized)}</div>
+        <div class="markdown-committed">${sanitizeRenderedMarkdownHtml(marked.parse(normalized))}</div>
         <div class="markdown-pending"></div>
     `;
 }
@@ -9000,9 +9150,9 @@ function renderMarkdownIntoHost(host, markdownText, options = {}) {
     host.dataset.markdownSource = normalized;
 
     const renderer = getMarkdownRenderer();
-    host.innerHTML = normalized.trim() ? renderer.render(normalized) : '';
+    host.innerHTML = normalized.trim() ? sanitizeRenderedMarkdownHtml(renderer.render(normalized)) : '';
     if (allowLooseFallback && shouldFallbackToLooseMarkdown(host, normalized)) {
-        host.innerHTML = renderLooseMarkdownToHtml(normalized);
+        host.innerHTML = sanitizeRenderedMarkdownHtml(renderLooseMarkdownToHtml(normalized));
     }
     if (renderer.name !== 'remark') {
         renderMathInHost(host);
@@ -9026,15 +9176,128 @@ function pulseMessageRender(el) {
 }
 
 function sanitizeAssistantRenderText(text) {
-    let cleanText = String(text || '');
-    cleanText = cleanText.replace(/<\|[\s\S]*?\|>/g, '');
+    let cleanText = stripHiddenAssistantProtocolText(text);
     cleanText = cleanText.replace(/<commentary[\s\S]*?>/gi, '');
     cleanText = cleanText.replace(/commentary to=[a-z_]+(\s+(json|code|text))?/gi, '');
-    cleanText = cleanText.replace(/\{"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*([\s\S]*?)\}/g, '');
     cleanText = cleanText.trim().replace(/^(json|code|text)\s*/gi, '');
-    cleanText = cleanText.replace(/<\|.*?\|>/g, '');
     cleanText = deduplicateTrailingParagraph(cleanText);
     return cleanText;
+}
+
+function stripHiddenAssistantProtocolText(text) {
+    let cleanText = String(text || '');
+
+    cleanText = cleanText.replace(/<think>[\s\S]*?<\/think>/g, '');
+    cleanText = cleanText.replace(/<\|channel\|>analysis[\s\S]*?(?=<\|channel\|>final|$)/g, '');
+    cleanText = cleanText.replace(/<\|channel\|>(analysis|final|message)/g, '');
+    cleanText = cleanText.replace(/<\|end\|>/g, '');
+    cleanText = cleanText.replace(/\{"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*\{[^}]*\}\}/g, '');
+    cleanText = cleanText.replace(/\{"name"\s*:\s*"[^"]+"[^}]*\}/g, '');
+    cleanText = cleanText.replace(/<\|[\s\S]*?\|>/g, '');
+
+    if (cleanText.includes('</think>')) {
+        cleanText = cleanText.split('</think>').pop().trim();
+    }
+    if (cleanText.includes('<think>')) {
+        cleanText = cleanText.split('<think>')[0];
+    }
+
+    return cleanText;
+}
+
+function sanitizeRenderedMarkdownHtml(html) {
+    const rawHtml = String(html || '');
+    if (!rawHtml.trim()) return '';
+
+    if (window.DOMPurify?.sanitize) {
+        return window.DOMPurify.sanitize(rawHtml);
+    }
+
+    const template = document.createElement('template');
+    template.innerHTML = rawHtml;
+
+    const allowedTags = new Set([
+        'a', 'abbr', 'b', 'blockquote', 'br', 'code', 'del', 'details', 'div', 'em',
+        'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'i', 'img', 'kbd', 'li', 'mark',
+        'ol', 'p', 'pre', 'q', 'rp', 'rt', 'ruby', 's', 'samp', 'small', 'span',
+        'strong', 'sub', 'summary', 'sup', 'table', 'tbody', 'td', 'th', 'thead',
+        'tr', 'ul'
+    ]);
+    const globalAllowedAttrs = new Set(['class', 'title', 'aria-hidden']);
+    const tagAllowedAttrs = {
+        a: new Set(['href', 'target', 'rel']),
+        img: new Set(['src', 'alt', 'title']),
+        code: new Set(['class']),
+        span: new Set(['class']),
+        div: new Set(['class']),
+        th: new Set(['colspan', 'rowspan']),
+        td: new Set(['colspan', 'rowspan'])
+    };
+
+    const sanitizeUrl = (value) => {
+        const normalized = String(value || '').trim();
+        if (!normalized) return '';
+        if (normalized.startsWith('#') || normalized.startsWith('/') || normalized.startsWith('./') || normalized.startsWith('../')) {
+            return normalized;
+        }
+        try {
+            const parsed = new URL(normalized, window.location.origin);
+            const protocol = parsed.protocol.toLowerCase();
+            if (protocol === 'http:' || protocol === 'https:' || protocol === 'mailto:') {
+                return parsed.href;
+            }
+        } catch (_) {
+            return '';
+        }
+        return '';
+    };
+
+    const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_ELEMENT);
+    const nodes = [];
+    while (walker.nextNode()) {
+        nodes.push(walker.currentNode);
+    }
+
+    nodes.forEach((node) => {
+        const tagName = node.tagName.toLowerCase();
+        if (!allowedTags.has(tagName)) {
+            node.replaceWith(document.createTextNode(node.textContent || ''));
+            return;
+        }
+
+        Array.from(node.attributes).forEach((attr) => {
+            const attrName = attr.name.toLowerCase();
+            const allowedForTag = tagAllowedAttrs[tagName];
+            const isAllowed = globalAllowedAttrs.has(attrName) || allowedForTag?.has(attrName);
+            if (!isAllowed || attrName.startsWith('on')) {
+                node.removeAttribute(attr.name);
+                return;
+            }
+
+            if ((attrName === 'href' || attrName === 'src')) {
+                const sanitized = sanitizeUrl(attr.value);
+                if (!sanitized) {
+                    node.removeAttribute(attr.name);
+                    return;
+                }
+                node.setAttribute(attr.name, sanitized);
+            }
+        });
+
+        if (tagName === 'a') {
+            node.setAttribute('target', '_blank');
+            node.setAttribute('rel', 'noopener noreferrer');
+        }
+    });
+
+    return template.innerHTML;
+}
+
+function detachCurrentAudioPlaybackListeners() {
+    if (currentAudioPlaybackController) {
+        currentAudioPlaybackController.abort();
+        currentAudioPlaybackController = null;
+    }
 }
 
 function appendStreamChunkDedup(existingText, nextChunk) {
@@ -9408,8 +9671,18 @@ function updateScrollToBottomButton() {
         && !isRestoringChatSession
         && !isSavedLibraryOpen;
 
+    if (!shouldShow && document.activeElement === scrollToBottomBtn) {
+        scrollToBottomBtn.blur();
+    }
+
     scrollToBottomBtn.classList.toggle('is-visible', shouldShow);
-    scrollToBottomBtn.setAttribute('aria-hidden', shouldShow ? 'false' : 'true');
+    scrollToBottomBtn.hidden = !shouldShow;
+    if (shouldShow) {
+        scrollToBottomBtn.removeAttribute('aria-hidden');
+        scrollToBottomBtn.removeAttribute('inert');
+    } else {
+        scrollToBottomBtn.setAttribute('inert', '');
+    }
     updateReasoningControlVisibility();
 }
 
@@ -10250,23 +10523,33 @@ async function processTTSQueue(isFirstChunk = false) {
 
             // Play via Audio element
             await new Promise((resolve, reject) => {
+                detachCurrentAudioPlaybackListeners();
+                const playbackController = new AbortController();
+                currentAudioPlaybackController = playbackController;
+
                 const onEnded = () => {
-                    currentAudio.removeEventListener('ended', onEnded);
-                    currentAudio.removeEventListener('error', onError);
+                    if (currentAudioPlaybackController === playbackController) {
+                        currentAudioPlaybackController = null;
+                    }
                     resolve();
                 };
                 const onError = (e) => {
                     console.error("Audio element error:", e);
-                    currentAudio.removeEventListener('ended', onEnded);
-                    currentAudio.removeEventListener('error', onError);
+                    if (currentAudioPlaybackController === playbackController) {
+                        currentAudioPlaybackController = null;
+                    }
                     reject(e);
                 };
 
-                currentAudio.addEventListener('ended', onEnded);
-                currentAudio.addEventListener('error', onError);
+                currentAudio.addEventListener('ended', onEnded, { once: true, signal: playbackController.signal });
+                currentAudio.addEventListener('error', onError, { once: true, signal: playbackController.signal });
 
                 // Check cancellation before starting
                 if (sessionId !== ttsSessionId) {
+                    playbackController.abort();
+                    if (currentAudioPlaybackController === playbackController) {
+                        currentAudioPlaybackController = null;
+                    }
                     resolve();
                     return;
                 }
@@ -10278,6 +10561,7 @@ async function processTTSQueue(isFirstChunk = false) {
         } catch (e) {
             console.error("Playback failed for chunk:", e);
         } finally {
+            detachCurrentAudioPlaybackListeners();
             if (playbackBundle?.revokeInputs) {
                 for (const url of playbackBundle.revokeInputs) {
                     URL.revokeObjectURL(url);

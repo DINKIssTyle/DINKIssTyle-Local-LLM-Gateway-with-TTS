@@ -458,7 +458,7 @@
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/sw.js?v=5').catch(err => {
+                navigator.serviceWorker.register('/sw.js?v=6').catch(err => {
                     console.warn('Service worker registration failed:', err);
                 });
             });
