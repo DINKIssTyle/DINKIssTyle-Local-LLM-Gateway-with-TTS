@@ -62,6 +62,34 @@ let config = {
     hapticsEnabled: true
 };
 
+const AppState = {
+    chat: {
+        messages: [],
+        isGenerating: false,
+        activeLocalTurnId: ''
+    },
+    audio: {
+        currentAudio: null,
+        currentAudioBtn: null,
+        audioWarmup: null,
+        ttsQueue: [],
+        activeTTSSessionLabel: '',
+        currentAudioPlaybackController: null,
+        isPlayingQueue: false,
+        streamingTTSActive: false,
+        streamingTTSCommittedIndex: 0,
+        streamingTTSBuffer: '',
+        streamingTTSProcessor: null,
+        ttsSessionId: 0
+    },
+    input: {
+        pendingVoiceInputAutoTTS: false
+    },
+    ui: {
+        activeStreamingMessageId: null
+    }
+};
+
 let streamLoopWorker = null;
 let streamLoopWorkerFailed = false;
 let streamLoopWorkerMessageId = 0;
@@ -676,7 +704,12 @@ document.addEventListener('keydown', (event) => {
  * Holistic sync for Screen Wake Lock based on app state
  */
 async function syncWakeLock() {
-    const shouldBeActive = !!(isGenerating || isPlayingQueue || isSTTActive || streamingTTSActive);
+    const shouldBeActive = !!(
+        AppState.chat.isGenerating
+        || AppState.audio.isPlayingQueue
+        || isSTTActive
+        || AppState.audio.streamingTTSActive
+    );
     if (shouldBeActive) {
         await requestWakeLock();
     } else {
@@ -694,7 +727,12 @@ async function requestWakeLock() {
 
         wakeLock.addEventListener('release', () => {
             console.info('[WakeLock] Screen Wake Lock released');
-            const stillBusy = !!(isGenerating || isPlayingQueue || isSTTActive || streamingTTSActive);
+            const stillBusy = !!(
+                AppState.chat.isGenerating
+                || AppState.audio.isPlayingQueue
+                || isSTTActive
+                || AppState.audio.streamingTTSActive
+            );
             if (document.visibilityState === 'visible' && stillBusy) {
                 wakeLock = null;
                 setTimeout(() => syncWakeLock(), 1000);
@@ -891,6 +929,10 @@ function clearSavedLibrarySearch() {
     return savedLibraryController.clearSavedLibrarySearch();
 }
 
+function renderSavedLibraryList() {
+    return savedLibraryController.renderSavedLibraryList();
+}
+
 function openSavedTurnModal(id) {
     return savedLibraryController.openSavedTurnModal(id);
 }
@@ -916,7 +958,7 @@ function getActiveComposerBackgroundTask() {
 
 function updateComposerBackgroundTaskUI() {
     const hasBackgroundTask = !!getActiveComposerBackgroundTask();
-    inputContainer?.classList.toggle('has-background-task', hasBackgroundTask && !isGenerating && !composerProgressActive);
+    inputContainer?.classList.toggle('has-background-task', hasBackgroundTask && !AppState.chat.isGenerating && !composerProgressActive);
     updateMessageInputPlaceholder();
 }
 
@@ -1012,8 +1054,8 @@ function getTurnDataFromAssistantButton(btn) {
     const responseEl = messageEl.querySelector('.markdown-body');
     const committedResponseEl = responseEl?.querySelector('.markdown-committed');
     const pendingResponseEl = responseEl?.querySelector('.markdown-pending');
-    const userMessage = messages.find((entry) => entry?.role === 'user' && entry?.turnId === turnId);
-    const assistantMessage = [...messages].reverse().find((entry) => entry?.role === 'assistant' && entry?.turnId === turnId);
+    const userMessage = AppState.chat.messages.find((entry) => entry?.role === 'user' && entry?.turnId === turnId);
+    const assistantMessage = [...AppState.chat.messages].reverse().find((entry) => entry?.role === 'assistant' && entry?.turnId === turnId);
 
     const promptText = (userEl?.innerText || userMessage?.content || '').trim();
     const responseMarkdownSource = (
@@ -1077,9 +1119,7 @@ async function downloadCertificate() {
 }
 
 // Chat State
-let messages = [];
 let pendingImage = null;
-let isGenerating = false;
 let abortController = null;
 let lastResponseId = null; // For Stateful Chat
 let statefulTurnCount = 0;
@@ -1091,24 +1131,6 @@ let statefulLastInputTokens = 0;
 let statefulLastOutputTokens = 0;
 let statefulPeakInputTokens = 0;
 // Audio State
-let currentAudio = null;
-let currentAudioBtn = null;
-let audioWarmup = null; // Used to bypass auto-play blocks
-let ttsQueue = [];
-let activeTTSSessionLabel = "";
-let currentAudioPlaybackController = null;
-
-let isPlayingQueue = false;
-
-// Streaming TTS State
-let streamingTTSActive = false;
-let streamingTTSCommittedIndex = 0; // How much of the display text has been sent to TTS
-let streamingTTSBuffer = ""; // Uncommitted text buffer
-let streamingTTSProcessor = null; // Reference to the active processor loop
-let ttsSessionId = 0;
-let pendingVoiceInputAutoTTS = false;
-
-
 // DOM Elements
 const chatMessages = document.getElementById('chat-messages');
 const chatRestoreOverlay = document.getElementById('chat-restore-overlay');
@@ -1118,7 +1140,6 @@ let autoScrollHoldTimeout = null;
 let autoScrollResizeObserver = null;
 let lockScrollToLatest = false;
 let suppressNextScrollEvent = false;
-let activeStreamingMessageId = null;
 let activeStreamingMessagePinnedToTop = false;
 let activeStreamingMessagePinPending = false;
 let pendingScrollToBottom = false;
@@ -1132,6 +1153,7 @@ let composerProgressActive = false;
 let composerProgressPercent = null;
 const composerBackgroundTasks = new Map();
 const scrollToBottomBtn = document.getElementById('scroll-to-bottom-btn');
+let isRestoringChatSession = false;
 let chatScrollMetrics = {
     scrollTop: 0,
     scrollHeight: 0,
@@ -1202,7 +1224,7 @@ if (chatMessages) {
             lockScrollToLatest = false;
         }
 
-        if (isGenerating) {
+        if (AppState.chat.isGenerating) {
             if (shouldAutoScroll) {
                 lockScrollToLatest = true;
             } else {
@@ -1235,34 +1257,37 @@ const savedTurnModalTitleInput = document.getElementById('saved-turn-inline-titl
 const savedTurnModalTitleSaveBtn = document.getElementById('saved-turn-inline-title-save');
 const savedTurnModalTitleCancelBtn = document.getElementById('saved-turn-inline-title-cancel');
 const osTTSVoiceSelect = document.getElementById('cfg-os-tts-voice');
+let chatUIController = null;
+let chatStreamingController = null;
+
 function getTTSPlaybackState() {
     return {
-        currentAudio,
-        currentAudioBtn,
-        audioWarmup,
-        ttsQueue,
-        activeTTSSessionLabel,
-        currentAudioPlaybackController,
-        isPlayingQueue,
-        streamingTTSActive,
-        streamingTTSCommittedIndex,
-        streamingTTSBuffer,
-        ttsSessionId
+        currentAudio: AppState.audio.currentAudio,
+        currentAudioBtn: AppState.audio.currentAudioBtn,
+        audioWarmup: AppState.audio.audioWarmup,
+        ttsQueue: AppState.audio.ttsQueue,
+        activeTTSSessionLabel: AppState.audio.activeTTSSessionLabel,
+        currentAudioPlaybackController: AppState.audio.currentAudioPlaybackController,
+        isPlayingQueue: AppState.audio.isPlayingQueue,
+        streamingTTSActive: AppState.audio.streamingTTSActive,
+        streamingTTSCommittedIndex: AppState.audio.streamingTTSCommittedIndex,
+        streamingTTSBuffer: AppState.audio.streamingTTSBuffer,
+        ttsSessionId: AppState.audio.ttsSessionId
     };
 }
 
 function setTTSPlaybackState(patch = {}) {
-    if (Object.prototype.hasOwnProperty.call(patch, 'currentAudio')) currentAudio = patch.currentAudio;
-    if (Object.prototype.hasOwnProperty.call(patch, 'currentAudioBtn')) currentAudioBtn = patch.currentAudioBtn;
-    if (Object.prototype.hasOwnProperty.call(patch, 'audioWarmup')) audioWarmup = patch.audioWarmup;
-    if (Object.prototype.hasOwnProperty.call(patch, 'ttsQueue')) ttsQueue = patch.ttsQueue;
-    if (Object.prototype.hasOwnProperty.call(patch, 'activeTTSSessionLabel')) activeTTSSessionLabel = patch.activeTTSSessionLabel;
-    if (Object.prototype.hasOwnProperty.call(patch, 'currentAudioPlaybackController')) currentAudioPlaybackController = patch.currentAudioPlaybackController;
-    if (Object.prototype.hasOwnProperty.call(patch, 'isPlayingQueue')) isPlayingQueue = patch.isPlayingQueue;
-    if (Object.prototype.hasOwnProperty.call(patch, 'streamingTTSActive')) streamingTTSActive = patch.streamingTTSActive;
-    if (Object.prototype.hasOwnProperty.call(patch, 'streamingTTSCommittedIndex')) streamingTTSCommittedIndex = patch.streamingTTSCommittedIndex;
-    if (Object.prototype.hasOwnProperty.call(patch, 'streamingTTSBuffer')) streamingTTSBuffer = patch.streamingTTSBuffer;
-    if (Object.prototype.hasOwnProperty.call(patch, 'ttsSessionId')) ttsSessionId = patch.ttsSessionId;
+    if (Object.prototype.hasOwnProperty.call(patch, 'currentAudio')) AppState.audio.currentAudio = patch.currentAudio;
+    if (Object.prototype.hasOwnProperty.call(patch, 'currentAudioBtn')) AppState.audio.currentAudioBtn = patch.currentAudioBtn;
+    if (Object.prototype.hasOwnProperty.call(patch, 'audioWarmup')) AppState.audio.audioWarmup = patch.audioWarmup;
+    if (Object.prototype.hasOwnProperty.call(patch, 'ttsQueue')) AppState.audio.ttsQueue = patch.ttsQueue;
+    if (Object.prototype.hasOwnProperty.call(patch, 'activeTTSSessionLabel')) AppState.audio.activeTTSSessionLabel = patch.activeTTSSessionLabel;
+    if (Object.prototype.hasOwnProperty.call(patch, 'currentAudioPlaybackController')) AppState.audio.currentAudioPlaybackController = patch.currentAudioPlaybackController;
+    if (Object.prototype.hasOwnProperty.call(patch, 'isPlayingQueue')) AppState.audio.isPlayingQueue = patch.isPlayingQueue;
+    if (Object.prototype.hasOwnProperty.call(patch, 'streamingTTSActive')) AppState.audio.streamingTTSActive = patch.streamingTTSActive;
+    if (Object.prototype.hasOwnProperty.call(patch, 'streamingTTSCommittedIndex')) AppState.audio.streamingTTSCommittedIndex = patch.streamingTTSCommittedIndex;
+    if (Object.prototype.hasOwnProperty.call(patch, 'streamingTTSBuffer')) AppState.audio.streamingTTSBuffer = patch.streamingTTSBuffer;
+    if (Object.prototype.hasOwnProperty.call(patch, 'ttsSessionId')) AppState.audio.ttsSessionId = patch.ttsSessionId;
 }
 
 const ttsController = appTTS.createTTSController({
@@ -1270,7 +1295,7 @@ const ttsController = appTTS.createTTSController({
         osTTSVoiceSelect
     },
     deps: {
-        getActiveStreamingMessageId: () => activeStreamingMessageId,
+        getActiveStreamingMessageId: () => AppState.ui.activeStreamingMessageId,
         config,
         escapeAttr,
         escapeHtml,
@@ -1281,11 +1306,11 @@ const ttsController = appTTS.createTTSController({
         getToastBottomOffset,
         onCombinedQueueConsumed: (texts) => {
             texts.forEach((text) => {
-                if (ttsQueue[0] === text) {
-                    ttsQueue.shift();
+                if (AppState.audio.ttsQueue[0] === text) {
+                    AppState.audio.ttsQueue.shift();
                 } else {
-                    const idx = ttsQueue.indexOf(text);
-                    if (idx >= 0) ttsQueue.splice(idx, 1);
+                    const idx = AppState.audio.ttsQueue.indexOf(text);
+                    if (idx >= 0) AppState.audio.ttsQueue.splice(idx, 1);
                 }
                 ttsAudioCache.delete(text);
             });
@@ -1311,7 +1336,7 @@ const modelController = appModels.createModelController({
         enforceMCPPolicyForMode,
         escapeAttr,
         escapeHtml,
-        isGenerating: () => isGenerating,
+        isGenerating: () => AppState.chat.isGenerating,
         normalizeContextStrategyForMode,
         normalizeReasoningValue,
         persistClientConfig,
@@ -1535,10 +1560,6 @@ window.addEventListener('resize', updateViewportMetrics, { passive: true });
 window.addEventListener('orientationchange', updateViewportMetrics);
 updateViewportMetrics();
 
-// Audio Context for Auto-play
-let audioContextUnlocked = false;
-let audioCtx = null;
-
 async function unlockAudioContext() {
     return ttsController.unlockAudioContext();
 }
@@ -1687,11 +1708,9 @@ let serverReplayCurrentTurnId = '';
 let serverReplayCurrentAssistantId = '';
 let serverReplayMessageBuffers = new Map();
 let serverReplayReasoningBuffers = new Map();
-let activeLocalTurnId = '';
 let activeLocalAssistantId = '';
 let assistantTurnIdMap = new Map();
 let locallyRenderedTurnIds = new Set();
-let isRestoringChatSession = false;
 let didInitialChatBootstrap = false;
 let lastSessionRetryTimer = null;
 let lastSessionFetchPromise = null;
@@ -1863,8 +1882,8 @@ function syncSnapshotUserMessages(session = currentChatSessionCache) {
             chatMessages.insertBefore(userEl, anchor);
             updateScrollToBottomButton();
         }
-        if (!messages.some((entry) => entry?.role === 'user' && entry?.turnId === turnId && entry?.content === userContent)) {
-            messages.push({ role: 'user', content: userContent, turnId });
+        if (!AppState.chat.messages.some((entry) => entry?.role === 'user' && entry?.turnId === turnId && entry?.content === userContent)) {
+            AppState.chat.messages.push({ role: 'user', content: userContent, turnId });
         }
     });
 }
@@ -1984,7 +2003,7 @@ function restoreLastSessionIntoChatView() {
     const restoredAssistant = { role: 'assistant', content: assistantText, turnId };
     appendMessage(restoredUser, { skipScroll: true });
     appendMessage(restoredAssistant, { skipScroll: true });
-    messages.push(restoredUser, restoredAssistant);
+    AppState.chat.messages.push(restoredUser, restoredAssistant);
     holdAutoScrollAtBottom(1200);
     ensureChatRestoredToLatest();
     return true;
@@ -1997,15 +2016,15 @@ function clearLastSessionRetryTimer() {
 }
 
 function relinquishLocalStreamOwnership(reason = 'server-sync') {
-    if (!activeLocalTurnId && !activeLocalAssistantId && !isGenerating) return false;
+    if (!AppState.chat.activeLocalTurnId && !activeLocalAssistantId && !AppState.chat.isGenerating) return false;
     console.info('[ChatSession] Relinquishing local stream ownership:', reason, {
-        turnId: activeLocalTurnId,
+        turnId: AppState.chat.activeLocalTurnId,
         assistantId: activeLocalAssistantId
     });
-    activeLocalTurnId = '';
+    AppState.chat.activeLocalTurnId = '';
     activeLocalAssistantId = '';
     locallyRenderedTurnIds = new Set();
-    isGenerating = false;
+    AppState.chat.isGenerating = false;
     broadcastLLMActivityState(false, 'finished');
     localStreamOwnershipReleased = true;
     hideProgressDock();
@@ -3057,7 +3076,7 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
         ? String(lastItem.turn_id).trim()
         : '';
 
-    messages = [];
+    AppState.chat.messages = [];
 
     const fragment = document.createDocumentFragment();
     let lastTurnId = '';
@@ -3076,7 +3095,7 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
 
         if (item?.user_content) {
             appendMessage({ role: 'user', content: item.user_content, turnId }, { parent: fragment, skipScroll: true });
-            messages.push({ role: 'user', content: item.user_content, turnId });
+            AppState.chat.messages.push({ role: 'user', content: item.user_content, turnId });
         }
         if (hasAssistantContent) {
             appendMessage({ role: 'assistant', content: '', id: assistantId, turnId }, { parent: fragment, skipScroll: true });
@@ -3156,7 +3175,7 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
         finalizeMessageContent(assistantId, assistantText);
         finalizeAssistantStatusCards(assistantId, 'done');
         setAssistantActionBarReady(assistantId);
-        messages.push({ role: 'assistant', content: assistantText, turnId });
+        AppState.chat.messages.push({ role: 'assistant', content: assistantText, turnId });
     });
 
     serverReplayCurrentTurnId = lastTurnId;
@@ -3165,7 +3184,7 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
 }
 
 function isActiveLocalTurn(turnId = '') {
-    return !!turnId && !!activeLocalTurnId && turnId === activeLocalTurnId;
+    return !!turnId && !!AppState.chat.activeLocalTurnId && turnId === AppState.chat.activeLocalTurnId;
 }
 
 function hasSubstantiveChatMessages() {
@@ -3258,8 +3277,8 @@ function applyCurrentChatSessionSnapshot(session) {
         currentChatSessionCache = null;
         sessionLLMActivityRunning = false;
         syncGlobalLLMComposerUI(null);
-        if (!abortController && isGenerating) {
-            isGenerating = false;
+        if (!abortController && AppState.chat.isGenerating) {
+            AppState.chat.isGenerating = false;
             updateSendButtonState();
             hideProgressDock();
         }
@@ -3281,8 +3300,8 @@ function applyCurrentChatSessionSnapshot(session) {
     syncGlobalLLMComposerUI();
 
     const serverGenerating = session.Status === 'running';
-    if (!abortController && isGenerating !== serverGenerating) {
-        isGenerating = serverGenerating;
+    if (!abortController && AppState.chat.isGenerating !== serverGenerating) {
+        AppState.chat.isGenerating = serverGenerating;
         updateSendButtonState();
     }
     if (!serverGenerating) {
@@ -3632,7 +3651,7 @@ function applyCurrentChatSessionEvent(entry) {
                     finalizeAssistantStatusCards(activeLocalAssistantId, 'done');
                     setAssistantActionBarReady(activeLocalAssistantId);
                 }
-                activeLocalTurnId = '';
+                AppState.chat.activeLocalTurnId = '';
                 activeLocalAssistantId = '';
                 hideProgressDock();
                 cleanupTrailingEmptyAssistantMessages();
@@ -3687,7 +3706,7 @@ function applyCurrentChatSessionEvent(entry) {
                 if (activeLocalAssistantId) {
                     finalizeAssistantStatusCards(activeLocalAssistantId, 'stopped', t('status.stopped'));
                 }
-                activeLocalTurnId = '';
+                AppState.chat.activeLocalTurnId = '';
                 activeLocalAssistantId = '';
                 cleanupTrailingEmptyAssistantMessages();
                 break;
@@ -3732,7 +3751,7 @@ async function syncCurrentChatSessionFromServerInternal() {
 
     const session = await fetchCurrentChatSession();
     applyCurrentChatSessionSnapshot(session);
-    if (activeLocalTurnId || activeLocalAssistantId || isGenerating) {
+    if (AppState.chat.activeLocalTurnId || activeLocalAssistantId || AppState.chat.isGenerating) {
         relinquishLocalStreamOwnership(`session-sync:${session?.Status || 'none'}`);
     }
 
@@ -3870,7 +3889,7 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
     chatMessages?.classList.add('is-session-hydrating');
     resetChatViewState();
     dismissStartupCards();
-    messages = [];
+    AppState.chat.messages = [];
 
     const users = [];
     const assistantByTurn = new Map();
@@ -4021,7 +4040,7 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
         if (!document.querySelector(`.message.user[data-turn-id="${user.turnId}"]`)) {
             appendMessage({ role: 'user', content: user.content, turnId: user.turnId }, { parent: fragment, skipScroll: true });
         }
-        messages.push({ role: 'user', content: user.content, turnId: user.turnId });
+        AppState.chat.messages.push({ role: 'user', content: user.content, turnId: user.turnId });
         const assistantId = assistantByTurn.get(user.turnId);
         if (!assistantId) continue;
         const waitingForRemoteReply = passiveRunningSession && user.turnId === pendingTurnId;
@@ -4086,7 +4105,7 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
         finalizeMessageContent(assistantId, assistantText);
         finalizeAssistantStatusCards(assistantId, 'done');
         setAssistantActionBarReady(assistantId);
-        messages.push({ role: 'assistant', content: assistantText, turnId: user.turnId });
+        AppState.chat.messages.push({ role: 'assistant', content: assistantText, turnId: user.turnId });
     }
 
     if (users.length > 0) {
@@ -4141,7 +4160,7 @@ async function restoreLastSession() {
 
     appendMessage(restoredUser);
     appendMessage(restoredAssistant);
-    messages.push(restoredUser, restoredAssistant);
+    AppState.chat.messages.push(restoredUser, restoredAssistant);
     holdAutoScrollAtBottom(1200);
     ensureChatRestoredToLatest();
 
@@ -4166,7 +4185,7 @@ function adjustChatFontSize(delta) {
 
     config.chatFontSize = nextSize;
     applyChatFontSize();
-    localStorage.setItem('appConfig', JSON.stringify(config));
+    persistAppConfigSnapshot();
 }
 
 async function syncServerConfig(options = {}) {
@@ -4294,7 +4313,7 @@ async function syncServerConfig(options = {}) {
             }
 
             // Save to localStorage so next reload uses these
-            localStorage.setItem('appConfig', JSON.stringify(config));
+            persistAppConfigSnapshot();
             await loadTTSDictionary(getEffectiveTTSDictionaryLang(), {
                 forceReload: forceDictionaryReload,
                 log
@@ -4496,7 +4515,7 @@ function setupEventListeners() {
     sendBtn.addEventListener('click', () => {
         const session = currentChatSessionCache;
         const sessionRunning = sessionLLMActivityRunning || String(session?.Status || '').trim().toLowerCase() === 'running';
-        const isCurrentlyActive = isGenerating || sessionRunning || llmActivityBusy;
+        const isCurrentlyActive = AppState.chat.isGenerating || sessionRunning || llmActivityBusy;
 
         if (isCurrentlyActive) {
             stopGeneration();
@@ -4554,17 +4573,17 @@ function resetChatViewState() {
     statefulLastInputTokens = 0;
     statefulLastOutputTokens = 0;
     statefulPeakInputTokens = 0;
-    messages = [];
+    AppState.chat.messages = [];
     pendingScrollToBottom = false;
     chatMessages.innerHTML = '';
     updateScrollToBottomButton();
     resetServerChatReplayState();
     currentChatSessionCache = null;
     stopChatSessionPolling();
-    activeLocalTurnId = '';
+    AppState.chat.activeLocalTurnId = '';
     activeLocalAssistantId = '';
     locallyRenderedTurnIds = new Set();
-    isGenerating = false;
+    AppState.chat.isGenerating = false;
     abortController = null;
     broadcastLLMActivityState(false, 'finished');
     hideProgressDock();
@@ -4634,7 +4653,7 @@ async function clearChat() {
     // Stop any TTS playback and generation
     stopAllAudio();
 
-    if (isGenerating) {
+    if (AppState.chat.isGenerating) {
         await stopGeneration();
     }
 
@@ -4687,7 +4706,7 @@ function cleanContentForStatefulSummary(text) {
 }
 
 function summarizeMessagesForStatefulReset() {
-    const recent = messages.slice(-12);
+    const recent = AppState.chat.messages.slice(-12);
     const lines = recent.map((m, idx) => {
         const label = m.role === 'assistant' ? 'Assistant' : 'User';
         let content = cleanContentForStatefulSummary(m.content || '');
@@ -4833,8 +4852,12 @@ function unloadHeaderModel(event, instanceId) {
     return modelController.unloadHeaderModel(event, instanceId);
 }
 
-function persistClientConfig() {
+function persistAppConfigSnapshot() {
     localStorage.setItem('appConfig', JSON.stringify(config));
+}
+
+function persistClientConfig() {
+    persistAppConfigSnapshot();
 }
 
 function updateComposerLayoutMetrics() {
@@ -4854,7 +4877,7 @@ function updateReasoningControlVisibility() {
     if (!reasoningControlBar) return;
 
     const scrollButtonVisible = !!scrollToBottomBtn?.classList.contains('is-visible');
-    const shouldReveal = !reasoningControlBar.hidden && !scrollButtonVisible && !isGenerating;
+    const shouldReveal = !reasoningControlBar.hidden && !scrollButtonVisible && !AppState.chat.isGenerating;
 
     reasoningControlBar.classList.toggle('is-visible', shouldReveal);
     reasoningControlBar.classList.toggle('is-suppressed', !shouldReveal);
@@ -4937,8 +4960,8 @@ function buildChatPayload({ text, currentImage, temperatureOverride = null, repe
     }
 
     const messageSource = contextStrategy === 'history'
-        ? messages.slice(-((parseInt(config.historyCount, 10) || 10) * 2))
-        : messages.slice(-1);
+        ? AppState.chat.messages.slice(-((parseInt(config.historyCount, 10) || 10) * 2))
+        : AppState.chat.messages.slice(-1);
 
     const payloadHistory = messageSource.map(m => {
         if (m.image) {
@@ -5023,7 +5046,7 @@ async function sendMessage(options = {}) {
     const currentImage = pendingImage; // Capture early
 
     if (!text && !currentImage) return;
-    if (isGenerating) {
+    if (AppState.chat.isGenerating) {
         await stopGeneration();
         await new Promise((resolve) => setTimeout(resolve, 120));
     }
@@ -5032,7 +5055,7 @@ async function sendMessage(options = {}) {
 
     // Stop and clear any existing audio/TTS
     stopAllAudio();
-    pendingVoiceInputAutoTTS = !!options.fromVoiceInput;
+    AppState.input.pendingVoiceInputAutoTTS = !!options.fromVoiceInput;
 
     // Prepare User Message
     const turnId = generateTurnId();
@@ -5052,7 +5075,7 @@ async function sendMessage(options = {}) {
         shouldAutoScroll = true;
         holdAutoScrollAtBottom(600);
     }
-    messages.push(userMsg);
+    AppState.chat.messages.push(userMsg);
     if (usesStatefulConversationContext()) {
         statefulEstimatedChars += text.length;
         updateStatefulBudgetIndicator();
@@ -5064,7 +5087,7 @@ async function sendMessage(options = {}) {
     autoResizeInput();
 
     // Prepare Assistant Placeholder
-    isGenerating = true;
+    AppState.chat.isGenerating = true;
     syncWakeLock(); // Request wake lock for generation
     broadcastLLMActivityState(true, 'answering');
     lockScrollToLatest = true;
@@ -5074,8 +5097,8 @@ async function sendMessage(options = {}) {
     abortController = new AbortController();
 
     const assistantId = buildServerAssistantMessageId(turnId, '');
-    activeStreamingMessageId = assistantId;
-    activeLocalTurnId = turnId;
+    AppState.ui.activeStreamingMessageId = assistantId;
+    AppState.chat.activeLocalTurnId = turnId;
     activeLocalAssistantId = assistantId;
     assistantTurnIdMap.set(assistantId, turnId);
     ensureAssistantMessageElement(assistantId, turnId);
@@ -5145,13 +5168,13 @@ async function sendMessage(options = {}) {
             setAssistantActionBarReady(assistantId);
         }
     } finally {
-        pendingVoiceInputAutoTTS = false;
-        isGenerating = false;
+        AppState.input.pendingVoiceInputAutoTTS = false;
+        AppState.chat.isGenerating = false;
         syncWakeLock(); // Release wake lock if nothing else is active
         broadcastLLMActivityState(false, 'finished');
         lockScrollToLatest = false;
         stopStreamingMessageAutoScroll();
-        activeStreamingMessageId = null;
+        AppState.ui.activeStreamingMessageId = null;
         abortController = null;
         updateSendButtonState();
         fastForwardChatSessionEvents().catch(console.warn);
@@ -5237,7 +5260,7 @@ function updateSendButtonState() {
 function updateSendButtonStateCore() {
     const session = currentChatSessionCache;
     const sessionRunning = sessionLLMActivityRunning || String(session?.Status || '').trim().toLowerCase() === 'running';
-    const isCurrentlyActive = isGenerating || sessionRunning || llmActivityBusy;
+    const isCurrentlyActive = AppState.chat.isGenerating || sessionRunning || llmActivityBusy;
 
     if (isCurrentlyActive) {
         sendBtn.disabled = false; // Enabled so we can Click to Stop
@@ -5286,7 +5309,7 @@ function updateInlineComposerActionVisibility() {
         return;
     }
 
-    if (isGenerating) {
+    if (AppState.chat.isGenerating) {
         setComposerPrimaryButtons({ showSend: true, showInlineMic: false });
         return;
     }
@@ -5375,7 +5398,7 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
 
     // Initialize streaming TTS if enabled
     const useStreamingTTS = shouldAutoPlayTTSForRequest({
-        fromVoiceInput: streamOptions.fromVoiceInput === true || pendingVoiceInputAutoTTS
+        fromVoiceInput: streamOptions.fromVoiceInput === true || AppState.input.pendingVoiceInputAutoTTS
     });
     if (useStreamingTTS) {
         initStreamingTTS(elementId);
@@ -5789,7 +5812,7 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
         // Keep only the user-visible answer in history to avoid ballooning context.
         historyContent = sanitizeAssistantRenderText(fullText).trim();
         if (historyContent && !streamDetached && !streamRestartRequested && !localStreamOwnershipReleased) {
-            messages.push({ role: 'assistant', content: historyContent, turnId });
+            AppState.chat.messages.push({ role: 'assistant', content: historyContent, turnId });
             if (config.llmMode === 'stateful') {
                 statefulTurnCount += 1;
                 statefulEstimatedChars += historyContent.length;
@@ -5806,7 +5829,7 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
             setAssistantActionBarReady(elementId);
         }
         if (activeLocalAssistantId === elementId) {
-            activeLocalTurnId = '';
+            AppState.chat.activeLocalTurnId = '';
             activeLocalAssistantId = '';
         }
         localStreamOwnershipReleased = false;
@@ -5983,7 +6006,12 @@ function getSnapshotReasoningDuration(item) {
 }
 
 function ensureAssistantMessageElement(id, turnId = '') {
-    const resolvedTurnId = String(turnId || assistantTurnIdMap.get(id) || (id === activeLocalAssistantId ? activeLocalTurnId : '') || '').trim();
+    const resolvedTurnId = String(
+        turnId
+        || assistantTurnIdMap.get(id)
+        || (id === activeLocalAssistantId ? AppState.chat.activeLocalTurnId : '')
+        || ''
+    ).trim();
     if (id && resolvedTurnId) {
         assistantTurnIdMap.set(id, resolvedTurnId);
     }
@@ -5998,7 +6026,7 @@ function ensureAssistantMessageElement(id, turnId = '') {
     }
     appendMessage({ role: 'assistant', content: '', id, turnId: resolvedTurnId });
     el = document.getElementById(id);
-    if (el && activeStreamingMessageId === id) {
+    if (el && AppState.ui.activeStreamingMessageId === id) {
         startStreamingMessageAutoScroll(id);
     }
     attachStreamingAudioButtonToMessage(el);
@@ -6066,7 +6094,7 @@ function attachStreamingAudioButtonToMessage(msgEl) {
     return ttsController.attachStreamingAudioButtonToMessage(msgEl);
 }
 
-const chatUIController = appChatUI.createChatUIController({
+chatUIController = appChatUI.createChatUIController({
     refs: {
         chatMessages,
         inputArea,
@@ -6086,7 +6114,7 @@ const chatUIController = appChatUI.createChatUIController({
     }
 });
 
-const chatStreamingController = appChatStreaming.createChatStreamingController({
+chatStreamingController = appChatStreaming.createChatStreamingController({
     deps: {
         attachStreamingAudioButtonToMessage,
         checkAndTriggerLabelPin,
@@ -6171,7 +6199,7 @@ function hideProgressDock() {
         composerProgressLabel = '';
         composerProgressActive = false;
         composerProgressPercent = null;
-        if (!isGenerating) {
+        if (!AppState.chat.isGenerating) {
             inputContainer?.classList.remove('has-progress');
         }
         updateMessageInputPlaceholder();
@@ -7156,23 +7184,27 @@ function updateMessageContent(id, text) {
 
 
 function isChatNearBottom() {
+    if (!chatUIController) return true;
     return chatUIController.isChatNearBottom();
 }
 
 function hasLongScrollableChat() {
+    if (!chatUIController) return false;
     return chatUIController.hasLongScrollableChat();
 }
 
 function updateScrollToBottomButton() {
-    if (isRestoringChatSession) return;
+    if (isRestoringChatSession || !chatUIController) return;
     return chatUIController.updateScrollToBottomButton();
 }
 
 function jumpToLatestMessages() {
+    if (!chatUIController) return;
     return chatUIController.jumpToLatestMessages();
 }
 
 function scrollToBottom(force = false) {
+    if (!chatUIController) return;
     return chatUIController.scrollToBottom(force);
 }
 
@@ -7437,7 +7469,7 @@ function updateMicLayout() {
         }
     }
 
-    updateMicUIForGeneration(isGenerating);
+    updateMicUIForGeneration(AppState.chat.isGenerating);
     syncMicRecordingUI();
     updateInlineComposerActionVisibility();
 }
@@ -7472,13 +7504,13 @@ let sttStopFallbackTimer = null;
 function toggleSTT() {
     triggerHaptic('nudge');
     // 1. If generating response, stop it (Mic acts as stop button)
-    if (isGenerating) {
+    if (AppState.chat.isGenerating) {
         stopGeneration();
         return;
     }
 
     // 2. If TTS is currently playing, stop it (interruption support)
-    if (isPlayingQueue) {
+    if (AppState.audio.isPlayingQueue) {
         stopAllAudio();
     }
 
