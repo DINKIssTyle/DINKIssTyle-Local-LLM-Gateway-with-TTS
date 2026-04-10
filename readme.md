@@ -4,7 +4,7 @@ Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
 -->
 
 <p align="center">
-  <img src="frontend/appicon.png" alt="icon" width="256px">
+  <img src="manual/imgs/appicon.png" alt="icon" width="256px">
 </p>
 
 # DINKIssTyle Local LLM Gateway with TTS & MCP
