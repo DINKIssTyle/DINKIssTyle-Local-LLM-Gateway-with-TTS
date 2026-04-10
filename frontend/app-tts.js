@@ -221,15 +221,26 @@
             if (!voiceSelect) return;
 
             try {
-                const response = await fetch('/api/voices');
+                const response = await fetch('/api/tts/styles', {
+                    credentials: 'include'
+                });
+                if (response.status === 404) {
+                    // Some deployments don't expose server-side voice presets.
+                    // Keep the existing select options and fail quietly.
+                    return;
+                }
                 if (!response.ok) throw new Error(await response.text());
 
                 const voices = await response.json();
                 voiceSelect.innerHTML = '';
                 voices.forEach((voice) => {
+                    const voiceId = String(typeof voice === 'string' ? voice : (voice?.id || '')).replace(/\.json$/i, '');
+                    if (!voiceId) return;
                     const option = global.document.createElement('option');
-                    option.value = voice.id.replace(/\.json$/i, '');
-                    option.textContent = voice.name || voice.id;
+                    option.value = voiceId;
+                    option.textContent = typeof voice === 'string'
+                        ? voiceId
+                        : (voice?.name || voiceId);
                     voiceSelect.appendChild(option);
                 });
 
@@ -237,7 +248,7 @@
                     voiceSelect.value = String(config.ttsVoice).replace(/\.json$/i, '');
                 }
             } catch (error) {
-                console.error('[TTS] Failed to load voice styles:', error);
+                console.warn('[TTS] Failed to load voice styles:', error);
             }
         }
 

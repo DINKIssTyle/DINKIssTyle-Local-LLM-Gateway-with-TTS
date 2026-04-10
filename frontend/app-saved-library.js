@@ -533,6 +533,7 @@
             loadSavedTurns,
             openSavedLibrary,
             openSavedTurnModal,
+            renderSavedLibraryList,
             refreshSavedTurnTitleById,
             resetSwipeState: () => {
                 savedLibrarySwipeState = null;
