@@ -8,6 +8,7 @@ package core
 import (
 	"bytes"
 	"context"
+	"dinkisstyle-chat/internal/config"
 	"dinkisstyle-chat/internal/mcp"
 	"dinkisstyle-chat/internal/promptkit"
 	"embed"
@@ -468,11 +469,11 @@ func (a *App) Startup(ctx context.Context) {
 	// Reload config now that paths are set up and files potentially copied
 	a.loadConfig()
 	if a.enableDebugTrace {
-		wruntime.WindowSetMinSize(ctx, 1200, 800)
-		wruntime.WindowSetSize(ctx, 1200, 800)
+		wruntime.WindowSetMinSize(ctx, config.DebugWindowWidth, config.NormalWindowHeight)
+		wruntime.WindowSetSize(ctx, config.DebugWindowWidth, config.NormalWindowHeight)
 	} else {
-		wruntime.WindowSetMinSize(ctx, 755, 800)
-		wruntime.WindowSetSize(ctx, 755, 800)
+		wruntime.WindowSetMinSize(ctx, config.NormalWindowWidth, config.NormalWindowHeight)
+		wruntime.WindowSetSize(ctx, config.NormalWindowWidth, config.NormalWindowHeight)
 	}
 
 	// Check for Auto Start Server
@@ -1898,4 +1899,29 @@ func (a *App) ResetMemory(userID string) string {
 	}
 
 	return "Memory reset successfully."
+}
+
+// GetAppVersion returns the current application version
+func (a *App) GetAppVersion() string {
+	return config.AppVersion
+}
+
+// GetAboutInfo returns metadata for the About modal
+func (a *App) GetAboutInfo() map[string]string {
+	return map[string]string{
+		"name":      "DKST LLM Chat Server",
+		"version":   config.AppVersion,
+		"copyright": "(C) 2026 DINKI'ssTyle",
+	}
+}
+
+// GetWindowDimensions returns the centrally defined window size constants
+func (a *App) GetWindowDimensions() map[string]int {
+	return map[string]int{
+		"normalWidth":  config.NormalWindowWidth,
+		"normalHeight": config.NormalWindowHeight,
+		"debugWidth":   config.DebugWindowWidth,
+		"minWidth":     config.WindowMinWidth,
+		"minHeight":    config.WindowMinHeight,
+	}
 }

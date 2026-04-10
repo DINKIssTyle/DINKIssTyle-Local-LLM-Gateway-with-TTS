@@ -1306,10 +1306,9 @@
                 <div style="text-align: center; margin-bottom: 20px;">
                     <img src="public/icon-512.png" alt="App Icon"
                         style="width: 64px; height: 64px; margin-bottom: 12px;">
-                    <div style="font-size: 18px; font-weight: 600; color: var(--text-color); margin-bottom: 4px;">DKST
-                        LLM Chat Server</div>
-                    <div style="color: var(--accent-color);">Version 3.0</div>
-                    <div style="margin-top: 8px;">(C) 2026 DINKI'ssTyle</div>
+                    <div id="about-app-name" style="font-size: 18px; font-weight: 600; color: var(--text-color); margin-bottom: 4px;">DKST LLM Chat Server</div>
+                    <div id="app-version-text" style="color: var(--accent-color);">Version -</div>
+                    <div id="about-app-copyright" style="margin-top: 8px;">(C) 2026 DINKI'ssTyle</div>
                 </div>
 
                 <div style="font-weight: 600; margin-bottom: 8px;">Open Source Licenses</div>
@@ -1486,9 +1485,9 @@
                 const currentHeight = size?.h || window.innerHeight;
 
                 if (enabled) {
-                    const targetWidth = 1200;
+                    const targetWidth = windowConfig.debugWidth;
                     if (typeof window.runtime.WindowSetMinSize === 'function') {
-                        window.runtime.WindowSetMinSize(1200, 600);
+                        window.runtime.WindowSetMinSize(windowConfig.debugWidth, windowConfig.minHeight);
                     }
                     if (currentWidth < targetWidth) {
                         debugTracePreviousSize = { w: currentWidth, h: currentHeight };
@@ -1497,9 +1496,9 @@
                     }
                 } else {
                     if (typeof window.runtime.WindowSetMinSize === 'function') {
-                        window.runtime.WindowSetMinSize(755, 600);
+                        window.runtime.WindowSetMinSize(windowConfig.minWidth, windowConfig.minHeight);
                     }
-                    const targetWidth = 755;
+                    const targetWidth = windowConfig.normalWidth;
                     window.runtime.WindowSetSize(targetWidth, currentHeight);
                     debugTraceAutoExpanded = false;
                 }
@@ -1523,11 +1522,24 @@
         let statusRefreshTimer = null;
         let welcomeState = null;
         let llmActivityBusy = false;
+        let windowConfig = {
+            normalWidth: 755,
+            normalHeight: 800,
+            debugWidth: 1200,
+            minWidth: 755,
+            minHeight: 600
+        };
 
         async function init() {
             if (typeof window.go !== 'undefined') {
                 try {
                     const status = await window.go.core.App.GetServerStatus();
+                    windowConfig = await window.go.core.App.GetWindowDimensions() || windowConfig;
+                    const about = await window.go.core.App.GetAboutInfo();
+                    document.getElementById('about-app-name').textContent = about.name;
+                    document.getElementById('app-version-text').textContent = `Version ${about.version}`;
+                    document.getElementById('about-app-copyright').textContent = about.copyright;
+                    console.log(`${about.name} v${about.version}`);
                     updateUI(status.running, status.port, status.llmBusy);
                     document.getElementById('port-input').value = status.port; // Set loaded port
                     updateMcpPort();
