@@ -6,7 +6,11 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -33,42 +37,81 @@ type JSONRPCError struct {
 
 // Global state for SSE clients
 var (
-	clients   = make(map[chan string]bool)
-	clientsMu sync.Mutex
+	clients         = make(map[string]chan string)
+	clientsMu       sync.Mutex
+	nextClientIDSeq atomic.Uint64
 )
 
-func AddClient(ch chan string) {
+func AddClient(ch chan string) string {
 	clientsMu.Lock()
 	defer clientsMu.Unlock()
-	clients[ch] = true
+	id := strconv.FormatUint(nextClientIDSeq.Add(1), 10)
+	clients[id] = ch
 	log.Printf("[MCP-DEBUG] Total Clients: %d", len(clients))
+	return id
 }
 
-func RemoveClient(ch chan string) {
+func RemoveClient(clientID string) {
 	clientsMu.Lock()
 	defer clientsMu.Unlock()
-	delete(clients, ch)
+	ch, ok := clients[clientID]
+	if !ok {
+		return
+	}
+	delete(clients, clientID)
 	close(ch)
 }
 
-// Broadcast sends a message to all connected SSE clients and returns count sent
-func Broadcast(msg string) int {
+// SendToClient sends a message to a specific SSE client and returns whether it was delivered.
+func SendToClient(clientID, msg string) bool {
 	clientsMu.Lock()
 	defer clientsMu.Unlock()
-	count := 0
-	for ch := range clients {
-		select {
-		case ch <- msg:
-			count++
-		default:
-			log.Printf("[MCP-DEBUG] Broadcast SKIPPED for a client (channel full)")
-		}
+	ch, ok := clients[clientID]
+	if !ok {
+		return false
 	}
-	return count
+	select {
+	case ch <- msg:
+		return true
+	default:
+		log.Printf("[MCP-DEBUG] SendToClient SKIPPED for client=%s (channel full)", clientID)
+		return false
+	}
+}
+
+func buildEndpointURL(r *http.Request, clientID string) string {
+	scheme := "http"
+	if r != nil && r.TLS != nil {
+		scheme = "https"
+	}
+	host := ""
+	if r != nil {
+		host = r.Host
+	}
+	endpointURL := fmt.Sprintf("%s://%s/mcp/messages", scheme, host)
+	if strings.TrimSpace(clientID) == "" {
+		return endpointURL
+	}
+	values := url.Values{}
+	values.Set("client_id", clientID)
+	return endpointURL + "?" + values.Encode()
+}
+
+func extractClientID(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	if clientID := strings.TrimSpace(r.URL.Query().Get("client_id")); clientID != "" {
+		return clientID
+	}
+	if clientID := strings.TrimSpace(r.Header.Get("X-MCP-Client-ID")); clientID != "" {
+		return clientID
+	}
+	return ""
 }
 
 // buildResponse constructs a JSON-RPC response for a given request
-func buildResponse(req *JSONRPCRequest, userID string, enableMemory bool, disabledTools []string, disallowedCmds []string, disallowedDirs []string) *JSONRPCResponse {
+func buildResponse(req *JSONRPCRequest, userID string, enableMemory bool, disabledTools []string, disallowedCmds []string, disallowedDirs []string, clientID string) *JSONRPCResponse {
 	res := &JSONRPCResponse{
 		JSONRPC: "2.0",
 		ID:      req.ID,
@@ -95,7 +138,7 @@ func buildResponse(req *JSONRPCRequest, userID string, enableMemory bool, disabl
 		}
 
 	case "tools/call":
-		handleToolCall(req, res, userID, enableMemory, disabledTools, disallowedCmds, disallowedDirs)
+		handleToolCall(req, res, userID, enableMemory, disabledTools, disallowedCmds, disallowedDirs, clientID)
 
 	case "notifications/initialized":
 		log.Println("[MCP] Client Initialized")
@@ -146,17 +189,13 @@ func HandleSSE(w http.ResponseWriter, r *http.Request) {
 	}
 
 	messageChan := make(chan string, 200)
-	AddClient(messageChan)
+	clientID := AddClient(messageChan)
 	defer func() {
 		log.Printf("[MCP-DEBUG] SSE CLOSED for %s", r.RemoteAddr)
-		RemoveClient(messageChan)
+		RemoveClient(clientID)
 	}()
 
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	endpointURL := fmt.Sprintf("%s://%s/mcp/messages", scheme, r.Host)
+	endpointURL := buildEndpointURL(r, clientID)
 	fmt.Fprintf(w, "event: endpoint\ndata: %s\n\n", endpointURL)
 	flusher.Flush()
 	log.Printf("[MCP-DEBUG] Advertised Endpoint: %s", endpointURL)
@@ -164,7 +203,7 @@ func HandleSSE(w http.ResponseWriter, r *http.Request) {
 	// If we captured an initial request, process it immediately in the stream
 	if initialReq != nil {
 		ctx := GetContext()
-		res := buildResponse(initialReq, ctx.UserID, ctx.EnableMemory, ctx.DisabledTools, ctx.DisallowedCmds, ctx.DisallowedDirs)
+		res := buildResponse(initialReq, ctx.UserID, ctx.EnableMemory, ctx.DisabledTools, ctx.DisallowedCmds, ctx.DisallowedDirs, clientID)
 		if res != nil {
 			respBytes, _ := json.Marshal(res)
 			fmt.Fprintf(w, "event: message\ndata: %s\n\n", string(respBytes))
@@ -228,21 +267,27 @@ func HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[MCP-DEBUG] Request Method: %s (ID: %v)", req.Method, req.ID)
 
+	clientID := extractClientID(r)
+	if clientID == "" {
+		http.Error(w, "Missing client_id", http.StatusBadRequest)
+		return
+	}
+
 	w.WriteHeader(http.StatusAccepted)
 
 	go func() {
 		time.Sleep(50 * time.Millisecond)
 		ctx := GetContext()
-		res := buildResponse(&req, ctx.UserID, ctx.EnableMemory, ctx.DisabledTools, ctx.DisallowedCmds, ctx.DisallowedDirs)
+		res := buildResponse(&req, ctx.UserID, ctx.EnableMemory, ctx.DisabledTools, ctx.DisallowedCmds, ctx.DisallowedDirs, clientID)
 		if res != nil {
 			respBytes, _ := json.Marshal(res)
-			count := Broadcast(string(respBytes))
-			log.Printf("[MCP-DEBUG] Broadcasted %s (to %d clients)", req.Method, count)
+			delivered := SendToClient(clientID, string(respBytes))
+			log.Printf("[MCP-DEBUG] Routed %s to client=%s delivered=%v", req.Method, clientID, delivered)
 		}
 	}()
 }
 
-func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, enableMemory bool, disabledTools []string, disallowedCmds []string, disallowedDirs []string) {
+func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, enableMemory bool, disabledTools []string, disallowedCmds []string, disallowedDirs []string, clientID string) {
 	var params struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
@@ -262,7 +307,9 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 			},
 			"isError": true,
 		}
-		Broadcast(fmt.Sprintf(`{"type": "tool_call.failure", "tool": "%s", "reason": %q}`, params.Name, err.Error()))
+		if strings.TrimSpace(clientID) != "" {
+			SendToClient(clientID, fmt.Sprintf(`{"type": "tool_call.failure", "tool": "%s", "reason": %q}`, params.Name, err.Error()))
+		}
 		return
 	}
 
@@ -271,5 +318,7 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 			{"type": "text", "text": content},
 		},
 	}
-	Broadcast(fmt.Sprintf(`{"type": "tool_call.success", "tool": %q}`, params.Name))
+	if strings.TrimSpace(clientID) != "" {
+		SendToClient(clientID, fmt.Sprintf(`{"type": "tool_call.success", "tool": %q}`, params.Name))
+	}
 }
