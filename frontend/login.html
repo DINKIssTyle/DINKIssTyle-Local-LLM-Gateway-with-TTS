@@ -78,9 +78,8 @@
             background: rgba(255, 255, 255, 0.05);
         }
 
-        .refresh-btn svg {
-            width: 20px;
-            height: 20px;
+        .refresh-btn .material-icons-round {
+            font-size: 20px;
             display: block;
         }
 
@@ -227,10 +226,7 @@
 <body>
     <div class="login-container">
         <button class="refresh-btn" onclick="window.location.reload(true)" title="새로고침(PWA, 캐시 등등)">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path fill="currentColor"
-                    d="M12 6V3L8 7l4 4V8c2.76 0 5 2.24 5 5a5 5 0 0 1-8.66 3.54l-1.42 1.42A7 7 0 1 0 19 13c0-3.87-3.13-7-7-7Zm-5 5a5 5 0 0 1 8.66-3.54l1.42-1.42A7 7 0 1 0 5 11h2Z" />
-            </svg>
+            <span class="material-icons-round">refresh</span>
         </button>
 
         <div class="login-header">

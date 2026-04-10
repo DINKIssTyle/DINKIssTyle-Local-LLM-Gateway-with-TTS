@@ -540,6 +540,7 @@
             },
             saveEditedSavedTurnTitle,
             saveTurn,
+            scheduleSavedTitleRefresh,
             setupSavedLibrarySwipeGestures: () => {},
             speakSavedTurnResponse,
             startEditSavedTurnTitle,
