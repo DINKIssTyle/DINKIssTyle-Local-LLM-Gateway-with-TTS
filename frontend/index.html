@@ -196,11 +196,23 @@
             /* margin-bottom handled by flex gap */
         }
 
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
         .card-title {
             font-size: 12px;
             color: var(--text-secondary);
             text-transform: uppercase;
             letter-spacing: 1px;
+            margin-bottom: 0;
+        }
+
+        .card > .card-title {
             margin-bottom: 12px;
         }
 
@@ -364,20 +376,22 @@
             flex: 1 1 0;
         }
 
-        .mcp-port-group {
-            flex: 0 0 180px !important;
-        }
-
         .mcp-port-label-row {
             display: flex;
             align-items: center;
-            justify-content: space-between;
-            gap: 8px;
             margin-bottom: 6px;
         }
 
         .mcp-port-label-row label {
             margin-bottom: 0;
+        }
+
+        .mcp-port-group {
+            position: relative;
+        }
+
+        .mcp-port-input-wrap {
+            position: relative;
         }
 
         .help-icon-btn {
@@ -403,6 +417,17 @@
 
         .help-icon-btn .material-icons-round {
             font-size: 18px;
+        }
+
+        .mcp-port-input-wrap .help-icon-btn {
+            position: absolute;
+            top: 50%;
+            left: calc(100% + 12px);
+            transform: translateY(-50%);
+        }
+
+        .mcp-port-input-wrap .help-icon-btn:hover {
+            transform: translateY(calc(-50% - 1px));
         }
 
         .trace-meta {
@@ -678,6 +703,12 @@
             max-height: min(86vh, 920px);
         }
 
+        .doc-help-modal {
+            max-width: 840px;
+            width: min(840px, 92vw);
+            max-height: min(82vh, 860px);
+        }
+
         .mcp-help-layout {
             display: grid;
             grid-template-rows: minmax(0, 2fr) minmax(220px, 1fr);
@@ -783,6 +814,12 @@
             color: #79b8ff;
         }
 
+        .mcp-help-markdown img {
+            max-width: 100%;
+            height: auto;
+            display: block;
+        }
+
         .mcp-help-markdown hr {
             border: 0;
             border-top: 1px solid var(--border-color);
@@ -795,6 +832,96 @@
             align-items: center;
             justify-content: center;
             color: var(--text-secondary);
+        }
+
+        .doc-help-body {
+            padding: 0;
+        }
+
+        .doc-help-markdown {
+            padding: 20px;
+            overflow: auto;
+            line-height: 1.65;
+            color: var(--text-color);
+        }
+
+        .doc-help-markdown.is-loading,
+        .doc-help-markdown.is-error {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+        }
+
+        .doc-help-markdown h1,
+        .doc-help-markdown h2,
+        .doc-help-markdown h3 {
+            margin: 0 0 12px;
+            line-height: 1.25;
+        }
+
+        .doc-help-markdown h1 {
+            font-size: 22px;
+        }
+
+        .doc-help-markdown h2 {
+            font-size: 18px;
+            margin-top: 22px;
+        }
+
+        .doc-help-markdown h3 {
+            font-size: 15px;
+            margin-top: 18px;
+        }
+
+        .doc-help-markdown p,
+        .doc-help-markdown ul,
+        .doc-help-markdown ol,
+        .doc-help-markdown pre,
+        .doc-help-markdown blockquote {
+            margin: 0 0 12px;
+        }
+
+        .doc-help-markdown ul,
+        .doc-help-markdown ol {
+            padding-left: 20px;
+        }
+
+        .doc-help-markdown code {
+            font-family: "JetBrains Mono", Consolas, monospace;
+            font-size: 0.92em;
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 6px;
+            padding: 0.12em 0.4em;
+        }
+
+        .doc-help-markdown pre {
+            background: #0b1016;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 10px;
+            padding: 14px;
+            overflow: auto;
+        }
+
+        .doc-help-markdown pre code {
+            background: transparent;
+            padding: 0;
+        }
+
+        .doc-help-markdown blockquote {
+            border-left: 3px solid rgba(88, 166, 255, 0.5);
+            padding-left: 12px;
+            color: #c2cfdb;
+        }
+
+        .doc-help-markdown a {
+            color: #79b8ff;
+        }
+
+        .doc-help-markdown img {
+            max-width: 100%;
+            height: auto;
+            display: block;
         }
 
         .mcp-json-panel {
@@ -1185,7 +1312,12 @@
             <div class="col left-col">
                 <!-- Server Status -->
                 <div class="card">
-                    <div class="card-title">Server Status</div>
+                    <div class="card-header">
+                        <div class="card-title">Server Status</div>
+                        <button class="icon-btn help-icon-btn" type="button" onclick="openMcpHelpModal()" title="MCP Help" aria-label="Open MCP help">
+                            <span class="material-icons-round">help</span>
+                        </button>
+                    </div>
                     <div class="status-row">
                         <div class="status-indicator">
                             <span class="status-dot" id="status-dot"></span>
@@ -1202,9 +1334,6 @@
                         <div class="form-group mcp-port-group">
                             <div class="mcp-port-label-row">
                                 <label for="mcp-port-input">MCP Port (HTTP)</label>
-                                <button class="icon-btn help-icon-btn" type="button" onclick="openMcpHelpModal()" title="MCP Help" aria-label="Open MCP help">
-                                    <span class="material-icons-round">help</span>
-                                </button>
                             </div>
                             <input type="text" id="mcp-port-input" value="7861" readonly
                                 style="background: rgba(255,255,255,0.05); color: var(--text-secondary); cursor: not-allowed;">
@@ -1218,7 +1347,14 @@
 
                 <!-- LLM Settings -->
                 <div class="card">
-                    <div class="card-title">LLM Configuration</div>
+                    <div class="card-header">
+                        <div class="card-title">LLM Configuration</div>
+                        <button class="icon-btn help-icon-btn" type="button"
+                            onclick="openDocHelpModal('LLM Endpoint Help', 'public/help/LMStdio_Endpoint.md')"
+                            title="LLM Endpoint Help" aria-label="Open LLM Endpoint help">
+                            <span class="material-icons-round">help</span>
+                        </button>
+                    </div>
                     <div class="form-group">
                         <label>LLM Endpoint</label>
                         <input type="text" id="llm-endpoint" value="http://127.0.0.1:1234"
@@ -1295,7 +1431,14 @@
 
                 <!-- Advanced Settings -->
                 <div class="card">
-                    <div class="card-title">Advanced Settings</div>
+                    <div class="card-header">
+                        <div class="card-title">Advanced Settings</div>
+                        <button class="icon-btn help-icon-btn" type="button"
+                            onclick="openDocHelpModal('Certificate Help', 'public/help/Certificates.md')"
+                            title="Certificate Help" aria-label="Open Certificate help">
+                            <span class="material-icons-round">help</span>
+                        </button>
+                    </div>
                     <div class="form-group">
                         <label>Certificate Domain / Address</label>
                         <input type="text" id="cert-domain" value="localhost" placeholder="localhost or domain.com"
@@ -1526,6 +1669,23 @@
             </div>
             <div class="modal-footer" style="display: flex; justify-content: flex-end;">
                 <button class="btn btn-primary" onclick="closeMcpHelpModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="doc-help-modal">
+        <div class="modal doc-help-modal">
+            <div class="modal-header">
+                <div class="modal-title" id="doc-help-modal-title">Help</div>
+                <button class="icon-btn" onclick="closeDocHelpModal()">
+                    <span class="material-icons-round">close</span>
+                </button>
+            </div>
+            <div class="modal-body doc-help-body">
+                <div id="doc-help-markdown" class="doc-help-markdown is-loading">Loading help document...</div>
+            </div>
+            <div class="modal-footer" style="display: flex; justify-content: flex-end;">
+                <button class="btn btn-primary" onclick="closeDocHelpModal()">Close</button>
             </div>
         </div>
     </div>
@@ -1813,6 +1973,7 @@
         let openTracePayloadEntry = null;
         let mcpHelpMarkdownLoaded = false;
         let mcpHelpMarkdownSource = '';
+        const docHelpMarkdownCache = new Map();
         let managedModelsRefreshTimer = null;
         let statusRefreshTimer = null;
         let welcomeState = null;
@@ -2261,12 +2422,21 @@
         function renderSimpleMarkdown(markdown) {
             const normalized = String(markdown || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
             const codeBlocks = [];
-            let html = escapeHtml(normalized).replace(/```([\s\S]*?)```/g, (_, code) => {
+            const htmlTags = [];
+
+            let source = normalized.replace(/```([\s\S]*?)```/g, (_, code) => {
                 const index = codeBlocks.length;
                 codeBlocks.push(`<pre><code>${code.replace(/^\n/, '')}</code></pre>`);
                 return `@@CODEBLOCK_${index}@@`;
             });
 
+            source = source.replace(/<\/?[A-Za-z][^>]*>/g, (tag) => {
+                const index = htmlTags.length;
+                htmlTags.push(tag);
+                return `@@HTMLTAG_${index}@@`;
+            });
+
+            let html = escapeHtml(source);
             html = html
                 .replace(/^### (.+)$/gm, '<h3>$1</h3>')
                 .replace(/^## (.+)$/gm, '<h2>$1</h2>')
@@ -2286,7 +2456,7 @@
                 .replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
 
             const blocks = html.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean).map((block) => {
-                if (/^<(h1|h2|h3|ul|ol|pre|blockquote)/.test(block)) {
+                if (/^(?:@@HTMLTAG_\d+@@|<(h1|h2|h3|ul|ol|pre|blockquote))/.test(block)) {
                     return block;
                 }
                 return `<p>${block.replace(/\n/g, '<br>')}</p>`;
@@ -2294,7 +2464,32 @@
 
             let output = blocks.join('\n');
             output = output.replace(/@@CODEBLOCK_(\d+)@@/g, (_, index) => codeBlocks[Number(index)] || '');
+            output = output.replace(/@@HTMLTAG_(\d+)@@/g, (_, index) => htmlTags[Number(index)] || '');
             return output;
+        }
+
+        function resolveHelpAssetPaths(container, markdownPath) {
+            if (!container || !markdownPath) return;
+
+            const baseDir = markdownPath.includes('/')
+                ? markdownPath.slice(0, markdownPath.lastIndexOf('/') + 1)
+                : '';
+
+            const resolvePath = (value) => {
+                const raw = String(value || '').trim();
+                if (!raw || /^(?:[a-z]+:|\/|#)/i.test(raw)) {
+                    return raw;
+                }
+                return `${baseDir}${raw}`;
+            };
+
+            container.querySelectorAll('img[src]').forEach((img) => {
+                img.setAttribute('src', resolvePath(img.getAttribute('src')));
+            });
+
+            container.querySelectorAll('a[href]').forEach((link) => {
+                link.setAttribute('href', resolvePath(link.getAttribute('href')));
+            });
         }
 
         async function loadMcpHelpMarkdown() {
@@ -2308,6 +2503,19 @@
             return mcpHelpMarkdownSource;
         }
 
+        async function loadDocHelpMarkdown(path) {
+            if (docHelpMarkdownCache.has(path)) {
+                return docHelpMarkdownCache.get(path);
+            }
+            const response = await fetch(path, { cache: 'no-store' });
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            const markdown = await response.text();
+            docHelpMarkdownCache.set(path, markdown);
+            return markdown;
+        }
+
         async function openMcpHelpModal() {
             const modal = document.getElementById('mcp-help-modal');
             const markdownEl = document.getElementById('mcp-help-markdown');
@@ -2319,6 +2527,7 @@
             if (mcpHelpMarkdownLoaded && mcpHelpMarkdownSource) {
                 markdownEl.classList.remove('is-loading', 'is-error');
                 markdownEl.innerHTML = renderSimpleMarkdown(mcpHelpMarkdownSource);
+                resolveHelpAssetPaths(markdownEl, 'public/help/LMStudio_MCP.md');
                 return;
             }
 
@@ -2330,6 +2539,7 @@
                 const markdown = await loadMcpHelpMarkdown();
                 markdownEl.classList.remove('is-loading', 'is-error');
                 markdownEl.innerHTML = renderSimpleMarkdown(markdown);
+                resolveHelpAssetPaths(markdownEl, 'public/help/LMStudio_MCP.md');
             } catch (e) {
                 console.error('Failed to load MCP help markdown:', e);
                 markdownEl.classList.remove('is-loading');
@@ -2340,6 +2550,35 @@
 
         function closeMcpHelpModal() {
             document.getElementById('mcp-help-modal').style.display = 'none';
+        }
+
+        async function openDocHelpModal(title, path) {
+            const modal = document.getElementById('doc-help-modal');
+            const titleEl = document.getElementById('doc-help-modal-title');
+            const markdownEl = document.getElementById('doc-help-markdown');
+            if (!modal || !titleEl || !markdownEl) return;
+
+            titleEl.textContent = title || 'Help';
+            modal.style.display = 'flex';
+            markdownEl.classList.add('is-loading');
+            markdownEl.classList.remove('is-error');
+            markdownEl.textContent = 'Loading help document...';
+
+            try {
+                const markdown = await loadDocHelpMarkdown(path);
+                markdownEl.classList.remove('is-loading', 'is-error');
+                markdownEl.innerHTML = renderSimpleMarkdown(markdown);
+                resolveHelpAssetPaths(markdownEl, path);
+            } catch (e) {
+                console.error('Failed to load help markdown:', path, e);
+                markdownEl.classList.remove('is-loading');
+                markdownEl.classList.add('is-error');
+                markdownEl.textContent = 'Failed to load help document.';
+            }
+        }
+
+        function closeDocHelpModal() {
+            document.getElementById('doc-help-modal').style.display = 'none';
         }
 
         async function copyMcpJsonExample() {
