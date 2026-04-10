@@ -750,7 +750,7 @@
         }
 
         .welcome-modal {
-            max-width: 680px;
+            max-width: 760px;
         }
 
         .welcome-intro {
@@ -772,6 +772,11 @@
         }
 
         .welcome-actions-list {
+            display: grid;
+            gap: 14px;
+        }
+
+        .welcome-models-grid {
             display: grid;
             gap: 14px;
         }
@@ -811,6 +816,28 @@
         .welcome-action-body {
             font-size: 13px;
             line-height: 1.6;
+            color: var(--text-secondary);
+        }
+
+        .welcome-model-card {
+            background:
+                linear-gradient(180deg, rgba(88, 166, 255, 0.05), rgba(255, 255, 255, 0.02)),
+                rgba(255, 255, 255, 0.03);
+        }
+
+        .welcome-model-summary {
+            display: grid;
+            gap: 8px;
+        }
+
+        .welcome-model-copy {
+            font-size: 13px;
+            line-height: 1.6;
+            color: var(--text-secondary);
+        }
+
+        .welcome-model-state {
+            font-size: 12px;
             color: var(--text-secondary);
         }
 
@@ -1584,6 +1611,7 @@
                         }
                         refreshManagedModels();
                         checkAssetStatus();
+                        refreshWelcomeState(true);
                     });
 
                     window.runtime.EventsOn("llm-activity", (state) => {
@@ -1622,13 +1650,13 @@
             if (typeof window.go === 'undefined') return;
             try {
                 welcomeState = await window.go.core.App.GetWelcomeState();
-                renderWelcomeModal(forceOpen);
+                await renderWelcomeModal(forceOpen);
             } catch (e) {
                 console.error('Failed to load welcome state:', e);
             }
         }
 
-        function renderWelcomeModal(forceOpen = false) {
+        async function renderWelcomeModal(forceOpen = false) {
             const modal = document.getElementById('welcome-modal');
             const primaryEl = document.getElementById('welcome-primary-message');
             const secondaryEl = document.getElementById('welcome-secondary-message');
@@ -1644,6 +1672,13 @@
             skipBtn.style.display = state.requiresMigration ? '' : '';
 
             const cards = [];
+            let managedModels = [];
+            try {
+                managedModels = await (window.go?.core?.App?.GetManagedModels?.() ?? []);
+            } catch (e) {
+                console.error('Failed to load welcome managed models:', e);
+            }
+
             if (state.requiresMigration) {
                 cards.push(`
                     <div class="welcome-action-card">
@@ -1661,21 +1696,28 @@
                     </div>
                 `);
             }
-            if (state.requiresTtsDownload) {
+
+            if (Array.isArray(managedModels) && managedModels.length) {
                 cards.push(`
                     <div class="welcome-action-card">
                         <div class="welcome-action-top">
-                            <div class="welcome-action-title">Voice runtime download</div>
-                            <span class="welcome-action-badge">Optional</span>
+                            <div class="welcome-action-title">Local AI Packages</div>
+                            <span class="welcome-action-badge">Recommended</span>
+                        </div>
+                        <div class="welcome-action-body">Install only what you want to use. These downloads stay on your machine and unlock voice playback plus local semantic retrieval.</div>
+                        <div class="welcome-models-grid">
+                            ${managedModels.map((item) => renderManagedModelCard(item, { scope: 'welcome', simplified: true })).join('')}
+                        </div>
+                    </div>
+                `);
+            } else if (state.requiresTtsDownload) {
+                cards.push(`
+                    <div class="welcome-action-card">
+                        <div class="welcome-action-top">
+                            <div class="welcome-action-title">Local AI Packages</div>
+                            <span class="welcome-action-badge">Recommended</span>
                         </div>
                         <div class="welcome-action-body">${escapeHtml(state.ttsDownloadMessage || 'Download the local runtime files to use Supertonic TTS and related local features.')}</div>
-                        <div class="managed-model-actions">
-                            <button class="btn btn-primary btn-compact" id="welcome-download-btn" onclick="runWelcomeDownload()">
-                                <span class="material-icons-round">download</span>
-                                Download Runtime
-                            </button>
-                            ${state.canSkipTTSDownload ? `<button class="btn btn-secondary btn-compact" onclick="dismissWelcomeModal()">Skip for Now</button>` : ''}
-                        </div>
                     </div>
                 `);
             }
@@ -2090,6 +2132,86 @@
             }
         }
 
+        function getManagedModelIntro(item) {
+            if (item?.kind === 'tts') {
+                return 'Supertonic 2 is the local speech runtime used for natural text-to-speech playback inside the app.';
+            }
+            if (item?.kind === 'embedding') {
+                return 'Multilingual E5 Small powers local semantic search and memory retrieval so Korean and multilingual context can be found more accurately.';
+            }
+            return 'This package adds local AI features that work directly on your device.';
+        }
+
+        function renderManagedModelCard(item, options = {}) {
+            const simplified = options.simplified === true;
+            const scope = String(options.scope || 'manager');
+            const status = escapeHtml(String(item.status || 'unknown'));
+            const displayName = escapeHtml(String(item.displayName || item.modelId || item.key || 'Model'));
+            const installDir = escapeHtml(String(item.installDir || ''));
+            const message = escapeHtml(String(item.message || ''));
+            const provider = escapeHtml(String(item.provider || ''));
+            const modelId = escapeHtml(String(item.modelId || ''));
+            const backend = escapeHtml(String(item.backend || ''));
+            const progressPct = Number(item.progressPct || 0);
+            const downloading = !!item.downloading;
+            const currentFile = escapeHtml(String(item.currentFile || ''));
+            const progressText = escapeHtml(String(item.progressText || ''));
+            const canDownload = !!item.canDownload;
+            const buttonLabel = item.installed ? 'Redownload' : 'Download';
+            const modelKey = escapeHtml(String(item.key || ''));
+            const domKey = managedModelDomKey(String(item.key || ''));
+            const metaHtml = simplified
+                ? `
+                    <div class="welcome-model-summary">
+                        <div class="welcome-model-copy">${escapeHtml(getManagedModelIntro(item))}</div>
+                        <div class="welcome-model-state" id="${scope}-managed-model-message-${domKey}">${message}</div>
+                    </div>
+                `
+                : `
+                    <div class="managed-model-meta">
+                        <div><strong>Provider:</strong> ${provider}</div>
+                        <div><strong>Model ID:</strong> ${modelId}</div>
+                        ${backend ? `<div><strong>Backend:</strong> ${backend}</div>` : ''}
+                        <div><strong>Install Dir:</strong> ${installDir}</div>
+                        <div><strong>State:</strong> <span id="${scope}-managed-model-message-${domKey}">${message}</span></div>
+                    </div>
+                `;
+
+            return `
+                <div class="managed-model-card${simplified ? ' welcome-model-card' : ''}" id="${scope}-managed-model-card-${domKey}">
+                    <div class="managed-model-header">
+                        <div class="managed-model-title">${displayName}</div>
+                        <span class="managed-model-chip ${status}" id="${scope}-managed-model-chip-${domKey}">${status}</span>
+                    </div>
+                    ${metaHtml}
+                    <div class="managed-model-progress" id="${scope}-managed-model-progress-${domKey}" style="${downloading || progressPct > 0 ? '' : 'display:none;'}">
+                        <div class="managed-model-progress-bar">
+                            <div class="managed-model-progress-fill" id="${scope}-managed-model-progress-fill-${domKey}" style="width: ${Math.max(0, Math.min(progressPct, 100))}%;"></div>
+                        </div>
+                        <div class="managed-model-progress-meta">
+                            <span id="${scope}-managed-model-progress-text-${domKey}">${progressText || 'Downloading...'}</span>
+                            <span id="${scope}-managed-model-progress-pct-${domKey}">${Math.round(progressPct)}%</span>
+                        </div>
+                        <div class="managed-model-progress-file" id="${scope}-managed-model-progress-file-${domKey}" style="${currentFile ? '' : 'display:none;'}">${currentFile}</div>
+                    </div>
+                    <div class="managed-model-actions">
+                        ${canDownload ? `
+                            <button class="btn btn-primary btn-compact" id="${scope}-managed-model-download-btn-${domKey}" data-model-key="${modelKey}" onclick="startManagedModelDownload(this.dataset.modelKey)" ${downloading ? 'disabled' : ''}>
+                                <span class="material-icons-round" id="${scope}-managed-model-download-icon-${domKey}">${downloading ? 'downloading' : 'download'}</span>
+                                ${buttonLabel}
+                            </button>
+                        ` : ''}
+                        ${!simplified && item.kind === 'embedding' ? `
+                            <button class="btn btn-secondary btn-compact" onclick="exportEmbeddingManifest()">
+                                <span class="material-icons-round">description</span>
+                                Manifest
+                            </button>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+        }
+
         function openModelManagerModal() {
             document.getElementById('model-manager-modal').style.display = 'flex';
             refreshManagedModels();
@@ -2115,19 +2237,19 @@
             return String(key || '').replace(/[^a-zA-Z0-9_-]/g, '_');
         }
 
-        function applyManagedModelDownloadState(state) {
+        function applyManagedModelDownloadStateToScope(scope, state) {
             const domKey = managedModelDomKey(state?.key || '');
             if (!domKey) return;
 
-            const chipEl = document.getElementById(`managed-model-chip-${domKey}`);
-            const messageEl = document.getElementById(`managed-model-message-${domKey}`);
-            const progressEl = document.getElementById(`managed-model-progress-${domKey}`);
-            const fillEl = document.getElementById(`managed-model-progress-fill-${domKey}`);
-            const textEl = document.getElementById(`managed-model-progress-text-${domKey}`);
-            const pctEl = document.getElementById(`managed-model-progress-pct-${domKey}`);
-            const fileEl = document.getElementById(`managed-model-progress-file-${domKey}`);
-            const buttonEl = document.getElementById(`managed-model-download-btn-${domKey}`);
-            const buttonIconEl = document.getElementById(`managed-model-download-icon-${domKey}`);
+            const chipEl = document.getElementById(`${scope}-managed-model-chip-${domKey}`);
+            const messageEl = document.getElementById(`${scope}-managed-model-message-${domKey}`);
+            const progressEl = document.getElementById(`${scope}-managed-model-progress-${domKey}`);
+            const fillEl = document.getElementById(`${scope}-managed-model-progress-fill-${domKey}`);
+            const textEl = document.getElementById(`${scope}-managed-model-progress-text-${domKey}`);
+            const pctEl = document.getElementById(`${scope}-managed-model-progress-pct-${domKey}`);
+            const fileEl = document.getElementById(`${scope}-managed-model-progress-file-${domKey}`);
+            const buttonEl = document.getElementById(`${scope}-managed-model-download-btn-${domKey}`);
+            const buttonIconEl = document.getElementById(`${scope}-managed-model-download-icon-${domKey}`);
 
             const progressPct = Number(state?.progressPct || 0);
             const active = !!state?.active;
@@ -2164,6 +2286,11 @@
             }
         }
 
+        function applyManagedModelDownloadState(state) {
+            applyManagedModelDownloadStateToScope('manager', state);
+            applyManagedModelDownloadStateToScope('welcome', state);
+        }
+
         async function refreshManagedModels() {
             const listEl = document.getElementById('managed-models-list');
             const rootEl = document.getElementById('models-root-dir');
@@ -2188,62 +2315,7 @@
                     return;
                 }
 
-                listEl.innerHTML = items.map((item) => {
-                    const status = escapeHtml(String(item.status || 'unknown'));
-                    const displayName = escapeHtml(String(item.displayName || item.modelId || item.key || 'Model'));
-                    const installDir = escapeHtml(String(item.installDir || ''));
-                    const message = escapeHtml(String(item.message || ''));
-                    const provider = escapeHtml(String(item.provider || ''));
-                    const modelId = escapeHtml(String(item.modelId || ''));
-                    const backend = escapeHtml(String(item.backend || ''));
-                    const progressPct = Number(item.progressPct || 0);
-                    const downloading = !!item.downloading;
-                    const currentFile = escapeHtml(String(item.currentFile || ''));
-                    const progressText = escapeHtml(String(item.progressText || ''));
-                    const canDownload = !!item.canDownload;
-                    const buttonLabel = item.installed ? 'Redownload' : 'Download';
-                    const modelKey = escapeHtml(String(item.key || ''));
-                    const domKey = managedModelDomKey(String(item.key || ''));
-                    return `
-                        <div class="managed-model-card" id="managed-model-card-${domKey}">
-                            <div class="managed-model-header">
-                                <div class="managed-model-title">${displayName}</div>
-                                <span class="managed-model-chip ${status}" id="managed-model-chip-${domKey}">${status}</span>
-                            </div>
-                            <div class="managed-model-meta">
-                                <div><strong>Provider:</strong> ${provider}</div>
-                                <div><strong>Model ID:</strong> ${modelId}</div>
-                                ${backend ? `<div><strong>Backend:</strong> ${backend}</div>` : ''}
-                                <div><strong>Install Dir:</strong> ${installDir}</div>
-                                <div><strong>State:</strong> <span id="managed-model-message-${domKey}">${message}</span></div>
-                            </div>
-                            <div class="managed-model-progress" id="managed-model-progress-${domKey}" style="${downloading || progressPct > 0 ? '' : 'display:none;'}">
-                                    <div class="managed-model-progress-bar">
-                                        <div class="managed-model-progress-fill" id="managed-model-progress-fill-${domKey}" style="width: ${Math.max(0, Math.min(progressPct, 100))}%;"></div>
-                                    </div>
-                                    <div class="managed-model-progress-meta">
-                                        <span id="managed-model-progress-text-${domKey}">${progressText || 'Downloading...'}</span>
-                                        <span id="managed-model-progress-pct-${domKey}">${Math.round(progressPct)}%</span>
-                                    </div>
-                                    <div class="managed-model-progress-file" id="managed-model-progress-file-${domKey}" style="${currentFile ? '' : 'display:none;'}">${currentFile}</div>
-                                </div>
-                            <div class="managed-model-actions">
-                                ${canDownload ? `
-                                    <button class="btn btn-primary btn-compact" id="managed-model-download-btn-${domKey}" data-model-key="${modelKey}" onclick="startManagedModelDownload(this.dataset.modelKey)" ${downloading ? 'disabled' : ''}>
-                                        <span class="material-icons-round" id="managed-model-download-icon-${domKey}">${downloading ? 'downloading' : 'download'}</span>
-                                        ${buttonLabel}
-                                    </button>
-                                ` : ''}
-                                ${item.kind === 'embedding' ? `
-                                    <button class="btn btn-secondary btn-compact" onclick="exportEmbeddingManifest()">
-                                        <span class="material-icons-round">description</span>
-                                        Manifest
-                                    </button>
-                                ` : ''}
-                            </div>
-                        </div>
-                    `;
-                }).join('');
+                listEl.innerHTML = items.map((item) => renderManagedModelCard(item, { scope: 'manager' })).join('');
             } catch (e) {
                 if (listEl) {
                     listEl.innerHTML = '<div style="color: var(--danger-color); font-size: 13px;">Failed to load model status.</div>';
