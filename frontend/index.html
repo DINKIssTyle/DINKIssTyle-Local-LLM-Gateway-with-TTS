@@ -356,6 +356,55 @@
             gap: 12px;
         }
 
+        .server-port-row {
+            align-items: flex-end;
+        }
+
+        .server-port-row .form-group {
+            flex: 1 1 0;
+        }
+
+        .mcp-port-group {
+            flex: 0 0 180px !important;
+        }
+
+        .mcp-port-label-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+
+        .mcp-port-label-row label {
+            margin-bottom: 0;
+        }
+
+        .help-icon-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            padding: 0;
+            border-radius: 999px;
+            border: 1px solid rgba(88, 166, 255, 0.22);
+            background: rgba(88, 166, 255, 0.08);
+            color: var(--accent-color);
+            transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+        }
+
+        .help-icon-btn:hover {
+            color: #ffffff;
+            background: rgba(88, 166, 255, 0.18);
+            border-color: rgba(88, 166, 255, 0.42);
+            transform: translateY(-1px);
+        }
+
+        .help-icon-btn .material-icons-round {
+            font-size: 18px;
+        }
+
         .trace-meta {
             display: flex;
             align-items: center;
@@ -584,6 +633,10 @@
             z-index: 150;
         }
 
+        #mcp-help-modal {
+            z-index: 130;
+        }
+
         .modal {
             background: var(--card-bg);
             border: 1px solid var(--border-color);
@@ -607,6 +660,179 @@
         .modal-title {
             font-weight: 600;
             font-size: 16px;
+        }
+
+        .modal-body {
+            padding: 16px;
+            overflow: auto;
+        }
+
+        .modal-footer {
+            padding: 16px;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .mcp-help-modal {
+            max-width: 1000px;
+            width: min(1000px, 94vw);
+            max-height: min(86vh, 920px);
+        }
+
+        .mcp-help-layout {
+            display: grid;
+            grid-template-rows: minmax(0, 2fr) minmax(220px, 1fr);
+            gap: 14px;
+            min-height: min(72vh, 760px);
+        }
+
+        .mcp-help-section {
+            min-height: 0;
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.025);
+            overflow: hidden;
+        }
+
+        .mcp-help-section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--border-color);
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .mcp-help-section-title {
+            font-size: 12px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+        }
+
+        .mcp-help-markdown {
+            padding: 16px;
+            height: 100%;
+            overflow: auto;
+            line-height: 1.65;
+            color: var(--text-color);
+        }
+
+        .mcp-help-markdown h1,
+        .mcp-help-markdown h2,
+        .mcp-help-markdown h3 {
+            margin: 0 0 12px;
+            line-height: 1.25;
+        }
+
+        .mcp-help-markdown h1 {
+            font-size: 22px;
+        }
+
+        .mcp-help-markdown h2 {
+            font-size: 18px;
+            margin-top: 22px;
+        }
+
+        .mcp-help-markdown h3 {
+            font-size: 15px;
+            margin-top: 18px;
+        }
+
+        .mcp-help-markdown p,
+        .mcp-help-markdown ul,
+        .mcp-help-markdown ol,
+        .mcp-help-markdown pre,
+        .mcp-help-markdown blockquote {
+            margin: 0 0 12px;
+        }
+
+        .mcp-help-markdown ul,
+        .mcp-help-markdown ol {
+            padding-left: 20px;
+        }
+
+        .mcp-help-markdown code {
+            font-family: "JetBrains Mono", Consolas, monospace;
+            font-size: 0.92em;
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 6px;
+            padding: 0.12em 0.4em;
+        }
+
+        .mcp-help-markdown pre {
+            background: #0b1016;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 10px;
+            padding: 14px;
+            overflow: auto;
+        }
+
+        .mcp-help-markdown pre code {
+            background: transparent;
+            padding: 0;
+        }
+
+        .mcp-help-markdown blockquote {
+            border-left: 3px solid rgba(88, 166, 255, 0.5);
+            padding-left: 12px;
+            color: #c2cfdb;
+        }
+
+        .mcp-help-markdown a {
+            color: #79b8ff;
+        }
+
+        .mcp-help-markdown hr {
+            border: 0;
+            border-top: 1px solid var(--border-color);
+            margin: 20px 0;
+        }
+
+        .mcp-help-markdown.is-loading,
+        .mcp-help-markdown.is-error {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+        }
+
+        .mcp-json-panel {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+
+        .mcp-json-caption {
+            padding: 0 14px 12px;
+            color: var(--text-secondary);
+            font-size: 12px;
+        }
+
+        .mcp-json-box {
+            margin: 0 14px 14px;
+            padding: 14px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: #0b1016;
+            color: #d7e3f0;
+            font-family: "JetBrains Mono", Consolas, monospace;
+            font-size: 13px;
+            line-height: 1.6;
+            overflow: auto;
+            white-space: pre;
+            flex: 1;
+        }
+
+        @media (max-width: 900px) {
+            .mcp-help-modal {
+                width: min(1000px, 96vw);
+            }
+
+            .mcp-help-layout {
+                grid-template-rows: minmax(0, 1.7fr) minmax(200px, 1fr);
+                min-height: min(78vh, 820px);
+            }
         }
 
         .managed-models-list {
@@ -967,14 +1193,19 @@
                         </div>
                         <span id="port-display" style="color: var(--text-secondary); font-size: 13px;"></span>
                     </div>
-                    <div class="form-row">
+                    <div class="form-row server-port-row">
                         <div class="form-group">
                             <label>Web Port (HTTPS)</label>
                             <input type="text" id="port-input" value="7860" placeholder="7860" onkeyup="updateMcpPort()"
                                 onchange="savePort()">
                         </div>
-                        <div class="form-group">
-                            <label>MCP Port (HTTP)</label>
+                        <div class="form-group mcp-port-group">
+                            <div class="mcp-port-label-row">
+                                <label for="mcp-port-input">MCP Port (HTTP)</label>
+                                <button class="icon-btn help-icon-btn" type="button" onclick="openMcpHelpModal()" title="MCP Help" aria-label="Open MCP help">
+                                    <span class="material-icons-round">help</span>
+                                </button>
+                            </div>
                             <input type="text" id="mcp-port-input" value="7861" readonly
                                 style="background: rgba(255,255,255,0.05); color: var(--text-secondary); cursor: not-allowed;">
                         </div>
@@ -1264,6 +1495,41 @@
         </div>
     </div>
 
+    <div class="modal-overlay" id="mcp-help-modal">
+        <div class="modal mcp-help-modal">
+            <div class="modal-header">
+                <div class="modal-title">LM Studio MCP Help</div>
+                <button class="icon-btn" onclick="closeMcpHelpModal()">
+                    <span class="material-icons-round">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="mcp-help-layout">
+                    <section class="mcp-help-section">
+                        <div class="mcp-help-section-header">
+                            <div class="mcp-help-section-title">Guide</div>
+                        </div>
+                        <div id="mcp-help-markdown" class="mcp-help-markdown is-loading">Loading help document...</div>
+                    </section>
+                    <section class="mcp-help-section mcp-json-panel">
+                        <div class="mcp-help-section-header">
+                            <div class="mcp-help-section-title">mcp.json Example</div>
+                            <button class="btn btn-secondary btn-compact" type="button" onclick="copyMcpJsonExample()">
+                                <span class="material-icons-round">content_copy</span>
+                                Copy JSON
+                            </button>
+                        </div>
+                        <div class="mcp-json-caption">Use the current server address shown below in LM Studio's <code>mcp.json</code>.</div>
+                        <pre class="mcp-json-box"><code id="mcp-json-example"></code></pre>
+                    </section>
+                </div>
+            </div>
+            <div class="modal-footer" style="display: flex; justify-content: flex-end;">
+                <button class="btn btn-primary" onclick="closeMcpHelpModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
     <div class="modal-overlay" id="welcome-modal">
         <div class="modal welcome-modal">
             <div class="modal-header">
@@ -1545,6 +1811,8 @@
         let debugTraceAutoExpanded = false;
         let debugTracePreviousSize = null;
         let openTracePayloadEntry = null;
+        let mcpHelpMarkdownLoaded = false;
+        let mcpHelpMarkdownSource = '';
         let managedModelsRefreshTimer = null;
         let statusRefreshTimer = null;
         let welcomeState = null;
@@ -1962,6 +2230,132 @@
             } catch (e) {
                 console.error('Failed to copy trace payload:', e);
                 showAlert('Failed to copy trace payload: ' + e.message);
+            }
+        }
+
+        function getCurrentMcpServerUrl() {
+            const configuredPort = parseInt(document.getElementById('port-input')?.value, 10);
+            const mcpPort = !Number.isNaN(configuredPort) ? configuredPort + 1 : 7861;
+            const host = (window.location && window.location.hostname && window.location.hostname !== 'localhost')
+                ? window.location.hostname
+                : '127.0.0.1';
+            return `http://${host}:${mcpPort}/mcp/sse`;
+        }
+
+        function buildMcpJsonExample(url) {
+            return JSON.stringify({
+                mcpServers: {
+                    "dinkisstyle-gateway": {
+                        url
+                    }
+                }
+            }, null, 2);
+        }
+
+        function updateMcpJsonExample() {
+            const codeEl = document.getElementById('mcp-json-example');
+            if (!codeEl) return;
+            codeEl.textContent = buildMcpJsonExample(getCurrentMcpServerUrl());
+        }
+
+        function renderSimpleMarkdown(markdown) {
+            const normalized = String(markdown || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+            const codeBlocks = [];
+            let html = escapeHtml(normalized).replace(/```([\s\S]*?)```/g, (_, code) => {
+                const index = codeBlocks.length;
+                codeBlocks.push(`<pre><code>${code.replace(/^\n/, '')}</code></pre>`);
+                return `@@CODEBLOCK_${index}@@`;
+            });
+
+            html = html
+                .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+                .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+                .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+                .replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>')
+                .replace(/(?:^|\n)([-*] .+(?:\n[-*] .+)*)/g, (match) => {
+                    const items = match.trim().split('\n').map((line) => `<li>${line.replace(/^[-*] /, '')}</li>`).join('');
+                    return `\n<ul>${items}</ul>`;
+                })
+                .replace(/(?:^|\n)(\d+\. .+(?:\n\d+\. .+)*)/g, (match) => {
+                    const items = match.trim().split('\n').map((line) => `<li>${line.replace(/^\d+\. /, '')}</li>`).join('');
+                    return `\n<ol>${items}</ol>`;
+                })
+                .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+                .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+                .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+                .replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+
+            const blocks = html.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean).map((block) => {
+                if (/^<(h1|h2|h3|ul|ol|pre|blockquote)/.test(block)) {
+                    return block;
+                }
+                return `<p>${block.replace(/\n/g, '<br>')}</p>`;
+            });
+
+            let output = blocks.join('\n');
+            output = output.replace(/@@CODEBLOCK_(\d+)@@/g, (_, index) => codeBlocks[Number(index)] || '');
+            return output;
+        }
+
+        async function loadMcpHelpMarkdown() {
+            if (mcpHelpMarkdownLoaded) return mcpHelpMarkdownSource;
+            const response = await fetch('public/help/LMStudio_MCP.md', { cache: 'no-store' });
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            mcpHelpMarkdownSource = await response.text();
+            mcpHelpMarkdownLoaded = true;
+            return mcpHelpMarkdownSource;
+        }
+
+        async function openMcpHelpModal() {
+            const modal = document.getElementById('mcp-help-modal');
+            const markdownEl = document.getElementById('mcp-help-markdown');
+            updateMcpJsonExample();
+            modal.style.display = 'flex';
+
+            if (!markdownEl) return;
+
+            if (mcpHelpMarkdownLoaded && mcpHelpMarkdownSource) {
+                markdownEl.classList.remove('is-loading', 'is-error');
+                markdownEl.innerHTML = renderSimpleMarkdown(mcpHelpMarkdownSource);
+                return;
+            }
+
+            markdownEl.classList.add('is-loading');
+            markdownEl.classList.remove('is-error');
+            markdownEl.textContent = 'Loading help document...';
+
+            try {
+                const markdown = await loadMcpHelpMarkdown();
+                markdownEl.classList.remove('is-loading', 'is-error');
+                markdownEl.innerHTML = renderSimpleMarkdown(markdown);
+            } catch (e) {
+                console.error('Failed to load MCP help markdown:', e);
+                markdownEl.classList.remove('is-loading');
+                markdownEl.classList.add('is-error');
+                markdownEl.textContent = 'Failed to load help document.';
+            }
+        }
+
+        function closeMcpHelpModal() {
+            document.getElementById('mcp-help-modal').style.display = 'none';
+        }
+
+        async function copyMcpJsonExample() {
+            const text = buildMcpJsonExample(getCurrentMcpServerUrl());
+            try {
+                if (window.runtime && typeof window.runtime.ClipboardSetText === 'function') {
+                    await window.runtime.ClipboardSetText(text);
+                } else if (navigator.clipboard && navigator.clipboard.writeText) {
+                    await navigator.clipboard.writeText(text);
+                } else {
+                    throw new Error('Clipboard API unavailable');
+                }
+                showAlert('mcp.json example copied to clipboard.');
+            } catch (e) {
+                console.error('Failed to copy mcp.json example:', e);
+                showAlert('Failed to copy mcp.json example: ' + e.message);
             }
         }
 
@@ -2416,6 +2810,7 @@
             } else {
                 document.getElementById('mcp-port-input').value = '-';
             }
+            updateMcpJsonExample();
         }
 
         async function savePort() {
