@@ -3,17 +3,25 @@
  * Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
  */
 
-const CACHE_NAME = 'dkst-chat-v12';
+const CACHE_NAME = 'dkst-chat-v21';
 const ASSETS = [
     '/',
     '/index.html',
     '/login.html',
     '/web.html',
-    '/web.html?v=10',
+    '/web.html?v=19',
     '/fonts.css?v=1',
     '/style.css?v=8',
     '/icons.css?v=2',
-    '/app.js?v=9',
+    '/app-utils.js?v=1',
+    '/app-i18n.js?v=1',
+    '/app-saved-library.js?v=1',
+    '/app-models.js?v=1',
+    '/app-tts.js?v=2',
+    '/app-session.js?v=1',
+    '/app-chat-streaming.js?v=1',
+    '/app-chat-ui.js?v=1',
+    '/app.js?v=18',
     '/icons.css',
     '/public/icon-512.png',
     '/site.webmanifest',
@@ -86,7 +94,7 @@ self.addEventListener('fetch', event => {
     event.respondWith(
         fetch(event.request).catch(() => {
             if (event.request.mode === 'navigate') {
-                return caches.match('/web.html?v=10')
+                return caches.match('/web.html?v=19')
                     .then(response => response || caches.match('/web.html'))
                     .then(response => response || caches.match('/index.html'))
                     .then(response => {
