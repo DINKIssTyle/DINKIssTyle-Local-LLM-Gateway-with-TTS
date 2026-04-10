@@ -98,6 +98,31 @@ fi
 GOBIN=$(go env GOPATH)/bin
 export PATH=$PATH:$GOBIN
 
+# --- Version Sync Logic ---
+echo "Syncing version from config..."
+APP_VERSION=$(grep 'AppVersion =' internal/config/config.go | cut -d'"' -f2)
+
+if [ -z "$APP_VERSION" ]; then
+    echo "Error: Could not extract AppVersion from internal/config/config.go"
+    exit 1
+fi
+echo "Current Version: $APP_VERSION"
+
+# Update wails.json
+if command -v python3 &> /dev/null; then
+    python3 -c "import json; d=json.load(open('wails.json')); d['info']['productVersion']='$APP_VERSION'; json.dump(d, open('wails.json', 'w'), indent=4)"
+elif command -v sed &> /dev/null; then
+    sed -i "s/\"productVersion\": \".*\"/\"productVersion\": \"$APP_VERSION\"/" wails.json
+fi
+
+# Update frontend/package.json
+if [ -f "frontend/package.json" ]; then
+    if command -v python3 &> /dev/null; then
+        python3 -c "import json; d=json.load(open('frontend/package.json')); d['version']='$APP_VERSION'; json.dump(d, open('frontend/package.json', 'w'), indent=4)"
+    fi
+fi
+# -------------------------
+
 # --- 4. Verify WebKit Version for Build Tags ---
 BUILD_TAGS=""
 if pkg-config --exists webkit2gtk-4.0; then

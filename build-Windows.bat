@@ -8,7 +8,16 @@ if exist "build\bin\DKST LLM Chat Server.exe" del "build\bin\DKST LLM Chat Serve
 if not exist "build\bin" mkdir "build\bin"
 if exist "frontend\dist" rmdir /s /q "frontend\dist"
 
-echo Clean complete. Building...
+echo Clean complete.
+echo Syncing version from config...
+powershell -Command "$content = Get-Content internal/config/config.go -Raw; if ($content -match 'AppVersion\s*=\s*\"([^\"]+)\"') { $version = $Matches[1]; echo \"Extracted Version: $version\"; $wails = Get-Content wails.json | ConvertFrom-Json; $wails.info.productVersion = $version; $wails | ConvertTo-Json -Depth 10 | Set-Content wails.json; if (Test-Path bundle\versioninfo.json) { $vi = Get-Content bundle\versioninfo.json | ConvertFrom-Json; $vi.FixedFileInfo.FileVersion.Major = [int]$version.Split('.')[0]; $vi.FixedFileInfo.FileVersion.Minor = [int]$version.Split('.')[1]; $vi.FixedFileInfo.FileVersion.Patch = [int]$version.Split('.')[2]; $vi.FixedFileInfo.ProductVersion = $vi.FixedFileInfo.FileVersion; $vi.StringFileInfo.FileVersion = $version; $vi.StringFileInfo.ProductVersion = $version; $vi | ConvertTo-Json -Depth 10 | Set-Content bundle\versioninfo.json; } if (Test-Path frontend\package.json) { $pkg = Get-Content frontend\package.json | ConvertFrom-Json; $pkg.version = $version; $pkg | ConvertTo-Json -Depth 10 | Set-Content frontend\package.json; } } else { Write-Error 'Could not extract version'; exit 1 }"
+
+if %ERRORLEVEL% NEQ 0 (
+    echo Version sync failed!
+    exit /b 1
+)
+
+echo Building...
 rem Using manual build (generate + go build) because wails build CLI is failing in this environment.
 wails generate bindings
 rem Generate Windows resources (icon, manifest, version info)

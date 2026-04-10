@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"dinkisstyle-chat/internal/config"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -83,7 +84,7 @@ func buildResponse(req *JSONRPCRequest, userID string, enableMemory bool, disabl
 			},
 			"serverInfo": map[string]string{
 				"name":    "DKST Local Gateway",
-				"version": "3.0.0",
+				"version": config.AppVersion,
 			},
 		}
 

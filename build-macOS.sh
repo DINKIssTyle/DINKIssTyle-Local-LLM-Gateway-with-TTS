@@ -18,6 +18,33 @@ if ! command -v wails &> /dev/null; then
     exit 1
 fi
 
+# --- Version Sync Logic ---
+# Extract version from internal/config/config.go
+APP_VERSION=$(grep 'AppVersion =' internal/config/config.go | cut -d'"' -f2)
+
+if [ -z "$APP_VERSION" ]; then
+    echo "Error: Could not extract AppVersion from internal/config/config.go"
+    exit 1
+fi
+
+echo "Synced App Version: $APP_VERSION"
+
+# Update wails.json
+if command -v python3 &> /dev/null; then
+    python3 -c "import json; d=json.load(open('wails.json')); d['info']['productVersion']='$APP_VERSION'; json.dump(d, open('wails.json', 'w'), indent=4)"
+elif command -v sed &> /dev/null; then
+    # Fallback to sed if python3 is not available (less robust for JSON but works for simple replacement)
+    sed -i '' "s/\"productVersion\": \".*\"/\"productVersion\": \"$APP_VERSION\"/" wails.json
+fi
+
+# Update frontend/package.json
+if [ -f "frontend/package.json" ]; then
+    if command -v python3 &> /dev/null; then
+        python3 -c "import json; d=json.load(open('frontend/package.json')); d['version']='$APP_VERSION'; json.dump(d, open('frontend/package.json', 'w'), indent=4)"
+    fi
+fi
+# -------------------------
+
 resolve_signing_identity() {
     if [ -n "${MACOS_SIGN_IDENTITY:-}" ]; then
         echo "$MACOS_SIGN_IDENTITY"
