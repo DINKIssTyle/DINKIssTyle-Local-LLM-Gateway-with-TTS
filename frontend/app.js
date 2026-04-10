@@ -7628,6 +7628,10 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
                         const elapsedMs = Number.isFinite(Number(json.total_elapsed_ms || json.elapsed_ms))
                             ? Number(json.total_elapsed_ms || json.elapsed_ms)
                             : (reasoningStartMs > 0 ? Date.now() - reasoningStartMs : 0);
+                        
+                        // Sync to global buffer for passive window / snapshot compatibility
+                        serverReplayReasoningBuffers.set(elementId, reasoningBuffer);
+                        
                         if (!deferToServerChatSession) showReasoningStatus(elementId, reasoningBuffer, false, elapsedMs); // Update with full buffer
                     }
                     else if (json.type === 'reasoning.end') {
@@ -7638,7 +7642,9 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
                             : (reasoningStartMs > 0 ? Date.now() - reasoningStartMs : 0);
                         reasoningStartMs = 0;
                         reasoningSource = null;
-                        if (!deferToServerChatSession) finalizeReasoningStatus(elementId, 'done', '', elapsedMs);
+                        
+                        serverReplayReasoningBuffers.set(elementId, reasoningBuffer);
+                        if (!deferToServerChatSession) finalizeReasoningStatus(elementId, 'done', reasoningBuffer, elapsedMs);
                     }
 
 
@@ -7750,17 +7756,21 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
 
                             if ((hasAnalysis && !hasFinal) || (hasThink && !hasThinkEnd)) {
                                 // Extract the "new" content part for status update
-                                // This is tricky during streaming, but we can show the last part of fullText
                                 let statusText = "Thinking...";
+                                let fullReasoningText = "";
                                 if (hasAnalysis) {
                                     const parts = rawDisplayText.split('<|channel|>analysis');
-                                    statusText = parts[parts.length - 1].split('<|channel|>')[0].trim();
+                                    fullReasoningText = parts[parts.length - 1].split('<|channel|>')[0].trim();
+                                    statusText = fullReasoningText;
                                 } else if (hasThink) {
                                     const parts = rawDisplayText.split('<think>');
-                                    statusText = parts[parts.length - 1].split('</think>')[0].trim();
+                                    fullReasoningText = parts[parts.length - 1].split('</think>')[0].trim();
+                                    statusText = fullReasoningText;
                                 }
 
-                                // Limit status text length for display
+                                serverReplayReasoningBuffers.set(elementId, fullReasoningText);
+
+                                // Limit status text length for display in the status line (full text is in bodyEl)
                                 if (statusText.length > 150) statusText = "..." + statusText.slice(-147);
                                 showReasoningStatus(elementId, statusText, false);
                             } else if (hasFinal || hasThinkEnd) {
@@ -8940,8 +8950,14 @@ function finalizeReasoningStatus(elementId, outcome = 'done', detail = '', durat
         else titleEl.textContent = formatThoughtDuration(durationMs);
     }
 
-    if (bodyEl && detail) {
-        bodyEl.textContent = detail;
+    if (bodyEl) {
+        let cleanText = (detail || '').replace(/<think>/g, '').replace(/<\/think>/g, '').trim();
+        if (!cleanText) {
+            cleanText = (serverReplayReasoningBuffers.get(elementId) || '').replace(/<think>/g, '').replace(/<\/think>/g, '').trim();
+        }
+        if (cleanText) {
+            bodyEl.textContent = cleanText;
+        }
     }
     syncAssistantMessageShellState(card.closest('.message.assistant'));
 
