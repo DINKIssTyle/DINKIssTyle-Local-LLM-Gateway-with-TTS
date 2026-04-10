@@ -66,8 +66,59 @@ let streamLoopWorker = null;
 let streamLoopWorkerFailed = false;
 let streamLoopWorkerMessageId = 0;
 const pendingStreamLoopChecks = new Map();
-let pendingStreamRenderFrame = 0;
-const pendingStreamRenderUpdates = new Map();
+const appUtils = window.DKSTAppUtils;
+const appChatStreaming = window.DKSTChatStreaming;
+const appChatUI = window.DKSTChatUI;
+const appI18n = window.DKSTI18n;
+const appModels = window.DKSTModels;
+const appSavedLibrary = window.DKSTSavedLibrary;
+const appSession = window.DKSTSession;
+const appTTS = window.DKSTTTS;
+
+if (!appUtils) {
+    throw new Error('DKSTAppUtils failed to load before app.js');
+}
+
+if (!appChatStreaming) {
+    throw new Error('DKSTChatStreaming failed to load before app.js');
+}
+
+if (!appChatUI) {
+    throw new Error('DKSTChatUI failed to load before app.js');
+}
+
+if (!appI18n) {
+    throw new Error('DKSTI18n failed to load before app.js');
+}
+
+if (!appModels) {
+    throw new Error('DKSTModels failed to load before app.js');
+}
+
+if (!appSavedLibrary) {
+    throw new Error('DKSTSavedLibrary failed to load before app.js');
+}
+
+if (!appSession) {
+    throw new Error('DKSTSession failed to load before app.js');
+}
+
+if (!appTTS) {
+    throw new Error('DKSTTTS failed to load before app.js');
+}
+
+const {
+    buildSessionFetchOptions,
+    escapeAttr,
+    escapeHtml,
+    getMarkdownRenderer,
+    normalizeMarkdownForRender,
+    renderLooseMarkdownToHtml,
+    sanitizeRenderedMarkdownHtml,
+    shouldFallbackToLooseMarkdown
+} = appUtils;
+
+const { applyTranslations: applyI18nTranslations, t: translateKey, translations } = appI18n;
 
 function getDefaultContextStrategyForMode(mode) {
     return mode === 'stateful' ? 'stateful' : 'history';
@@ -104,9 +155,6 @@ function usesRetrievalConversationContext() {
 function enforceMCPPolicyForMode(mode) {
     return mode === 'stateful' ? !!config.enableMCP : false;
 }
-
-let availableModels = [];
-let availableModelInfoById = new Map();
 
 const USER_BUBBLE_THEMES = {
     ocean: {
@@ -151,48 +199,6 @@ const USER_BUBBLE_THEMES = {
     }
 };
 
-function buildSessionFetchOptions(extra = {}) {
-    const { headers: extraHeaders = {}, ...rest } = extra || {};
-    const headers = {
-        ...extraHeaders
-    };
-    const sessionToken = localStorage.getItem('sessionToken') || '';
-    if (sessionToken && !headers.Authorization) {
-        headers.Authorization = `Bearer ${sessionToken}`;
-    }
-    return {
-        credentials: 'include',
-        cache: 'no-store',
-        headers,
-        ...rest
-    };
-}
-
-function getMarkdownRenderer() {
-    const remarkRenderer = window.remarkMarkdownRenderer;
-    if (remarkRenderer?.render) return remarkRenderer;
-
-    if (window.marked?.parse) {
-        return {
-            name: 'marked',
-            render(markdown) {
-                return window.marked.parse(markdown || '');
-            }
-        };
-    }
-
-    return {
-        name: 'plain',
-        render(markdown) {
-            const escaped = String(markdown || '')
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;');
-            return escaped ? `<pre>${escaped}</pre>` : '';
-        }
-    };
-}
-
 function rerenderAllMarkdownHosts() {
     document.querySelectorAll('.markdown-committed, #saved-turn-modal-response').forEach((host) => {
         const source = host?.dataset?.markdownSource;
@@ -201,126 +207,12 @@ function rerenderAllMarkdownHosts() {
     });
 }
 
-function escapeHtml(text) {
-    return String(text || '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-}
-
 function syncHapticsPreference() {
-    window.DKSTHaptics?.setEnabled(config.hapticsEnabled !== false);
+    appUtils.syncHapticsPreference(config);
 }
 
 function triggerHaptic(type) {
-    if (config.hapticsEnabled === false) return;
-    window.DKSTHaptics?.trigger(type);
-}
-
-function renderLooseInlineMarkdown(text) {
-    let html = escapeHtml(text);
-    html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
-    html = html.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2">$1</a>');
-    html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
-    html = html.replace(/(^|[^\*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
-    return html;
-}
-
-function renderLooseMarkdownToHtml(markdownText) {
-    const lines = String(markdownText || '').split('\n');
-    const html = [];
-    let paragraph = [];
-    let listType = null;
-
-    const flushParagraph = () => {
-        if (!paragraph.length) return;
-        html.push(`<p>${renderLooseInlineMarkdown(paragraph.join(' '))}</p>`);
-        paragraph = [];
-    };
-
-    const closeList = () => {
-        if (!listType) return;
-        html.push(listType === 'ol' ? '</ol>' : '</ul>');
-        listType = null;
-    };
-
-    const openList = (type) => {
-        if (listType === type) return;
-        closeList();
-        html.push(type === 'ol' ? '<ol>' : '<ul>');
-        listType = type;
-    };
-
-    for (const rawLine of lines) {
-        const line = String(rawLine || '').trim();
-
-        if (!line) {
-            flushParagraph();
-            closeList();
-            continue;
-        }
-
-        if (/^---+$/.test(line)) {
-            flushParagraph();
-            closeList();
-            html.push('<hr>');
-            continue;
-        }
-
-        const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
-        if (headingMatch) {
-            flushParagraph();
-            closeList();
-            const level = Math.min(headingMatch[1].length, 6);
-            html.push(`<h${level}>${renderLooseInlineMarkdown(headingMatch[2].trim())}</h${level}>`);
-            continue;
-        }
-
-        const orderedMatch = line.match(/^(\d+)\.\s+(.+)$/);
-        if (orderedMatch) {
-            flushParagraph();
-            openList('ol');
-            html.push(`<li>${renderLooseInlineMarkdown(orderedMatch[2].trim())}</li>`);
-            continue;
-        }
-
-        const unorderedMatch = line.match(/^[-*•●▪■▸▹▻▶▷►]\s+(.+)$/);
-        if (unorderedMatch) {
-            flushParagraph();
-            openList('ul');
-            html.push(`<li>${renderLooseInlineMarkdown(unorderedMatch[1].trim())}</li>`);
-            continue;
-        }
-
-        if (/^[#*•●▪■▸▹▻▶▷►-]+$/.test(line)) {
-            continue;
-        }
-
-        closeList();
-        paragraph.push(line);
-    }
-
-    flushParagraph();
-    closeList();
-    return html.join('');
-}
-
-function shouldFallbackToLooseMarkdown(host, normalized) {
-    if (!host || !normalized.trim()) return false;
-
-    const hasHeadingSyntax = /(^|\n)[ \t]*#{1,6}\s+\S/.test(normalized);
-    const hasListSyntax = /(^|\n)[ \t]*(?:[-*•●▪■▸▹▻▶▷►]\s+\S|\d+\.\s+\S)/.test(normalized);
-    const text = host.innerText || host.textContent || '';
-
-    if (hasHeadingSyntax && !host.querySelector('h1,h2,h3,h4,h5,h6') && /(^|\n)\s*#\s*\S/.test(text)) {
-        return true;
-    }
-
-    if (hasListSyntax && !host.querySelector('ul,ol,li') && /(^|\n)\s*(?:[-*•●▪■▸▹▻▶▷►]|\d+\.)\s*\S/.test(text)) {
-        return true;
-    }
-
-    return false;
+    appUtils.triggerHaptic(config, type);
 }
 
 function getLoopDetectionTail(text = '', minLength = 0) {
@@ -600,703 +492,6 @@ function getSessionSnapshotTurns(sessionUISnapshot = {}) {
 // i18n Translation System
 // ============================================================================
 
-const translations = {
-    ko: {
-        // Modal
-        'modal.settings.title': '설정',
-        // Sections
-        'section.llm': 'LLM 설정',
-        'section.appearance': '채팅 외형',
-        'section.voiceInput': '음성 입력',
-        'section.tts': 'TTS 엔진',
-        'section.embedding': '임베딩 검색',
-        // Server
-        'server.stopped': '서버: 중지됨',
-        'server.running': '서버: 실행중',
-        'server.port': '서버 포트',
-        'server.start': '서버 시작',
-        'server.stop': '서버 중지',
-        // Actions
-        'action.clearChat': '대화 기록 삭제',
-        'action.logout': '로그아웃',
-        'action.logoutAllSessions': '모든 위치에서 로그아웃',
-        'action.save': '저장',
-        'action.saveTurn': '대화 저장',
-        'action.close': '닫기',
-        'action.cancel': '취소',
-        'action.reload': '새로고침',
-        'action.manageModels': '모델 관리',
-        'action.refreshModels': '상태 새로고침',
-        'action.clearContext': '문맥 초기화',
-        'library.searchPlaceholder': '저장된 대화를 검색하세요...',
-        'library.empty': '저장된 대화가 없습니다.',
-        'library.emptyFiltered': '검색 결과가 없습니다.',
-        'library.saved': '대화를 저장했습니다.',
-        'library.deleted': '저장된 대화를 삭제했습니다.',
-        'library.saveFailed': '대화를 저장하지 못했습니다.',
-        'library.titleRefresh': '제목 생성',
-        'library.titleRefreshed': '제목을 생성했습니다.',
-        'library.titleRefreshFailed': '제목을 생성하지 못했습니다.',
-        'library.titleLabel': '제목',
-        'library.titlePlaceholder': '제목을 입력하세요',
-        'library.titleUpdated': '제목을 저장했습니다.',
-        'library.titleUpdateFailed': '제목을 저장하지 못했습니다.',
-        'library.deleteConfirm': '이 저장된 대화를 삭제할까요?',
-        'library.deleteFailed': '저장된 대화를 삭제하지 못했습니다.',
-        'library.modalTitle': '저장된 대화',
-        'library.prompt': '프롬프트',
-        'library.response': '응답',
-        'library.savedAt': '저장 시각',
-        'clipboard.copied': '클립보드에 복사했습니다.',
-        'clipboard.copyFailed': '복사하지 못했습니다.',
-        // Settings - LLM
-        'setting.llmEndpoint.label': 'LLM 엔드포인트',
-        'setting.model.label': '모델 이름',
-        'setting.model.desc': 'LLM서버에서 현재 로드되어 있는 모델 이름을 적어주세요.',
-        'setting.secondaryModel.label': '보조 모델',
-        'setting.secondaryModel.desc': '저장된 대화 제목 생성 같은 가벼운 작업에 우선 사용할 보조 모델입니다.',
-        'setting.hideThink.label': 'Hide <think>',
-        'setting.hideThink.desc': 'LLM이 생각하는 과정을 채팅창에 보여주지 않습니다.',
-        'setting.systemPrompt.label': '시스템 프롬프트',
-        'setting.systemPrompt.desc': 'LLM의 역할을 지정하세요. 예: "당신은 나의 영어 선생님입니다." System_prompt.json에서 수정할 수 있습니다.',
-        'setting.temperature.label': 'Temperature',
-        'setting.temperature.desc': 'Auto면 모델 기본값을 사용하고, 직접 지정하면 0.1 단위로 조절합니다.',
-        'setting.temperature.auto': 'Auto',
-        'setting.temperature.modalDesc': '0은 Auto이며, 이 경우 temperature 필드를 요청에 넣지 않습니다.',
-        'setting.history.label': 'History Count',
-        'setting.history.desc': '(기본값: 10) 대화 기억 횟수',
-        'setting.apiToken.label': 'API Token',
-        'setting.apiToken.desc': 'LM Studio API Token (인증 활성화 시 필요, 빈칸이면 무시)',
-        'setting.apiToken.placeholder': '빈칸이면 기본값 사용',
-        'setting.llmMode.label': '연결 모드',
-        'setting.llmMode.desc': 'OpenAI 호환 모드 또는 LM Studio 모드를 선택하세요.',
-        'setting.llmMode.option.standard': 'OpenAI 호환',
-        'setting.llmMode.option.stateful': 'LM Studio (권장)',
-        'setting.contextStrategy.label': '배경 / 문맥 기억 방법',
-        'setting.contextStrategy.desc': '모드에 따라 문맥 유지 방식을 선택합니다.',
-        'setting.contextStrategy.option.retrieval': 'FTS5 + Vector',
-        'setting.contextStrategy.option.stateful': 'Stateful',
-        'setting.contextStrategy.option.none': '사용 안 함',
-        'setting.contextStrategy.option.history': 'History',
-        'setting.enableMCP.label': 'MCP 기능 활성화',
-        'setting.enableMCP.desc': 'Model Context Protocol 기능(웹 검색, 브라우징)을 활성화합니다.',
-        'setting.enableMemory.label': '개인 메모리 활성화',
-        'setting.enableMemory.desc': 'LLM이 사용자 정보를 파일에 기록하고 기억할 수 있게 합니다.',
-        'setting.showReasoningControl.label': 'Reasoning control 표시',
-        'setting.showReasoningControl.desc': '선택한 모델이 reasoning을 지원할 때 입력창 위에 reasoning control 바를 표시합니다.',
-        'setting.forceShowReasoningControl.label': 'Reasoning control 강제 표시',
-        'setting.forceShowReasoningControl.desc': '모델 메타데이터에 reasoning 정보가 없어도 control 바를 강제로 표시합니다.',
-        'setting.statefulTurnLimit.label': 'Stateful Turn Limit',
-        'setting.statefulTurnLimit.desc': '(기본값: 8) LM Studio 모드에서 몇 턴까지 유지한 뒤 대화 문맥을 요약하고 새 체인으로 이어갈지 지정합니다.',
-        'setting.statefulCharBudget.label': 'Stateful Character Budget',
-        'setting.statefulCharBudget.desc': '(기본값: 32000) 활성 문맥의 예상 총 글자 수가 이 값을 넘기면 자동 compact가 실행됩니다.',
-        'setting.statefulTokenBudget.label': 'Stateful Token Budget',
-        'setting.statefulTokenBudget.desc': '(기본값: 30000) 자동 compact 판단에서 가장 우선으로 사용하는 예상 토큰 예산입니다.',
-        'setting.memory.warning': '주의: 개인 정보가 PC에 평문으로 저장됩니다.',
-        'setting.memory.open': '파일 열기',
-        'setting.memory.reset': '메모리 초기화',
-        'setting.memory.reset.confirm': '개인 메모리를 초기화하시겠습니까? 이 작업은 되돌릴 수 없습니다.',
-        'setting.memory.reset.success': '메모리가 초기화되었습니다.',
-        'setting.userBubbleTheme.label': '사용자 버블 스타일',
-        'setting.userBubbleTheme.desc': '내 메시지 버블의 그라데이션 색상을 선택합니다.',
-        'setting.streamingScrollMode.label': '스크롤 방식',
-        'setting.streamingScrollMode.desc': '어시스턴트 응답이 스트리밍되는 동안 채팅 화면 스크롤 방식을 선택합니다.',
-        'setting.streamingScrollMode.option.auto': '자동 스크롤',
-        'setting.streamingScrollMode.option.labelTop': '자동 스크롤 안함',
-        'setting.markdownRenderMode.label': '마크다운 랜더링 방식',
-        'setting.markdownRenderMode.desc': '응답 스트리밍 중 마크다운을 얼마나 적극적으로 랜더링할지 선택합니다.',
-        'setting.markdownRenderMode.option.fast': '빠르게 랜더링',
-        'setting.markdownRenderMode.option.balanced': '약간 지연된 랜더링',
-        'setting.markdownRenderMode.option.final': '응답 완료 후 랜더링',
-        'setting.hapticsEnabled.label': '햅틱 활성화',
-        'setting.hapticsEnabled.desc': '지원되는 모바일 기기에서 주요 버튼에 진동 피드백을 줍니다.',
-        'setting.micLayout.label': '마이크 레이아웃',
-        'setting.micLayout.desc': '화면에 마이크를 배치합니다.',
-        'setting.micLayout.option.none': '사용 안 함',
-        'setting.micLayout.option.left': '왼쪽',
-        'setting.micLayout.option.right': '오른쪽',
-        'setting.micLayout.option.bottom': '하단',
-        'setting.micLayout.option.inline': '메시지 창 내부',
-        'setting.voiceInputAutoPlay.label': '음성 입력 시 자동 재생',
-        'setting.voiceInputAutoPlay.desc': '마이크로 보낸 메시지는 TTS 엔진의 자동 재생 설정과 관계없이 이 옵션을 우선 적용합니다.',
-        'status.thinking': '생각 중...',
-        'status.live': '진행 중',
-        'status.running': '실행 중',
-        'status.done': '완료',
-        'status.failed': '실패',
-        'status.stopped': '중단됨',
-        'status.unexpectedStop': '응답이 예상치 못하게 중단되었습니다.',
-        'status.thoughtForSeconds': '{seconds}초 동안 생각함',
-        'status.thoughtForMinutes': '{minutes}분 동안 생각함',
-        'status.thoughtForMinutesSeconds': '{minutes}분 {seconds}초 동안 생각함',
-        'tool.currentTimeChecked': '현재 시간을 확인했습니다.',
-        'tool.currentLocationChecked': '사용자 위치를 확인했습니다.',
-        'tool.fallbackName': '도구',
-        'tool.executeCommand': '명령어 실행: {value}',
-        'tool.searchQuery': '검색어: {value}',
-        'tool.openUrl': '페이지 읽기: {value}',
-        'tool.readBufferedSource': '버퍼 문서 읽기: {value}',
-        'tool.searchMemory': '메모리 검색: {value}',
-        'tool.readMemory': '메모리 읽기: ID {value}',
-        'tool.deleteMemory': '메모리 삭제: ID {value}',
-        'tool.executionFinished': '도구 실행이 완료되었습니다.',
-        'tool.noQueryDetails': '세부 질의 정보 없음',
-        'tool.unknownError': '알 수 없는 오류',
-        'progress.processingPrompt': '프롬프트 처리 중',
-        'progress.loadingModel': '모델 로딩 중',
-        'progress.modelLoaded': '모델 로딩 완료',
-        'background.savedTurnTitle': '저장된 대화 제목 생성 중...',
-        'background.serverChatContinuing': '응답을 이어받는 중...',
-        // Settings - TTS
-        'setting.enableTTS.label': 'TTS 활성화',
-        'setting.enableTTS.desc': '응답을 음성으로 재생합니다.',
-        'setting.autoPlay.label': '자동 재생',
-        'setting.autoPlay.desc': '응답을 자동으로 음성 재생합니다.',
-        'setting.ttsEngine.label': 'TTS 엔진',
-        'setting.ttsEngine.desc': 'Supertonic 2 또는 운영체제 기본 음성을 선택합니다.',
-        'setting.ttsEngine.option.supertonic': 'Supertonic 2',
-        'setting.ttsEngine.option.os': 'OS TTS',
-        'setting.voiceStyle.label': '음성 스타일',
-        'setting.voiceStyle.desc': 'TTS 음성 스타일을 선택합니다.',
-        'setting.osVoice.label': 'OS 목소리',
-        'setting.osVoice.desc': '운영체제에서 제공하는 음성을 선택합니다.',
-        'setting.osRate.label': 'OS 속도',
-        'setting.osRate.desc': '운영체제 음성의 재생 속도입니다.',
-        'setting.osPitch.label': 'OS 음조',
-        'setting.osPitch.desc': '운영체제 음성의 음조를 조절합니다.',
-        'setting.osVoice.loading': '목소리 불러오는 중...',
-        'setting.osVoice.unavailable': 'OS TTS 사용 불가',
-        'setting.speed.label': '속도',
-        'setting.speed.desc': '음성 재생 속도입니다.',
-        'setting.ttsLang.label': 'TTS 언어',
-        'setting.ttsLang.desc': '선호하는 언어를 선택하세요.',
-        'setting.chunkSize.label': 'Smart Chunking',
-        'setting.chunkSize.desc': '(추천값: 150~300) TTS가 몇 글자씩 잘라 생성할지 지정',
-        'setting.steps.label': '추론 단계',
-        'setting.steps.desc': '(추천값: 2~8, 기본값: 5) 높을수록 자연스러운 음성',
-        'setting.threads.label': 'CPU 사용',
-        'setting.threads.desc': '(기본값: 2) TTS 생성에 할당하는 CPU 스레드',
-        'setting.format.label': '재생 형식',
-        'setting.format.desc': 'MP3는 WAV를 변환하여 재생합니다.',
-        'setting.format.note': 'WAV형식을 사용하면 모바일에서 화면이 꺼져도 백그라운드 재생을 계속할 수 있습니다.',
-        'setting.enableEmbeddings.label': '임베딩 검색 활성화',
-        'setting.enableEmbeddings.desc': 'FTS5와 함께 로컬 임베딩 유사도 검색을 사용합니다. 실제 모델 연결이 준비될 때 품질이 더 좋아집니다.',
-        'setting.embeddingModel.label': '임베딩 모델',
-        'setting.embeddingModel.desc': '로컬 임베딩 모델을 선택합니다.',
-        'modal.models.title': '모델 관리',
-        'setting.modelsRoot.label': '모델 저장 폴더',
-        'action.downloadModel': '다운로드',
-        'action.redownloadModel': '다시 다운로드',
-        'action.exportManifest': '매니페스트',
-        'status.downloading': '다운로드 중',
-        'models.loading': '불러오는 중...',
-        'models.empty': '관리되는 모델이 없습니다.',
-        'models.loadFailed': '모델 상태를 불러오지 못했습니다.',
-        'models.downloadStarted': '모델 다운로드를 시작했습니다.',
-        'models.downloadFinished': '모델 다운로드가 완료되었습니다.',
-        'models.downloadFailed': '모델 다운로드에 실패했습니다.',
-        'models.modalTitle': '모델 선택',
-        'models.loaded': '로드됨',
-        'models.unload': '언로드',
-        'models.unloading': '언로드 중...',
-        'models.progressBytes': '{downloaded} / {total}',
-        // Advanced
-        'section.advanced': '고급 설정',
-        'setting.cert.label': 'HTTPS 인증서',
-        'setting.cert.desc': '이 기기에서 서버를 신뢰하기 위해 인증서를 다운로드합니다.',
-        'action.downloadCert': '인증서(cert.pem) 다운로드',
-        // Chat
-        'chat.welcome': '안녕하세요! 채팅할 준비가 되었습니다. 우측 상단 기어 아이콘에서 설정하세요.',
-        'chat.instruction': '우측 상단 설정(⚙️)에서 설정을 변경하실 수 있습니다.',
-        'chat.startup.welcomeTitle': '환영합니다.',
-        'chat.startup.welcomeBody': '바로 대화를 시작하실 수 있습니다.',
-        'chat.startup.issueBody': '아래 항목을 확인해 주세요.',
-        'chat.startup.restore': '마지막 대화 불러오기',
-        'chat.startup.restoreLoaded': '마지막 대화를 불러왔습니다.',
-        'chat.startup.restoreMissing': '불러올 마지막 대화가 없습니다.',
-        'chat.startup.restoreFailed': '마지막 대화를 불러오지 못했습니다.',
-        'chat.reconnect.title': '연결이 잠시 멈춘 것 같습니다.',
-        'chat.reconnect.body': '백그라운드 복귀 후 동기화가 지연되고 있습니다. 다시 연결을 시도해 주세요.',
-        'chat.reconnect.action': '재접속 시도',
-        'chat.passiveSyncWaiting': '다른 창에서 응답을 생성하고 있습니다...',
-        'chat.passiveSyncThinking': '다른 창에서 응답을 생성하고 있습니다...',
-        'chat.passiveSyncTool': '다른 창에서 MCP 도구를 사용 중입니다...',
-        'input.placeholder': '메시지를 입력하세요...',
-        'input.placeholder.sttA': '지금 말하세요...',
-        'input.placeholder.sttB': '듣는 중...',
-        'input.placeholder.restoring': '이전 대화 복원 중...',
-        'reasoning.auto': 'Auto',
-        'progress.restoringHistory': '이전 대화 복원 중',
-        'restore.skeletonTitle': '이전 대화를 불러오는 중입니다.',
-        'restore.skeletonBody': '서버에 저장된 대화와 상태를 복원하고 있습니다.',
-        // Health Check
-        'health.systemReady': '시스템 준비 완료',
-        'health.checkRequired': '시스템 점검 필요',
-        'health.checkFailed': '시스템 점검 실패',
-        'health.backendError': '백엔드와 통신할 수 없습니다 (Wails 및 API 응답 없음).',
-        'health.llm': 'LLM',
-        'health.tts': 'TTS',
-        'health.status.connected': '연결됨',
-        'health.status.ready': '준비됨',
-        'health.status.disabled': '비활성화됨',
-        'health.status.unreachable': '연결 불가',
-        'health.mode': '모드',
-        'health.checkToken': ' -> **API Token**을 확인해주세요.',
-        'health.checkServer': ' -> **LM Studio 서버**가 실행 중인지 확인해주세요.',
-
-        // Errors
-        'error.authFailed': 'LM Studio 인증 실패.\n\n해결 방법:\n1. LM Studio -> Developer(사이드바) -> Server Settings\n2. \'Require Authentication\' 끄기\n3. 또는 \'Manage Tokens\'에서 \'Create new token\' API Key를 생성해서 우측 상단 설정(⚙️)에 입력하세요.\n\n원본 오류: ',
-        'error.mcpFailed': 'LM Studio MCP 연결 실패.\n\n해결 방법:\n1. LM Studio -> Developer(사이드바) -> Server Settings\n2. \'Allow calling servers from mcp.json\' 옵션 켜기\n3. 또는 우측 상단 설정(⚙️)에서 \'MCP 기능 활성화\' 옵션을 꺼주세요.\n\n원본 오류: ',
-        'error.contextExceeded': '대화 문맥 길이가 초과되었습니다. 사이드바 하단의 [문맥 초기화] 버튼을 눌러주세요.',
-        'error.visionNotSupported': '선택한 모델은 이미지를 인식할 수 없습니다. 비전(Vision) 모델을 선택해주세요.',
-        'warning.loopDetected': '[⚠️ 반복 응답 감지로 인해 응답 처리를 중단했습니다.]',
-        'warning.repeatRetrying': '[⚠️ 반복 응답을 감지해 LM Studio 가중치를 보정한 뒤 다시 시도합니다.]',
-        'warning.repeatStopped': '[⚠️ 반복 응답을 감지해 응답을 중단했습니다.]'
-    },
-    en: {
-        // Modal
-        'modal.settings.title': 'Settings',
-        // Sections
-        'section.llm': 'LLM Settings',
-        'section.appearance': 'Chat Appearance',
-        'section.voiceInput': 'Voice Input',
-        'section.tts': 'TTS Engine',
-        'section.embedding': 'Embedding Retrieval',
-        // Server
-        'server.stopped': 'Server: Stopped',
-        'server.running': 'Server: Running',
-        'server.port': 'Server Port',
-        'server.start': 'Start Server',
-        'server.stop': 'Stop Server',
-        'error.contextExceeded': 'Context size has been exceeded. Please click [Reset Context] in the sidebar.',
-        'error.visionNotSupported': 'The selected model does not support images. Please choose a vision-capable model.',
-        // Actions
-        'action.clearChat': 'Clear Chat History',
-        'action.logout': 'Logout',
-        'action.logoutAllSessions': 'Log Out Everywhere',
-        'action.save': 'Save Settings',
-        'action.saveTurn': 'Save Turn',
-        'action.close': 'Close',
-        'action.cancel': 'Cancel',
-        'action.reload': 'Reload',
-        'action.manageModels': 'Manage Models',
-        'action.refreshModels': 'Refresh Status',
-        'action.clearContext': 'Reset Context',
-        'library.searchPlaceholder': 'Search saved turns...',
-        'library.empty': 'No saved turns yet.',
-        'library.emptyFiltered': 'No saved turns match your search.',
-        'library.saved': 'Saved this turn.',
-        'library.deleted': 'Saved turn deleted.',
-        'library.saveFailed': 'Failed to save this turn.',
-        'library.titleRefresh': 'Generate title',
-        'library.titleRefreshed': 'Generated the title.',
-        'library.titleRefreshFailed': 'Failed to generate the title.',
-        'library.titleLabel': 'Title',
-        'library.titlePlaceholder': 'Enter a title',
-        'library.titleUpdated': 'Saved the title.',
-        'library.titleUpdateFailed': 'Failed to save the title.',
-        'library.deleteConfirm': 'Delete this saved turn?',
-        'library.deleteFailed': 'Failed to delete saved turn.',
-        'library.modalTitle': 'Saved Turn',
-        'library.prompt': 'Prompt',
-        'library.response': 'Response',
-        'library.savedAt': 'Saved at',
-        'clipboard.copied': 'Copied to clipboard.',
-        'clipboard.copyFailed': 'Failed to copy.',
-        // Settings - LLM
-        'setting.llmEndpoint.label': 'LLM Endpoint',
-        'setting.model.label': 'Model Name',
-        'setting.model.desc': 'Enter the model name loaded on your LLM server.',
-        'setting.secondaryModel.label': 'Secondary Model',
-        'setting.secondaryModel.desc': 'A helper model preferred for lighter tasks such as generating saved conversation titles.',
-        'setting.hideThink.label': 'Hide <think>',
-        'setting.hideThink.desc': 'Hides the thinking process from the chat.',
-        'setting.systemPrompt.label': 'System Prompt',
-        'setting.systemPrompt.desc': 'Define the LLM\'s role. Example: "You are my English teacher." It can be modified in System_prompt.json.',
-        'setting.temperature.label': 'Temperature',
-        'setting.temperature.desc': 'Auto uses the model default. Manual values change in 0.1 steps.',
-        'setting.temperature.auto': 'Auto',
-        'setting.temperature.modalDesc': '0 means Auto, and the request omits the temperature field.',
-        'setting.history.label': 'History Count',
-        'setting.history.desc': '(Default: 10) Number of messages to remember',
-        'setting.apiToken.label': 'API Token',
-        'setting.apiToken.desc': 'LM Studio API Token (Required if Auth is enabled)',
-        'setting.apiToken.placeholder': 'Leaving empty uses default',
-        'setting.llmMode.label': 'Connection Mode',
-        'setting.llmMode.desc': 'Select between OpenAI Compatible or LM Studio',
-        'setting.llmMode.option.standard': 'OpenAI Compatible',
-        'setting.llmMode.option.stateful': 'LM Studio (Recommended)',
-        'setting.contextStrategy.label': 'Background / Context Memory',
-        'setting.contextStrategy.desc': 'Choose how the app keeps conversational context for the current connection mode.',
-        'setting.contextStrategy.option.retrieval': 'FTS5 + Vector',
-        'setting.contextStrategy.option.stateful': 'Stateful',
-        'setting.contextStrategy.option.none': 'Disabled',
-        'setting.contextStrategy.option.history': 'History',
-        'setting.enableMCP.label': 'Enable MCP Features',
-        'setting.enableMCP.desc': 'Enable integration with Model Context Protocol (web search, browsing)',
-        'setting.enableMemory.label': 'Enable Personal Memory',
-        'setting.enableMemory.desc': 'Allow LLM to remember personal details in a local file.',
-        'setting.showReasoningControl.label': 'Show reasoning control',
-        'setting.showReasoningControl.desc': 'Show the reasoning control above the composer when the selected model supports reasoning.',
-        'setting.forceShowReasoningControl.label': 'Force show reasoning control',
-        'setting.forceShowReasoningControl.desc': 'Show the control even when the model metadata does not report reasoning support.',
-        'setting.statefulTurnLimit.label': 'Stateful Turn Limit',
-        'setting.statefulTurnLimit.desc': '(Default: 8) Choose how many turns LM Studio keeps before compacting the conversation into a summary and starting a fresh chain.',
-        'setting.statefulCharBudget.label': 'Stateful Character Budget',
-        'setting.statefulCharBudget.desc': '(Default: 32000) If the estimated active context grows past this many characters, automatic compaction runs.',
-        'setting.statefulTokenBudget.label': 'Stateful Token Budget',
-        'setting.statefulTokenBudget.desc': '(Default: 30000) Primary token safety threshold used to decide when automatic context compaction should trigger.',
-        'setting.memory.warning': 'Warning: Personal data is stored unencrypted on local disk.',
-        'setting.memory.open': 'Open File',
-        'setting.memory.reset': 'Reset Memory',
-        'setting.memory.reset.confirm': 'Are you sure you want to reset your personal memory? This cannot be undone.',
-        'setting.memory.reset.success': 'Memory reset successfully.',
-        'setting.userBubbleTheme.label': 'User Bubble Style',
-        'setting.userBubbleTheme.desc': 'Choose the gradient preset for your message bubbles.',
-        'setting.streamingScrollMode.label': 'Scroll Behavior',
-        'setting.streamingScrollMode.desc': 'Choose how the chat view behaves while the assistant response is streaming.',
-        'setting.streamingScrollMode.option.auto': 'Auto Scroll',
-        'setting.streamingScrollMode.option.labelTop': 'No Auto Scroll',
-        'setting.markdownRenderMode.label': 'Markdown Rendering Mode',
-        'setting.markdownRenderMode.desc': 'Choose how aggressively markdown is rendered while the response is still streaming.',
-        'setting.markdownRenderMode.option.fast': 'Fast Rendering',
-        'setting.markdownRenderMode.option.balanced': 'Slightly Delayed Rendering',
-        'setting.markdownRenderMode.option.final': 'Render After Completion',
-        'setting.hapticsEnabled.label': 'Enable Haptics',
-        'setting.hapticsEnabled.desc': 'Adds vibration feedback to key buttons on supported mobile devices.',
-        'setting.micLayout.label': 'Mic Layout',
-        'setting.micLayout.desc': 'Place a microphone on the screen.',
-        'setting.micLayout.option.none': 'None',
-        'setting.micLayout.option.left': 'Left Side',
-        'setting.micLayout.option.right': 'Right Side',
-        'setting.micLayout.option.bottom': 'Bottom',
-        'setting.micLayout.option.inline': 'In Message Input',
-        'setting.voiceInputAutoPlay.label': 'Auto-play For Voice Input',
-        'setting.voiceInputAutoPlay.desc': 'Messages sent with the microphone follow this option even if TTS engine auto-play is turned off.',
-        'status.thinking': 'Thinking...',
-        'status.live': 'Live',
-        'status.running': 'Running',
-        'status.done': 'Done',
-        'status.failed': 'Failed',
-        'status.stopped': 'Stopped',
-        'status.unexpectedStop': 'The response stopped unexpectedly.',
-        'status.thoughtForSeconds': 'Thought for {seconds}s',
-        'status.thoughtForMinutes': 'Thought for {minutes}m',
-        'status.thoughtForMinutesSeconds': 'Thought for {minutes}m {seconds}s',
-        'tool.currentTimeChecked': 'Checked the current time.',
-        'tool.currentLocationChecked': 'Checked the user location.',
-        'tool.fallbackName': 'Tool',
-        'tool.executeCommand': 'Command: {value}',
-        'tool.searchQuery': 'Query: {value}',
-        'tool.openUrl': 'Open page: {value}',
-        'tool.readBufferedSource': 'Read buffered source: {value}',
-        'tool.searchMemory': 'Search memory: {value}',
-        'tool.readMemory': 'Read memory: ID {value}',
-        'tool.deleteMemory': 'Delete memory: ID {value}',
-        'tool.executionFinished': 'Tool execution finished.',
-        'tool.noQueryDetails': 'No query details',
-        'tool.unknownError': 'Unknown error',
-        'progress.processingPrompt': 'Processing Prompt',
-        'progress.loadingModel': 'Loading Model',
-        'progress.modelLoaded': 'Model Loaded',
-        'background.savedTurnTitle': 'Generating saved turn titles...',
-        // Settings - TTS
-        'setting.enableTTS.label': 'Enable TTS',
-        'setting.enableTTS.desc': 'Play responses as audio.',
-        'setting.autoPlay.label': 'Auto-play',
-        'setting.autoPlay.desc': 'Automatically play audio responses.',
-        'setting.ttsEngine.label': 'TTS Engine',
-        'setting.ttsEngine.desc': 'Choose between Supertonic 2 and the operating system voice.',
-        'setting.ttsEngine.option.supertonic': 'Supertonic 2',
-        'setting.ttsEngine.option.os': 'OS TTS',
-        'setting.voiceStyle.label': 'Voice Style',
-        'setting.voiceStyle.desc': 'Select the TTS voice style.',
-        'setting.osVoice.label': 'OS Voice',
-        'setting.osVoice.desc': 'Select a voice provided by the operating system.',
-        'setting.osRate.label': 'OS Speed',
-        'setting.osRate.desc': 'Playback speed for the operating system voice.',
-        'setting.osPitch.label': 'OS Pitch',
-        'setting.osPitch.desc': 'Pitch for the operating system voice.',
-        'setting.osVoice.loading': 'Loading voices...',
-        'setting.osVoice.unavailable': 'OS TTS unavailable',
-        'setting.speed.label': 'Speed',
-        'setting.speed.desc': 'Audio playback speed.',
-        'setting.ttsLang.label': 'TTS Language',
-        'setting.ttsLang.desc': 'Select your preferred language.',
-        'setting.chunkSize.label': 'Smart Chunking',
-        'setting.chunkSize.desc': '(Recommended: 150~300) Characters per TTS chunk',
-        'setting.steps.label': 'Inference Steps',
-        'setting.steps.desc': '(Recommended: 2~8, Default: 5) Higher = more natural voice',
-        'setting.threads.label': 'CPU Threads',
-        'setting.threads.desc': '(Default: 2) CPU threads for TTS generation',
-        'setting.format.label': 'Audio Format',
-        'setting.format.desc': 'MP3 is converted from WAV.',
-        'setting.format.note': 'Using WAV helps mobile devices keep background playback running even when the screen turns off.',
-        'setting.enableEmbeddings.label': 'Enable embedding retrieval',
-        'setting.enableEmbeddings.desc': 'Use local embedding similarity together with FTS5. Retrieval quality improves further when the real embedding runtime is connected.',
-        'setting.embeddingModel.label': 'Embedding Model',
-        'setting.embeddingModel.desc': 'Choose the local embedding model.',
-        'modal.models.title': 'Model Manager',
-        'setting.modelsRoot.label': 'Model Storage Folder',
-        'action.downloadModel': 'Download',
-        'action.redownloadModel': 'Redownload',
-        'action.exportManifest': 'Manifest',
-        'status.downloading': 'Downloading',
-        'models.loading': 'Loading...',
-        'models.empty': 'No managed models available.',
-        'models.loadFailed': 'Failed to load model status.',
-        'models.downloadStarted': 'Model download started.',
-        'models.downloadFinished': 'Model download completed.',
-        'models.downloadFailed': 'Model download failed.',
-        'models.modalTitle': 'Select Model',
-        'models.loaded': 'Loaded',
-        'models.unload': 'Unload',
-        'models.unloading': 'Unloading...',
-        'models.progressBytes': '{downloaded} / {total}',
-        // Advanced
-        'section.advanced': 'Advanced Settings',
-        'setting.cert.label': 'HTTPS Certificate',
-        'setting.cert.desc': 'Download the certificate to trust this server on this device.',
-        'action.downloadCert': 'Download cert.pem',
-        // Chat
-        'chat.welcome': 'Hello! I am ready to chat. Configure settings using the gear icon.',
-        'chat.instruction': 'You can configure settings in the top right menu.',
-        'chat.startup.welcomeTitle': 'Welcome.',
-        'chat.startup.welcomeBody': 'You can start chatting right away.',
-        'chat.startup.issueBody': 'Please check the items below.',
-        'chat.startup.restore': 'Load last conversation',
-        'chat.startup.restoreLoaded': 'Last conversation loaded.',
-        'chat.startup.restoreMissing': 'No saved conversation to load.',
-        'chat.startup.restoreFailed': 'Could not load the last conversation.',
-        'chat.reconnect.title': 'Connection seems paused.',
-        'chat.reconnect.body': 'Sync has not resumed after returning from the background. Try reconnecting.',
-        'chat.reconnect.action': 'Reconnect',
-        'chat.passiveSyncWaiting': 'Another window is generating a response...',
-        'chat.passiveSyncThinking': 'Another window is generating a reply...',
-        'chat.passiveSyncTool': 'Another window is using an MCP tool...',
-        'input.placeholder': 'Type a message...',
-        'input.placeholder.sttA': 'Speak now...',
-        'input.placeholder.sttB': 'Listening...',
-        'input.placeholder.restoring': 'Restoring previous conversation...',
-        'reasoning.auto': 'Auto',
-        'progress.restoringHistory': 'Restoring previous conversation',
-        'background.serverChatContinuing': 'Resuming server response...',
-        'restore.skeletonTitle': 'Restoring previous conversation.',
-        'restore.skeletonBody': 'Loading chat history and state from the server.',
-        // Health Check
-        'health.systemReady': 'System Ready',
-        'health.checkRequired': 'System Check Required',
-        'health.checkFailed': 'System Check Failed',
-        'health.backendError': 'Could not communicate with backend (neither Wails nor API).',
-        'health.llm': 'LLM',
-        'health.tts': 'TTS',
-        'health.status.connected': 'Connected',
-        'health.status.ready': 'Ready',
-        'health.status.disabled': 'Disabled',
-        'health.status.unreachable': 'Unreachable',
-        'health.mode': 'Mode',
-        'health.checkToken': ' -> Check **API Token**.',
-        'health.checkServer': ' -> Check if **LM Studio Server** is running.',
-        'health.checkServer': ' -> Check if **LM Studio Server** is running.',
-        // Errors
-        'error.authFailed': 'LM Studio Authentication Failed.\n\nSolution:\n1. Open LM Studio -> Developer (sidebar) -> Server Settings\n2. Turn OFF \'Require Authentication\'\n3. Or go to \'Manage Tokens\' -> \'Create new token\' and enter it in Settings.\n\nOriginal Error: ',
-        'error.mcpFailed': 'LM Studio MCP Connection Failed.\n\nSolution:\n1. Open LM Studio -> Developer (sidebar) -> Server Settings\n2. Turn ON \'Allow calling servers from mcp.json\'\n3. Or turn OFF \'Enable MCP Features\' in the top right settings (⚙️).\n\nOriginal Error: ',
-        'error.mcpPluginToolsUnavailable': 'LM Studio cannot call MCP tools right now. Please check your `mcp.json`.\n\nUse the server address shown in the server window like this:\n```json\n{\n  "mcpServers": {\n    "dinkisstyle-gateway": {\n      "url": "{url}"\n    }\n  }\n}\n```',
-        'warning.loopDetected': '[⚠️ Repeated responses were detected, and the response was stopped.]',
-        'warning.repeatRetrying': '[⚠️ Repetition was detected, so the request is being retried with adjusted LM Studio weights.]',
-        'warning.repeatStopped': '[⚠️ Repetition was detected, so the response was stopped.]',
-        'action.stop': 'Stop',
-        'action.stopGeneration': 'Stop Generation'
-    },
-    'ko': {
-        'setting.history.label': '대화 기억 횟수',
-        'setting.history.desc': '(기본값: 10) 기억할 대화 상자의 개수입니다.',
-        'setting.apiToken.label': 'API 토큰',
-        'setting.apiToken.desc': 'LM Studio API 토큰 (인증 활성화 시 필요)',
-        'setting.apiToken.placeholder': '비워두면 기본값 사용',
-        'setting.llmMode.label': '연결 모드',
-        'setting.llmMode.desc': 'OpenAI 호환 모드와 LM Studio 모드 중 선택하세요.',
-        'setting.llmMode.option.standard': 'OpenAI 호환',
-        'setting.llmMode.option.stateful': 'LM Studio',
-        'setting.contextStrategy.label': '배경 / 문맥 메모리',
-        'setting.contextStrategy.desc': '현재 모드에서 대화 문맥을 유지하는 방식을 선택합니다.',
-        'setting.contextStrategy.option.retrieval': 'FTS5 + Vector',
-        'setting.contextStrategy.option.stateful': 'Stateful',
-        'setting.contextStrategy.option.none': '비활성화',
-        'setting.contextStrategy.option.history': '단순 히스토리',
-        'setting.enableMCP.label': 'MCP 기능 활성화',
-        'setting.enableMCP.desc': 'Model Context Protocol 통합 기능을 사용합니다 (웹 검색, 브라우징 등)',
-        'setting.enableMemory.label': '개인 메모리 활성화',
-        'setting.enableMemory.desc': 'LLM이 로컬 파일에 개인적인 세부 사항을 기억하도록 허용합니다.',
-        'setting.showReasoningControl.label': 'Reasoning 컨트롤 표시',
-        'setting.showReasoningControl.desc': '선택한 모델이 Reasoning을 지원할 때 입력창 위에 컨트롤 바를 표시합니다.',
-        'setting.forceShowReasoningControl.label': 'Reasoning 컨트롤 강제 표시',
-        'setting.forceShowReasoningControl.desc': '모델 메타데이터에 정보가 없어도 컨트롤 바를 강제로 표시합니다.',
-        'setting.statefulTurnLimit.label': 'Stateful 턴 제한',
-        'setting.statefulTurnLimit.desc': '(기본값: 8) 대화가 요약되어 정리되기 전까지 유지할 턴 수입니다.',
-        'setting.statefulCharBudget.label': 'Stateful 글자수 예산',
-        'setting.statefulCharBudget.desc': '(기본값: 32000) 활성 문맥이 이 글자수를 넘으면 자동으로 요약 및 정리가 수행됩니다.',
-        'setting.statefulTokenBudget.label': 'Stateful 토큰 예산',
-        'setting.statefulTokenBudget.desc': '(기본값: 30000) 자동 문맥 압축을 트리거하는 주요 토큰 임계값입니다.',
-        'setting.memory.warning': '주의: 개인 데이터는 암호화되지 않은 상태로 로컬 디스크에 저장됩니다.',
-        'setting.memory.open': '파일 열기',
-        'setting.memory.reset': '메모리 초기화',
-        'setting.memory.reset.confirm': '개인 메모리를 초기화하시겠습니까? 이 작업은 되돌릴 수 없습니다.',
-        'setting.memory.reset.success': '메모리가 성공적으로 초기화되었습니다.',
-        'setting.userBubbleTheme.label': '사용자 말풍선 스타일',
-        'setting.userBubbleTheme.desc': '사용자 메시지 말풍선의 그라데이션 프리셋을 선택합니다.',
-        'setting.streamingScrollMode.label': '스크롤 방식',
-        'setting.streamingScrollMode.desc': '어시스턴트 응답이 스트리밍되는 동안 채팅 화면 스크롤 동작을 선택합니다.',
-        'setting.streamingScrollMode.option.auto': '자동 스크롤',
-        'setting.streamingScrollMode.option.labelTop': '자동 스크롤 안 함',
-        'setting.markdownRenderMode.label': '마크다운 렌더링 모드',
-        'setting.markdownRenderMode.desc': '응답 스트리밍 중 마크다운 렌더링의 공격성을 선택합니다.',
-        'setting.markdownRenderMode.option.fast': '빠른 렌더링',
-        'setting.markdownRenderMode.option.balanced': '약간 지연된 렌더링',
-        'setting.markdownRenderMode.option.final': '완료 후 렌더링',
-        'setting.hapticsEnabled.label': '진동(햅틱) 활성화',
-        'setting.hapticsEnabled.desc': '지원되는 기기에서 버튼 클릭 시 진동 피드백을 줍니다.',
-        'setting.micLayout.label': '마이크 배치',
-        'setting.micLayout.desc': '화면에 마이크 버튼을 배치하는 방식입니다.',
-        'setting.micLayout.option.none': '표시 안 함',
-        'setting.micLayout.option.left': '왼쪽 사이드',
-        'setting.micLayout.option.right': '오른쪽 사이드',
-        'setting.micLayout.option.bottom': '하단 중앙',
-        'setting.micLayout.option.inline': '입력창 내부',
-        'setting.voiceInputAutoPlay.label': '음성 입력 시 자동 재생',
-        'setting.voiceInputAutoPlay.desc': '마이크로 보낸 메시지는 TTS 자동 재생 설정과 관계없이 이 옵션을 따릅니다.',
-        'status.thinking': '생각 중...',
-        'status.live': 'LIVE',
-        'status.running': '실행 중',
-        'status.done': '완료',
-        'status.failed': '실패',
-        'status.stopped': '중단됨',
-        'status.unexpectedStop': '응답이 예기치 않게 중단되었습니다.',
-        'status.thoughtForSeconds': '{seconds}초 동안 생각함',
-        'status.thoughtForMinutes': '{minutes}분 동안 생각함',
-        'status.thoughtForMinutesSeconds': '{minutes}분 {seconds}초 동안 생각함',
-        'tool.currentTimeChecked': '현재 시간을 확인했습니다.',
-        'tool.currentLocationChecked': '사용자 위치를 확인했습니다.',
-        'tool.fallbackName': '도구',
-        'tool.executeCommand': '명령어 실행: {value}',
-        'tool.searchQuery': '검색어: {value}',
-        'tool.openUrl': '페이지 열기: {value}',
-        'tool.readBufferedSource': '소스 읽기: {value}',
-        'tool.searchMemory': '메모리 검색: {value}',
-        'tool.readMemory': '메모리 읽기: ID {value}',
-        'tool.deleteMemory': '메모리 삭제: ID {value}',
-        'tool.executionFinished': '도구 실행이 완료되었습니다.',
-        'tool.noQueryDetails': '상세 쿼리 없음',
-        'tool.unknownError': '알 수 없는 오류',
-        'progress.processingPrompt': '프롬프트 처리 중',
-        'progress.loadingModel': '모델 로드 중',
-        'progress.modelLoaded': '모델 로드 완료',
-        'background.savedTurnTitle': '대화 제목 생성 중...',
-        'setting.enableTTS.label': 'TTS 활성화',
-        'setting.enableTTS.desc': '응답을 음성으로 재생합니다.',
-        'setting.autoPlay.label': '자동 재생',
-        'setting.autoPlay.desc': '응답을 자동으로 음성 재생합니다.',
-        'setting.ttsEngine.label': 'TTS 엔진',
-        'setting.ttsEngine.desc': 'Supertonic 2와 운영체제 기본 음성 중 선택하세요.',
-        'setting.ttsEngine.option.supertonic': 'Supertonic 2',
-        'setting.ttsEngine.option.os': 'OS TTS',
-        'setting.voiceStyle.label': '목소리 스타일',
-        'setting.voiceStyle.desc': 'TTS 목소리 스타일을 선택하세요.',
-        'setting.osVoice.label': 'OS 목소리',
-        'setting.osVoice.desc': '운영체제에서 제공하는 목소리를 선택하세요.',
-        'setting.osRate.label': 'OS 속도',
-        'setting.osRate.desc': '운영체제 목소리의 재생 속도입니다.',
-        'setting.osPitch.label': 'OS 음조',
-        'setting.osPitch.desc': '운영체제 목소리의 높낮이입니다.',
-        'setting.osVoice.loading': '목소리 불러오는 중...',
-        'setting.osVoice.unavailable': 'OS TTS 사용 불가',
-        'setting.speed.label': '재생 속도',
-        'setting.speed.desc': '음성 재생 속도입니다.',
-        'setting.ttsLang.label': 'TTS 언어',
-        'setting.ttsLang.desc': '선호하는 언어를 선택하세요.',
-        'setting.chunkSize.label': '스마트 청킹',
-        'setting.chunkSize.desc': '(추천: 150~300) TTS가 한 번에 읽을 글자 수입니다.',
-        'setting.steps.label': '추론 단계(Steps)',
-        'setting.steps.desc': '(추천: 2~8, 기본: 5) 높을수록 자연스럽습니다.',
-        'setting.threads.label': 'CPU 스레드',
-        'setting.threads.desc': '(기본: 2) TTS 생성에 사용할 스레드 수입니다.',
-        'setting.format.label': '오디오 형식',
-        'setting.format.desc': 'MP3는 WAV에서 변환됩니다.',
-        'setting.format.note': 'WAV 형식을 사용하면 모바일에서 화면이 꺼져도 재생이 잘 됩니다.',
-        'setting.enableEmbeddings.label': '임베딩 검색 활성화',
-        'setting.enableEmbeddings.desc': 'FTS5와 함께 임베딩 유사도 검색을 병행합니다.',
-        'setting.embeddingModel.label': '임베딩 모델',
-        'setting.embeddingModel.desc': '로컬 임베딩 모델을 선택하세요.',
-        'modal.models.title': '모델 관리자',
-        'setting.modelsRoot.label': '모델 저장 폴더',
-        'action.downloadModel': '다운로드',
-        'action.redownloadModel': '재다운로드',
-        'action.exportManifest': '매니페스트',
-        'status.downloading': '다운로드 중',
-        'models.loading': '불러오는 중...',
-        'models.empty': '관리 가능한 모델이 없습니다.',
-        'models.loadFailed': '모델 정보를 가져오지 못했습니다.',
-        'models.downloadStarted': '다운로드가 시작되었습니다.',
-        'models.downloadFinished': '다운로드가 완료되었습니다.',
-        'models.downloadFailed': '다운로드에 실패했습니다.',
-        'models.progressBytes': '{downloaded} / {total}',
-        'section.advanced': '고급 설정',
-        'setting.cert.label': 'HTTPS 인증서',
-        'setting.cert.desc': '이 기기에서 서버를 신뢰하도록 인증서를 다운로드하세요.',
-        'action.downloadCert': '인증서 다운로드',
-        'chat.welcome': '반가워요! 대화할 준비가 되었습니다.',
-        'chat.instruction': '설정(⚙️)에서 엔진을 구성할 수 있습니다.',
-        'chat.startup.welcomeTitle': '환영합니다.',
-        'chat.startup.welcomeBody': '바로 대화를 시작하실 수 있습니다.',
-        'chat.startup.issueBody': '아래 항목들을 확인해주세요.',
-        'chat.startup.restore': '이전 대화 불러오기',
-        'chat.startup.restoreLoaded': '이전 대화가 로드되었습니다.',
-        'chat.startup.restoreMissing': '불러올 대화가 없습니다.',
-        'chat.startup.restoreFailed': '대화를 불러오지 못했습니다.',
-        'chat.reconnect.title': '연결이 끊어진 것 같습니다.',
-        'chat.reconnect.body': '백그라운드에서 복귀한 후 동기화가 중단되었습니다.',
-        'chat.reconnect.action': '다시 연결',
-        'chat.passiveSyncWaiting': '다른 창에서 응답을 생성 중입니다...',
-        'chat.passiveSyncThinking': '다른 창에서 생각 중입니다...',
-        'chat.passiveSyncTool': '다른 창에서 도구를 사용 중입니다...',
-        'input.placeholder': '메시지를 입력하세요...',
-        'input.placeholder.sttA': '말씀하세요...',
-        'input.placeholder.sttB': '듣고 있어요...',
-        'input.placeholder.restoring': '이전 대화를 복구하는 중...',
-        'reasoning.auto': '자동',
-        'progress.restoringHistory': '이전 대화 복구 중',
-        'background.serverChatContinuing': '서버 응답 재개 중...',
-        'restore.skeletonTitle': '이전 대화 복원 중',
-        'restore.skeletonBody': '서버에서 기록과 상태를 가져오고 있습니다.',
-        'health.systemReady': '시스템 준비됨',
-        'health.checkRequired': '시스템 체크 필요',
-        'health.checkFailed': '시스템 체크 실패',
-        'health.backendError': '백엔드와 통신할 수 없습니다 (Wails/API 모두 불가).',
-        'health.llm': 'LLM',
-        'health.tts': 'TTS',
-        'health.status.connected': '연결됨',
-        'health.status.ready': '준비됨',
-        'health.status.disabled': '비활성화',
-        'health.status.unreachable': '도달 불가',
-        'health.mode': '모드',
-        'health.checkToken': ' -> **API 토큰**을 확인하세요.',
-        'health.checkServer': ' -> **LM Studio 서버**가 켜져 있는지 확인하세요.',
-        'error.authFailed': 'LM Studio 인증 실패.\n\n해결 방법:\n1. LM Studio -> Developer -> Server Settings\n2. \'Require Authentication\' 끄기\n3. 또는 토큰을 생성해 설정에 입력하세요.\n\n오류: ',
-        'error.mcpFailed': 'LM Studio MCP 연결 실패.\n\n해결 방법:\n1. LM Studio -> Developer -> Server Settings\n2. \'Allow calling servers from mcp.json\' 켜기\n3. 또는 설정에서 MCP 기능을 끄세요.\n\n오류: ',
-        'error.mcpPluginToolsUnavailable': '현재 LM Studio에서 MCP 도구를 호출할 수 없습니다. `mcp.json`를 확인해주세요.\n\n아래는 현재 서버 설정값을 참조한 예시입니다.\n```json\n{\n  "mcpServers": {\n    "dinkisstyle-gateway": {\n      "url": "{url}"\n    }\n  }\n}\n```',
-        'warning.loopDetected': '[⚠️ 반복적인 응답이 감지되어 중단되었습니다.]',
-        'warning.repeatRetrying': '[⚠️ 반복이 감지되어 LM Studio 가중치를 조정해 다시 시도합니다.]',
-        'warning.repeatStopped': '[⚠️ 반복이 감지되어 응답을 중단했습니다.]',
-        'action.stop': '중단',
-        'action.stopGeneration': '답변 중단'
-    }
-};
-
-function t(key) {
-    const lang = config.language || 'ko';
-    return translations[lang]?.[key] || translations['en']?.[key] || key;
-}
-
 function extractRuntimeErrorMessage(errorLike) {
     if (typeof errorLike === 'string') {
         return errorLike.trim();
@@ -1374,290 +569,13 @@ function getLocalizedRuntimeErrorMessage(errorLike) {
     return '';
 }
 
-function normalizeInlineMarkdownSpacing(segment) {
-    return segment
-        .replace(/\*\*[ \t]+([^*\n](?:[^*\n]*?[^*\s\n])?)[ \t]+\*\*/g, '**$1**')
-        .replace(/(^|\n)([ \t]*(?:#{1,6}\s|(?:[-*+]\s|\d+\.\s)))(\*\*|__)([^\n]*?)(?=\n|$)/g, (match, prefix, markerPrefix, marker, content) => {
-            const trimmed = String(content || '').trim();
-            if (!trimmed || trimmed.includes(marker)) return match;
-            return `${prefix}${markerPrefix}${marker}${trimmed}${marker}`;
-        })
-        .replace(/(^|\n)([ \t]*(?:#{1,6}\s|(?:[-*+]\s|\d+\.\s)))(\*|_)([^\n]*?)(?=\n|$)/g, (match, prefix, markerPrefix, marker, content) => {
-            const trimmed = String(content || '').trim();
-            if (!trimmed || trimmed.startsWith(' ') || trimmed.includes(marker)) return match;
-            return `${prefix}${markerPrefix}${marker}${trimmed}${marker}`;
-        });
-}
-
-function normalizeMarkdownOutsideCode(text, transform) {
-    // Split by code blocks (``` or ~~~) and inline code (`)
-    const parts = String(text).split(/(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]+`)/g);
-    return parts.map((part, index) => {
-        if (index % 2 === 1) return part;
-        return transform(part);
-    }).join('');
-}
-
-function protectMathSegments(text) {
-    const placeholders = [];
-    let index = 0;
-    const register = (match) => {
-        const token = `@@PROTECTED_MATH_${index++}@@`;
-        placeholders.push({ token, value: match });
-        return token;
-    };
-
-    const protectedText = normalizeMarkdownOutsideCode(text, (segment) =>
-        segment.replace(/(\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|(?<!\$)\$[^$\n]+\$(?!\$))/g, register)
-    );
-
-    return { protectedText, placeholders };
-}
-
-function countTablePipes(line) {
-    return (String(line).match(/\|/g) || []).length;
-}
-
-function isLikelyTableRow(line) {
-    const trimmed = String(line || '').trim();
-    if (!trimmed) return false;
-    return countTablePipes(trimmed) >= 2;
-}
-
-function isTableSeparatorRow(line) {
-    const trimmed = String(line || '').trim();
-    if (!trimmed) return false;
-    const normalized = trimmed.replace(/\|/g, '').replace(/:/g, '').replace(/-/g, '').trim();
-    return normalized === '' && /-/.test(trimmed);
-}
-
-function normalizeTableRow(line) {
-    let trimmed = String(line || '').trim();
-    trimmed = trimmed.replace(/^[-*+]\s+/, '').trim();
-    trimmed = trimmed.replace(/^\|\s*/, '').replace(/\s*\|$/, '');
-    const cells = trimmed.split('|').map(cell => cell.trim());
-    if (cells.length < 2) {
-        return String(line || '');
-    }
-    return `| ${cells.join(' | ')} |`;
-}
-
-function normalizeTableBlock(block) {
-    const rawLines = String(block || '').split('\n').map(line => line.trim()).filter(Boolean);
-    if (rawLines.length < 2) {
-        return block;
-    }
-
-    const normalizedRows = rawLines.map(normalizeTableRow);
-    const headerCells = normalizedRows[0]
-        .replace(/^\|\s*/, '')
-        .replace(/\s*\|$/, '')
-        .split('|')
-        .map(cell => cell.trim())
-        .filter(Boolean);
-
-    if (headerCells.length < 2) {
-        return block;
-    }
-
-    if (!isTableSeparatorRow(rawLines[1])) {
-        const separator = `| ${headerCells.map(() => '---').join(' | ')} |`;
-        normalizedRows.splice(1, 0, separator);
-    } else {
-        normalizedRows[1] = `| ${headerCells.map(() => '---').join(' | ')} |`;
-    }
-
-    return normalizedRows.join('\n');
-}
-
-function canonicalizeTableLikeBlocks(text) {
-    const lines = String(text || '').split('\n');
-    const result = [];
-
-    for (let i = 0; i < lines.length;) {
-        if (!isLikelyTableRow(lines[i])) {
-            result.push(lines[i]);
-            i += 1;
-            continue;
-        }
-
-        const block = [];
-        let j = i;
-        while (j < lines.length && isLikelyTableRow(lines[j])) {
-            block.push(lines[j]);
-            j += 1;
-        }
-
-        if (block.length >= 2) {
-            result.push(normalizeTableBlock(block.join('\n')));
-        } else {
-            result.push(...block);
-        }
-        i = j;
-    }
-
-    return result.join('\n');
-}
-
-function closeUnbalancedCodeFences(text) {
-    const source = String(text || '');
-    // Handle backtick fences
-    const backtickFences = source.match(/(^|\n)```/g);
-    const hasUnclosedBacktick = backtickFences && backtickFences.length % 2 !== 0;
-
-    // Handle tilde fences
-    const tildeFences = source.match(/(^|\n)~~~/g);
-    const hasUnclosedTilde = tildeFences && tildeFences.length % 2 !== 0;
-
-    let result = source;
-    if (hasUnclosedBacktick) result += '\n```';
-    if (hasUnclosedTilde) result += '\n~~~';
-    return result;
-}
-
-function protectTableSegments(text) {
-    const placeholders = [];
-    let index = 0;
-    const register = (match) => {
-        const token = `@@PROTECTED_TABLE_${index++}@@`;
-        placeholders.push({ token, value: match });
-        return token;
-    };
-
-    const protectedText = normalizeMarkdownOutsideCode(text, (segment) =>
-        segment.replace(/(^|\n)(\|[^\n]+\|\n\|[-:\s|]+\|(?:\n\s*\n|\n\|[^\n]+\|)+)/g, (match, prefix, tableBlock) => {
-            return `${prefix}${register(tableBlock)}`;
-        })
-    );
-
-    return { protectedText, placeholders };
-}
-
-function restoreProtectedSegments(text, placeholders) {
-    return (placeholders || []).reduce((result, entry) => result.replaceAll(entry.token, entry.value), text);
-}
-
-function restoreProtectedMathSegments(text, placeholders) {
-    return restoreProtectedSegments(text, placeholders);
-}
-
-function normalizeMarkdownForRender(text) {
-    if (!text) return '';
-
-    let normalized = String(text);
-    normalized = closeUnbalancedCodeFences(normalized);
-    const protectedMath = protectMathSegments(normalized);
-    normalized = protectedMath.protectedText;
-
-    // Remove invisible characters that can break markdown emphasis or list parsing.
-    normalized = normalized.replace(/[\u200B-\u200D\u2060\uFEFF]/g, '');
-
-    // Convert common unicode bullets into markdown list markers so streaming content
-    // renders as proper nested lists instead of raw text lines.
-    normalized = normalized
-        .replace(/(^|\n)([ \t]*)[•●▪■▸▹▻▶▷►]\s+/g, '$1$2- ')
-        .replace(/(^|\n)([ \t]*)[◦○◇◆]\s+/g, '$1$2  - ');
-
-    // Normalize markdown headings/lists/tables when streamed without enough spacing.
-    normalized = normalized
-        .replace(/\r\n/g, '\n')
-        .replace(/\r/g, '\n')
-        // Restore missing spaces after ATX headings. Use [^\s#] to avoid chaining:
-        // "###Title" -> "### Title" but "###" followed by "#" stays as-is (part of "####").
-        .replace(/(^|\n)([ \t]*#{1,6})(?=[^\s#])/g, '$1$2 ')
-        // Some model outputs omit the required space after ordered list markers
-        // ("1.Item" or "1. Item" with missing space)
-        .replace(/(^|\n)([ \t]*)(\d+)\.(?=\S)/g, '$1$2$3. ')
-        // Support for '-' list marker missing space (e.g. "-item").
-        // Exclude "---" (horizontal rule) by requiring the char after '-' is not '-'.
-        .replace(/(^|\n)([ \t]*)(-)(?=[^\s\-])/g, '$1$2$3 ')
-        // Support for '*' and '+' as list markers with missing space.
-        // Exclude '**' (bold) and '++' by requiring the char after is not the same.
-        .replace(/(^|\n)([ \t]*)(\*)(?=[^\s*])/g, '$1$2$3 ')
-        .replace(/(^|\n)([ \t]*)(\+)(?=[^\s+])/g, '$1$2$3 ')
-        // Support for blockquotes missing space: ">quote" -> "> quote"
-        .replace(/(^|\n)([ \t]*>)(?=\S)/g, '$1$2 ')
-        // Support for task lists: "- [ ]" and ensure space if "[ ]text"
-        .replace(/(^|\n)([ \t]*[-*+]\s+\[[ xX]\])(?=\S)/g, '$1$2 ')
-        // Remove stray empty bullet markers that become standalone list items.
-        .replace(/(^|\n)[ \t]*[•●▪■▸▹▻▶▷►][ \t]*(?=\n|$)/g, '$1');
-
-    // Normalize stray spaces inside strong markers without touching code spans/blocks.
-    // Done after marker spacing to ensure marker detection works.
-    normalized = normalizeMarkdownOutsideCode(normalized, (segment) =>
-        normalizeInlineMarkdownSpacing(segment)
-            .replace(/(^|\n)([ \t]*[-*+]\s+)\*\*\s+([^*\n]+?)\s+\*\*/g, '$1$2**$3**')
-    );
-
-    normalized = normalizeMarkdownOutsideCode(normalized, (segment) =>
-        canonicalizeTableLikeBlocks(segment)
-    );
-
-    const protectedTables = protectTableSegments(normalized);
-    normalized = protectedTables.protectedText;
-
-    normalized = normalizeMarkdownOutsideCode(normalized, (segment) => {
-        let result = segment
-            // Restore missing line breaks before markdown headers that get glued to
-            // the previous sentence during streaming, e.g. "answer### Title".
-            // Use [^\n#] to avoid splitting inside heading markers themselves.
-            .replace(/([^\n#])([ \t]*#{1,6}\s)/g, '$1\n\n$2')
-            // Split headings from list markers when streamed onto the same line,
-            // e.g. "### Title1. Item" or "### Title- Item".
-            // The lookahead must not confuse '**' (bold closing) with '*' (list marker).
-            .replace(/(^|\n)([ \t]*#{1,6}[^\n]*?\S)(?=[ \t]*(?:-(?!-)\s|\+\s|\d+\.\s))/g, '$1$2\n\n');
-
-        // Break paragraphs before standalone bold lead-ins ("sentence**Heading**").
-        // Process line-by-line so we can skip heading lines entirely.
-        result = result.split('\n').map(line => {
-            // Never split bold inside heading lines
-            if (/^\s*#{1,6}\s/.test(line)) return line;
-            // Only split if the bold block is preceded by a non-whitespace character
-            // (indicates two blocks glued together during streaming)
-            return line.replace(/([^\s])([ \t]*\*\*[^*\n][^\n]*\*\*)$/g, '$1\n\n$2');
-        }).join('\n');
-
-        return result
-            // Restore missing line breaks before list items only when they appear
-            // after sentence-like punctuation.
-            .replace(/([.!?;:)\]。！？])([ \t]*(?:[-*+]\s|\d+\.\s))/g, '$1\n\n$2')
-            // Restore missing line breaks before blockquotes.
-            .replace(/([^\n])([ \t]*>)/g, '$1\n\n$2')
-            // Ensure horizontal rules have enough space.
-            .replace(/([^\n])\n?([ \t]*[-*_]{3,}[ \t]*)(?=\n|$)/g, '$1\n\n$2')
-            .replace(/([^\n])([ \t]*\$\$)/g, '$1\n\n$2')
-            .replace(/([^\n])\n(#{1,6}\s)/g, '$1\n\n$2')
-            .replace(/([^\n])\n((?:[-*+]\s|\d+\.\s))/g, '$1\n\n$2')
-            // Cleanup extra spaces in links: "[text] (url)" -> "[text](url)"
-            .replace(/\[([^\]]+)\]\s+\((https?:\/\/[^\s)]+)\)/g, '[$1]($2)')
-            .replace(/(\|[^\n]+\|)\n(?=\|[-:\s|]+\|)/g, '$1\n')
-            // Streaming sometimes inserts blank lines between markdown table rows.
-            // Collapse those gaps so GFM parsers can recognize the table again.
-            .replace(/(\|[^\n]+\|)\n\s*\n(?=\|[-:\s|]+\|)/g, '$1\n')
-            .replace(/(\|[-:\s|]+\|)\n\s*\n(?=\|)/g, '$1\n')
-            .replace(/(\|[^\n]+\|)\n\s*\n(?=\|[^\n]+\|)/g, '$1\n')
-            .replace(/\n{3,}/g, '\n\n');
-    });
-
-    normalized = restoreProtectedSegments(normalized, protectedTables.placeholders);
-    return restoreProtectedMathSegments(normalized, protectedMath.placeholders);
+function t(key) {
+    return translateKey(config.language || 'ko', key);
 }
 
 function applyTranslations() {
     const lang = config.language || 'ko';
-    document.querySelectorAll('[data-i18n]').forEach(el => {
-        const key = el.getAttribute('data-i18n');
-        if (translations[lang]?.[key]) {
-            el.textContent = translations[lang][key];
-        }
-    });
-    document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
-        const key = el.getAttribute('data-i18n-placeholder');
-        if (translations[lang]?.[key]) {
-            el.placeholder = translations[lang][key];
-        }
-    });
-    // Update language selector
+    applyI18nTranslations({ language: lang, root: document });
     const langSelect = document.getElementById('cfg-lang');
     if (langSelect) langSelect.value = lang;
     if (savedLibrarySearchInput) {
@@ -1810,117 +728,16 @@ async function releaseWakeLock() {
 /**
  * Fetch available models from LLM server and populate dropdown
  */
-async function fetchModels() {
-    const select = document.getElementById('cfg-model');
-    const secondarySelect = document.getElementById('cfg-secondary-model');
-    if (!select) return;
-
-    try {
-        const mode = encodeURIComponent(String(config.llmMode || 'standard').trim().toLowerCase() || 'standard');
-        const response = await fetch(`/api/models?mode=${mode}`, { credentials: 'include' });
-        if (!response.ok) {
-            const errText = await response.text();
-            throw new Error(errText || `HTTP ${response.status}`);
-        }
-
-        const data = await response.json();
-        console.log('[Models] Raw response:', data);
-
-        let models = [];
-        if (Array.isArray(data)) {
-            models = data;
-        } else if (data.data && Array.isArray(data.data)) {
-            models = data.data;
-        } else if (data.object === 'list' && Array.isArray(data.data)) {
-            models = data.data;
-        } else if (data.models && Array.isArray(data.models)) {
-            // LM Studio /api/v1/models format
-            models = data.models.map(m => ({
-                id: m.key, // Map key to id
-                ...m
-            }));
-        } else {
-            console.warn('[Models] Unexpected format:', data);
-        }
-
-        const normalizedModels = models.map((model) => normalizeModelInfo(model)).filter(Boolean);
-        setAvailableModels(models);
-
-        // Clear existing options
-        select.innerHTML = '';
-        if (secondarySelect) {
-            secondarySelect.innerHTML = '<option value="">Use primary model</option>';
-        }
-
-        if (normalizedModels.length === 0) {
-            select.innerHTML = '<option value="">No models available</option>';
-            renderReasoningControl();
-            return;
-        }
-
-        // Populate with models
-        normalizedModels.forEach(model => {
-            const option = document.createElement('option');
-            option.value = model.id;
-            option.textContent = model.displayName;
-            select.appendChild(option);
-            if (secondarySelect) {
-                const secondaryOption = document.createElement('option');
-                secondaryOption.value = model.id;
-                secondaryOption.textContent = model.displayName;
-                secondarySelect.appendChild(secondaryOption);
-            }
-        });
-
-        // Select current config value if it exists
-        if (config.model && Array.from(select.options).some(opt => opt.value === config.model)) {
-            select.value = config.model;
-        } else if (normalizedModels.length > 0) {
-            select.value = normalizedModels[0].id;
-            config.model = normalizedModels[0].id;
-        }
-        if (secondarySelect) {
-            if (config.secondaryModel && Array.from(secondarySelect.options).some(opt => opt.value === config.secondaryModel)) {
-                secondarySelect.value = config.secondaryModel;
-            } else {
-                secondarySelect.value = '';
-            }
-        }
-        updateHeaderModelDisplay();
-        renderModelPickerModal();
-        renderReasoningControl();
-    } catch (err) {
-        console.error('[Models] Failed to fetch:', err);
-        // Show specific error in dropdown
-        select.innerHTML = `<option value="">Error: ${err.message}</option>`;
-        setAvailableModels([]);
-        renderReasoningControl();
-
-        // Also add a manual input option
-        const manualOption = document.createElement('option');
-        manualOption.value = config.model || '';
-        manualOption.textContent = config.model || 'Enter model manually';
-        select.appendChild(manualOption);
-        if (secondarySelect && config.secondaryModel) {
-            const manualSecondary = document.createElement('option');
-            manualSecondary.value = config.secondaryModel;
-            manualSecondary.textContent = config.secondaryModel;
-            secondarySelect.appendChild(manualSecondary);
-            secondarySelect.value = config.secondaryModel;
-        }
-        updateHeaderModelDisplay();
-        renderModelPickerModal();
-    }
+function fetchModels() {
+    return modelController.fetchModels();
 }
 
 function openSettingsModal() {
-    triggerHaptic('error');
-    document.getElementById('settings-modal').classList.add('active');
-    fetchModels(); // Populate model dropdown when modal opens
+    return modelController.openSettingsModal();
 }
 
 function closeSettingsModal() {
-    document.getElementById('settings-modal').classList.remove('active');
+    return modelController.closeSettingsModal();
 }
 
 function normalizeTemperatureValue(value, fallback = null) {
@@ -1993,131 +810,6 @@ function generateTurnId() {
     return `turn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function escapeAttr(value) {
-    return String(value ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/"/g, '&quot;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-}
-
-function summarizeSavedTurn(item) {
-    const prompt = (item?.prompt_text || '').trim();
-    const response = (item?.response_text || '').trim();
-    const preview = [prompt, response].filter(Boolean).join(' ');
-    return preview.length > 180 ? `${preview.slice(0, 180)}...` : preview;
-}
-
-function filterSavedTurns(query) {
-    const needle = String(query || '').trim().toLowerCase();
-    if (!needle) return savedTurns;
-    return savedTurns.filter((item) => {
-        const haystack = [
-            item.title,
-            item.prompt_text,
-            item.response_text
-        ].join('\n').toLowerCase();
-        return haystack.includes(needle);
-    });
-}
-
-function renderSavedLibraryList() {
-    if (!savedLibraryList) return;
-    const items = filterSavedTurns(savedLibraryQuery);
-    if (items.length === 0) {
-        const emptyLabel = savedTurns.length === 0 ? t('library.empty') : t('library.emptyFiltered');
-        savedLibraryList.innerHTML = `<div class="saved-library-empty">${escapeHtml(emptyLabel)}</div>`;
-        return;
-    }
-
-    savedLibraryList.innerHTML = items.map((item) => `
-        <article class="saved-library-item">
-            <div class="saved-library-item-main" onclick="openSavedTurnModal(${item.id})">
-                <div class="saved-library-item-title">${escapeHtml(item.title || '')}</div>
-                <div class="saved-library-item-preview">${escapeHtml(summarizeSavedTurn(item))}</div>
-                <div class="saved-library-item-meta">${escapeHtml(t('library.savedAt'))}: ${escapeHtml(new Date(item.created_at).toLocaleString())}</div>
-            </div>
-            ${item.processing ? `
-            <button class="icon-btn" title="${escapeAttr(t('background.savedTurnTitle'))}" disabled>
-                <span class="material-icons-round">hourglass_top</span>
-            </button>` : item.title_source === 'fallback' ? `
-            <button class="icon-btn" onclick="refreshSavedTurnTitleById(${item.id})" title="${escapeAttr(t('library.titleRefresh'))}" ${savedTitleRefreshIds.has(item.id) ? 'disabled' : ''}>
-                <span class="material-icons-round">refresh</span>
-            </button>` : ''}
-            <button class="icon-btn" onclick="deleteSavedTurn(${item.id})" title="Delete">
-                <span class="material-icons-round">delete</span>
-            </button>
-        </article>
-    `).join('');
-}
-
-async function loadSavedTurns() {
-    if (!currentUser) return;
-    try {
-        const response = await fetch('/api/saved-turns', { credentials: 'include' });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const data = await response.json();
-        savedTurns = Array.isArray(data.items) ? data.items : [];
-        savedLibraryLoaded = true;
-        renderSavedLibraryList();
-        updateSavedLibrarySearchClearButton();
-        reconcileSavedTitleRefreshState();
-    } catch (e) {
-        console.warn('Failed to load saved turns:', e);
-    }
-}
-
-function openSavedLibrary() {
-    if (!savedLibraryView) return;
-    triggerHaptic('error');
-    if (savedLibraryCloseTimer) {
-        clearTimeout(savedLibraryCloseTimer);
-        savedLibraryCloseTimer = null;
-    }
-    isSavedLibraryOpen = true;
-    savedLibraryView.hidden = false;
-    savedLibraryView.classList.remove('is-closing');
-    requestAnimationFrame(() => {
-        savedLibraryView.classList.add('is-open');
-    });
-    renderSavedLibraryList();
-    loadSavedTurns();
-    if (savedLibrarySearchInput) {
-        savedLibrarySearchInput.value = savedLibraryQuery;
-        updateSavedLibrarySearchClearButton();
-        const shouldAutoFocusSearch = window.matchMedia?.('(hover: hover) and (pointer: fine)')?.matches;
-        if (shouldAutoFocusSearch) {
-            requestAnimationFrame(() => savedLibrarySearchInput.focus());
-        } else {
-            savedLibrarySearchInput.blur();
-        }
-    }
-}
-
-function toggleSavedLibrary() {
-    if (isSavedLibraryOpen) {
-        closeSavedLibrary();
-        return;
-    }
-    openSavedLibrary();
-}
-
-function closeSavedLibrary() {
-    if (!savedLibraryView) return;
-    if (savedLibraryCloseTimer) {
-        clearTimeout(savedLibraryCloseTimer);
-    }
-    isSavedLibraryOpen = false;
-    savedLibraryView.classList.remove('is-open');
-    savedLibraryView.classList.add('is-closing');
-    savedLibraryCloseTimer = window.setTimeout(() => {
-        savedLibraryCloseTimer = null;
-        if (!savedLibraryView || isSavedLibraryOpen) return;
-        savedLibraryView.hidden = true;
-        savedLibraryView.classList.remove('is-closing');
-    }, 220);
-}
-
 function getUserBubbleTheme(themeId) {
     return USER_BUBBLE_THEMES[themeId] || USER_BUBBLE_THEMES.ocean;
 }
@@ -2167,146 +859,52 @@ function selectUserBubbleTheme(themeId) {
     saveConfig(false);
 }
 
-function shouldIgnoreSavedLibrarySwipeTarget(target) {
-    if (!(target instanceof Element)) return false;
-    return !!target.closest(
-        '#input-area, .input-container, #message-input, input, textarea, select, button, a, label, pre, code, .saved-turn-modal, .modal, .message-actions'
-    );
+function loadSavedTurns() {
+    return savedLibraryController.loadSavedTurns();
+}
+
+function openSavedLibrary() {
+    return savedLibraryController.openSavedLibrary();
+}
+
+function toggleSavedLibrary() {
+    return savedLibraryController.toggleSavedLibrary();
+}
+
+function closeSavedLibrary() {
+    return savedLibraryController.closeSavedLibrary();
 }
 
 function setupSavedLibrarySwipeGestures() {
-    return;
-
-    document.addEventListener('touchstart', (event) => {
-        if (!event.touches || event.touches.length !== 1) {
-            savedLibrarySwipeState = null;
-            return;
-        }
-
-        const target = event.target;
-        if (shouldIgnoreSavedLibrarySwipeTarget(target)) {
-            savedLibrarySwipeState = null;
-            return;
-        }
-
-        const touch = event.touches[0];
-        const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
-        const startX = touch.clientX;
-        const startY = touch.clientY;
-        const canOpen = !isSavedLibraryOpen && startX <= 28;
-        const canClose = isSavedLibraryOpen && startX >= viewportWidth * 0.2;
-
-        if (!canOpen && !canClose) {
-            savedLibrarySwipeState = null;
-            return;
-        }
-
-        savedLibrarySwipeState = {
-            mode: canOpen ? 'open' : 'close',
-            startX,
-            startY,
-            width: Math.max(1, viewportWidth)
-        };
-    }, { passive: true });
-
-    document.addEventListener('touchend', (event) => {
-        if (!savedLibrarySwipeState || !event.changedTouches || event.changedTouches.length !== 1) {
-            savedLibrarySwipeState = null;
-            return;
-        }
-
-        const touch = event.changedTouches[0];
-        const dx = touch.clientX - savedLibrarySwipeState.startX;
-        const dy = touch.clientY - savedLibrarySwipeState.startY;
-        const ratio = Math.abs(dx) / savedLibrarySwipeState.width;
-
-        if (Math.abs(dy) <= 64) {
-            if (savedLibrarySwipeState.mode === 'open' && (dx >= 72 || ratio >= 0.18)) {
-                openSavedLibrary();
-            } else if (savedLibrarySwipeState.mode === 'close' && (dx <= -72 || ratio >= 0.18)) {
-                closeSavedLibrary();
-            }
-        }
-
-        savedLibrarySwipeState = null;
-    }, { passive: true });
-
-    document.addEventListener('touchcancel', () => {
-        savedLibrarySwipeState = null;
-    }, { passive: true });
+    return savedLibraryController.setupSavedLibrarySwipeGestures();
 }
 
 function handleSavedLibrarySearch(value) {
-    savedLibraryQuery = value || '';
-    updateSavedLibrarySearchClearButton();
-    renderSavedLibraryList();
+    return savedLibraryController.handleSavedLibrarySearch(value);
 }
 
 function updateSavedLibrarySearchClearButton() {
-    const clearBtn = document.getElementById('saved-library-search-clear');
-    if (!clearBtn) return;
-    const hasQuery = !!String(savedLibrarySearchInput?.value ?? savedLibraryQuery ?? '').trim();
-    clearBtn.hidden = !hasQuery;
+    return savedLibraryController.updateSavedLibrarySearchClearButton();
 }
 
 function clearSavedLibrarySearch() {
-    savedLibraryQuery = '';
-    if (savedLibrarySearchInput) {
-        savedLibrarySearchInput.value = '';
-    }
-    updateSavedLibrarySearchClearButton();
-    renderSavedLibraryList();
-    requestAnimationFrame(() => savedLibrarySearchInput?.focus());
+    return savedLibraryController.clearSavedLibrarySearch();
 }
 
 function openSavedTurnModal(id) {
-    const item = savedTurns.find((entry) => entry.id === id);
-    if (!item || !savedTurnModal) return;
-
-    savedTurnModal.dataset.turnId = String(item.id);
-    savedTurnModal.dataset.title = item.title || '';
-    savedTurnModal.dataset.titleSource = item.title_source || '';
-    savedTurnModal.dataset.responseText = item.response_text || '';
-    document.getElementById('saved-turn-modal-prompt').textContent = item.prompt_text || '';
-    const responseHost = document.getElementById('saved-turn-modal-response');
-    if (responseHost) {
-        responseHost.innerHTML = '';
-        renderMarkdownIntoHost(responseHost, item.response_text || '');
-    }
-    setSavedTurnTitleEditMode(false);
-    renderSavedTurnInlineTitle(item.title || '');
-    savedTurnModal.classList.add('active');
+    return savedLibraryController.openSavedTurnModal(id);
 }
 
 function closeSavedTurnModal() {
-    if (savedTurnModal) {
-        delete savedTurnModal.dataset.turnId;
-        delete savedTurnModal.dataset.title;
-        delete savedTurnModal.dataset.titleSource;
-        delete savedTurnModal.dataset.responseText;
-        delete savedTurnModal.dataset.titleSaving;
-    }
-    setSavedTurnTitleEditMode(false);
-    savedTurnModal?.classList.remove('active');
+    return savedLibraryController.closeSavedTurnModal();
 }
 
-async function copySavedTurnResponse() {
-    const text = savedTurnModal?.dataset?.responseText || '';
-    if (!text.trim()) return;
-    try {
-        await navigator.clipboard.writeText(text);
-        triggerHaptic('success');
-        showToast(t('clipboard.copied'));
-    } catch (err) {
-        console.warn('Clipboard API failed, trying fallback', err);
-        fallbackCopyTextToClipboard(text);
-    }
+function copySavedTurnResponse() {
+    return savedLibraryController.copySavedTurnResponse();
 }
 
 function speakSavedTurnResponse(btn) {
-    const text = savedTurnModal?.dataset?.responseText || '';
-    if (!text.trim()) return;
-    speakMessage(text, btn);
+    return savedLibraryController.speakSavedTurnResponse(btn);
 }
 
 function getActiveComposerBackgroundTask() {
@@ -2344,13 +942,7 @@ function clearComposerBackgroundTask(id, { abort = false } = {}) {
 }
 
 function cancelComposerBackgroundTasks(reason = 'user-interrupt') {
-    if (savedTitleRefreshTimer) {
-        clearTimeout(savedTitleRefreshTimer);
-        savedTitleRefreshTimer = null;
-    }
-    if (savedTitleRefreshInFlight && savedTitleRefreshAbortController) {
-        savedTitleRefreshAbortController.abort();
-    }
+    savedLibraryController.cancelBackgroundTasks(reason);
     for (const [id, task] of composerBackgroundTasks.entries()) {
         task?.abortController?.abort?.(reason);
         composerBackgroundTasks.delete(id);
@@ -2369,91 +961,16 @@ function isLikelyStreamDetachError(err) {
         || message.includes('the network connection was lost');
 }
 
-function renderSavedTurnInlineTitle(title) {
-    if (!savedTurnModalTitleView) return;
-    const trimmedTitle = (title || '').trim();
-    savedTurnModalTitleView.textContent = trimmedTitle || t('library.modalTitle');
-    savedTurnModalTitleView.classList.toggle('is-placeholder', !trimmedTitle);
-}
-
-function setSavedTurnTitleEditMode(isEditing) {
-    if (!savedTurnModalTitleView || !savedTurnModalTitleEdit || !savedTurnModalTitleInput) return;
-    savedTurnModalTitleView.hidden = !!isEditing;
-    savedTurnModalTitleEdit.hidden = !isEditing;
-    if (isEditing) {
-        savedTurnModalTitleInput.value = savedTurnModal?.dataset?.title || '';
-        requestAnimationFrame(() => {
-            savedTurnModalTitleInput.focus();
-            savedTurnModalTitleInput.select();
-        });
-    }
-}
-
 function startEditSavedTurnTitle() {
-    if (!savedTurnModal?.dataset?.turnId) return;
-    if (savedTurnModal.dataset.titleSaving === 'true') return;
-    setSavedTurnTitleEditMode(true);
+    return savedLibraryController.startEditSavedTurnTitle();
 }
 
 function cancelEditSavedTurnTitle() {
-    if (savedTurnModal?.dataset?.titleSaving === 'true') return;
-    setSavedTurnTitleEditMode(false);
+    return savedLibraryController.cancelEditSavedTurnTitle();
 }
 
-function updateSavedTurnEntry(updatedItem) {
-    if (!updatedItem) return;
-    savedTurns = savedTurns.map((item) => item.id === updatedItem.id ? updatedItem : item);
-    renderSavedLibraryList();
-    updateSavedLibrarySearchClearButton();
-    reconcileSavedTitleRefreshState({ abortInFlightIfSettled: true });
-
-    if (savedTurnModal?.classList.contains('active') && String(updatedItem.id) === savedTurnModal.dataset.turnId) {
-        savedTurnModal.dataset.title = updatedItem.title || '';
-        savedTurnModal.dataset.titleSource = updatedItem.title_source || '';
-        renderSavedTurnInlineTitle(updatedItem.title || '');
-    }
-}
-
-async function saveEditedSavedTurnTitle() {
-    const turnId = parseInt(savedTurnModal?.dataset?.turnId || '', 10);
-    const nextTitle = (savedTurnModalTitleInput?.value || '').trim();
-    if (!turnId || !nextTitle) {
-        showToast(t('library.titleUpdateFailed'), true);
-        return;
-    }
-    if (savedTurnModal?.dataset?.titleSaving === 'true') return;
-
-    savedTurnModal.dataset.titleSaving = 'true';
-    if (savedTurnModalTitleSaveBtn) savedTurnModalTitleSaveBtn.disabled = true;
-    if (savedTurnModalTitleCancelBtn) savedTurnModalTitleCancelBtn.disabled = true;
-    if (savedTurnModalTitleInput) savedTurnModalTitleInput.disabled = true;
-
-    try {
-        const response = await fetch('/api/saved-turns', {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({
-                id: turnId,
-                title: nextTitle
-            })
-        });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const data = await response.json();
-        if (!data.item) throw new Error('Missing item');
-        updateSavedTurnEntry(data.item);
-        setSavedTurnTitleEditMode(false);
-        broadcastSavedTurnsChange('title-manual');
-        showToast(t('library.titleUpdated'));
-    } catch (err) {
-        console.warn('Failed to update saved turn title:', err);
-        showToast(t('library.titleUpdateFailed'), true);
-    } finally {
-        delete savedTurnModal.dataset.titleSaving;
-        if (savedTurnModalTitleSaveBtn) savedTurnModalTitleSaveBtn.disabled = false;
-        if (savedTurnModalTitleCancelBtn) savedTurnModalTitleCancelBtn.disabled = false;
-        if (savedTurnModalTitleInput) savedTurnModalTitleInput.disabled = false;
-    }
+function saveEditedSavedTurnTitle() {
+    return savedLibraryController.saveEditedSavedTurnTitle();
 }
 
 function buildSavedTurnTitleRequestPayload(extra = {}) {
@@ -2471,215 +988,16 @@ function buildSavedTurnTitleRequestPayload(extra = {}) {
     return payload;
 }
 
-async function saveTurn(promptText, responseText) {
-    try {
-        const payload = buildSavedTurnTitleRequestPayload({
-            prompt_text: promptText,
-            response_text: responseText
-        });
-        console.log('[SavedTurn] Saving turn', {
-            promptLen: String(promptText || '').length,
-            responseLen: String(responseText || '').length,
-            promptPreview: String(promptText || '').slice(0, 120),
-            responsePreview: String(responseText || '').slice(0, 120)
-        });
-        const response = await fetch('/api/saved-turns', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify(payload)
-        });
-        if (!response.ok) {
-            const errorText = await response.text().catch(() => '');
-            console.warn('[SavedTurn] Save request failed', {
-                status: response.status,
-                statusText: response.statusText,
-                body: errorText
-            });
-            throw new Error(`HTTP ${response.status}`);
-        }
-        const data = await response.json();
-        const item = data.item;
-        if (item) {
-            savedTurns = [item, ...savedTurns.filter((entry) => entry.id !== item.id)];
-            savedLibraryLoaded = true;
-            renderSavedLibraryList();
-            reconcileSavedTitleRefreshState();
-            broadcastSavedTurnsChange(item.processing ? 'title-processing' : 'saved');
-        }
-        showToast(t('library.saved'));
-    } catch (e) {
-        console.warn('Failed to save turn:', e);
-        showToast(t('library.saveFailed'), true);
-    }
+function saveTurn(promptText, responseText) {
+    return savedLibraryController.saveTurn(promptText, responseText);
 }
 
-async function deleteSavedTurn(id) {
-    if (!confirm(t('library.deleteConfirm'))) return;
-    try {
-        const response = await fetch(`/api/saved-turns?id=${encodeURIComponent(String(id))}`, {
-            method: 'DELETE',
-            credentials: 'include'
-        });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        savedTurns = savedTurns.filter((item) => item.id !== id);
-        renderSavedLibraryList();
-        closeSavedTurnModal();
-        broadcastSavedTurnsChange('deleted');
-        showToast(t('library.deleted'));
-    } catch (e) {
-        console.warn('Failed to delete saved turn:', e);
-        showToast(t('library.deleteFailed'), true);
-    }
+function deleteSavedTurn(id) {
+    return savedLibraryController.deleteSavedTurn(id);
 }
 
-function hasPendingSavedTurnTitleRefresh() {
-    return savedTurns.some((item) => item.title_source === 'fallback' && !item.processing);
-}
-
-function hasActiveSavedTurnTitleWork() {
-    return savedTurns.some((item) => item.processing || item.title_source === 'fallback');
-}
-
-function reconcileSavedTitleRefreshState(options = {}) {
-    const { abortInFlightIfSettled = false, delay = 1200 } = options;
-    const hasActive = hasActiveSavedTurnTitleWork();
-    const hasPending = hasPendingSavedTurnTitleRefresh();
-
-    if (!hasActive) {
-        if (savedTitleRefreshTimer) {
-            clearTimeout(savedTitleRefreshTimer);
-            savedTitleRefreshTimer = null;
-        }
-        if (abortInFlightIfSettled && savedTitleRefreshInFlight && savedTitleRefreshAbortController) {
-            savedTitleRefreshAbortController.abort();
-        }
-        clearComposerBackgroundTask('saved-turn-title-refresh');
-        return;
-    }
-
-    if (!hasPending) {
-        if (savedTitleRefreshTimer) {
-            clearTimeout(savedTitleRefreshTimer);
-        }
-        setComposerBackgroundTask('saved-turn-title-refresh', {
-            label: t('background.savedTurnTitle')
-        });
-        savedTitleRefreshTimer = setTimeout(() => {
-            loadSavedTurns();
-        }, Math.max(1500, delay));
-        return;
-    }
-
-    scheduleSavedTitleRefresh(delay);
-}
-
-function scheduleSavedTitleRefresh(delay = 1200) {
-    if (savedTitleRefreshTimer) {
-        clearTimeout(savedTitleRefreshTimer);
-    }
-    const hasPending = hasPendingSavedTurnTitleRefresh();
-    if (!hasPending) {
-        clearComposerBackgroundTask('saved-turn-title-refresh');
-        return;
-    }
-
-    setComposerBackgroundTask('saved-turn-title-refresh', {
-        label: t('background.savedTurnTitle')
-    });
-
-    savedTitleRefreshTimer = setTimeout(() => {
-        const runner = () => refreshSavedTurnTitle();
-        if ('requestIdleCallback' in window) {
-            window.requestIdleCallback(runner, { timeout: 2000 });
-        } else {
-            runner();
-        }
-    }, delay);
-}
-
-async function refreshSavedTurnTitle() {
-    if (savedTitleRefreshInFlight || !currentUser || document.hidden) return;
-    if (!hasPendingSavedTurnTitleRefresh()) {
-        reconcileSavedTitleRefreshState();
-        return;
-    }
-
-    savedTitleRefreshInFlight = true;
-    savedTitleRefreshAbortController = new AbortController();
-    setComposerBackgroundTask('saved-turn-title-refresh', {
-        label: t('background.savedTurnTitle'),
-        abortController: savedTitleRefreshAbortController
-    });
-    try {
-        const response = await fetch('/api/saved-turns/title-refresh', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify(buildSavedTurnTitleRequestPayload()),
-            signal: savedTitleRefreshAbortController.signal
-        });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const data = await response.json();
-        if (data.updated && data.item) {
-            updateSavedTurnEntry(data.item);
-            broadcastSavedTurnsChange('title-updated');
-            reconcileSavedTitleRefreshState({ delay: 5000 });
-        } else if (data.processing && data.item) {
-            updateSavedTurnEntry(data.item);
-            broadcastSavedTurnsChange('title-processing');
-            reconcileSavedTitleRefreshState({ delay: 2500 });
-        } else if (!hasPendingSavedTurnTitleRefresh()) {
-            reconcileSavedTitleRefreshState();
-        }
-    } catch (e) {
-        if (e.name === 'AbortError') {
-            return;
-        }
-        console.warn('Failed to refresh saved turn title:', e);
-    } finally {
-        savedTitleRefreshInFlight = false;
-        savedTitleRefreshAbortController = null;
-        reconcileSavedTitleRefreshState();
-    }
-}
-
-async function refreshSavedTurnTitleById(id) {
-    if (!id || savedTitleRefreshIds.has(id)) return;
-
-    savedTitleRefreshIds.add(id);
-    renderSavedLibraryList();
-
-    try {
-        const response = await fetch(`/api/saved-turns/title-refresh?id=${encodeURIComponent(String(id))}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify(buildSavedTurnTitleRequestPayload())
-        });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const data = await response.json();
-
-        if (data.item) {
-            updateSavedTurnEntry(data.item);
-        }
-
-        if (data.updated && data.item) {
-            broadcastSavedTurnsChange('title-updated');
-            showToast(t('library.titleRefreshed'));
-        } else if (data.processing) {
-            broadcastSavedTurnsChange('title-processing');
-            reconcileSavedTitleRefreshState({ delay: 2500 });
-        } else {
-            showToast(t('library.titleRefreshFailed'), true);
-        }
-    } catch (e) {
-        console.warn('Failed to refresh saved turn title by id:', e);
-        showToast(t('library.titleRefreshFailed'), true);
-    } finally {
-        savedTitleRefreshIds.delete(id);
-        renderSavedLibraryList();
-    }
+function refreshSavedTurnTitleById(id) {
+    return savedLibraryController.refreshSavedTurnTitleById(id);
 }
 
 function getTurnDataFromAssistantButton(btn) {
@@ -2772,8 +1090,6 @@ let pendingStatefulResetReason = null;
 let statefulLastInputTokens = 0;
 let statefulLastOutputTokens = 0;
 let statefulPeakInputTokens = 0;
-let savedTitleRefreshIds = new Set();
-
 // Audio State
 let currentAudio = null;
 let currentAudioBtn = null;
@@ -2791,8 +1107,6 @@ let streamingTTSBuffer = ""; // Uncommitted text buffer
 let streamingTTSProcessor = null; // Reference to the active processor loop
 let ttsSessionId = 0;
 let pendingVoiceInputAutoTTS = false;
-let osTTSVoices = [];
-let osTTSVoicesReady = false;
 
 
 // DOM Elements
@@ -2921,6 +1235,133 @@ const savedTurnModalTitleInput = document.getElementById('saved-turn-inline-titl
 const savedTurnModalTitleSaveBtn = document.getElementById('saved-turn-inline-title-save');
 const savedTurnModalTitleCancelBtn = document.getElementById('saved-turn-inline-title-cancel');
 const osTTSVoiceSelect = document.getElementById('cfg-os-tts-voice');
+function getTTSPlaybackState() {
+    return {
+        currentAudio,
+        currentAudioBtn,
+        audioWarmup,
+        ttsQueue,
+        activeTTSSessionLabel,
+        currentAudioPlaybackController,
+        isPlayingQueue,
+        streamingTTSActive,
+        streamingTTSCommittedIndex,
+        streamingTTSBuffer,
+        ttsSessionId
+    };
+}
+
+function setTTSPlaybackState(patch = {}) {
+    if (Object.prototype.hasOwnProperty.call(patch, 'currentAudio')) currentAudio = patch.currentAudio;
+    if (Object.prototype.hasOwnProperty.call(patch, 'currentAudioBtn')) currentAudioBtn = patch.currentAudioBtn;
+    if (Object.prototype.hasOwnProperty.call(patch, 'audioWarmup')) audioWarmup = patch.audioWarmup;
+    if (Object.prototype.hasOwnProperty.call(patch, 'ttsQueue')) ttsQueue = patch.ttsQueue;
+    if (Object.prototype.hasOwnProperty.call(patch, 'activeTTSSessionLabel')) activeTTSSessionLabel = patch.activeTTSSessionLabel;
+    if (Object.prototype.hasOwnProperty.call(patch, 'currentAudioPlaybackController')) currentAudioPlaybackController = patch.currentAudioPlaybackController;
+    if (Object.prototype.hasOwnProperty.call(patch, 'isPlayingQueue')) isPlayingQueue = patch.isPlayingQueue;
+    if (Object.prototype.hasOwnProperty.call(patch, 'streamingTTSActive')) streamingTTSActive = patch.streamingTTSActive;
+    if (Object.prototype.hasOwnProperty.call(patch, 'streamingTTSCommittedIndex')) streamingTTSCommittedIndex = patch.streamingTTSCommittedIndex;
+    if (Object.prototype.hasOwnProperty.call(patch, 'streamingTTSBuffer')) streamingTTSBuffer = patch.streamingTTSBuffer;
+    if (Object.prototype.hasOwnProperty.call(patch, 'ttsSessionId')) ttsSessionId = patch.ttsSessionId;
+}
+
+const ttsController = appTTS.createTTSController({
+    refs: {
+        osTTSVoiceSelect
+    },
+    deps: {
+        getActiveStreamingMessageId: () => activeStreamingMessageId,
+        config,
+        escapeAttr,
+        escapeHtml,
+        getAudioCache: () => ttsAudioCache,
+        getCachedAudioPromise: (text) => ttsAudioCache.get(text),
+        getPlaybackState: () => getTTSPlaybackState(),
+        getSpeakableTextFromMarkdownHost: (host) => getSpeakableTextFromMarkdownHost(host),
+        getToastBottomOffset,
+        onCombinedQueueConsumed: (texts) => {
+            texts.forEach((text) => {
+                if (ttsQueue[0] === text) {
+                    ttsQueue.shift();
+                } else {
+                    const idx = ttsQueue.indexOf(text);
+                    if (idx >= 0) ttsQueue.splice(idx, 1);
+                }
+                ttsAudioCache.delete(text);
+            });
+        },
+        onDetachCurrentAudioPlaybackListeners: () => detachCurrentAudioPlaybackListeners(),
+        onProcessQueue: () => processTTSQueue(),
+        onSetAssistantActionBarReady: (elementId) => setAssistantActionBarReady(elementId),
+        onSyncCurrentAudioButtonUI: () => syncCurrentAudioButtonUI(),
+        onSyncWakeLock: () => syncWakeLock(),
+        setPlaybackState: (patch) => setTTSPlaybackState(patch),
+        t
+    }
+});
+const modelController = appModels.createModelController({
+    refs: {
+        composerReasoningSelect,
+        reasoningControlBar,
+        scrollToBottomBtn
+    },
+    deps: {
+        DEFAULT_REASONING_OPTIONS,
+        config,
+        enforceMCPPolicyForMode,
+        escapeAttr,
+        escapeHtml,
+        isGenerating: () => isGenerating,
+        normalizeContextStrategyForMode,
+        normalizeReasoningValue,
+        persistClientConfig,
+        saveConfig,
+        showToast,
+        t,
+        triggerHaptic,
+        updateComposerLayoutMetrics,
+        updateReasoningControlVisibility,
+        updateScrollToBottomButton
+    }
+});
+const savedLibraryController = appSavedLibrary.createSavedLibraryController({
+    refs: {
+        savedLibraryView,
+        savedLibraryList,
+        savedLibrarySearchInput,
+        savedTurnModal,
+        savedTurnModalTitleView,
+        savedTurnModalTitleEdit,
+        savedTurnModalTitleInput,
+        savedTurnModalTitleSaveBtn,
+        savedTurnModalTitleCancelBtn
+    },
+    deps: {
+        buildSavedTurnTitleRequestPayload,
+        broadcastSavedTurnsChange,
+        clearComposerBackgroundTask,
+        escapeAttr,
+        escapeHtml,
+        fallbackCopyTextToClipboard,
+        getCurrentUser: () => currentUser,
+        onOpenStateChange: () => updateScrollToBottomButton(),
+        renderMarkdownIntoHost,
+        setComposerBackgroundTask,
+        showToast,
+        speakMessage,
+        t,
+        triggerHaptic
+    }
+});
+const sessionController = appSession.createSessionController({
+    deps: {
+        buildSessionFetchOptions,
+        getCurrentUser: () => currentUser,
+        onExternalConfigSync: () => syncServerConfig({ log: true }),
+        onLLMActivitySyncState: (state) => applyExternalLLMActivityState(state),
+        onSavedTurnsExternalSync: () => loadSavedTurns()
+    }
+});
 
 savedTurnModalTitleInput?.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') {
@@ -3099,241 +1540,30 @@ let audioContextUnlocked = false;
 let audioCtx = null;
 
 async function unlockAudioContext() {
-    if (!audioCtx) {
-        const AudioContext = window.AudioContext || window.webkitAudioContext;
-        if (AudioContext) {
-            audioCtx = new AudioContext();
-        }
-    }
-
-    if (audioCtx && audioCtx.state === 'suspended') {
-        try {
-            await audioCtx.resume();
-            // Play silent buffer to unlock state
-            const buffer = audioCtx.createBuffer(1, 1, 22050);
-            const source = audioCtx.createBufferSource();
-            source.buffer = buffer;
-            source.connect(audioCtx.destination);
-            source.start(0);
-            audioContextUnlocked = true;
-            console.log("AudioContext unlocked/resumed");
-        } catch (e) {
-            console.error("Failed to resume AudioContext", e);
-        }
-    }
-
-    // Initialize/Unlock HTML5 Audio element for iOS
-    if (!currentAudio) {
-        currentAudio = new Audio();
-        currentAudio.playsInline = true;
-        // iOS requires a play() call during user interaction to unlock background audio
-        currentAudio.src = 'data:audio/wav;base64,UklGRigAAABXQVZFRm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAA=='; // 1 sample silent wav
-        currentAudio.play().catch(() => { });
-    }
+    return ttsController.unlockAudioContext();
 }
 
 /**
  * Update Media Session Metadata
  */
 function updateMediaSessionMetadata(text) {
-    if ('mediaSession' in navigator) {
-        navigator.mediaSession.metadata = new MediaMetadata({
-            title: text || "TTS Message",
-            artist: "DKST Chat",
-            album: "Local LLM Gateway",
-            artwork: [
-                { src: 'public/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }
-            ]
-        });
-
-        // Set action handlers
-        navigator.mediaSession.setActionHandler('pause', () => {
-            stopAllAudio();
-        });
-        navigator.mediaSession.setActionHandler('stop', () => {
-            stopAllAudio();
-        });
-    }
+    return ttsController.updateMediaSessionMetadata(text);
 }
 
 function clearMediaSessionMetadata() {
-    if ('mediaSession' in navigator) {
-        navigator.mediaSession.metadata = null;
-    }
+    return ttsController.clearMediaSessionMetadata();
 }
 
 function readWavHeader(view) {
-    if (view.byteLength < 44) return null;
-
-    const readTag = (offset) => String.fromCharCode(
-        view.getUint8(offset),
-        view.getUint8(offset + 1),
-        view.getUint8(offset + 2),
-        view.getUint8(offset + 3)
-    );
-
-    if (readTag(0) !== 'RIFF' || readTag(8) !== 'WAVE') return null;
-
-    let offset = 12;
-    let fmt = null;
-    let dataOffset = -1;
-    let dataSize = 0;
-
-    while (offset + 8 <= view.byteLength) {
-        const chunkId = readTag(offset);
-        const chunkSize = view.getUint32(offset + 4, true);
-        const chunkDataStart = offset + 8;
-
-        if (chunkId === 'fmt ') {
-            if (chunkSize < 16 || chunkDataStart + chunkSize > view.byteLength) return null;
-            fmt = {
-                audioFormat: view.getUint16(chunkDataStart, true),
-                channelCount: view.getUint16(chunkDataStart + 2, true),
-                sampleRate: view.getUint32(chunkDataStart + 4, true),
-                bitsPerSample: view.getUint16(chunkDataStart + 14, true),
-                raw: new Uint8Array(view.buffer.slice(chunkDataStart, chunkDataStart + chunkSize))
-            };
-        } else if (chunkId === 'data') {
-            dataOffset = chunkDataStart;
-            dataSize = Math.min(chunkSize, view.byteLength - chunkDataStart);
-            break;
-        }
-
-        offset = chunkDataStart + chunkSize + (chunkSize % 2);
-    }
-
-    if (!fmt || dataOffset < 0) return null;
-
-    return { fmt, dataOffset, dataSize };
+    return ttsController.readWavHeader(view);
 }
 
 function concatenateWavArrayBuffers(buffers) {
-    if (!buffers || buffers.length === 0) return null;
-    if (buffers.length === 1) return buffers[0];
-
-    const parts = [];
-    let totalDataLength = 0;
-
-    for (const buffer of buffers) {
-        const header = readWavHeader(new DataView(buffer));
-        if (!header || header.fmt.audioFormat !== 1) return null;
-
-        if (parts.length > 0) {
-            const baseFmt = parts[0].fmt;
-            if (
-                header.fmt.channelCount !== baseFmt.channelCount ||
-                header.fmt.sampleRate !== baseFmt.sampleRate ||
-                header.fmt.bitsPerSample !== baseFmt.bitsPerSample
-            ) {
-                return null;
-            }
-        }
-
-        parts.push({
-            fmt: header.fmt,
-            data: new Uint8Array(buffer, header.dataOffset, header.dataSize)
-        });
-        totalDataLength += header.dataSize;
-    }
-
-    const result = new Uint8Array(44 + totalDataLength);
-    const view = new DataView(result.buffer);
-    const fmtChunk = parts[0].fmt.raw;
-
-    const writeTag = (offset, tag) => {
-        for (let i = 0; i < tag.length; i++) {
-            view.setUint8(offset + i, tag.charCodeAt(i));
-        }
-    };
-
-    writeTag(0, 'RIFF');
-    view.setUint32(4, 36 + totalDataLength, true);
-    writeTag(8, 'WAVE');
-    writeTag(12, 'fmt ');
-    view.setUint32(16, 16, true);
-    result.set(fmtChunk.slice(0, 16), 20);
-    writeTag(36, 'data');
-    view.setUint32(40, totalDataLength, true);
-
-    let offset = 44;
-    for (const part of parts) {
-        result.set(part.data, offset);
-        offset += part.data.length;
-    }
-
-    return result.buffer;
-}
-
-async function promiseWithTimeout(promise, timeoutMs) {
-    let timeoutId = null;
-    try {
-        return await Promise.race([
-            promise,
-            new Promise((resolve) => {
-                timeoutId = setTimeout(() => resolve(null), timeoutMs);
-            })
-        ]);
-    } finally {
-        if (timeoutId) clearTimeout(timeoutId);
-    }
+    return ttsController.concatenateWavArrayBuffers(buffers);
 }
 
 async function combinePlayableChunks(primaryUrl, queuedTexts) {
-    if (!primaryUrl || !queuedTexts || queuedTexts.length === 0) {
-        return { url: primaryUrl, revokeInputs: null };
-    }
-
-    if ((config.ttsFormat || 'wav') !== 'wav') {
-        return { url: primaryUrl, revokeInputs: null };
-    }
-
-    const urls = [primaryUrl];
-    const consumedTexts = [];
-
-    for (let i = 0; i < Math.min(2, queuedTexts.length); i++) {
-        const nextText = queuedTexts[i];
-        const cachedPromise = ttsAudioCache.get(nextText);
-        if (!cachedPromise) break;
-
-        const nextUrl = await promiseWithTimeout(cachedPromise, 120);
-        if (!nextUrl) break;
-
-        urls.push(nextUrl);
-        consumedTexts.push(nextText);
-    }
-
-    if (urls.length === 1) {
-        return { url: primaryUrl, revokeInputs: null };
-    }
-
-    try {
-        const buffers = await Promise.all(urls.map(async (url) => {
-            const response = await fetch(url);
-            return await response.arrayBuffer();
-        }));
-        const mergedBuffer = concatenateWavArrayBuffers(buffers);
-        if (!mergedBuffer) {
-            return { url: primaryUrl, revokeInputs: null };
-        }
-
-        for (const text of consumedTexts) {
-            if (ttsQueue[0] === text) {
-                ttsQueue.shift();
-            } else {
-                const idx = ttsQueue.indexOf(text);
-                if (idx >= 0) ttsQueue.splice(idx, 1);
-            }
-            ttsAudioCache.delete(text);
-        }
-
-        return {
-            url: URL.createObjectURL(new Blob([mergedBuffer], { type: 'audio/wav' })),
-            revokeInputs: urls
-        };
-    } catch (e) {
-        console.error('[TTS] Failed to combine WAV chunks:', e);
-        return { url: primaryUrl, revokeInputs: null };
-    }
+    return ttsController.combinePlayableChunks(primaryUrl, queuedTexts);
 }
 
 
@@ -3358,6 +1588,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadVoiceStyles(); // Fetch voice styles
     initOSTTSVoiceLoading();
     await syncServerConfig({ log: true, forceDictionaryReload: true }); // Sync with server
+    sessionController.setupSyncListeners();
     setupEventListeners();
     initServerControl();
     if (window.runtime?.EventsOn) {
@@ -3366,20 +1597,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             syncGlobalLLMComposerUI();
         });
     }
-    if (llmActivitySyncChannel) {
-        llmActivitySyncChannel.addEventListener('message', (event) => {
-            const state = event?.data || {};
-            if (state?.sourceId === localLLMActivitySourceId) {
-                return;
-            }
-            externalLLMActivityBusy = !!state?.busy;
-            externalLLMActivityPhase = String(state?.phase || '').trim().toLowerCase();
-            if (!externalLLMActivityBusy && !isPassiveServerSession()) {
-                passiveGenerationPlaceholder = '';
-            }
-            syncGlobalLLMComposerUI();
-        });
-    }
+    sessionController.setupLLMActivitySyncListener();
 
     // Setup Markdown
     marked.setOptions({
@@ -3483,30 +1701,11 @@ let currentChatSessionSyncPromise = null;
 let pendingCurrentChatSessionSync = false;
 let localStreamOwnershipReleased = false;
 let foregroundSyncTimers = [];
-let savedTurns = [];
-let savedLibraryQuery = '';
-let savedLibraryLoaded = false;
-let savedTitleRefreshInFlight = false;
-let savedTitleRefreshTimer = null;
-let savedTitleRefreshAbortController = null;
-let isSavedLibraryOpen = false;
-let savedLibrarySwipeState = null;
-let savedLibraryCloseTimer = null;
 let passiveGenerationPlaceholder = '';
 let llmActivityBusy = false;
 let externalLLMActivityBusy = false;
 let externalLLMActivityPhase = '';
 let sessionLLMActivityRunning = false;
-const localLLMActivitySourceId = `chat-${Math.random().toString(36).slice(2, 10)}`;
-const savedTurnsSyncChannel = typeof BroadcastChannel !== 'undefined'
-    ? new BroadcastChannel('dkst-saved-turns-sync')
-    : null;
-const configSyncChannel = typeof BroadcastChannel !== 'undefined'
-    ? new BroadcastChannel('dkst-config-sync')
-    : null;
-const llmActivitySyncChannel = typeof BroadcastChannel !== 'undefined'
-    ? new BroadcastChannel('dkst-llm-activity-sync')
-    : null;
 
 function isPassiveServerSession(session = currentChatSessionCache) {
     return !!session
@@ -3572,18 +1771,17 @@ function syncGlobalLLMComposerUI(session = currentChatSessionCache) {
     updateSendButtonStateCore();
 }
 
-function broadcastLLMActivityState(busy, phase = 'answering') {
-    if (!llmActivitySyncChannel) return;
-    try {
-        llmActivitySyncChannel.postMessage({
-            sourceId: localLLMActivitySourceId,
-            busy: !!busy,
-            phase: String(phase || '').trim().toLowerCase() || 'answering',
-            at: Date.now()
-        });
-    } catch (error) {
-        console.warn('[LLMActivitySync] broadcast failed:', error);
+function applyExternalLLMActivityState(state = {}) {
+    externalLLMActivityBusy = !!state?.busy;
+    externalLLMActivityPhase = String(state?.phase || '').trim().toLowerCase();
+    if (!externalLLMActivityBusy && !isPassiveServerSession()) {
+        passiveGenerationPlaceholder = '';
     }
+    syncGlobalLLMComposerUI();
+}
+
+function broadcastLLMActivityState(busy, phase = 'answering') {
+    return sessionController.broadcastLLMActivityState(busy, phase);
 }
 
 function ensurePassiveSyncPlaceholder(turnId = '', sessionId = 'default', eventSeq = 0, phase = '') {
@@ -3672,33 +1870,7 @@ function syncSnapshotUserMessages(session = currentChatSessionCache) {
 }
 
 function broadcastConfigSync() {
-    const payload = {
-        type: 'config-updated',
-        timestamp: Date.now()
-    };
-    try {
-        configSyncChannel?.postMessage(payload);
-    } catch (err) {
-        console.warn('Failed to broadcast config sync channel event:', err);
-    }
-    try {
-        localStorage.setItem('dkst-config-sync', JSON.stringify(payload));
-    } catch (err) {
-        console.warn('Failed to broadcast config via storage:', err);
-    }
-}
-
-async function handleExternalConfigSync() {
-    try {
-        await syncServerConfig({ log: true });
-    } catch (err) {
-        console.warn('Failed to sync config from external event:', err);
-    }
-}
-
-function handleSavedTurnsExternalSync() {
-    if (!currentUser) return;
-    loadSavedTurns();
+    return sessionController.broadcastConfigSync();
 }
 
 function dismissReconnectNoticeCard() {
@@ -3798,65 +1970,8 @@ async function retryChatReconnect() {
 }
 
 function broadcastSavedTurnsChange(reason = 'updated') {
-    const payload = {
-        type: 'saved-turns-sync',
-        reason,
-        userId: currentUser?.id || '',
-        timestamp: Date.now()
-    };
-    try {
-        if (savedTurnsSyncChannel) {
-            savedTurnsSyncChannel.postMessage(payload);
-        }
-    } catch (err) {
-        console.warn('Failed to broadcast saved turns via channel:', err);
-    }
-    try {
-        localStorage.setItem('savedTurnsSyncEvent', JSON.stringify(payload));
-    } catch (err) {
-        console.warn('Failed to broadcast saved turns via storage:', err);
-    }
+    return sessionController.broadcastSavedTurnsChange(reason);
 }
-
-if (savedTurnsSyncChannel) {
-    savedTurnsSyncChannel.onmessage = (event) => {
-        const payload = event?.data;
-        if (!payload || payload.type !== 'saved-turns-sync') return;
-        if (payload.userId && currentUser?.id && payload.userId !== currentUser.id) return;
-        handleSavedTurnsExternalSync();
-    };
-}
-
-if (configSyncChannel) {
-    configSyncChannel.onmessage = (event) => {
-        const payload = event?.data;
-        if (!payload || payload.type !== 'config-updated') return;
-        handleExternalConfigSync();
-    };
-}
-
-window.addEventListener('storage', (event) => {
-    if (event.key !== 'savedTurnsSyncEvent' || !event.newValue) return;
-    try {
-        const payload = JSON.parse(event.newValue);
-        if (!payload || payload.type !== 'saved-turns-sync') return;
-        if (payload.userId && currentUser?.id && payload.userId !== currentUser.id) return;
-        handleSavedTurnsExternalSync();
-    } catch (err) {
-        console.warn('Failed to parse saved turn sync payload:', err);
-    }
-});
-
-window.addEventListener('storage', (event) => {
-    if (event.key !== 'dkst-config-sync' || !event.newValue) return;
-    try {
-        const payload = JSON.parse(event.newValue);
-        if (!payload || payload.type !== 'config-updated') return;
-        handleExternalConfigSync();
-    } catch (err) {
-        console.warn('Failed to parse config sync payload:', err);
-    }
-});
 
 function restoreLastSessionIntoChatView() {
     if (!lastSessionCache || hasSubstantiveChatMessages()) return false;
@@ -4287,7 +2402,7 @@ function loadConfig() {
     if (format === 'mp3') format = 'mp3-high'; // Legacy mapping
     document.getElementById('cfg-tts-format').value = format;
     populateOSTTSVoiceList();
-    if (config.osTtsVoiceURI && osTTSVoiceSelect && osTTSVoicesReady) {
+    if (config.osTtsVoiceURI && osTTSVoiceSelect && ttsController.isVoicesReady()) {
         osTTSVoiceSelect.value = config.osTtsVoiceURI;
     }
     syncOSTTSVoiceConfigFromSelection();
@@ -4374,24 +2489,7 @@ function updateSettingsVisibility() {
 }
 
 function renderContextStrategyOptions() {
-    const select = document.getElementById('cfg-context-strategy');
-    if (!select) return;
-    const mode = document.getElementById('cfg-llm-mode')?.value || config.llmMode || 'standard';
-    const normalizedMode = mode === 'stateful' ? 'stateful' : 'standard';
-    const options = normalizedMode === 'stateful'
-        ? [
-            { value: 'retrieval', label: t('setting.contextStrategy.option.retrieval') },
-            { value: 'stateful', label: t('setting.contextStrategy.option.stateful') },
-            { value: 'none', label: t('setting.contextStrategy.option.none') }
-        ]
-        : [
-            { value: 'retrieval', label: t('setting.contextStrategy.option.retrieval') },
-            { value: 'history', label: t('setting.contextStrategy.option.history') },
-            { value: 'none', label: t('setting.contextStrategy.option.none') }
-        ];
-    const currentValue = normalizeContextStrategyForMode(normalizedMode, select.value || config.contextStrategy);
-    select.innerHTML = options.map((option) => `<option value="${option.value}">${option.label}</option>`).join('');
-    select.value = currentValue;
+    return modelController.renderContextStrategyOptions();
 }
 
 function setupSettingsListeners() {
@@ -4706,7 +2804,7 @@ function saveConfig(closeModal = true) {
     config.osTtsPitch = parseFloat(document.getElementById('cfg-os-tts-pitch').value) || 1.0;
     if (osTTSVoiceSelect) {
         config.osTtsVoiceURI = osTTSVoiceSelect.value || '';
-        const selectedVoice = osTTSVoices.find((voice) => voice.voiceURI === config.osTtsVoiceURI) || null;
+        const selectedVoice = ttsController.getVoices().find((voice) => voice.voiceURI === config.osTtsVoiceURI) || null;
         config.osTtsVoiceName = selectedVoice?.name || '';
         config.osTtsVoiceLang = selectedVoice?.lang || '';
     }
@@ -4849,48 +2947,15 @@ function applyChatFontSize() {
 }
 
 async function fetchLastSession() {
-    try {
-        const response = await fetch('/api/last-session', buildSessionFetchOptions());
-        if (!response.ok) {
-            return null;
-        }
-        const data = await response.json();
-        if (!data.has_session) {
-            return null;
-        }
-        return data;
-    } catch (e) {
-        console.warn('Failed to fetch last session:', e);
-        return null;
-    }
+    return sessionController.fetchLastSession();
 }
 
 async function fetchCurrentChatSession() {
-    try {
-        const response = await fetch('/api/chat-session/current', buildSessionFetchOptions());
-        if (!response.ok) return null;
-        const data = await response.json();
-        return data?.has_session ? data.item : null;
-    } catch (e) {
-        console.warn('Failed to fetch current chat session:', e);
-        return null;
-    }
+    return sessionController.fetchCurrentChatSession();
 }
 
 async function fetchCurrentChatSessionEvents(afterSeq = 0, limit = 400) {
-    try {
-        const response = await fetch(`/api/chat-session/events?after_seq=${afterSeq}&limit=${limit}`, buildSessionFetchOptions());
-        if (!response.ok) return { session: null, items: [], totalCount: 0 };
-        const data = await response.json();
-        return {
-            session: data?.has_session ? data.session : null,
-            items: Array.isArray(data?.items) ? data.items : [],
-            totalCount: Number(data?.total_count || 0)
-        };
-    } catch (e) {
-        console.warn('Failed to fetch current chat session events:', e);
-        return { session: null, items: [], totalCount: 0 };
-    }
+    return sessionController.fetchCurrentChatSessionEvents(afterSeq, limit);
 }
 
 async function fastForwardChatSessionEvents(limit = 400) {
@@ -6183,7 +4248,7 @@ async function syncServerConfig(options = {}) {
                 const osPitchValEl = document.getElementById('os-pitch-val');
                 if (osPitchValEl) osPitchValEl.textContent = String(config.osTtsPitch || 1.0);
                 populateOSTTSVoiceList();
-                if (osTTSVoiceSelect && config.osTtsVoiceURI && osTTSVoicesReady) {
+                if (osTTSVoiceSelect && config.osTtsVoiceURI && ttsController.isVoicesReady()) {
                     osTTSVoiceSelect.value = config.osTtsVoiceURI;
                 }
                 updateTTSSettingsVisibility();
@@ -6243,33 +4308,15 @@ async function syncServerConfig(options = {}) {
 }
 
 async function loadVoiceStyles() {
-    try {
-        const response = await fetch('/api/tts/styles');
-        if (response.ok) {
-            const styles = await response.json();
-            const select = document.getElementById('cfg-tts-voice');
-            select.innerHTML = styles.map(s => `<option value="${s}">${s}</option>`).join('');
-            const saved = config.ttsVoice ? config.ttsVoice.replace('.json', '') : null;
-            if (saved && styles.includes(saved)) {
-                select.value = saved;
-            } else if (styles.length > 0) {
-                select.value = styles[0];
-                config.ttsVoice = styles[0];
-            }
-        }
-    } catch (e) {
-        console.warn('Failed to load voice styles:', e);
-    }
+    return ttsController.loadVoiceStyles();
 }
 
 function supportsOSTTS() {
-    return typeof window !== 'undefined'
-        && 'speechSynthesis' in window
-        && typeof window.SpeechSynthesisUtterance !== 'undefined';
+    return ttsController.supportsOSTTS();
 }
 
 function getCurrentTTSEngine() {
-    return config.ttsEngine === 'os' ? 'os' : 'supertonic';
+    return ttsController.getCurrentTTSEngine();
 }
 
 function mapVoiceLangToDictionaryLang(lang = '') {
@@ -6290,104 +4337,23 @@ function getEffectiveTTSDictionaryLang() {
 }
 
 function getSelectedOSTTSVoice() {
-    if (!supportsOSTTS()) return null;
-    if (!Array.isArray(osTTSVoices) || osTTSVoices.length === 0) {
-        osTTSVoices = window.speechSynthesis.getVoices() || [];
-    }
-
-    const byURI = osTTSVoices.find((voice) => voice.voiceURI === config.osTtsVoiceURI);
-    if (byURI) return byURI;
-
-    const byNameLang = osTTSVoices.find((voice) =>
-        voice.name === config.osTtsVoiceName && voice.lang === config.osTtsVoiceLang
-    );
-    if (byNameLang) return byNameLang;
-
-    return osTTSVoices.find((voice) => String(voice.lang || '').toLowerCase().startsWith('ko'))
-        || osTTSVoices[0]
-        || null;
+    return ttsController.getSelectedOSTTSVoice();
 }
 
 function syncOSTTSVoiceConfigFromSelection() {
-    const selectedVoiceURI = osTTSVoiceSelect?.value || config.osTtsVoiceURI;
-    const selected = osTTSVoices.find((voice) => voice.voiceURI === selectedVoiceURI) || getSelectedOSTTSVoice();
-    if (!selected) return;
-    config.osTtsVoiceURI = selected.voiceURI || '';
-    config.osTtsVoiceName = selected.name || '';
-    config.osTtsVoiceLang = selected.lang || '';
+    return ttsController.syncOSTTSVoiceConfigFromSelection();
 }
 
 function populateOSTTSVoiceList() {
-    if (!osTTSVoiceSelect) return;
-
-    if (!supportsOSTTS()) {
-        osTTSVoices = [];
-        osTTSVoicesReady = false;
-        osTTSVoiceSelect.innerHTML = `<option value="">${escapeHtml(t('setting.osVoice.unavailable'))}</option>`;
-        osTTSVoiceSelect.disabled = true;
-        return;
-    }
-
-    osTTSVoices = window.speechSynthesis.getVoices() || [];
-    if (!osTTSVoices.length) {
-        osTTSVoicesReady = false;
-        osTTSVoiceSelect.innerHTML = `<option value="">${escapeHtml(t('setting.osVoice.loading'))}</option>`;
-        osTTSVoiceSelect.disabled = true;
-        return;
-    }
-
-    osTTSVoicesReady = true;
-    osTTSVoiceSelect.disabled = false;
-    osTTSVoiceSelect.innerHTML = osTTSVoices.map((voice) => {
-        const label = `${voice.name} (${voice.lang})${voice.default ? ' - DEFAULT' : ''}`;
-        return `<option value="${escapeAttr(voice.voiceURI || '')}">${escapeHtml(label)}</option>`;
-    }).join('');
-
-    const selected = getSelectedOSTTSVoice();
-    if (selected?.voiceURI) {
-        osTTSVoiceSelect.value = selected.voiceURI;
-    }
-    syncOSTTSVoiceConfigFromSelection();
+    return ttsController.populateOSTTSVoiceList();
 }
 
 function initOSTTSVoiceLoading() {
-    if (!supportsOSTTS()) {
-        populateOSTTSVoiceList();
-        return;
-    }
-
-    populateOSTTSVoiceList();
-    if (typeof window.speechSynthesis.onvoiceschanged !== 'undefined') {
-        window.speechSynthesis.onvoiceschanged = () => {
-            populateOSTTSVoiceList();
-        };
-    }
+    return ttsController.initOSTTSVoiceLoading();
 }
 
 function updateTTSSettingsVisibility() {
-    const engine = getCurrentTTSEngine();
-    const supertonicIds = [
-        'container-tts-supertonic-voice',
-        'container-tts-supertonic-speed',
-        'container-tts-lang',
-        'container-tts-supertonic-steps',
-        'container-tts-supertonic-threads',
-        'container-tts-supertonic-format'
-    ];
-    const osIds = [
-        'container-tts-os-voice',
-        'container-tts-os-rate',
-        'container-tts-os-pitch'
-    ];
-
-    supertonicIds.forEach((id) => {
-        const el = document.getElementById(id);
-        if (el) el.style.display = engine === 'supertonic' ? 'block' : 'none';
-    });
-    osIds.forEach((id) => {
-        const el = document.getElementById(id);
-        if (el) el.style.display = engine === 'os' ? 'block' : 'none';
-    });
+    return ttsController.updateTTSSettingsVisibility();
 }
 
 
@@ -6435,7 +4401,7 @@ function setupEventListeners() {
     }
 
     messageInput.addEventListener('touchstart', () => {
-        savedLibrarySwipeState = null;
+        savedLibraryController.resetSwipeState();
         pendingInputFocusChatScrollTop = chatMessages?.scrollTop ?? null;
         pendingFirstInputScrollRepairTop = pendingInputFocusChatScrollTop;
     }, { passive: true });
@@ -6843,296 +4809,28 @@ function normalizeReasoningValue(value) {
     return DEFAULT_REASONING_OPTIONS.includes(normalized) ? normalized : '';
 }
 
-function normalizeReasoningOptions(values) {
-    if (!Array.isArray(values)) return [];
-    const normalizedValues = values
-        .map((value) => normalizeReasoningValue(value))
-        .filter(Boolean);
-    return [...new Set(normalizedValues)];
-}
-
-function parseReasoningCapability(rawCapability) {
-    if (rawCapability === null || rawCapability === undefined || rawCapability === false) {
-        return { supportsReasoning: false, reasoningOptions: [] };
-    }
-
-    if (rawCapability === true) {
-        return {
-            supportsReasoning: true,
-            reasoningOptions: [...DEFAULT_REASONING_OPTIONS]
-        };
-    }
-
-    if (typeof rawCapability === 'string') {
-        const normalized = normalizeReasoningValue(rawCapability);
-        if (normalized) {
-            return {
-                supportsReasoning: true,
-                reasoningOptions: normalized === 'on' || normalized === 'off'
-                    ? [...DEFAULT_REASONING_OPTIONS]
-                    : [normalized]
-            };
-        }
-        const truthy = ['true', 'supported', 'enabled', 'yes', 'available'];
-        if (truthy.includes(rawCapability.trim().toLowerCase())) {
-            return {
-                supportsReasoning: true,
-                reasoningOptions: [...DEFAULT_REASONING_OPTIONS]
-            };
-        }
-        return { supportsReasoning: false, reasoningOptions: [] };
-    }
-
-    if (Array.isArray(rawCapability)) {
-        const options = normalizeReasoningOptions(rawCapability);
-        return {
-            supportsReasoning: options.length > 0,
-            reasoningOptions: options
-        };
-    }
-
-    if (typeof rawCapability === 'object') {
-        const options = normalizeReasoningOptions(
-            rawCapability.options
-            || rawCapability.values
-            || rawCapability.levels
-            || rawCapability.supported_values
-            || rawCapability.allowed
-        );
-        const supportedFlag = rawCapability.supported
-            ?? rawCapability.enabled
-            ?? rawCapability.available
-            ?? rawCapability.reasoning;
-        const supportsReasoning = supportedFlag === true || options.length > 0;
-        return {
-            supportsReasoning,
-            reasoningOptions: supportsReasoning
-                ? (options.length > 0 ? options : [...DEFAULT_REASONING_OPTIONS])
-                : []
-        };
-    }
-
-    return { supportsReasoning: false, reasoningOptions: [] };
-}
-
-function normalizeModelInfo(model) {
-    if (!model || typeof model !== 'object') return null;
-    const id = String(model.id || model.key || model.name || '').trim();
-    if (!id) return null;
-
-    const reasoningCapability = parseReasoningCapability(
-        model.reasoning
-        ?? model.capabilities?.reasoning
-        ?? model.metadata?.reasoning
-        ?? model.model_info?.reasoning
-    );
-
-    const loadedInstances = Array.isArray(model.loaded_instances) ? model.loaded_instances : [];
-    const primaryLoadedInstance = loadedInstances.find((instance) => {
-        if (!instance) return false;
-        if (typeof instance === 'string') return instance.trim() !== '';
-        if (typeof instance === 'object') {
-            return String(instance.instance_id || instance.id || instance.key || '').trim() !== '';
-        }
-        return false;
-    }) || null;
-    const primaryLoadedInstanceId = typeof primaryLoadedInstance === 'string'
-        ? primaryLoadedInstance.trim()
-        : String(
-            primaryLoadedInstance?.instance_id
-            || primaryLoadedInstance?.id
-            || primaryLoadedInstance?.key
-            || ''
-        ).trim();
-    const rawLoaded = model.loaded
-        ?? model.is_loaded
-        ?? model.isLoaded
-        ?? model.active
-        ?? model.currently_loaded
-        ?? model.metadata?.loaded
-        ?? model.model_info?.loaded;
-    const rawState = String(
-        model.state
-        ?? model.status
-        ?? model.load_state
-        ?? model.metadata?.state
-        ?? model.model_info?.state
-        ?? ''
-    ).trim().toLowerCase();
-    const isLoaded = loadedInstances.length > 0 || rawLoaded === true || ['loaded', 'active', 'ready', 'resident'].includes(rawState);
-
-    return {
-        id,
-        displayName: String(model.display_name || model.displayName || model.name || id).trim() || id,
-        isLoaded,
-        loadedInstances,
-        primaryLoadedInstanceId,
-        stateLabel: rawState,
-        supportsReasoning: reasoningCapability.supportsReasoning,
-        reasoningOptions: reasoningCapability.reasoningOptions
-    };
-}
-
-function setAvailableModels(models) {
-    availableModels = Array.isArray(models)
-        ? models.map((model) => normalizeModelInfo(model)).filter(Boolean)
-        : [];
-    availableModelInfoById = new Map(availableModels.map((model) => [model.id, model]));
-}
-
-function getHeaderModelTrigger() {
-    return document.getElementById('header-model-trigger');
-}
-
 function updateHeaderModelDisplay() {
-    const headerModelName = document.getElementById('header-model-name');
-    if (!headerModelName) return;
-    const selectedModel = availableModelInfoById.get(String(config.model || '').trim());
-    headerModelName.textContent = selectedModel?.displayName || config.model || 'No Model Set';
+    return modelController.updateHeaderModelDisplay();
 }
 
 function closeModelPickerModal() {
-    const trigger = getHeaderModelTrigger();
-    if (trigger) trigger.setAttribute('aria-expanded', 'false');
-    document.getElementById('model-picker-modal')?.classList.remove('active');
+    return modelController.closeModelPickerModal();
 }
 
 function renderModelPickerModal() {
-    const list = document.getElementById('model-picker-list');
-    if (!list) return;
-
-    if (!availableModels.length) {
-        list.innerHTML = `<div class="model-picker-empty">${escapeHtml(t('models.empty'))}</div>`;
-        return;
-    }
-
-    const isStatefulMode = String(config.llmMode || '').trim().toLowerCase() === 'stateful';
-    list.innerHTML = availableModels.map((model) => {
-        const selected = model.id === String(config.model || '').trim();
-        const loadedBadge = isStatefulMode && model.isLoaded
-            ? `<span class="model-picker-badge is-loaded">${escapeHtml(t('models.loaded'))}</span>`
-            : '';
-        const currentLabel = selected ? `<span class="model-picker-current">${escapeHtml(model.id)}</span>` : '';
-        const unloadButton = isStatefulMode && model.isLoaded && model.primaryLoadedInstanceId
-            ? `<button type="button" class="icon-btn model-picker-unload" title="${escapeAttr(t('models.unload'))}" onclick="unloadHeaderModel(event, '${escapeAttr(model.primaryLoadedInstanceId)}')"><span class="material-icons-round">eject</span></button>`
-            : '';
-
-        return `
-            <div class="model-picker-item${selected ? ' is-selected' : ''}">
-                <button
-                    class="model-picker-main"
-                    type="button"
-                    onclick="selectHeaderModel('${escapeAttr(model.id)}')">
-                    <div class="model-picker-copy">
-                        <div class="model-picker-name">${escapeHtml(model.displayName || model.id)}</div>
-                        <div class="model-picker-meta">
-                            ${loadedBadge}
-                            ${currentLabel}
-                        </div>
-                    </div>
-                </button>
-                ${unloadButton}
-            </div>
-        `;
-    }).join('');
+    return modelController.renderModelPickerModal();
 }
 
-async function openModelPickerModal(event) {
-    if (event) {
-        event.preventDefault();
-        event.stopPropagation();
-    }
-    const trigger = getHeaderModelTrigger();
-    if (!trigger) return;
-    await fetchModels();
-    renderModelPickerModal();
-    document.getElementById('model-picker-modal')?.classList.add('active');
-    trigger.setAttribute('aria-expanded', 'true');
+function openModelPickerModal(event) {
+    return modelController.openModelPickerModal(event);
 }
 
-async function selectHeaderModel(modelId) {
-    const nextModel = String(modelId || '').trim();
-    if (!nextModel) return;
-    config.model = nextModel;
-    const cfgModel = document.getElementById('cfg-model');
-    if (cfgModel) {
-        const matchingOption = Array.from(cfgModel.options).find((option) => option.value === nextModel);
-        if (matchingOption) {
-            cfgModel.value = nextModel;
-        } else {
-            const option = document.createElement('option');
-            option.value = nextModel;
-            option.textContent = nextModel;
-            cfgModel.appendChild(option);
-            cfgModel.value = nextModel;
-        }
-    }
-    updateHeaderModelDisplay();
-    renderModelPickerModal();
-    closeModelPickerModal();
-    saveConfig(false);
+function selectHeaderModel(modelId) {
+    return modelController.selectHeaderModel(modelId);
 }
 
-async function unloadHeaderModel(event, instanceId) {
-    if (event) {
-        event.preventDefault();
-        event.stopPropagation();
-    }
-    const nextInstanceId = String(instanceId || '').trim();
-    if (!nextInstanceId) return;
-
-    try {
-        const response = await fetch('/api/models/unload', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({
-                instance_id: nextInstanceId,
-                mode: config.llmMode || 'standard'
-            })
-        });
-        if (!response.ok) {
-            throw new Error(await response.text().catch(() => `HTTP ${response.status}`));
-        }
-        await fetchModels();
-        renderModelPickerModal();
-        showToast(`${t('models.unload')} ✓`);
-    } catch (error) {
-        console.warn('[Models] Unload failed:', error);
-        showToast(String(error?.message || 'Unload failed'), true);
-    }
-}
-
-function getSelectedModelInfo() {
-    return availableModelInfoById.get(String(config.model || '').trim()) || null;
-}
-
-function shouldShowReasoningControl() {
-    if (!config.showReasoningControl) return false;
-    const selectedModelInfo = getSelectedModelInfo();
-    return !!(selectedModelInfo?.supportsReasoning || config.forceShowReasoningControl);
-}
-
-function getReasoningOptionsForCurrentModel() {
-    const selectedModelInfo = getSelectedModelInfo();
-    if (selectedModelInfo?.supportsReasoning && selectedModelInfo.reasoningOptions.length > 0) {
-        return selectedModelInfo.reasoningOptions;
-    }
-    if (config.forceShowReasoningControl) {
-        return [...DEFAULT_REASONING_OPTIONS];
-    }
-    return [];
-}
-
-function validateReasoningSelection() {
-    const normalizedValue = normalizeReasoningValue(config.reasoning);
-    if (!shouldShowReasoningControl()) {
-        config.reasoning = '';
-        return;
-    }
-
-    const options = getReasoningOptionsForCurrentModel();
-    config.reasoning = options.includes(normalizedValue) ? normalizedValue : '';
+function unloadHeaderModel(event, instanceId) {
+    return modelController.unloadHeaderModel(event, instanceId);
 }
 
 function persistClientConfig() {
@@ -7149,41 +4847,7 @@ function updateComposerLayoutMetrics() {
 }
 
 function renderReasoningControl() {
-    if (!reasoningControlBar || !composerReasoningSelect) return;
-
-    const previousReasoningValue = config.reasoning;
-    validateReasoningSelection();
-    if (previousReasoningValue !== config.reasoning) {
-        persistClientConfig();
-    }
-    const shouldShow = shouldShowReasoningControl();
-    reasoningControlBar.hidden = !shouldShow;
-
-    if (shouldShow) {
-        const options = getReasoningOptionsForCurrentModel();
-        composerReasoningSelect.innerHTML = '';
-
-        const autoOption = document.createElement('option');
-        autoOption.value = '';
-        autoOption.textContent = t('reasoning.auto');
-        composerReasoningSelect.appendChild(autoOption);
-
-        options.forEach((value) => {
-            const option = document.createElement('option');
-            option.value = value;
-            option.textContent = `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
-            composerReasoningSelect.appendChild(option);
-        });
-
-        composerReasoningSelect.value = config.reasoning || '';
-    } else {
-        composerReasoningSelect.innerHTML = `<option value="">${t('reasoning.auto')}</option>`;
-        composerReasoningSelect.value = '';
-    }
-
-    updateComposerLayoutMetrics();
-    updateReasoningControlVisibility();
-    updateScrollToBottomButton();
+    return modelController.renderReasoningControl();
 }
 
 function updateReasoningControlVisibility() {
@@ -7198,10 +4862,7 @@ function updateReasoningControlVisibility() {
 }
 
 function getEffectiveReasoningSelection() {
-    if (!shouldShowReasoningControl()) return '';
-    const normalized = normalizeReasoningValue(config.reasoning);
-    const options = getReasoningOptionsForCurrentModel();
-    return options.includes(normalized) ? normalized : '';
+    return modelController.getEffectiveReasoningSelection();
 }
 
 function getConfiguredTemperature() {
@@ -7351,7 +5012,7 @@ async function ensureStatefulContextBudget(nextUserText = '') {
 /* Chat Logic */
 
 async function sendMessage(options = {}) {
-    if (isSavedLibraryOpen) {
+    if (savedLibraryController.isOpen()) {
         closeSavedLibrary();
     }
     cancelComposerBackgroundTasks('user-message');
@@ -8394,108 +6055,69 @@ function cleanupTrailingEmptyAssistantMessages() {
 }
 
 function getAssistantMessageParts(elementId, turnId = '') {
-    const msgEl = document.getElementById(elementId);
-    if (!msgEl) return {};
-    return {
-        msgEl,
-        reasoningHost: msgEl.querySelector('.assistant-reasoning'),
-        toolsHost: msgEl.querySelector('.assistant-tools'),
-        bubble: msgEl.querySelector('.assistant-response-card .message-bubble'),
-        markdownBody: msgEl.querySelector('.assistant-response-card .markdown-body'),
-        committedHost: msgEl.querySelector('.assistant-response-card .markdown-committed'),
-        pendingHost: msgEl.querySelector('.assistant-response-card .markdown-pending')
-    };
+    return chatUIController.getAssistantMessageParts(elementId, turnId);
 }
 
 function syncCurrentAudioButtonUI() {
-    const btn = currentAudioBtn;
-    if (!btn) return;
-    const iconEl = btn.querySelector('.material-icons-round');
-    if (!iconEl) return;
-
-    if (isPlayingQueue) {
-        iconEl.textContent = 'stop';
-        btn.title = 'Stop';
-        btn.disabled = false;
-        return;
-    }
-
-    if (streamingTTSActive || ttsQueue.length > 0) {
-        iconEl.textContent = 'hourglass_empty';
-        btn.title = 'Preparing audio';
-        btn.disabled = true;
-        return;
-    }
-
-    iconEl.textContent = 'volume_up';
-    btn.title = 'Speak';
-    btn.disabled = false;
+    return ttsController.syncCurrentAudioButtonUI();
 }
 
 function attachStreamingAudioButtonToMessage(msgEl) {
-    if (!msgEl || !msgEl.id) return;
-    if (msgEl.id !== activeStreamingMessageId) return;
-    if (!(streamingTTSActive || isPlayingQueue || ttsQueue.length > 0)) return;
-
-    const speakBtn = msgEl.querySelector('.speak-btn');
-    if (!speakBtn) return;
-    currentAudioBtn = speakBtn;
-    syncCurrentAudioButtonUI();
-
-    // If TTS starts playing, ensure the action bar is visible so the user can see the "Stop" button.
-    const actionBar = msgEl.querySelector('.message-actions');
-    if (actionBar && !actionBar.classList.contains('is-ready')) {
-        setAssistantActionBarReady(msgEl.id);
-    }
+    return ttsController.attachStreamingAudioButtonToMessage(msgEl);
 }
 
+const chatUIController = appChatUI.createChatUIController({
+    refs: {
+        chatMessages,
+        inputArea,
+        reasoningControlBar,
+        scrollToBottomBtn
+    },
+    deps: {
+        attachStreamingAudioButtonToMessage,
+        commitChatScrollMetrics,
+        getStreamingScrollMode,
+        isAssistantMessageVisiblyEmpty,
+        pulseMessageRender,
+        refreshChatScrollMetrics,
+        savedLibraryIsOpen: () => savedLibraryController.isOpen(),
+        triggerHaptic,
+        updateReasoningControlVisibility
+    }
+});
+
+const chatStreamingController = appChatStreaming.createChatStreamingController({
+    deps: {
+        attachStreamingAudioButtonToMessage,
+        checkAndTriggerLabelPin,
+        ensureAssistantMessageElement,
+        ensureStreamingMarkdownHosts,
+        getMarkdownRenderMode,
+        getPassiveSyncWaitingText,
+        getStreamingScrollMode,
+        holdAutoScrollAtBottom,
+        isChatNearBottom,
+        observeAutoScrollResizes,
+        pulseMessageRender,
+        reconcileAssistantActionBarForMessage,
+        renderMarkdownIntoHost,
+        renderStreamingPreviewIntoHost,
+        sanitizeAssistantRenderText,
+        scrollToBottom,
+        syncAssistantMessageShellState
+    }
+});
+
 function setAssistantActionBarReady(elementId) {
-    const { msgEl } = getAssistantMessageParts(elementId);
-    if (!msgEl) return;
-    const actionBar = msgEl.querySelector('.message-actions');
-    if (!actionBar) return;
-    if (isAssistantMessageVisiblyEmpty(msgEl)) return;
-    if (actionBar.classList.contains('is-ready') && !actionBar.hidden) {
-        attachStreamingAudioButtonToMessage(msgEl);
-        return;
-    }
-
-    actionBar.classList.add('is-pending');
-
-    const finishReadyState = () => {
-        if (!actionBar.isConnected) return;
-        actionBar.classList.add('is-ready');
-        actionBar.classList.remove('is-pending');
-        delete actionBar.dataset.readyScheduled;
-        attachStreamingAudioButtonToMessage(msgEl);
-    };
-
-    if (actionBar.dataset.readyScheduled === 'true') {
-        finishReadyState();
-        return;
-    }
-
-    actionBar.dataset.readyScheduled = 'true';
-    requestAnimationFrame(() => {
-        finishReadyState();
-    });
-    setTimeout(() => {
-        finishReadyState();
-    }, 120);
+    return chatUIController.setAssistantActionBarReady(elementId);
 }
 
 function reconcileAssistantActionBarForMessage(msgEl) {
-    if (!msgEl || !msgEl.classList?.contains('assistant') || !msgEl.id) return;
-    const actionBar = msgEl.querySelector('.message-actions');
-    if (!actionBar || isAssistantMessageVisiblyEmpty(msgEl)) return;
-    setAssistantActionBarReady(msgEl.id);
+    return chatUIController.reconcileAssistantActionBarForMessage(msgEl);
 }
 
 function reconcileVisibleAssistantActionBars() {
-    if (!chatMessages) return;
-    chatMessages.querySelectorAll('.message.assistant').forEach((msgEl) => {
-        reconcileAssistantActionBarForMessage(msgEl);
-    });
+    return chatUIController.reconcileVisibleAssistantActionBars();
 }
 
 function renderProgressDock(label, percent = null, mode = 'prompt-processing', indeterminate = false) {
@@ -9086,10 +6708,7 @@ function showToast(message, isError = false) {
 }
 
 function speakMessageFromBtn(btn) {
-    const bubble = btn.closest('.message-inner').querySelector('.markdown-body');
-    if (bubble) {
-        speakMessage(getSpeakableTextFromMarkdownHost(bubble), btn);
-    }
+    return ttsController.speakMessageFromBtn(btn);
 }
 
 function getToastBottomOffset() {
@@ -9102,56 +6721,7 @@ function getToastBottomOffset() {
  * Stop all audio playback and clear queues
  */
 function stopAllAudio() {
-    // Clear queues
-    ttsQueue = [];
-    audioWarmup = null;
-
-    if (supportsOSTTS()) {
-        try {
-            window.speechSynthesis.cancel();
-        } catch (_) {
-            // Ignore OS TTS cancellation errors
-        }
-    }
-
-    // Stop current audio source
-    if (currentAudio) {
-        try {
-            detachCurrentAudioPlaybackListeners();
-            currentAudio.pause();
-            currentAudio.src = '';
-            currentAudio.load(); // Forces resource release
-        } catch (e) {
-            // Ignore
-        }
-    }
-
-    // Clear audio cache to free memory
-    clearTTSAudioCache();
-    clearMediaSessionMetadata();
-    // Reset state and sync wake lock
-    isPlayingQueue = false;
-    streamingTTSActive = false;
-    syncWakeLock();
-
-    // Cancel streaming
-    streamingTTSActive = false;
-    streamingTTSBuffer = "";
-    streamingTTSCommittedIndex = 0;
-
-    // Increment session ID to invalidate pending ops
-    ttsSessionId++;
-    activeTTSSessionLabel = "";
-
-    // Reset UI
-    const btn = currentAudioBtn;
-    if (btn) {
-        const iconEl = btn.querySelector('.material-icons-round');
-        if (iconEl) iconEl.textContent = 'volume_up';
-        btn.title = 'Speak';
-        btn.disabled = false;
-    }
-    currentAudioBtn = null;
+    return ttsController.stopAllAudio();
 }
 
 // Show/Hide Reasoning Status Helper with Streaming Support
@@ -9536,822 +7106,118 @@ function stripHiddenAssistantProtocolText(text) {
     return cleanText;
 }
 
-function sanitizeRenderedMarkdownHtml(html) {
-    const rawHtml = String(html || '');
-    if (!rawHtml.trim()) return '';
-
-    if (window.DOMPurify?.sanitize) {
-        return window.DOMPurify.sanitize(rawHtml);
-    }
-
-    const template = document.createElement('template');
-    template.innerHTML = rawHtml;
-
-    const allowedTags = new Set([
-        'a', 'abbr', 'b', 'blockquote', 'br', 'code', 'del', 'details', 'div', 'em',
-        'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'i', 'img', 'kbd', 'li', 'mark',
-        'ol', 'p', 'pre', 'q', 'rp', 'rt', 'ruby', 's', 'samp', 'small', 'span',
-        'strong', 'sub', 'summary', 'sup', 'table', 'tbody', 'td', 'th', 'thead',
-        'tr', 'ul'
-    ]);
-    const globalAllowedAttrs = new Set(['class', 'title', 'aria-hidden']);
-    const tagAllowedAttrs = {
-        a: new Set(['href', 'target', 'rel']),
-        img: new Set(['src', 'alt', 'title']),
-        code: new Set(['class']),
-        span: new Set(['class']),
-        div: new Set(['class']),
-        th: new Set(['colspan', 'rowspan']),
-        td: new Set(['colspan', 'rowspan'])
-    };
-
-    const sanitizeUrl = (value) => {
-        const normalized = String(value || '').trim();
-        if (!normalized) return '';
-        if (normalized.startsWith('#') || normalized.startsWith('/') || normalized.startsWith('./') || normalized.startsWith('../')) {
-            return normalized;
-        }
-        try {
-            const parsed = new URL(normalized, window.location.origin);
-            const protocol = parsed.protocol.toLowerCase();
-            if (protocol === 'http:' || protocol === 'https:' || protocol === 'mailto:') {
-                return parsed.href;
-            }
-        } catch (_) {
-            return '';
-        }
-        return '';
-    };
-
-    const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_ELEMENT);
-    const nodes = [];
-    while (walker.nextNode()) {
-        nodes.push(walker.currentNode);
-    }
-
-    nodes.forEach((node) => {
-        const tagName = node.tagName.toLowerCase();
-        if (!allowedTags.has(tagName)) {
-            node.replaceWith(document.createTextNode(node.textContent || ''));
-            return;
-        }
-
-        Array.from(node.attributes).forEach((attr) => {
-            const attrName = attr.name.toLowerCase();
-            const allowedForTag = tagAllowedAttrs[tagName];
-            const isAllowed = globalAllowedAttrs.has(attrName) || allowedForTag?.has(attrName);
-            if (!isAllowed || attrName.startsWith('on')) {
-                node.removeAttribute(attr.name);
-                return;
-            }
-
-            if ((attrName === 'href' || attrName === 'src')) {
-                const sanitized = sanitizeUrl(attr.value);
-                if (!sanitized) {
-                    node.removeAttribute(attr.name);
-                    return;
-                }
-                node.setAttribute(attr.name, sanitized);
-            }
-        });
-
-        if (tagName === 'a') {
-            node.setAttribute('target', '_blank');
-            node.setAttribute('rel', 'noopener noreferrer');
-        }
-    });
-
-    return template.innerHTML;
-}
-
 function detachCurrentAudioPlaybackListeners() {
-    if (currentAudioPlaybackController) {
-        currentAudioPlaybackController.abort();
-        currentAudioPlaybackController = null;
-    }
+    return ttsController.detachCurrentAudioPlaybackListeners();
 }
 
 function appendStreamChunkDedup(existingText, nextChunk) {
-    const prev = String(existingText || '');
-    const chunk = String(nextChunk || '');
-    if (!chunk) return prev;
-    if (!prev) return chunk;
-    if (prev === chunk) return prev;
-    if (prev.endsWith(chunk)) return prev;
-    if (chunk.startsWith(prev)) return chunk;
-    if (chunk.length > prev.length && chunk.includes(prev)) return chunk;
-
-    const maxOverlap = Math.min(prev.length, chunk.length);
-    const minSafeOverlap = 8;
-    for (let overlap = maxOverlap; overlap >= minSafeOverlap; overlap--) {
-        if (prev.slice(-overlap) === chunk.slice(0, overlap)) {
-            const prevTail = prev.slice(-overlap);
-            const chunkRemainderFirst = chunk.charAt(overlap);
-            const prevTailLast = prevTail.charAt(prevTail.length - 1);
-            if (/\d/.test(prevTailLast) && /\d/.test(chunkRemainderFirst)) {
-                continue;
-            }
-            return prev + chunk.slice(overlap);
-        }
-    }
-    return prev + chunk;
+    return chatStreamingController.appendStreamChunkDedup(existingText, nextChunk);
 }
 
 function deduplicateTrailingParagraph(text) {
-    const source = String(text || '');
-    if (!source) return source;
-
-    const blocks = source.split(/\n{2,}/);
-    if (blocks.length >= 2) {
-        const last = blocks[blocks.length - 1].trim();
-        const prev = blocks[blocks.length - 2].trim();
-        if (last && prev && last === prev) {
-            return blocks.slice(0, -1).join('\n\n');
-        }
-    }
-
-    const lines = source.split('\n');
-    if (lines.length >= 2) {
-        const lastLine = lines[lines.length - 1].trim();
-        const prevLine = lines[lines.length - 2].trim();
-        if (lastLine && prevLine && lastLine === prevLine) {
-            return lines.slice(0, -1).join('\n');
-        }
-    }
-
-    return source;
+    return chatStreamingController.deduplicateTrailingParagraph(text);
 }
 
 function normalizeComparableTail(text) {
-    return String(text || '')
-        .replace(/\s+/g, ' ')
-        .trim();
+    return chatStreamingController.normalizeComparableTail(text);
 }
 
 function deduplicateCommittedPending(committedText, pendingText) {
-    const committed = String(committedText || '');
-    const pending = String(pendingText || '');
-    if (!pending) {
-        return { committedText: committed, pendingText: '' };
-    }
-
-    const normalizedCommitted = normalizeComparableTail(committed);
-    const normalizedPending = normalizeComparableTail(pending);
-    if (!normalizedPending) {
-        return { committedText: committed, pendingText: '' };
-    }
-
-    if (normalizedCommitted.endsWith(normalizedPending)) {
-        return { committedText: committed, pendingText: '' };
-    }
-
-    const committedBlocks = committed.split(/\n{2,}/).map(normalizeComparableTail).filter(Boolean);
-    const pendingBlocks = pending.split(/\n{2,}/).map(normalizeComparableTail).filter(Boolean);
-    const lastCommittedBlock = committedBlocks[committedBlocks.length - 1] || '';
-    const firstPendingBlock = pendingBlocks[0] || '';
-    if (lastCommittedBlock && firstPendingBlock && lastCommittedBlock === firstPendingBlock) {
-        return { committedText: committed, pendingText: '' };
-    }
-
-    return { committedText: committed, pendingText: pending };
+    return chatStreamingController.deduplicateCommittedPending(committedText, pendingText);
 }
 
 function finalizeMessageContent(id, text) {
-    flushStreamMessageRender(id);
-    const el = ensureAssistantMessageElement(id);
-    if (!el) return;
-    const bubble = el.querySelector('.message-bubble');
-    const { committedHost, pendingHost } = ensureStreamingMarkdownHosts(bubble);
-    if (!committedHost || !pendingHost) return;
-
-    if (el._pendingRenderState?.timerId) {
-        clearTimeout(el._pendingRenderState.timerId);
-    }
-    el._pendingRenderState = null;
-
-    const cleanText = sanitizeAssistantRenderText(text);
-
-    renderMarkdownIntoHost(committedHost, cleanText);
-    pendingHost.innerHTML = '';
-    pendingHost.textContent = '';
-    pendingHost.dataset.markdownSource = '';
-    pendingHost.classList.remove('is-stream-preview');
-    el._streamRenderState = {
-        committedText: cleanText,
-        pendingText: ''
-    };
-
-    const responseCard = el.querySelector('.assistant-response-card');
-    const actionBar = el.querySelector('.message-actions');
-    const hasVisibleContent = !!cleanText.trim();
-    if (responseCard) responseCard.hidden = !hasVisibleContent;
-
-    if (actionBar) {
-        actionBar.hidden = !hasVisibleContent;
-
-        // Ensure buttons are revealed/hidden based on text availability
-        const copyBtn = actionBar.querySelector('.copy-btn');
-        const speakBtn = actionBar.querySelector('.speak-btn');
-        if (copyBtn) copyBtn.hidden = !hasVisibleContent;
-        if (speakBtn) speakBtn.hidden = !hasVisibleContent;
-
-        // Directly transition to ready state when content exists.
-        // This avoids a timing issue where reconcileAssistantActionBarForMessage
-        // could bail early if isAssistantMessageVisiblyEmpty hadn't caught up yet.
-        if (hasVisibleContent) {
-            actionBar.classList.add('is-ready');
-            actionBar.classList.remove('is-pending');
-            attachStreamingAudioButtonToMessage(el);
-        }
-    }
-    syncAssistantMessageShellState(el);
-    if (hasVisibleContent) {
-        checkAndTriggerLabelPin();
-    }
+    return chatStreamingController.finalizeMessageContent(id, text);
 }
 
 function updateSyncedMessageContent(id, text, options = {}) {
-    const el = ensureAssistantMessageElement(id);
-    if (!el) return;
-    const animate = options.animate !== false;
-    const wasNearBottom = isChatNearBottom();
-    const bubble = el.querySelector('.message-bubble');
-    const { markdownBody: mdBody, committedHost, pendingHost } = ensureStreamingMarkdownHosts(bubble);
-    if (!committedHost || !pendingHost) return;
-
-    const previousCommittedText = String(el._streamRenderState?.committedText || '');
-    const cleanText = sanitizeAssistantRenderText(text);
-    const renderMode = getMarkdownRenderMode();
-    if (renderMode === 'final') {
-        renderStreamingPreviewIntoHost(committedHost, cleanText);
-        renderStreamingPreviewIntoHost(pendingHost, '');
-
-        // Rationale: We only buffer meaningful content, not the ephemeral placeholders.
-        if (cleanText !== getPassiveSyncWaitingText()) {
-            el._streamRenderState = {
-                committedText: cleanText,
-                pendingText: ''
-            };
-        }
-
-        const responseCard = el.querySelector('.assistant-response-card');
-        const actionBar = el.querySelector('.message-actions');
-        const hasVisibleContent = !!cleanText.trim();
-        if (responseCard) responseCard.hidden = !hasVisibleContent;
-        if (actionBar && hasVisibleContent) {
-            // Rationale: We no longer reveal the action bar early here to avoid showing buttons 
-            // during reasoning or tool calls. They will be revealed by request.complete 
-            // or if TTS starts (via attachStreamingAudioButtonToMessage).
-        }
-        syncAssistantMessageShellState(el);
-        if (cleanText.trim()) checkAndTriggerLabelPin();
-        scrollToBottom(wasNearBottom);
-        return;
-    }
-    let committedText = '';
-    let pendingText = '';
-
-    if (renderMode === 'fast') {
-        committedText = cleanText;
-        if (committedText !== previousCommittedText) {
-            renderMarkdownIntoHost(committedHost, committedText);
-        }
-        renderStreamingPreviewIntoHost(pendingHost, '');
-    } else {
-        pendingText = cleanText;
-        renderStreamingPreviewIntoHost(committedHost, '');
-        schedulePendingMarkdownRender(el, pendingHost, pendingText);
-    }
-    el._streamRenderState = {
-        committedText,
-        pendingText
-    };
-
-    const responseCard = el.querySelector('.assistant-response-card');
-    const actionBar = el.querySelector('.message-actions');
-    const hasVisibleContent = !!(committedText.trim() || pendingText.trim());
-    if (responseCard) responseCard.hidden = !hasVisibleContent;
-    if (actionBar && actionBar.classList.contains('is-ready')) {
-        actionBar.hidden = !hasVisibleContent;
-    }
-    syncAssistantMessageShellState(el);
-    if (hasVisibleContent) {
-        checkAndTriggerLabelPin();
-        reconcileAssistantActionBarForMessage(el);
-    }
-
-    const shouldPulse = animate && !previousCommittedText.trim() && hasVisibleContent;
-    if (shouldPulse) {
-        pulseMessageRender(el.querySelector('.assistant-response-card'));
-    }
-
-    scrollToBottom(wasNearBottom);
-    const codeBlocks = mdBody.querySelectorAll('pre code');
-    if (wasNearBottom && codeBlocks.length > 0 && getStreamingScrollMode() !== 'label-top') {
-        holdAutoScrollAtBottom(900);
-        observeAutoScrollResizes([el, bubble, mdBody, ...mdBody.querySelectorAll('pre')]);
-    }
+    return chatStreamingController.updateSyncedMessageContent(id, text, options);
 }
 
 function getSpeakableTextFromMarkdownHost(host) {
-    if (!host) return '';
-    const clone = host.cloneNode(true);
-    clone.querySelectorAll('pre, code').forEach((node) => node.remove());
-    return clone.innerText || clone.textContent || '';
+    return chatStreamingController.getSpeakableTextFromMarkdownHost(host);
 }
 
 function schedulePendingMarkdownRender(el, pendingHost, pendingText) {
-    if (!el || !pendingHost) return;
-    if (!el._pendingRenderState) {
-        el._pendingRenderState = { scheduled: false, text: '', timerId: null };
-    }
-
-    el._pendingRenderState.text = pendingText;
-    const renderMode = getMarkdownRenderMode();
-    const throttleMs = renderMode === 'balanced' ? 96 : 0;
-
-    if (el._pendingRenderState.scheduled) return;
-
-    const runRender = () => {
-        if (!el._pendingRenderState) return;
-        el._pendingRenderState.scheduled = false;
-        el._pendingRenderState.timerId = null;
-        renderStreamingPreviewIntoHost(pendingHost, el._pendingRenderState.text || '');
-    };
-
-    el._pendingRenderState.scheduled = true;
-    if (throttleMs > 0) {
-        el._pendingRenderState.timerId = setTimeout(() => {
-            requestAnimationFrame(runRender);
-        }, throttleMs);
-        return;
-    }
-
-    requestAnimationFrame(runRender);
+    return chatStreamingController.schedulePendingMarkdownRender(el, pendingHost, pendingText);
 }
 
 function flushStreamMessageRender(id) {
-    const key = String(id || '');
-    if (!key) return;
-    const pendingText = pendingStreamRenderUpdates.get(key);
-    if (typeof pendingText !== 'string') return;
-    pendingStreamRenderUpdates.delete(key);
-    updateMessageContent(key, pendingText);
+    return chatStreamingController.flushStreamMessageRender(id);
 }
 
 function scheduleStreamMessageRender(id, text) {
-    const key = String(id || '');
-    if (!key) return;
-    pendingStreamRenderUpdates.set(key, String(text || ''));
-    if (pendingStreamRenderFrame) return;
-
-    pendingStreamRenderFrame = requestAnimationFrame(() => {
-        pendingStreamRenderFrame = 0;
-        const updates = Array.from(pendingStreamRenderUpdates.entries());
-        pendingStreamRenderUpdates.clear();
-        updates.forEach(([messageId, latestText]) => {
-            updateMessageContent(messageId, latestText);
-        });
-    });
+    return chatStreamingController.scheduleStreamMessageRender(id, text);
 }
 
 function updateMessageContent(id, text) {
-    const el = ensureAssistantMessageElement(id);
-    if (!el) return;
-    const wasNearBottom = isChatNearBottom();
-
-    const bubble = el.querySelector('.message-bubble');
-    const { markdownBody: mdBody, committedHost, pendingHost } = ensureStreamingMarkdownHosts(bubble);
-
-    // Filter out common special tokens that might leak during streaming
-    let cleanText = sanitizeAssistantRenderText(text);
-    const previousCommittedText = String(el._streamRenderState?.committedText || '');
-    const renderMode = getMarkdownRenderMode();
-    if (renderMode === 'final') {
-        el._streamRenderState = {
-            committedText: cleanText,
-            pendingText: ''
-        };
-        const responseCard = el.querySelector('.assistant-response-card');
-        const actionBar = el.querySelector('.message-actions');
-        if (responseCard) responseCard.hidden = !cleanText.trim();
-        if (actionBar) {
-            if (el.id && !actionBar.classList.contains('is-ready')) {
-                actionBar.hidden = true;
-            } else {
-                actionBar.hidden = !cleanText.trim();
-            }
-        }
-        renderStreamingPreviewIntoHost(committedHost, cleanText);
-        renderStreamingPreviewIntoHost(pendingHost, '');
-        syncAssistantMessageShellState(el);
-        if (cleanText.trim()) checkAndTriggerLabelPin();
-        scrollToBottom(wasNearBottom);
-        return;
-    }
-    let committedText = '';
-    let pendingText = '';
-
-    if (renderMode === 'fast') {
-        committedText = cleanText;
-        if (committedText !== previousCommittedText) {
-            renderMarkdownIntoHost(committedHost, committedText, { allowLooseFallback: false });
-        }
-        renderStreamingPreviewIntoHost(pendingHost, '');
-    } else {
-        pendingText = cleanText;
-        renderStreamingPreviewIntoHost(committedHost, '');
-        schedulePendingMarkdownRender(el, pendingHost, pendingText);
-    }
-    el._streamRenderState = {
-        committedText,
-        pendingText
-    };
-
-    const responseCard = el.querySelector('.assistant-response-card');
-    const actionBar = el.querySelector('.message-actions');
-    const hasVisibleContent = !!(committedText.trim() || pendingText.trim());
-    if (responseCard) responseCard.hidden = !hasVisibleContent;
-    if (actionBar) {
-        if (el.id && !actionBar.classList.contains('is-ready')) {
-            actionBar.hidden = true;
-        } else {
-            actionBar.hidden = !hasVisibleContent;
-        }
-    }
-    syncAssistantMessageShellState(el);
-    if (hasVisibleContent) checkAndTriggerLabelPin();
-
-    if (!previousCommittedText.trim() && hasVisibleContent) {
-        pulseMessageRender(el.querySelector('.assistant-response-card'));
-    }
-
-    scrollToBottom(wasNearBottom);
-    const codeBlocks = mdBody.querySelectorAll('pre code');
-    if (wasNearBottom && codeBlocks.length > 0 && getStreamingScrollMode() !== 'label-top') {
-        holdAutoScrollAtBottom(900);
-        observeAutoScrollResizes([el, bubble, mdBody, ...mdBody.querySelectorAll('pre')]);
-    }
+    return chatStreamingController.updateMessageContent(id, text);
 }
 
 
 function isChatNearBottom() {
-    if (!chatMessages) return true;
-    return !!chatScrollMetrics.nearBottom;
+    return chatUIController.isChatNearBottom();
 }
 
 function hasLongScrollableChat() {
-    if (!chatMessages) return false;
-    return !!chatScrollMetrics.longScrollable;
+    return chatUIController.hasLongScrollableChat();
 }
 
 function updateScrollToBottomButton() {
-    if (!scrollToBottomBtn) return;
-    const shouldShow = !!chatMessages
-        && hasLongScrollableChat()
-        && !isChatNearBottom()
-        && !isRestoringChatSession
-        && !isSavedLibraryOpen;
-
-    if (!shouldShow && document.activeElement === scrollToBottomBtn) {
-        scrollToBottomBtn.blur();
-    }
-
-    scrollToBottomBtn.classList.toggle('is-visible', shouldShow);
-    scrollToBottomBtn.hidden = !shouldShow;
-    if (shouldShow) {
-        scrollToBottomBtn.removeAttribute('aria-hidden');
-        scrollToBottomBtn.removeAttribute('inert');
-    } else {
-        scrollToBottomBtn.setAttribute('inert', '');
-    }
-    updateReasoningControlVisibility();
+    if (isRestoringChatSession) return;
+    return chatUIController.updateScrollToBottomButton();
 }
 
 function jumpToLatestMessages() {
-    triggerHaptic('success');
-    lockScrollToLatest = true;
-    holdAutoScrollAtBottom(900);
-    scrollToBottom(true);
-    updateScrollToBottomButton();
+    return chatUIController.jumpToLatestMessages();
 }
 
 function scrollToBottom(force = false) {
-    if (!chatMessages) return;
-
-    // Respect No Auto Scroll (label-top) mode:
-    // If pinned to top, don't scroll to bottom UNLESS manually override (lockScrollToLatest)
-    if (!lockScrollToLatest && getStreamingScrollMode() === 'label-top' && activeStreamingMessagePinnedToTop) {
-        scheduleChatScrollMetricsRefresh(); // Update metrics for the "Go to bottom" button state
-        return;
-    }
-
-    if (!force && !shouldAutoScroll && !lockScrollToLatest) return;
-    scheduleChatScrollToBottom();
-    shouldAutoScroll = true;
+    return chatUIController.scrollToBottom(force);
 }
 
 function holdAutoScrollAtBottom(durationMs = 700) {
-    if (!chatMessages) return;
-    if (autoScrollHoldTimeout) {
-        clearTimeout(autoScrollHoldTimeout);
-        autoScrollHoldTimeout = null;
-    }
-    scheduleChatScrollToBottom();
-    autoScrollHoldTimeout = setTimeout(() => {
-        if (chatMessages && (shouldAutoScroll || lockScrollToLatest)) {
-            scheduleChatScrollToBottom();
-        }
-        autoScrollHoldTimeout = null;
-    }, durationMs);
+    return chatUIController.holdAutoScrollAtBottom(durationMs);
 }
 
 function scheduleChatScrollToBottom() {
-    if (!chatMessages || pendingScrollToBottom) return;
-    pendingScrollToBottom = true;
-    requestAnimationFrame(() => {
-        pendingScrollToBottom = false;
-        if (!chatMessages) return;
-        const metrics = refreshChatScrollMetrics();
-        suppressNextScrollEvent = true;
-        chatMessages.scrollTop = metrics.scrollHeight;
-        commitChatScrollMetrics({
-            scrollTop: Math.max(0, metrics.scrollHeight - metrics.clientHeight),
-            scrollHeight: metrics.scrollHeight,
-            clientHeight: metrics.clientHeight,
-            distanceFromBottom: 0,
-            nearBottom: true,
-            longScrollable: metrics.longScrollable
-        });
-        scrollActiveMessageIntoView();
-        updateScrollToBottomButton();
-    });
+    return chatUIController.scheduleChatScrollToBottom();
 }
 
 function observeAutoScrollResizes(elements) {
-    if (!chatMessages || typeof ResizeObserver === 'undefined') return;
-    if (autoScrollResizeObserver) {
-        autoScrollResizeObserver.disconnect();
-        autoScrollResizeObserver = null;
-    }
-
-    const targets = (elements || []).filter(Boolean);
-    if (targets.length === 0) return;
-    refreshChatScrollMetrics();
-
-    autoScrollResizeObserver = new ResizeObserver(() => {
-        if (!chatMessages) return;
-        const previousMetrics = chatScrollMetrics;
-        const currentMetrics = refreshChatScrollMetrics();
-        const delta = currentMetrics.scrollHeight - previousMetrics.scrollHeight;
-
-        if (shouldAutoScroll || lockScrollToLatest) {
-            scheduleChatScrollToBottom();
-        } else if (Math.abs(delta) > 1) {
-            // Respect No Auto Scroll (label-top) mode: 
-            // Don't follow the height change if we are pinned to the message top.
-            if (getStreamingScrollMode() === 'label-top' && activeStreamingMessagePinnedToTop) {
-                commitChatScrollMetrics(currentMetrics);
-                updateScrollToBottomButton();
-                return;
-            }
-
-            suppressNextScrollEvent = true;
-            chatMessages.scrollTop += delta;
-            commitChatScrollMetrics({
-                ...currentMetrics,
-                scrollTop: currentMetrics.scrollTop + delta,
-                distanceFromBottom: Math.max(0, currentMetrics.distanceFromBottom - delta)
-            });
-            updateScrollToBottomButton();
-        }
-    });
-
-    targets.forEach((target) => autoScrollResizeObserver.observe(target));
+    return chatUIController.observeAutoScrollResizes(elements);
 }
 
 function scrollActiveMessageIntoView() {
-    if (!chatMessages || !activeStreamingMessageId) return;
-    const activeMessage = document.getElementById(activeStreamingMessageId);
-    if (!activeMessage) return;
-    const responseCard = activeMessage.querySelector('.assistant-response-card');
-    const target = responseCard || activeMessage;
-    const containerRect = chatMessages.getBoundingClientRect();
-    const targetRect = target.getBoundingClientRect();
-    const inputRect = inputArea ? inputArea.getBoundingClientRect() : null;
-    const reasoningHeight = (!reasoningControlBar || reasoningControlBar.hidden)
-        ? 0
-        : reasoningControlBar.getBoundingClientRect().height;
-    const occlusion = inputRect ? Math.max(0, containerRect.bottom - inputRect.top) : 0;
-    const desiredBottom = containerRect.bottom - occlusion - Math.max(16, reasoningHeight > 0 ? 28 : 16);
-    const delta = targetRect.bottom - desiredBottom;
-
-    if (delta > 0) {
-        suppressNextScrollEvent = true;
-        chatMessages.scrollTop += delta;
-        updateScrollToBottomButton();
-    }
+    return chatUIController.scrollActiveMessageIntoView();
 }
 
 function pinActiveMessageLabelToTop() {
-    if (!chatMessages || !activeStreamingMessageId) return;
-    const activeMessage = document.getElementById(activeStreamingMessageId);
-    if (!activeMessage) return;
-    const label = activeMessage.querySelector('.message-label');
-    const target = label || activeMessage;
-    const containerRect = chatMessages.getBoundingClientRect();
-    const targetRect = target.getBoundingClientRect();
-    const topPadding = 12;
-    const delta = targetRect.top - containerRect.top - topPadding;
-    if (Math.abs(delta) > 1) {
-        suppressNextScrollEvent = true;
-        chatMessages.scrollTop += delta;
-        refreshChatScrollMetrics();
-        updateScrollToBottomButton();
-    }
+    return chatUIController.pinActiveMessageLabelToTop();
 }
 
 function checkAndTriggerLabelPin() {
-    if (!activeStreamingMessagePinPending || getStreamingScrollMode() !== 'label-top' || !activeStreamingMessageId) {
-        return;
-    }
-
-    const activeMessage = document.getElementById(activeStreamingMessageId);
-    if (!activeMessage) return;
-
-    // Assistant Response Visibility
-    const responseCard = activeMessage.querySelector('.assistant-response-card');
-    const hasResponseContent = responseCard && !responseCard.hidden && !!responseCard.querySelector('.markdown-body')?.textContent.trim();
-
-    // Tool Visibility
-    const toolsHost = activeMessage.querySelector('.assistant-tools');
-    const hasToolsContent = toolsHost && toolsHost.children.length > 0;
-
-    // Reasoning Visibility (Ignore initial "Thinking..." placeholder)
-    const reasoningBody = activeMessage.querySelector('.reasoning-body');
-    const reasoningText = reasoningBody ? reasoningBody.textContent.trim() : '';
-    // We only trigger if there are actual thoughts, not just the "Thinking..." status
-    const hasReasoningContent = reasoningText.length > 0 && reasoningText !== 'Thinking...';
-
-    if (hasResponseContent || hasToolsContent || hasReasoningContent) {
-        // Use double RAF to ensure the content is rendered and layout is ready
-        requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-                if (activeStreamingMessagePinPending) {
-                    pinActiveMessageLabelToTop();
-                    activeStreamingMessagePinnedToTop = true;
-                    activeStreamingMessagePinPending = false;
-                }
-            });
-        });
-    }
+    return chatUIController.checkAndTriggerLabelPin();
 }
 
 function pinTurnToTop(turnId) {
-    if (!chatMessages || !turnId) return;
-    const el = document.querySelector(`.message[data-turn-id="${turnId}"]`);
-    if (!el) return;
-    const label = el.querySelector('.message-label');
-    const target = label || el;
-    const containerRect = chatMessages.getBoundingClientRect();
-    const targetRect = target.getBoundingClientRect();
-    const topPadding = 12;
-    const delta = targetRect.top - containerRect.top - topPadding;
-    if (Math.abs(delta) > 1) {
-        suppressNextScrollEvent = true;
-        chatMessages.scrollTop += delta;
-        refreshChatScrollMetrics();
-        updateScrollToBottomButton();
-    }
+    return chatUIController.pinTurnToTop(turnId);
 }
 
 function startStreamingMessageAutoScroll(messageId) {
-    activeStreamingMessageId = messageId;
-    activeStreamingMessagePinnedToTop = false;
-    const activeMessage = document.getElementById(messageId);
-    if (!activeMessage || !chatMessages) return;
-
-    if (getStreamingScrollMode() === 'label-top') {
-        // Fix: Add a dummy class to allow scrolling the last message to the top
-        chatMessages.classList.add('is-label-top-streaming');
-
-        // Note: We don't pin here anymore. We wait for the first content.
-        // But we must set PinnedToTop to true to block auto-scrolls during the waiting phase.
-        activeStreamingMessagePinPending = true;
-        activeStreamingMessagePinnedToTop = true; 
-
-        shouldAutoScroll = false;
-        lockScrollToLatest = false;
-        if (autoScrollResizeObserver) {
-            autoScrollResizeObserver.disconnect();
-            autoScrollResizeObserver = null;
-        }
-        return;
-    }
-    const responseCard = activeMessage.querySelector('.assistant-response-card');
-    const markdownBody = activeMessage.querySelector('.markdown-body');
-    const codeBlocks = activeMessage.querySelectorAll('pre');
-    observeAutoScrollResizes([activeMessage, responseCard, markdownBody, ...codeBlocks]);
+    return chatUIController.startStreamingMessageAutoScroll(messageId);
 }
 
 function stopStreamingMessageAutoScroll() {
-    activeStreamingMessagePinnedToTop = false;
-    activeStreamingMessagePinPending = false;
-    if (chatMessages) {
-        chatMessages.classList.remove('is-label-top-streaming');
-    }
-    if (autoScrollResizeObserver) {
-        autoScrollResizeObserver.disconnect();
-        autoScrollResizeObserver = null;
-    }
+    return chatUIController.stopStreamingMessageAutoScroll();
 }
 
 // TTS: Speak a message using the Go server's /api/tts endpoint
 async function speakMessage(text, btn = null) {
-    // If clicking the same button that is currently playing or streaming, stop it
-    if ((isPlayingQueue || streamingTTSActive) && btn && btn === currentAudioBtn) {
-        stopAllAudio();
-        return;
-    }
-
-    // Stop previous audio before starting new one
-    stopAllAudio();
-
-    if (!config.enableTTS) {
-        if (!btn) return; // Don't alert on auto-play failure if disabled
-        alert('TTS is disabled. Enable it in settings.');
-        return;
-    }
-
-    if (getCurrentTTSEngine() === 'os' && !supportsOSTTS()) {
-        if (btn) {
-            alert(t('setting.osVoice.unavailable'));
-        }
-        return;
-    }
-
-    // Clean text for TTS (remove emojis, markdown, etc.)
-    const cleanText = cleanTextForTTS(text);
-    if (!cleanText) return;
     if (btn) {
         triggerHaptic('nudge');
     }
-    activeTTSSessionLabel = cleanText.substring(0, 120) + (cleanText.length > 120 ? '...' : '');
-
-    // Initialize/Clear queue
-    ttsQueue = []; // Clear existing queue if any (though stopAllAudio called above)
-    if (btn) currentAudioBtn = btn;
-
-    // Minimum chunk length - chunks shorter than this will be merged
-    const MIN_CHUNK_LENGTH = 50;
-
-    // 1. Split by paragraphs (double newlines) first
-    const paragraphs = cleanText.split(/\n\s*\n+/);
-
-    let currentChunk = "";
-
-    for (const paragraph of paragraphs) {
-        if (!paragraph.trim()) continue;
-
-        // 2. Smart sentence splitting:
-        // - Split on sentence endings (.!?) followed by space and uppercase/Korean
-        // - But NOT on numbered lists like "1.", "2." or abbreviations
-        // - Pattern: sentence ending + space + (uppercase letter OR Korean character)
-        const sentencePattern = /(?<=[.!?])(?=\s+(?:[A-Z가-힣]|$))/g;
-        const rawChunks = paragraph.split(sentencePattern).filter(s => s.trim());
-
-        // If no splits found, use the whole paragraph
-        const sentences = rawChunks.length > 0 ? rawChunks : [paragraph];
-
-        // 3. Combine sentences up to chunkSize, merging short chunks
-        for (const part of sentences) {
-            const trimmedPart = part.trim();
-            if (!trimmedPart) continue;
-
-            // If adding this part exceeds chunkSize and we have content, queue current chunk
-            if ((currentChunk + " " + trimmedPart).length > config.chunkSize && currentChunk.length >= MIN_CHUNK_LENGTH) {
-                ttsQueue.push(currentChunk.trim());
-                currentChunk = "";
-                processTTSQueue();
-            }
-
-            // Add to current chunk
-            currentChunk = currentChunk ? currentChunk + " " + trimmedPart : trimmedPart;
-        }
-
-        // At paragraph end, queue if we have enough content
-        if (currentChunk.length >= MIN_CHUNK_LENGTH) {
-            ttsQueue.push(currentChunk.trim());
-            currentChunk = "";
-            processTTSQueue();
-        }
-    }
-
-    // Final chunk - queue even if short (it's the last one)
-    if (currentChunk.trim()) {
-        ttsQueue.push(currentChunk.trim());
-        processTTSQueue();
-    }
+    return ttsController.speakMessage(text, btn);
 }
 
 // ============================================================================
@@ -10367,215 +7233,30 @@ async function speakMessage(text, btn = null) {
  * Optimized to prevent duplicates and improve performance
  */
 function cleanTextForTTS(text) {
-    if (!text) return '';
-
-    let cleaned = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-
-    // 1. Remove Structural Artifacts (Tools, Thinking, HTML)
-    // Remove tool status messages (content validation)
-    cleaned = cleaned.replace(/<span class="tool-status"[\s\S]*?<\/span>/g, '');
-    // Remove raw Tool Call logs
-    cleaned = cleaned.replace(/Tool Call:.*?(?:[.!?\n]|$)+/gi, '');
-    // Remove <think> blocks if any remain
-    cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/g, '');
-    // Remove all HTML tags
-    cleaned = cleaned.replace(/<[^>]*>/g, '');
-
-    // 2. Apply Custom Dictionary Corrections
-    if (typeof ttsDictionaryRegex !== 'undefined' && ttsDictionaryRegex) {
-        cleaned = cleaned.replace(ttsDictionaryRegex, (match) => {
-            return ttsDictionary[match.toLowerCase()] || match;
-        });
-    }
-
-    // 3. Remove URLs and Links
-    // Remove raw URLs (http://...) but keep the text
-    cleaned = cleaned.replace(/https?:\/\/[^\s]+/g, '');
-    // Convert Markdown links [Text](URL) -> Text
-    cleaned = cleaned.replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1');
-    // Remove Images ![Alt](URL) -> Alt
-    cleaned = cleaned.replace(/!\[([^\]]*)\]\([^\)]+\)/g, '$1');
-
-    // 4. Clean Markdown Syntax (Preserving Content)
-    // Remove Code Blocks entirely (fence + content)
-    // User requested to skip source code reading
-    cleaned = cleaned.replace(/```[\s\S]*?```/g, '');
-    // Remove inline code if it looks like variable names (optional, but requested "exclude source code")
-    // Let's keep inline code for now as it might be relevant words, but strict block removal is key.
-    cleaned = cleaned.replace(/`[^`]+`/g, ''); // Remove inline code too for cleaner reading?
-    // User said "source code", usually implies blocks.
-    // But inline `text` often contains variable names that disrupt flow.
-    // Let's stick to removing blocks first. Inline: remove backticks but keep text?
-    // Previous logic was "remove backticks keep text".
-    // User complaint was about "source code".
-    // Let's remove blocks entirely. Inline: keep text.
-    cleaned = cleaned.replace(/`/g, ''); // Remove inline backticks
-
-    // Convert Markdown headings into explicit paragraph breaks for stronger pauses.
-    cleaned = cleaned.replace(/^(#{1,6})\s+(.+?)([.!?]?)$/gm, (_, hashes, title, punct) => {
-        const level = hashes.length;
-        const suffix = punct || '.';
-        const pauseBreak = level <= 2 ? '\n\n' : '\n';
-        return `${title}${suffix}${pauseBreak}`;
-    });
-
-    // Remove Bold/Italic wrappers (**text**, __text__, *text*, _text_)
-    cleaned = cleaned.replace(/(\*\*|__)(.*?)\1/g, '$2');
-    cleaned = cleaned.replace(/(\*|_)(.*?)\1/g, '$2');
-
-    // Remove Blockquotes (>)
-    cleaned = cleaned.replace(/^>\s+/gm, '');
-    // Remove Horizontal Rules (---)
-    cleaned = cleaned.replace(/^([-*_]){3,}\s*$/gm, '\n\n');
-    // Treat list items as separate spoken units with an explicit boundary.
-    cleaned = cleaned.replace(/^\s*[-*+]\s+(.+)$/gm, '\n$1.\n');
-    cleaned = cleaned.replace(/^\s*(\d+)[\.\)]\s+(.+)$/gm, '\n$1. $2.\n');
-
-    // 5. Remove Emojis and Symbols (Consolidated Regex)
-    // Ranges: Emoticons, Symbols, Transport, Flags, Dingbats, Shapes, Arrows, etc.
-    const symbolRegex = /[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{FE00}-\u{FE0F}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2300}-\u{23FF}\u{25A0}-\u{25FF}\u{2B00}-\u{2BFF}\u{2190}-\u{21FF}\u{2900}-\u{297F}\u{3290}-\u{329F}\u{3030}\u{303D}]/gu;
-    cleaned = cleaned.replace(symbolRegex, '');
-
-    // 6. Normalization and Punctuation
-    // Fancy quotes to space or simple quotes
-    cleaned = cleaned.replace(/[«»""„‚]/g, ' ');
-    // Separators to comma/pause
-    cleaned = cleaned.replace(/[=→—–]/g, ', ');
-    cleaned = cleaned.replace(/\s*[-•◦▪▸►]\s*/g, ', ');
-    // Ellipsis
-    cleaned = cleaned.replace(/\.{3,}/g, '.');
-
-    // Remove specific unwanted characters if any remain
-    cleaned = cleaned.replace(/[*~|]/g, '');
-
-    // Ensure sentence spacing (e.g. "end.Next" -> "end. Next")
-    cleaned = cleaned.replace(/([.!?])(?=[^ \n])/g, '$1 ');
-    cleaned = cleaned.replace(/([^\s.!?])\n/g, '$1.\n');
-    cleaned = cleaned.replace(/\n([^\s])/g, '\n$1');
-
-    // Normalize Whitespace
-    cleaned = cleaned.replace(/\n{4,}/g, '\n\n\n'); // Preserve strong paragraph/list pauses
-    cleaned = cleaned.replace(/[ \t]+/g, ' ');    // Collapse spaces
-    cleaned = cleaned.replace(/^\s+|\s+$/gm, ''); // Trim lines
-
-    return cleaned.trim();
+    return ttsController.cleanTextForTTS(text);
 }
 
 /**
  * Initialize streaming TTS for a new message
  */
 function initStreamingTTS(elementId) {
-    // Stop any existing audio/TTS
-    stopAllAudio();
-
-    streamingTTSActive = true;
-    streamingTTSCommittedIndex = 0;
-    streamingTTSBuffer = "";
-    activeTTSSessionLabel = "Streaming TTS";
-
-    // Get speak button for UI updates
-    const msgEl = document.getElementById(elementId);
-    if (msgEl) {
-        currentAudioBtn = msgEl.querySelector('.speak-btn');
-    }
-    syncCurrentAudioButtonUI();
-
-    console.log("[Streaming TTS] Initialized");
+    return ttsController.initStreamingTTS(elementId);
 }
 
 function getStreamingChunkTargets() {
-    const baseTarget = Math.max(parseInt(config.chunkSize) || 200, 80);
-    const firstChunkTarget = Math.min(baseTarget, 48);
-    return {
-        firstChunkTarget,
-        weakBoundaryTarget: Math.max(Math.floor(baseTarget * 0.45), 36),
-        strongBoundaryTarget: Math.max(Math.floor(baseTarget * 0.72), 64),
-        hardCeiling: Math.max(Math.floor(baseTarget * 1.2), 120)
-    };
+    return ttsController.getStreamingChunkTargets();
 }
 
 function detectStreamingBoundary(newText) {
-    const patterns = [
-        { kind: 'strong', regex: /^([\s\S]*?\n{2,})/ },
-        { kind: 'strong', regex: /^([\s\S]*?\n)/ },
-        { kind: 'strong', regex: /^([\s\S]*?[.!?])(?:\s+|$)/ },
-        { kind: 'weak', regex: /^([\s\S]*?[,;:])(?:\s+|$)/ }
-    ];
-
-    for (const pattern of patterns) {
-        const match = newText.match(pattern.regex);
-        if (match && match[1] && match[1].trim()) {
-            return { text: match[1], kind: pattern.kind };
-        }
-    }
-    return null;
+    return ttsController.detectStreamingBoundary(newText);
 }
 
 function shouldCommitStreamingBoundary(length, boundaryKind, hasQueuedAudio) {
-    const targets = getStreamingChunkTargets();
-    if (!hasQueuedAudio) {
-        return length >= targets.firstChunkTarget || boundaryKind === 'strong';
-    }
-    if (boundaryKind === 'strong') {
-        return length >= targets.strongBoundaryTarget;
-    }
-    return length >= targets.weakBoundaryTarget;
+    return ttsController.shouldCommitStreamingBoundary(length, boundaryKind, hasQueuedAudio);
 }
 
 function splitTTSParagraphByPriority(text, maxChunkSize, minChunkLength, force = false) {
-    const chunks = [];
-    let remaining = (text || '').trim();
-    if (!remaining) return chunks;
-
-    const boundaryRegex = /([\s\S]*?(?:\n{2,}|\n|[.!?](?=\s|$)|[,;:](?=\s|$)))/g;
-
-    while (remaining) {
-        if (remaining.length <= maxChunkSize) {
-            if ((remaining.length >= minChunkLength || force) && /[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ0-9]/.test(remaining)) {
-                chunks.push(remaining.trim());
-            }
-            break;
-        }
-
-        const windowText = remaining.slice(0, maxChunkSize + Math.floor(maxChunkSize * 0.25));
-        let bestStrong = null;
-        let bestWeak = null;
-        let match;
-
-        boundaryRegex.lastIndex = 0;
-        while ((match = boundaryRegex.exec(windowText)) !== null) {
-            const segment = match[1];
-            const boundaryEnd = match.index + segment.length;
-            if (boundaryEnd < minChunkLength) continue;
-            if (boundaryEnd > maxChunkSize) break;
-
-            const trimmed = segment.trimEnd();
-            if (!trimmed) continue;
-
-            const isStrong = /(?:\n{2,}|\n|[.!?])\s*$/.test(trimmed);
-            if (isStrong) {
-                bestStrong = boundaryEnd;
-            } else {
-                bestWeak = boundaryEnd;
-            }
-        }
-
-        let splitAt = bestStrong || bestWeak;
-        if (!splitAt) {
-            splitAt = remaining.lastIndexOf(' ', maxChunkSize);
-            if (splitAt < minChunkLength) {
-                splitAt = maxChunkSize;
-            }
-        }
-
-        const chunk = remaining.slice(0, splitAt).trim();
-        if (chunk && /[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ0-9]/.test(chunk)) {
-            chunks.push(chunk);
-        }
-        remaining = remaining.slice(splitAt).trimStart();
-    }
-
-    return chunks;
+    return ttsController.splitTTSParagraphByPriority(text, maxChunkSize, minChunkLength, force);
 }
 
 /**
@@ -10583,93 +7264,7 @@ function splitTTSParagraphByPriority(text, maxChunkSize, minChunkLength, force =
  * This is called every time the LLM emits new tokens
  */
 function feedStreamingTTS(displayText) {
-    if (!streamingTTSActive) return;
-
-    // 최적화된 청킹 로직:
-    // - 첫 청크: 줄바꿈 발견 즉시 커밋 (빠른 시작)
-    // - 중간 청크: chunkSize 이상 + 줄바꿈 발견 시 커밋
-    // - 마지막 청크: finalizeStreamingTTS()에서 길이 무관 커밋
-
-    // Process all available committed segments in a loop
-    let iterations = 0;
-    const maxIterations = 20; // Safety limit
-
-    while (iterations < maxIterations) {
-        iterations++;
-
-        // Get the new portion of text since last commit
-        const newText = displayText.substring(streamingTTSCommittedIndex);
-        if (!newText || newText.length < 3) break; // Need at least some content
-
-        let committed = null;
-        let advanceBy = 0;
-        const hasQueuedAudio = firstChunkPlayedInCurrentSession();
-        const targets = getStreamingChunkTargets();
-
-        // PRIORITY 1: Check for Code Blocks (Skip them entirely)
-        const codeBlockMatch = newText.match(/(.*?)```[\s\S]*?```/);
-
-        if (codeBlockMatch) {
-            const textBefore = codeBlockMatch[1];
-            const fullMatch = codeBlockMatch[0];
-
-            if (textBefore.trim()) {
-                const cleanedBefore = cleanTextForTTS(textBefore);
-                // If cleaned text is substantial, commit it.
-                if (cleanedBefore.trim()) {
-                    committed = streamingTTSBuffer + cleanedBefore;
-                    streamingTTSBuffer = ""; // Reset buffer
-                }
-            }
-
-            if (committed) {
-                advanceBy = fullMatch.length;
-            } else {
-                streamingTTSCommittedIndex += fullMatch.length;
-                // Flush buffer if any
-                if (streamingTTSBuffer.trim()) {
-                    const toSpeak = streamingTTSBuffer;
-                    streamingTTSBuffer = "";
-                    pushToStreamingTTSQueue(toSpeak, true);
-                }
-                continue;
-            }
-        }
-
-        // PRIORITY 2: Weighted punctuation/newline boundaries
-        if (!committed) {
-            const boundary = detectStreamingBoundary(newText);
-            if (boundary) {
-                const potentialCommit = streamingTTSBuffer + cleanTextForTTS(boundary.text);
-                if (shouldCommitStreamingBoundary(potentialCommit.length, boundary.kind, hasQueuedAudio)) {
-                    committed = potentialCommit;
-                    streamingTTSBuffer = "";
-                    advanceBy = boundary.text.length;
-                } else {
-                    streamingTTSBuffer = potentialCommit + " ";
-                    streamingTTSCommittedIndex += boundary.text.length;
-                    continue;
-                }
-            }
-        }
-
-        if (!committed && (streamingTTSBuffer.length + cleanTextForTTS(newText).length) >= targets.hardCeiling) {
-            const forcedCommit = (streamingTTSBuffer + " " + cleanTextForTTS(newText.slice(0, targets.hardCeiling))).trim();
-            if (forcedCommit) {
-                committed = forcedCommit;
-                streamingTTSBuffer = "";
-                advanceBy = Math.min(newText.length, targets.hardCeiling);
-            }
-        }
-
-        // If nothing matched, stop the loop
-        if (!committed) break;
-
-        // Commit the segment
-        console.log(`[Streaming TTS] Committing (${committed.length} chars): "${committed.substring(0, 50)}..."`);
-        pushToStreamingTTSQueue(committed, true);
-        streamingTTSCommittedIndex += advanceBy;
-    }
+    return ttsController.feedStreamingTTS(displayText);
 }
 
 
@@ -10678,23 +7273,7 @@ function feedStreamingTTS(displayText) {
  * Commits any remaining uncommitted text
  */
 function finalizeStreamingTTS(finalDisplayText) {
-    if (!streamingTTSActive) return;
-
-    // Commit any remaining text including buffer
-    const remainingText = finalDisplayText.substring(streamingTTSCommittedIndex);
-    const cleanText = cleanTextForTTS(remainingText);
-
-    // Combine buffer with remaining text
-    const finalText = (streamingTTSBuffer + " " + (cleanText || "")).trim();
-
-    if (finalText) {
-        console.log(`[Streaming TTS] Finalizing: "${finalText.substring(0, 50)}..."`);
-        pushToStreamingTTSQueue(finalText, true); // Force output even if short
-    }
-
-    streamingTTSBuffer = "";
-    streamingTTSActive = false;
-    console.log("[Streaming TTS] Finalized");
+    return ttsController.finalizeStreamingTTS(finalDisplayText);
 }
 
 /**
@@ -10703,37 +7282,7 @@ function finalizeStreamingTTS(finalDisplayText) {
  * @param {boolean} force - If true, ignores MIN_CHUNK_LENGTH check (use for final chunk)
  */
 function pushToStreamingTTSQueue(text, force = false) {
-    if (!text || !text.trim()) return;
-
-    const hasQueuedAudio = ttsQueue.length > 0 || isPlayingQueue;
-    const minChunkLength = hasQueuedAudio ? 40 : 18;
-
-    const maxChunkSize = Math.max(parseInt(config.chunkSize) || 200, 80);
-
-    // Split into smaller chunks if needed (using weighted boundaries)
-    const paragraphs = text.split(/\n+/);
-    const newChunks = [];
-
-    for (const para of paragraphs) {
-        if (!para.trim()) continue;
-        const chunks = splitTTSParagraphByPriority(para, maxChunkSize, minChunkLength, force);
-        for (const chunk of chunks) {
-            ttsQueue.push(chunk);
-            newChunks.push(chunk);
-        }
-    }
-
-    // IMMEDIATELY start prefetching new chunks for engines that fetch audio.
-    if (getCurrentTTSEngine() === 'supertonic') {
-        for (const chunk of newChunks) {
-            prefetchTTSAudio(chunk);
-        }
-    }
-
-    // Start processing if not already running
-    if (!isPlayingQueue && ttsQueue.length > 0) {
-        processTTSQueue();
-    }
+    return ttsController.pushToStreamingTTSQueue(text, force);
 }
 
 // ============================================================================
@@ -10742,77 +7291,11 @@ function pushToStreamingTTSQueue(text, force = false) {
 const ttsAudioCache = new Map(); // text -> Promise<url>
 
 function firstChunkPlayedInCurrentSession() {
-    return ttsQueue.length > 0 || isPlayingQueue;
+    return ttsController.firstChunkPlayedInCurrentSession();
 }
 
 async function processOSTTSQueue() {
-    if (!supportsOSTTS()) return;
-    if (isPlayingQueue) return;
-    if (ttsQueue.length === 0) return;
-
-    isPlayingQueue = true;
-    syncWakeLock();
-    const btn = currentAudioBtn;
-    const sessionId = ttsSessionId;
-    const mediaSessionLabel = activeTTSSessionLabel;
-    let firstChunkPlayed = false;
-
-    while (true) {
-        if (sessionId !== ttsSessionId) break;
-
-        const text = ttsQueue.shift();
-        if (!text) {
-            if (streamingTTSActive) {
-                await new Promise((resolve) => setTimeout(resolve, 100));
-                continue;
-            }
-            break;
-        }
-
-        const utterance = new SpeechSynthesisUtterance(text);
-        const selectedVoice = getSelectedOSTTSVoice();
-        if (selectedVoice) {
-            utterance.voice = selectedVoice;
-            utterance.lang = selectedVoice.lang || config.osTtsVoiceLang || config.ttsLang || 'ko';
-        } else {
-            utterance.lang = config.osTtsVoiceLang || config.ttsLang || 'ko';
-        }
-        utterance.rate = parseFloat(config.osTtsRate) || 1.0;
-        utterance.pitch = parseFloat(config.osTtsPitch) || 1.0;
-
-        try {
-            if (!firstChunkPlayed && mediaSessionLabel) {
-                updateMediaSessionMetadata(mediaSessionLabel);
-            }
-
-            await new Promise((resolve, reject) => {
-                utterance.onstart = () => {
-                    if (!firstChunkPlayed && btn) {
-                        firstChunkPlayed = true;
-                        syncCurrentAudioButtonUI();
-                    }
-                };
-                utterance.onend = () => resolve();
-                utterance.onerror = (event) => {
-                    console.error('[OS TTS] Playback failed:', event);
-                    reject(event);
-                };
-
-                if (sessionId !== ttsSessionId) {
-                    resolve();
-                    return;
-                }
-
-                window.speechSynthesis.speak(utterance);
-            });
-        } catch (e) {
-            console.error('[OS TTS] Chunk playback error:', e);
-        }
-    }
-
-    if (sessionId === ttsSessionId) {
-        endTTS(btn, sessionId);
-    }
+    return ttsController.processOSTTSQueue();
 }
 
 /**
@@ -10820,246 +7303,25 @@ async function processOSTTSQueue() {
  * Can be called anytime - will use cached promise if already fetching/fetched
  */
 function prefetchTTSAudio(text) {
-    if (!text) return null;
-    if (ttsAudioCache.has(text)) return ttsAudioCache.get(text);
-
-    const promise = (async () => {
-        // Check if session is still valid
-        const sessionAtStart = ttsSessionId;
-
-        try {
-            const payload = {
-                text: text,
-                lang: config.ttsLang,
-                chunkSize: parseInt(config.chunkSize) || 300,
-                voiceStyle: config.ttsVoice,
-                speed: parseFloat(config.ttsSpeed) || 1.0,
-                steps: parseInt(config.ttsSteps) || 5,
-                format: config.ttsFormat || 'wav'
-            };
-
-            console.log(`[TTS] Prefetching: "${text.substring(0, 25)}..."`);
-            const response = await fetch('/api/tts', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-
-            // Check if session changed during fetch
-            if (sessionAtStart !== ttsSessionId) {
-                console.log(`[TTS] Session changed, discarding prefetch`);
-                return null;
-            }
-
-            if (!response.ok) {
-                console.error(`[TTS] Chunk failed:`, await response.text());
-                return null;
-            }
-
-            const blob = await response.blob();
-            const url = URL.createObjectURL(blob);
-            console.log(`[TTS] Prefetch complete: "${text.substring(0, 25)}..."`);
-            return url;
-        } catch (e) {
-            console.error(`[TTS] Chunk error:`, e);
-            return null;
-        }
-    })();
-
-    ttsAudioCache.set(text, promise);
-    return promise;
+    return ttsController.prefetchTTSAudio(text);
 }
 
 /**
  * Clear the audio cache (called on stopAllAudio)
  */
 function clearTTSAudioCache() {
-    // Revoke all URLs
-    ttsAudioCache.forEach(async (promise) => {
-        const url = await promise;
-        if (url) URL.revokeObjectURL(url);
-    });
-    ttsAudioCache.clear();
+    return ttsController.clearTTSAudioCache();
 }
 
 async function processTTSQueue(isFirstChunk = false) {
-    if (getCurrentTTSEngine() === 'os') {
-        return processOSTTSQueue();
-    }
-    if (ttsQueue.length === 0) return;
-    if (isPlayingQueue) return; // Already running
-
-    isPlayingQueue = true;
-    syncWakeLock();
-    const btn = currentAudioBtn;
-    const sessionId = ttsSessionId;
-    const mediaSessionLabel = activeTTSSessionLabel;
-
-    if (btn) {
-        syncCurrentAudioButtonUI();
-    }
-
-    let firstChunkPlayed = false;
-
-    // Start prefetching first few items immediately
-    for (let i = 0; i < Math.min(3, ttsQueue.length); i++) {
-        prefetchTTSAudio(ttsQueue[i]);
-    }
-
-    // Main processing loop
-    while (true) {
-        // Check cancellation
-        if (sessionId !== ttsSessionId) break;
-
-        // Get next item from queue
-        const text = ttsQueue.shift();
-
-        if (!text) {
-            // Queue empty - check if streaming is still active
-            if (streamingTTSActive) {
-                // Wait a bit for more items to arrive
-                await new Promise(r => setTimeout(r, 100));
-                continue;
-            } else {
-                // Streaming finished and queue empty - we're done
-                break;
-            }
-        }
-
-        // Start prefetching next items while we process current
-        for (let i = 0; i < Math.min(2, ttsQueue.length); i++) {
-            prefetchTTSAudio(ttsQueue[i]);
-        }
-
-        // Get current audio
-        let audioUrl = null;
-        let playbackBundle = null;
-        try {
-            const audioUrlPromise = prefetchTTSAudio(text);
-            audioUrl = await audioUrlPromise;
-        } catch (e) {
-            console.error("Prefetch failed", e);
-        }
-
-        // Remove from cache after getting
-        ttsAudioCache.delete(text);
-
-        if (!audioUrl) {
-            continue; // Skip failed chunks
-        }
-
-        // Check cancellation again
-        if (sessionId !== ttsSessionId) {
-            URL.revokeObjectURL(audioUrl);
-            break;
-        }
-
-        // Play audio using HTML5 Audio (Better for iOS Background)
-        try {
-            if (!firstChunkPlayed && mediaSessionLabel) {
-                updateMediaSessionMetadata(mediaSessionLabel);
-            }
-
-            if (!currentAudio) {
-                currentAudio = new Audio();
-                currentAudio.playsInline = true;
-                currentAudio.preload = 'auto';
-            }
-
-            playbackBundle = await combinePlayableChunks(audioUrl, [...ttsQueue]);
-            const playbackUrl = playbackBundle?.url || audioUrl;
-
-            // Update UI on first chunk playing
-            if (!firstChunkPlayed && btn) {
-                firstChunkPlayed = true;
-                syncCurrentAudioButtonUI();
-            }
-
-            // Play via Audio element
-            await new Promise((resolve, reject) => {
-                detachCurrentAudioPlaybackListeners();
-                const playbackController = new AbortController();
-                currentAudioPlaybackController = playbackController;
-
-                const onEnded = () => {
-                    if (currentAudioPlaybackController === playbackController) {
-                        currentAudioPlaybackController = null;
-                    }
-                    resolve();
-                };
-                const onError = (e) => {
-                    console.error("Audio element error:", e);
-                    if (currentAudioPlaybackController === playbackController) {
-                        currentAudioPlaybackController = null;
-                    }
-                    reject(e);
-                };
-
-                currentAudio.addEventListener('ended', onEnded, { once: true, signal: playbackController.signal });
-                currentAudio.addEventListener('error', onError, { once: true, signal: playbackController.signal });
-
-                // Check cancellation before starting
-                if (sessionId !== ttsSessionId) {
-                    playbackController.abort();
-                    if (currentAudioPlaybackController === playbackController) {
-                        currentAudioPlaybackController = null;
-                    }
-                    resolve();
-                    return;
-                }
-
-                currentAudio.src = playbackUrl;
-                currentAudio.play().catch(reject);
-            });
-
-        } catch (e) {
-            console.error("Playback failed for chunk:", e);
-        } finally {
-            detachCurrentAudioPlaybackListeners();
-            if (playbackBundle?.revokeInputs) {
-                for (const url of playbackBundle.revokeInputs) {
-                    URL.revokeObjectURL(url);
-                }
-            } else if (audioUrl) {
-                URL.revokeObjectURL(audioUrl);
-            }
-
-            if (playbackBundle?.url && playbackBundle.url !== audioUrl) {
-                URL.revokeObjectURL(playbackBundle.url);
-            }
-        }
-    }
-
-    // Finished or Cancelled
-    if (sessionId === ttsSessionId) {
-        endTTS(btn, sessionId);
-    }
+    return ttsController.processTTSQueue(isFirstChunk);
 }
 
 /**
  * Reset TTS UI state after playback completes
  */
 function endTTS(btn, sessionId) {
-    // Only update UI if we are still in the same session
-    if (sessionId === ttsSessionId) {
-        if (btn) {
-            const iconEl = btn.querySelector('.material-icons-round');
-            if (iconEl) iconEl.textContent = 'volume_up';
-            btn.title = 'Speak';
-            btn.disabled = false;
-        }
-        currentAudioBtn = null;
-        isPlayingQueue = false;
-        activeTTSSessionLabel = "";
-        clearMediaSessionMetadata();
-        syncWakeLock();
-    }
-}
-
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+    return ttsController.endTTS(btn, sessionId);
 }
 
 async function checkSystemHealth() {
