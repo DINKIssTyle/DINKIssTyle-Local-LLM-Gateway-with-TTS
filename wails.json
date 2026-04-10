@@ -1,15 +1,15 @@
 {
-    "name": "DKST LLM Chat Server",
-    "outputfilename": "DKST LLM Chat Server",
-    "frontend:dir": "frontend",
-    "author": {
-        "name": "DINKIssTyle",
-        "email": "dinki@me.com"
-    },
-    "info": {
-        "productVersion": "3.0.1",
-        "copyright": "Copyright (C) 2026 DINKI'ssTyle. All rights reserved.",
-        "comments": "Local LLM Gateway with TTS"
-    },
-    "bundleid": "com.dinkisstyle.llmchat"
+    "name":  "DKST LLM Chat Server",
+    "outputfilename":  "DKST LLM Chat Server",
+    "frontend:dir":  "frontend",
+    "author":  {
+                   "name":  "DINKIssTyle",
+                   "email":  "dinki@me.com"
+               },
+    "info":  {
+                 "productVersion":  "3.0.1",
+                 "copyright":  "Copyright (C) 2026 DINKI\u0027ssTyle. All rights reserved.",
+                 "comments":  "Local LLM Gateway with TTS"
+             },
+    "bundleid":  "com.dinkisstyle.llmchat"
 }

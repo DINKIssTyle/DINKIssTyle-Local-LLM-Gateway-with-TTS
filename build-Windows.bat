@@ -10,7 +10,34 @@ if exist "frontend\dist" rmdir /s /q "frontend\dist"
 
 echo Clean complete.
 echo Syncing version from config...
-powershell -Command "$content = Get-Content internal/config/config.go -Raw; if ($content -match 'AppVersion\s*=\s*\"([^\"]+)\"') { $version = $Matches[1]; echo \"Extracted Version: $version\"; $wails = Get-Content wails.json | ConvertFrom-Json; $wails.info.productVersion = $version; $wails | ConvertTo-Json -Depth 10 | Set-Content wails.json; if (Test-Path bundle\versioninfo.json) { $vi = Get-Content bundle\versioninfo.json | ConvertFrom-Json; $vi.FixedFileInfo.FileVersion.Major = [int]$version.Split('.')[0]; $vi.FixedFileInfo.FileVersion.Minor = [int]$version.Split('.')[1]; $vi.FixedFileInfo.FileVersion.Patch = [int]$version.Split('.')[2]; $vi.FixedFileInfo.ProductVersion = $vi.FixedFileInfo.FileVersion; $vi.StringFileInfo.FileVersion = $version; $vi.StringFileInfo.ProductVersion = $version; $vi | ConvertTo-Json -Depth 10 | Set-Content bundle\versioninfo.json; } if (Test-Path frontend\package.json) { $pkg = Get-Content frontend\package.json | ConvertFrom-Json; $pkg.version = $version; $pkg | ConvertTo-Json -Depth 10 | Set-Content frontend\package.json; } } else { Write-Error 'Could not extract version'; exit 1 }"
+PowerShell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$content = Get-Content 'internal/config/config.go' -Raw; " ^
+  "if ($content -match 'AppVersion\s*=\s*\""([^\""]+)\""') { " ^
+  "  $version = $Matches[1]; " ^
+  "  Write-Host ('Extracted Version: ' + $version); " ^
+  "  $wails = ConvertFrom-Json -InputObject (Get-Content 'wails.json' -Raw); " ^
+  "  $wails.info.productVersion = $version; " ^
+  "  Set-Content 'wails.json' -Value (ConvertTo-Json $wails -Depth 10); " ^
+  "  if (Test-Path 'bundle/versioninfo.json') { " ^
+  "    $vi = ConvertFrom-Json -InputObject (Get-Content 'bundle/versioninfo.json' -Raw); " ^
+  "    $parts = $version.Split('.'); " ^
+  "    $vi.FixedFileInfo.FileVersion.Major = [int]$parts[0]; " ^
+  "    $vi.FixedFileInfo.FileVersion.Minor = [int]$parts[1]; " ^
+  "    $vi.FixedFileInfo.FileVersion.Patch = [int]$parts[2]; " ^
+  "    $vi.FixedFileInfo.ProductVersion = $vi.FixedFileInfo.FileVersion; " ^
+  "    $vi.StringFileInfo.FileVersion = $version; " ^
+  "    $vi.StringFileInfo.ProductVersion = $version; " ^
+  "    Set-Content 'bundle/versioninfo.json' -Value (ConvertTo-Json $vi -Depth 10); " ^
+  "  } " ^
+  "  if (Test-Path 'frontend/package.json') { " ^
+  "    $pkg = ConvertFrom-Json -InputObject (Get-Content 'frontend/package.json' -Raw); " ^
+  "    $pkg.version = $version; " ^
+  "    Set-Content 'frontend/package.json' -Value (ConvertTo-Json $pkg -Depth 10); " ^
+  "  } " ^
+  "} else { " ^
+  "  Write-Error 'Could not extract version'; " ^
+  "  exit 1 " ^
+  "}"
 
 if %ERRORLEVEL% NEQ 0 (
     echo Version sync failed!
@@ -20,9 +47,21 @@ if %ERRORLEVEL% NEQ 0 (
 echo Building...
 rem Using manual build (generate + go build) because wails build CLI is failing in this environment.
 wails generate bindings
+if %ERRORLEVEL% NEQ 0 (
+    echo Wails bindings generation failed!
+    goto :build_failed
+)
 rem Generate Windows resources (icon, manifest, version info)
 goversioninfo -64 -o resource_windows.syso bundle\versioninfo.json
+if %ERRORLEVEL% NEQ 0 (
+    echo Windows resource generation failed!
+    goto :build_failed
+)
 go build -ldflags "-s -w -H windowsgui" -tags desktop,production -o "build\bin\DKST LLM Chat Server.exe" .
+if %ERRORLEVEL% NEQ 0 (
+    echo Go build failed!
+    goto :build_failed
+)
 
 if exist "build\bin\DKST LLM Chat Server.exe" (
     echo Copying assets...
@@ -35,7 +74,13 @@ if exist "build\bin\DKST LLM Chat Server.exe" (
     echo Build success!
 ) else (
     echo Build failed!
+    goto :build_failed
 )
 
 rem Clean up auto-generated Windows resource after build
 if exist "resource_windows.syso" del resource_windows.syso
+exit /b 0
+
+:build_failed
+if exist "resource_windows.syso" del resource_windows.syso
+exit /b 1
