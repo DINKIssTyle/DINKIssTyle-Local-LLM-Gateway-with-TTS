@@ -33,6 +33,7 @@
         let activeStreamingMessagePinnedToTop = false;
         let activeStreamingMessagePinPending = false;
         let pendingScrollToBottom = false;
+        const ENABLE_SCROLL_TRACE = false;
         let chatScrollMetrics = {
             scrollTop: 0,
             scrollHeight: 0,
@@ -41,6 +42,32 @@
             nearBottom: true,
             longScrollable: false
         };
+
+        function logScrollTrace(event, details = {}) {
+            if (!ENABLE_SCROLL_TRACE) return;
+            if (!global.console?.debug) return;
+            const metrics = chatMessages ? {
+                top: Math.round(chatMessages.scrollTop || 0),
+                height: Math.round(chatMessages.scrollHeight || 0),
+                client: Math.round(chatMessages.clientHeight || 0)
+            } : null;
+            global.console.debug('[ScrollTrace:UI]', event, {
+                activeStreamingMessageId,
+                shouldAutoScroll,
+                lockScrollToLatest,
+                metrics,
+                ...details
+            });
+        }
+
+        function syncChatScrollMetrics() {
+            const metrics = refreshChatScrollMetrics?.();
+            if (metrics) {
+                chatScrollMetrics = metrics;
+                return metrics;
+            }
+            return chatScrollMetrics;
+        }
 
         function getAssistantMessageParts(elementId) {
             const msgEl = global.document.getElementById(elementId);
@@ -107,16 +134,17 @@
 
         function isChatNearBottom() {
             if (!chatMessages) return true;
-            return !!chatScrollMetrics.nearBottom;
+            return !!syncChatScrollMetrics().nearBottom;
         }
 
         function hasLongScrollableChat() {
             if (!chatMessages) return false;
-            return !!chatScrollMetrics.longScrollable;
+            return !!syncChatScrollMetrics().longScrollable;
         }
 
         function updateScrollToBottomButton() {
             if (!scrollToBottomBtn) return;
+            syncChatScrollMetrics();
             const shouldShow = !!chatMessages
                 && hasLongScrollableChat()
                 && !isChatNearBottom()
@@ -154,10 +182,82 @@
             const delta = targetRect.bottom - desiredBottom;
 
             if (delta > 0) {
+                logScrollTrace('scrollActiveMessageIntoView', {
+                    targetId: activeStreamingMessageId,
+                    delta: Math.round(delta)
+                });
                 suppressNextScrollEvent = true;
                 chatMessages.scrollTop += delta;
                 updateScrollToBottomButton();
             }
+        }
+
+        function getActiveMessageTopDelta() {
+            if (!chatMessages || !activeStreamingMessageId) return null;
+            const activeMessage = global.document.getElementById(activeStreamingMessageId);
+            if (!activeMessage) return null;
+            const containerRect = chatMessages.getBoundingClientRect();
+            const targetRect = activeMessage.getBoundingClientRect();
+            const topPadding = 12;
+            return targetRect.top - containerRect.top - topPadding;
+        }
+
+        function getActiveMessagePinnedScrollTop() {
+            if (!chatMessages || !activeStreamingMessageId) return null;
+            const activeMessage = global.document.getElementById(activeStreamingMessageId);
+            if (!activeMessage) return null;
+            const topPadding = 12;
+            return Math.max(0, activeMessage.offsetTop - topPadding);
+        }
+
+        function hasActiveStreamingResponseContent() {
+            if (!activeStreamingMessageId) return false;
+            const activeMessage = global.document.getElementById(activeStreamingMessageId);
+            if (!activeMessage) return false;
+
+            const responseCard = activeMessage.querySelector('.assistant-response-card');
+            if (!responseCard || responseCard.hidden) return false;
+
+            const markdownBody = responseCard.querySelector('.markdown-body');
+            const markdownText = String(markdownBody?.textContent || '').trim();
+            const markdownSource = String(markdownBody?.dataset?.markdownSource || '').trim();
+            const committedHost = responseCard.querySelector('.markdown-committed');
+            const committedSource = String(committedHost?.dataset?.markdownSource || '').trim();
+            const streamStateText = String(activeMessage._streamRenderState?.committedText || activeMessage._streamRenderState?.pendingText || '').trim();
+            const hasImage = !!responseCard.querySelector('.message-image');
+
+            return !!(markdownText || markdownSource || committedSource || streamStateText || hasImage);
+        }
+
+        function updateLabelTopStreamingState() {
+            if (getStreamingScrollMode?.() !== 'label-top' || !activeStreamingMessageId) return false;
+            if (!hasActiveStreamingResponseContent()) {
+                chatMessages?.classList.remove('is-label-top-streaming');
+                return false;
+            }
+
+            const pinnedScrollTop = getActiveMessagePinnedScrollTop();
+            if (pinnedScrollTop == null) return false;
+            const metrics = syncChatScrollMetrics();
+            const bottomScrollTop = Math.max(0, metrics.scrollHeight - metrics.clientHeight);
+            const pinReached = bottomScrollTop >= pinnedScrollTop - 1;
+
+            if (pinReached) {
+                chatMessages?.classList.add('is-label-top-streaming');
+                activeStreamingMessagePinnedToTop = true;
+                activeStreamingMessagePinPending = false;
+                shouldAutoScroll = false;
+                lockScrollToLatest = false;
+                chatScrollMetrics = syncChatScrollMetrics();
+                updateScrollToBottomButton();
+                return true;
+            }
+
+            chatMessages?.classList.remove('is-label-top-streaming');
+            activeStreamingMessagePinnedToTop = false;
+            activeStreamingMessagePinPending = true;
+            shouldAutoScroll = true;
+            return false;
         }
 
         function scheduleChatScrollToBottom() {
@@ -166,19 +266,40 @@
             global.requestAnimationFrame(() => {
                 pendingScrollToBottom = false;
                 if (!chatMessages) return;
-                const metrics = refreshChatScrollMetrics?.() || chatScrollMetrics;
+                const metrics = syncChatScrollMetrics();
+                const isLabelTopMode = getStreamingScrollMode?.() === 'label-top';
+                const hasStreamingResponseContent = isLabelTopMode && hasActiveStreamingResponseContent();
+                let nextScrollTop = Math.max(0, metrics.scrollHeight - metrics.clientHeight);
+
+                if (hasStreamingResponseContent) {
+                    const pinnedScrollTop = getActiveMessagePinnedScrollTop();
+                    if (pinnedScrollTop != null) {
+                        nextScrollTop = Math.min(nextScrollTop, pinnedScrollTop);
+                        logScrollTrace('scheduleChatScrollToBottom:labelTopClamp', {
+                            pinnedScrollTop: Math.round(pinnedScrollTop),
+                            bottomScrollTop: Math.round(Math.max(0, metrics.scrollHeight - metrics.clientHeight))
+                        });
+                    }
+                }
+                logScrollTrace('scheduleChatScrollToBottom', {
+                    targetScrollHeight: Math.round(metrics.scrollHeight),
+                    nextScrollTop: Math.round(nextScrollTop)
+                });
                 suppressNextScrollEvent = true;
-                chatMessages.scrollTop = metrics.scrollHeight;
+                chatMessages.scrollTop = nextScrollTop;
                 chatScrollMetrics = {
-                    scrollTop: Math.max(0, metrics.scrollHeight - metrics.clientHeight),
+                    scrollTop: Math.max(0, nextScrollTop),
                     scrollHeight: metrics.scrollHeight,
                     clientHeight: metrics.clientHeight,
-                    distanceFromBottom: 0,
-                    nearBottom: true,
+                    distanceFromBottom: Math.max(0, metrics.scrollHeight - metrics.clientHeight - nextScrollTop),
+                    nearBottom: Math.max(0, metrics.scrollHeight - metrics.clientHeight - nextScrollTop) <= 1,
                     longScrollable: metrics.longScrollable
                 };
                 commitChatScrollMetrics?.(chatScrollMetrics);
-                scrollActiveMessageIntoView();
+                if (!hasStreamingResponseContent) {
+                    scrollActiveMessageIntoView();
+                }
+                updateLabelTopStreamingState();
                 updateScrollToBottomButton();
             });
         }
@@ -186,13 +307,15 @@
         function scrollToBottom(force = false) {
             if (!chatMessages) return;
             if (!lockScrollToLatest && getStreamingScrollMode?.() === 'label-top' && activeStreamingMessagePinnedToTop) {
-                refreshChatScrollMetrics?.();
+                syncChatScrollMetrics();
                 return;
             }
 
             if (!force && !shouldAutoScroll && !lockScrollToLatest) return;
             scheduleChatScrollToBottom();
-            shouldAutoScroll = true;
+            if (getStreamingScrollMode?.() !== 'label-top' || !activeStreamingMessagePinnedToTop) {
+                shouldAutoScroll = true;
+            }
         }
 
         function holdAutoScrollAtBottom(durationMs = 700) {
@@ -275,28 +398,11 @@
                 return;
             }
 
-            const activeMessage = global.document.getElementById(activeStreamingMessageId);
-            if (!activeMessage) return;
-
-            const responseCard = activeMessage.querySelector('.assistant-response-card');
-            const hasResponseContent = responseCard && !responseCard.hidden && !!responseCard.querySelector('.markdown-body')?.textContent.trim();
-            const toolsHost = activeMessage.querySelector('.assistant-tools');
-            const hasToolsContent = toolsHost && toolsHost.children.length > 0;
-            const reasoningBody = activeMessage.querySelector('.reasoning-body');
-            const reasoningText = reasoningBody ? reasoningBody.textContent.trim() : '';
-            const hasReasoningContent = reasoningText.length > 0 && reasoningText !== 'Thinking...';
-
-            if (hasResponseContent || hasToolsContent || hasReasoningContent) {
-                global.requestAnimationFrame(() => {
-                    global.requestAnimationFrame(() => {
-                        if (activeStreamingMessagePinPending) {
-                            pinActiveMessageLabelToTop();
-                            activeStreamingMessagePinnedToTop = true;
-                            activeStreamingMessagePinPending = false;
-                        }
-                    });
-                });
-            }
+            global.requestAnimationFrame(() => {
+                if (activeStreamingMessagePinPending) {
+                    updateLabelTopStreamingState();
+                }
+            });
         }
 
         function pinTurnToTop(turnId) {
@@ -320,20 +426,17 @@
         function startStreamingMessageAutoScroll(messageId) {
             activeStreamingMessageId = messageId;
             activeStreamingMessagePinnedToTop = false;
+            activeStreamingMessagePinPending = false;
+            logScrollTrace('startStreamingMessageAutoScroll', { messageId });
             const activeMessage = global.document.getElementById(messageId);
             if (!activeMessage || !chatMessages) return;
 
             if (getStreamingScrollMode?.() === 'label-top') {
-                chatMessages.classList.add('is-label-top-streaming');
+                chatMessages.classList.remove('is-label-top-streaming');
                 activeStreamingMessagePinPending = true;
-                activeStreamingMessagePinnedToTop = true;
-                shouldAutoScroll = false;
-                lockScrollToLatest = false;
-                if (autoScrollResizeObserver) {
-                    autoScrollResizeObserver.disconnect();
-                    autoScrollResizeObserver = null;
-                }
-                return;
+                activeStreamingMessagePinnedToTop = false;
+                shouldAutoScroll = true;
+                lockScrollToLatest = true;
             }
             const responseCard = activeMessage.querySelector('.assistant-response-card');
             const markdownBody = activeMessage.querySelector('.markdown-body');
@@ -342,8 +445,12 @@
         }
 
         function stopStreamingMessageAutoScroll() {
+            logScrollTrace('stopStreamingMessageAutoScroll', { clearingMessageId: activeStreamingMessageId });
             activeStreamingMessagePinnedToTop = false;
             activeStreamingMessagePinPending = false;
+            activeStreamingMessageId = null;
+            shouldAutoScroll = true;
+            lockScrollToLatest = false;
             if (chatMessages) {
                 chatMessages.classList.remove('is-label-top-streaming');
             }
