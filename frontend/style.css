@@ -382,9 +382,11 @@ body.keyboard-open #chat-header {
   position: absolute;
   left: 50%;
   bottom: calc(var(--input-area-height) + 12px + env(safe-area-inset-bottom, 0px) + var(--viewport-bottom-offset));
-  transform: translate(-50%, 18px) scale(0.92);
+  transform: translate3d(-50%, 18px, 0) scale(0.92);
   width: 54px;
   height: 54px;
+  appearance: none;
+  -webkit-appearance: none;
   border: 1px solid transparent;
   border-radius: 999px;
   display: inline-flex;
@@ -400,6 +402,12 @@ body.keyboard-open #chat-header {
   z-index: 26;
   overflow: hidden;
   isolation: isolate;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  backface-visibility: hidden;
+  will-change: transform, opacity;
   transition:
     opacity 0.18s ease,
     transform 0.22s ease,
@@ -450,7 +458,7 @@ body.keyboard-open #chat-header {
 .scroll-to-bottom-btn.is-visible {
   opacity: 1;
   pointer-events: auto;
-  transform: translate(-50%, 0) scale(1);
+  transform: translate3d(-50%, 0, 0) scale(1);
 }
 
 .scroll-to-bottom-btn:hover,
@@ -458,6 +466,10 @@ body.keyboard-open #chat-header {
   box-shadow:
     0 18px 40px rgba(0, 0, 0, 0.28),
     0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.scroll-to-bottom-btn:focus {
+  outline: none;
 }
 
 .scroll-to-bottom-btn .material-icons-round {
@@ -548,12 +560,11 @@ body.keyboard-open #chat-header {
   overflow-anchor: auto;
 }
 
-@supports (content-visibility: auto) {
-  .message {
-    content-visibility: auto;
-    contain-intrinsic-size: 280px;
-  }
-}
+/*
+  content-visibility/contain-intrinsic-size caused unstable scroll math for long chat histories,
+  especially in label-top streaming mode and after viewport size changes.
+  Accurate message heights are more important here than offscreen rendering optimization.
+*/
 
 .message.user {
   align-items: flex-end;

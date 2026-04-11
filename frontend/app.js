@@ -716,6 +716,14 @@ function handleSpeechAddition(speechToAdd, ctx) {
 
 async function handleStreamEvent(json, ctx) {
     const elementId = ctx.elementId;
+    if (json.type === 'reasoning.start'
+        || json.type === 'tool_call.start'
+        || json.type === 'message.delta') {
+        logScrollTrace(`stream:${json.type}`, {
+            elementId,
+            contentLength: typeof json.content === 'string' ? json.content.length : 0
+        });
+    }
 
     if (json.response_id) { AppState.chat.stateful.lastResponseId = json.response_id; }
 
@@ -1941,6 +1949,25 @@ function updateViewportMetrics() {
     document.body.classList.toggle('keyboard-open', keyboardLikelyOpen);
     updateComposerLayoutMetrics();
     updateScrollToBottomButton();
+}
+
+function logScrollTrace(event, details = {}) {
+    const ENABLE_SCROLL_TRACE = false;
+    if (!ENABLE_SCROLL_TRACE) return;
+    if (!console?.debug) return;
+    const metrics = chatMessages ? {
+        top: Math.round(chatMessages.scrollTop || 0),
+        height: Math.round(chatMessages.scrollHeight || 0),
+        client: Math.round(chatMessages.clientHeight || 0)
+    } : null;
+    console.debug('[ScrollTrace:App]', event, {
+        activeUIMessageId: AppState.ui.activeStreamingMessageId,
+        activeLocalAssistantId: AppState.chat.activeLocalAssistantId,
+        activeLocalTurnId: AppState.chat.activeLocalTurnId,
+        isGenerating: AppState.chat.isGenerating,
+        metrics,
+        ...details
+    });
 }
 
 function restoreChatScrollPosition(scrollTop) {
@@ -4592,6 +4619,7 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
         AppState.session.replay.currentAssistantId = assistantByTurn.get(AppState.session.replay.currentTurnId) || '';
     }
     scrollToBottom(true);
+    ensureChatRestoredToLatest();
     requestAnimationFrame(() => {
         reconcileVisibleAssistantActionBars();
         chatMessages?.classList.remove('is-session-hydrating');
@@ -5119,6 +5147,7 @@ function finishChatSessionRestore() {
         requestAnimationFrame(() => {
             scrollToBottom(true);
         });
+        ensureChatRestoredToLatest();
     });
     updateMessageInputPlaceholder();
 }
@@ -5542,10 +5571,13 @@ async function sendMessage(options = {}) {
     };
 
     const isLabelTop = getStreamingScrollMode() === 'label-top';
-    appendMessage(userMsg, { skipScroll: isLabelTop });
-    if (isLabelTop) {
-        pinTurnToTop(turnId);
-    } else {
+    logScrollTrace('sendMessage:start', {
+        turnId,
+        mode: isLabelTop ? 'label-top' : 'auto',
+        textLength: text.length
+    });
+    appendMessage(userMsg);
+    if (!isLabelTop) {
         AppState.ui.scroll.lockToLatest = true;
         AppState.ui.scroll.shouldAutoScroll = true;
         holdAutoScrollAtBottom(600);
@@ -5572,6 +5604,7 @@ async function sendMessage(options = {}) {
     AppState.chat.abortController = new AbortController();
 
     const assistantId = buildServerAssistantMessageId(turnId, '');
+    logScrollTrace('sendMessage:assistant-placeholder', { turnId, assistantId });
     AppState.ui.activeStreamingMessageId = assistantId;
     AppState.chat.activeLocalTurnId = turnId;
     AppState.chat.activeLocalAssistantId = assistantId;
@@ -6081,7 +6114,7 @@ function ensureAssistantMessageElement(id, turnId = '') {
         syncAssistantMessageShellState(el);
         return el;
     }
-    appendMessage({ role: 'assistant', content: '', id, turnId: resolvedTurnId });
+    appendMessage({ role: 'assistant', content: '', id, turnId: resolvedTurnId }, { skipScroll: true });
     el = document.getElementById(id);
     if (el && AppState.ui.activeStreamingMessageId === id) {
         startStreamingMessageAutoScroll(id);

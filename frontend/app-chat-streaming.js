@@ -173,8 +173,8 @@
                 renderStreamingPreviewIntoHost(committedHost, cleanText);
                 renderStreamingPreviewIntoHost(pendingHost, '');
                 syncAssistantMessageShellState(el);
-                if (cleanText.trim()) checkAndTriggerLabelPin();
                 scrollToBottom(wasNearBottom);
+                if (cleanText.trim()) checkAndTriggerLabelPin();
                 return;
             }
             let committedText = '';
@@ -205,13 +205,13 @@
                 }
             }
             syncAssistantMessageShellState(el);
-            if (hasVisibleContent) checkAndTriggerLabelPin();
 
             if (!previousCommittedText.trim() && hasVisibleContent) {
                 pulseMessageRender(el.querySelector('.assistant-response-card'));
             }
 
             scrollToBottom(wasNearBottom);
+            if (hasVisibleContent) checkAndTriggerLabelPin();
             const codeBlocks = mdBody.querySelectorAll('pre code');
             if (wasNearBottom && codeBlocks.length > 0 && getStreamingScrollMode() !== 'label-top') {
                 holdAutoScrollAtBottom(900);
@@ -317,8 +317,8 @@
                 const hasVisibleContent = !!cleanText.trim();
                 if (responseCard) responseCard.hidden = !hasVisibleContent;
                 syncAssistantMessageShellState(el);
-                if (cleanText.trim()) checkAndTriggerLabelPin();
                 scrollToBottom(wasNearBottom);
+                if (cleanText.trim()) checkAndTriggerLabelPin();
                 return;
             }
 
@@ -347,7 +347,6 @@
             }
             syncAssistantMessageShellState(el);
             if (hasVisibleContent) {
-                checkAndTriggerLabelPin();
                 reconcileAssistantActionBarForMessage(el);
             }
 
@@ -357,6 +356,9 @@
             }
 
             scrollToBottom(wasNearBottom);
+            if (hasVisibleContent) {
+                checkAndTriggerLabelPin();
+            }
             const codeBlocks = mdBody.querySelectorAll('pre code');
             if (wasNearBottom && codeBlocks.length > 0 && getStreamingScrollMode() !== 'label-top') {
                 holdAutoScrollAtBottom(900);
