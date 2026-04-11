@@ -179,6 +179,10 @@ let AppState = {
         retryTimer: null,
         pollTimer: null,
         reconnectWatchdogTimer: null,
+        eventStreamSource: null,
+        eventStreamConnected: false,
+        eventStreamRetryTimer: null,
+        eventStreamLastErrorAt: 0,
         reconnectCardVisible: false,
         localStreamOwnershipReleased: false,
         retryRecoveryInProgress: false,
@@ -492,24 +496,57 @@ class SSEParser {
     }
 
     parse(value) {
-        this.buffer += this.decoder.decode(value, { stream: true });
-        const lines = this.buffer.split('\n\n');
-        this.buffer = lines.pop(); // Keep partial line
-
+        this.buffer += this.decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
         const events = [];
-        for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed) continue;
+        let boundary = this.buffer.indexOf('\n\n');
+        while (boundary !== -1) {
+            const rawBlock = this.buffer.slice(0, boundary);
+            this.buffer = this.buffer.slice(boundary + 2);
+            boundary = this.buffer.indexOf('\n\n');
 
-            let json = null;
-            if (trimmed.startsWith('data: ')) {
-                const dataStr = trimmed.substring(6);
-                if (dataStr === '[DONE]') continue;
-                try { json = JSON.parse(dataStr); } catch (e) { console.warn('[SSE] JSON Parse Error', e); }
-            } else if (trimmed.startsWith('{')) {
-                try { json = JSON.parse(trimmed); } catch (e) {}
+            const block = String(rawBlock || '').trim();
+            if (!block) continue;
+
+            let eventName = 'message';
+            const dataLines = [];
+            for (const rawLine of block.split('\n')) {
+                const line = String(rawLine || '');
+                if (!line) continue;
+                if (line.startsWith(':')) continue;
+                if (line.startsWith('event:')) {
+                    eventName = line.slice(6).trim() || 'message';
+                    continue;
+                }
+                if (line.startsWith('data:')) {
+                    dataLines.push(line.startsWith('data: ') ? line.slice(6) : line.slice(5));
+                    continue;
+                }
+                if (line.startsWith('{')) {
+                    dataLines.push(line);
+                }
             }
-            if (json) events.push(json);
+
+            const dataStr = dataLines.join('\n').trim();
+            if (!dataStr || dataStr === '[DONE]') continue;
+
+            try {
+                const parsed = JSON.parse(dataStr);
+                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && !parsed.type && eventName && eventName !== 'message') {
+                    parsed.type = eventName;
+                }
+                events.push(parsed);
+            } catch (e) {
+                if (eventName === 'error') {
+                    events.push({
+                        type: 'error',
+                        error: {
+                            message: dataStr
+                        }
+                    });
+                } else {
+                    console.warn('[SSE] JSON Parse Error', e, dataStr);
+                }
+            }
         }
         return events;
     }
@@ -2202,8 +2239,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             cancelComposerBackgroundTasks('document-hidden');
             clearReconnectWatchdog();
             clearForegroundSyncTimers();
+            stopChatSessionEventStream();
         } else {
             savedLibraryController.scheduleSavedTitleRefresh(800);
+            restartChatSessionEventStream();
             scheduleForegroundSessionRefresh('visibility-visible');
         }
     });
@@ -2211,17 +2250,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.addEventListener('pagehide', () => {
         stopSTT({ suppressAutoSend: true, forceAbort: true });
         relinquishLocalStreamOwnership('pagehide');
+        stopChatSessionEventStream();
     });
 
     window.addEventListener('pageshow', () => {
+        restartChatSessionEventStream();
         scheduleForegroundSessionRefresh('pageshow');
     });
 
     window.addEventListener('focus', () => {
+        if (!AppState.session.eventStreamConnected) {
+            restartChatSessionEventStream();
+        }
         scheduleForegroundSessionRefresh('focus');
     });
 
     window.addEventListener('online', () => {
+        if (!AppState.session.eventStreamConnected) {
+            restartChatSessionEventStream();
+        }
         scheduleForegroundSessionRefresh('online');
     });
 });
@@ -2414,6 +2461,11 @@ function clearReconnectWatchdog() {
     AppState.session.reconnectWatchdogTimer = null;
 }
 
+function markChatSessionRealtimeHealthy() {
+    clearReconnectWatchdog();
+    dismissReconnectNoticeCard();
+}
+
 function clearForegroundSyncTimers() {
     if (!AppState.session.foregroundSyncTimers.length) return;
     AppState.session.foregroundSyncTimers.forEach((timerId) => clearTimeout(timerId));
@@ -2424,6 +2476,9 @@ function scheduleForegroundSessionRefresh(reason = 'foreground') {
     if (document.hidden) return;
 
     clearForegroundSyncTimers();
+    if (!AppState.session.eventStreamConnected) {
+        restartChatSessionEventStream();
+    }
     armReconnectWatchdog();
 
     const delays = [0, 900, 2600];
@@ -2461,14 +2516,17 @@ function showReconnectNoticeCard() {
 function armReconnectWatchdog(delay = 4200) {
     clearReconnectWatchdog();
     if (document.hidden) return;
+    if (AppState.session.eventStreamConnected) return;
     AppState.session.reconnectWatchdogTimer = window.setTimeout(() => {
         AppState.session.reconnectWatchdogTimer = null;
+        if (AppState.session.eventStreamConnected) return;
         showReconnectNoticeCard();
     }, Math.max(1500, delay));
 }
 
 async function retryChatReconnect() {
     dismissReconnectNoticeCard();
+    restartChatSessionEventStream();
     armReconnectWatchdog(5200);
     try {
         await checkAuth();
@@ -2574,8 +2632,7 @@ async function refreshSessionStateFromServer() {
                 await syncCurrentChatSessionFromServer();
             } while (AppState.session.pendingRefresh);
 
-            clearReconnectWatchdog();
-            dismissReconnectNoticeCard();
+            markChatSessionRealtimeHealthy();
         } catch (error) {
             console.warn('Session refresh failed:', error);
             clearReconnectWatchdog();
@@ -2600,6 +2657,8 @@ async function bootstrapInitialChatView() {
     } catch (e) {
         console.warn('Initial chat session sync failed:', e);
     }
+
+    startChatSessionEventStream();
 
     await checkSystemHealth();
 }
@@ -2642,6 +2701,7 @@ async function checkAuth() {
         const data = await response.json();
 
         if (!data.authenticated) {
+            stopChatSessionEventStream();
             localStorage.removeItem('sessionToken');
             window.location.href = '/login.html';
             return;
@@ -2739,6 +2799,7 @@ async function deleteUser(id) {
 // Logout
 async function logout() {
     try {
+        stopChatSessionEventStream();
         localStorage.removeItem('sessionToken');
         await fetch('/api/logout', buildSessionFetchOptions({ method: 'POST' }));
         window.location.href = '/login.html';
@@ -2754,6 +2815,7 @@ async function logoutAllSessions() {
     if (!confirm(confirmation)) return;
 
     try {
+        stopChatSessionEventStream();
         const response = await fetch('/api/logout-all-sessions', buildSessionFetchOptions({ method: 'POST' }));
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}`);
@@ -3523,8 +3585,116 @@ function stopChatSessionPolling() {
     }
 }
 
+function clearChatSessionEventStreamRetry() {
+    if (AppState.session.eventStreamRetryTimer) {
+        clearTimeout(AppState.session.eventStreamRetryTimer);
+        AppState.session.eventStreamRetryTimer = null;
+    }
+}
+
+function stopChatSessionEventStream() {
+    clearChatSessionEventStreamRetry();
+    AppState.session.eventStreamConnected = false;
+    if (AppState.session.eventStreamSource) {
+        sessionController.closeCurrentChatSessionEventStream(AppState.session.eventStreamSource);
+        AppState.session.eventStreamSource = null;
+    }
+}
+
+function restartChatSessionEventStream() {
+    stopChatSessionEventStream();
+    startChatSessionEventStream();
+}
+
+function scheduleChatSessionEventStreamReconnect(delay = 1200) {
+    if (!AppState.session.currentUser) return;
+    clearChatSessionEventStreamRetry();
+    AppState.session.eventStreamRetryTimer = window.setTimeout(() => {
+        AppState.session.eventStreamRetryTimer = null;
+        startChatSessionEventStream();
+    }, Math.max(300, Number(delay) || 1200));
+}
+
+function shouldDeferLiveChatSessionEvent(entry = null) {
+    if (!entry || typeof entry !== 'object') return false;
+    if (AppState.session.isRestoring) return true;
+    if (AppState.chat.activeLocalTurnId || AppState.chat.activeLocalAssistantId) return false;
+    if (AppState.session.eventSeq > 0) return false;
+    if (hasSubstantiveChatMessages()) return false;
+    const eventType = String(entry.EventType || '').trim();
+    return eventType !== '' && eventType !== 'session.cleared';
+}
+
+function startChatSessionEventStream() {
+    if (!AppState.session.currentUser) return;
+    if (AppState.session.eventStreamSource) return;
+
+    const source = sessionController.openCurrentChatSessionEventStream({
+        afterSeq: AppState.session.eventSeq,
+        onOpen: () => {
+            AppState.session.eventStreamConnected = true;
+            AppState.session.eventStreamLastErrorAt = 0;
+            clearChatSessionEventStreamRetry();
+            markChatSessionRealtimeHealthy();
+        },
+        onSession: (payload) => {
+            AppState.session.eventStreamConnected = true;
+            markChatSessionRealtimeHealthy();
+            if (payload?.has_session) {
+                applyCurrentChatSessionSnapshot(payload.session || null);
+            } else {
+                applyCurrentChatSessionSnapshot(null);
+            }
+        },
+        onEvent: (entry) => {
+            if (!entry || typeof entry !== 'object') return;
+            if (shouldDeferLiveChatSessionEvent(entry)) {
+                syncCurrentChatSessionFromServer().catch((error) => {
+                    console.warn('Deferred live chat event sync failed:', error);
+                });
+                return;
+            }
+            AppState.session.eventStreamConnected = true;
+            markChatSessionRealtimeHealthy();
+            dismissStartupCards();
+            applyCurrentChatSessionEvent(entry);
+            AppState.session.eventSeq = Math.max(AppState.session.eventSeq, Number(entry.EventSeq || 0));
+        },
+        onError: (_event, payload) => {
+            const now = Date.now();
+            const wasConnected = AppState.session.eventStreamConnected;
+            AppState.session.eventStreamConnected = false;
+            if (payload?.message) {
+                console.warn('Chat session SSE payload error:', payload.message);
+            }
+            if (source.readyState === EventSource.CLOSED) {
+                stopChatSessionEventStream();
+                scheduleChatSessionEventStreamReconnect(wasConnected ? 900 : 1800);
+                scheduleChatSessionPolling(500);
+                armReconnectWatchdog(wasConnected ? 3000 : 5200);
+                return;
+            }
+            if (!AppState.session.eventStreamLastErrorAt || now - AppState.session.eventStreamLastErrorAt > 1000) {
+                AppState.session.eventStreamLastErrorAt = now;
+                scheduleChatSessionPolling(500);
+                armReconnectWatchdog(wasConnected ? 3200 : 5200);
+            }
+        }
+    });
+
+    if (!source) {
+        scheduleChatSessionPolling(900);
+        return;
+    }
+
+    AppState.session.eventStreamSource = source;
+}
+
 function scheduleChatSessionPolling(delay = 1000) {
     stopChatSessionPolling();
+    if (AppState.session.eventStreamConnected) {
+        return;
+    }
     AppState.session.pollTimer = window.setTimeout(() => {
         AppState.session.pollTimer = null;
         syncCurrentChatSessionFromServer().catch((error) => {
@@ -3856,7 +4026,7 @@ function applyCurrentChatSessionEvent(entry) {
         }
     }
 
-    if (!isLocalActiveTurn) {
+    if (!isLocalActiveTurn && !isPassiveRunning) {
         switch (entry.EventType) {
             case 'message.delta':
             case 'reasoning.start':

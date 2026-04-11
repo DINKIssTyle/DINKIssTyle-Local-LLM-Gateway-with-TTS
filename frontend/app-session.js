@@ -196,13 +196,81 @@
             }
         }
 
+        function openCurrentChatSessionEventStream(options = {}) {
+            if (typeof global.EventSource !== 'function') {
+                return null;
+            }
+
+            const {
+                afterSeq = 0,
+                onOpen = null,
+                onSession = null,
+                onEvent = null,
+                onError = null
+            } = options;
+
+            const params = new URLSearchParams();
+            if (Number.isFinite(Number(afterSeq)) && Number(afterSeq) > 0) {
+                params.set('after_seq', String(Math.max(0, Number(afterSeq))));
+            }
+
+            const url = `/api/chat-session/events/stream${params.toString() ? `?${params.toString()}` : ''}`;
+            const source = new global.EventSource(url, { withCredentials: true });
+
+            const parsePayload = (event) => {
+                const raw = String(event?.data || '').trim();
+                if (!raw) return null;
+                try {
+                    return JSON.parse(raw);
+                } catch (err) {
+                    console.warn('Failed to parse SSE payload:', err, raw);
+                    return null;
+                }
+            };
+
+            source.addEventListener('open', (event) => {
+                onOpen?.(event);
+            });
+
+            source.addEventListener('session', (event) => {
+                const payload = parsePayload(event);
+                if (payload) {
+                    onSession?.(payload);
+                }
+            });
+
+            source.addEventListener('chat_event', (event) => {
+                const payload = parsePayload(event);
+                if (payload) {
+                    onEvent?.(payload);
+                }
+            });
+
+            source.addEventListener('error', (event) => {
+                const payload = parsePayload(event);
+                onError?.(event, payload);
+            });
+
+            return source;
+        }
+
+        function closeCurrentChatSessionEventStream(source) {
+            try {
+                source?.close?.();
+            } catch (err) {
+                console.warn('Failed to close chat session event stream:', err);
+            }
+        }
+
         return {
             broadcastConfigSync,
             broadcastLLMActivityState,
             broadcastSavedTurnsChange,
+            closeCurrentChatSessionEventStream,
             fetchCurrentChatSession,
             fetchCurrentChatSessionEvents,
             fetchLastSession,
+            openCurrentChatSessionEventStream,
             setupLLMActivitySyncListener,
             setupSyncListeners
         };

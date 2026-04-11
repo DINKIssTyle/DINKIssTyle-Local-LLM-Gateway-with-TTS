@@ -2352,6 +2352,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	}))
 	mux.HandleFunc("/api/chat-session/current", AuthMiddleware(authMgr, handleCurrentChatSession()))
 	mux.HandleFunc("/api/chat-session/events", AuthMiddleware(authMgr, handleChatSessionEvents()))
+	mux.HandleFunc("/api/chat-session/events/stream", AuthMiddleware(authMgr, handleChatSessionEventsStream()))
 	mux.HandleFunc("/api/chat-session/stop", AuthMiddleware(authMgr, handleStopCurrentChat()))
 	mux.HandleFunc("/api/chat-session/clear", AuthMiddleware(authMgr, handleClearCurrentChat()))
 	mux.HandleFunc("/api/tts", AuthMiddleware(authMgr, handleTTS))
@@ -3027,6 +3028,159 @@ func handleStopCurrentChat() http.HandlerFunc {
 			"status":    "ok",
 			"cancelled": cancelled,
 		})
+	}
+}
+
+func handleChatSessionEventsStream() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+		if userID == "" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "Streaming not supported", http.StatusInternalServerError)
+			return
+		}
+
+		afterSeq := 0
+		if raw := strings.TrimSpace(r.URL.Query().Get("after_seq")); raw != "" {
+			if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 0 {
+				afterSeq = parsed
+			}
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+
+		tick := time.NewTicker(350 * time.Millisecond)
+		defer tick.Stop()
+		heartbeat := time.NewTicker(15 * time.Second)
+		defer heartbeat.Stop()
+
+		var (
+			lastSessionID        int64
+			lastSessionUpdatedAt string
+			lastClearedAt        string
+			lastSessionStatus    string
+			lastHasSession       bool
+		)
+
+		sendSessionSnapshot := func(session *mcp.ChatSessionEntry) error {
+			payload := map[string]interface{}{
+				"has_session": session != nil,
+			}
+			if session != nil {
+				payload["session"] = session
+			}
+			return writeSSEEvent(w, "session", payload)
+		}
+
+		sendPendingEvents := func(session mcp.ChatSessionEntry) error {
+			for {
+				events, err := mcp.ListChatEvents(userID, session.ID, afterSeq, 200)
+				if err != nil {
+					return err
+				}
+				if len(events) == 0 {
+					return nil
+				}
+				for _, entry := range events {
+					if err := writeSSEEvent(w, "chat_event", entry); err != nil {
+						return err
+					}
+					afterSeq = entry.EventSeq
+				}
+				flusher.Flush()
+				if len(events) < 200 {
+					return nil
+				}
+			}
+		}
+
+		for {
+			session, err := mcp.GetCurrentChatSession(userID)
+			hasSession := err == nil
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				log.Printf("[handleChatSessionEventsStream] Failed to load session for %s: %v", userID, err)
+				if writeErr := writeSSEEvent(w, "error", map[string]string{"message": "failed to load chat session"}); writeErr != nil {
+					return
+				}
+				flusher.Flush()
+				return
+			}
+
+			if hasSession {
+				session = normalizeStaleRunningSession(session)
+			}
+
+			currentSessionID := int64(0)
+			currentUpdatedAt := ""
+			currentClearedAt := ""
+			currentStatus := ""
+			if hasSession {
+				currentSessionID = session.ID
+				currentUpdatedAt = session.UpdatedAt.UTC().Format(time.RFC3339Nano)
+				currentStatus = strings.TrimSpace(session.Status)
+				if session.ClearedAt.Valid {
+					currentClearedAt = session.ClearedAt.Time.UTC().Format(time.RFC3339Nano)
+				}
+			}
+
+			sessionChanged := hasSession != lastHasSession ||
+				currentSessionID != lastSessionID ||
+				currentUpdatedAt != lastSessionUpdatedAt ||
+				currentClearedAt != lastClearedAt ||
+				currentStatus != lastSessionStatus
+
+			if sessionChanged {
+				if lastHasSession && hasSession && (currentSessionID != lastSessionID || currentClearedAt != lastClearedAt) {
+					afterSeq = 0
+				}
+				if hasSession {
+					sessionCopy := session
+					if err := sendSessionSnapshot(&sessionCopy); err != nil {
+						return
+					}
+				} else {
+					if err := sendSessionSnapshot(nil); err != nil {
+						return
+					}
+				}
+				flusher.Flush()
+				lastHasSession = hasSession
+				lastSessionID = currentSessionID
+				lastSessionUpdatedAt = currentUpdatedAt
+				lastClearedAt = currentClearedAt
+				lastSessionStatus = currentStatus
+			}
+
+			if hasSession {
+				if err := sendPendingEvents(session); err != nil {
+					log.Printf("[handleChatSessionEventsStream] Failed to send chat events for %s: %v", userID, err)
+					return
+				}
+			}
+
+			select {
+			case <-r.Context().Done():
+				return
+			case <-heartbeat.C:
+				if err := writeSSEComment(w, "keepalive"); err != nil {
+					return
+				}
+				flusher.Flush()
+			case <-tick.C:
+			}
+		}
 	}
 }
 
@@ -4473,10 +4627,19 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			}
 		}
 
-		scanner := bufio.NewScanner(resp.Body)
+		reader := bufio.NewReader(resp.Body)
 		log.Println("[handleChat-DEBUG] Starting response scanner loop")
-		for scanner.Scan() {
-			line := scanner.Text()
+		for {
+			block, readErr := readUpstreamSSEBlock(reader)
+			if readErr != nil {
+				if errors.Is(readErr, io.EOF) {
+					break
+				}
+				log.Printf("[handleChat] Stream scanner error: %v", readErr)
+				break
+			}
+			line := block.Raw
+			dataStr := block.Data
 
 			// Log first few lines to debug stream format
 			if len(fullResponse) < 100 && len(fullResponse) > 0 {
@@ -4493,8 +4656,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			}
 
 			// Check for data: prefix
-			if strings.HasPrefix(trimmedLine, "data: ") {
-				dataStr := strings.TrimPrefix(trimmedLine, "data: ")
+			if dataStr != "" {
 
 				// 1. Check for Standard OpenAI [DONE]
 				if dataStr == "[DONE]" {
@@ -4686,14 +4848,10 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 						} else if msgType == "chat.end" || msgType == "message.end" {
 							log.Printf("[handleChat-DEBUG] Custom End Signal Received: %s", msgType)
 
-							// Capture response_id for chaining in stateful mode
-							// Line is like: event: chat.end\ndata: {"result": {"response_id": "..."}}
-							// We need to decode "data" part.
-							// The 'line' variable here is the raw SSE line, e.g. "data: {...}"
-							if strings.HasPrefix(line, "data: ") {
-								jsonPart := strings.TrimPrefix(line, "data: ")
+							// Capture response_id for chaining in stateful mode.
+							if strings.TrimSpace(dataStr) != "" {
 								var endPayload map[string]interface{}
-								if err := json.Unmarshal([]byte(jsonPart), &endPayload); err == nil {
+								if err := json.Unmarshal([]byte(dataStr), &endPayload); err == nil {
 									if res, ok := endPayload["result"].(map[string]interface{}); ok {
 										if rid, ok := res["response_id"].(string); ok && !discardStatefulResponseIDForTurn {
 											lastResponseID = rid
@@ -5146,10 +5304,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		}
 
 		resp.Body.Close() // Explicit close after scanner is done with this turn
-
-		if err := scanner.Err(); err != nil {
-			log.Printf("[handleChat] Stream scanner error: %v", err)
-		}
 
 		if nativeToolLoopDetected {
 			AddDebugTrace("chat", "turn.complete", "Turn stopped due to native tool loop", map[string]interface{}{
@@ -5731,6 +5885,93 @@ func sendSSEError(w http.ResponseWriter, flusher http.Flusher, msg string) {
 	// Also send a specialized error event if the frontend supports it
 	fmt.Fprintf(w, "event: error\ndata: %s\n\n", msg)
 	flusher.Flush()
+}
+
+func writeSSEEvent(w io.Writer, eventName string, payload interface{}) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(eventName) != "" {
+		if _, err := fmt.Fprintf(w, "event: %s\n", strings.TrimSpace(eventName)); err != nil {
+			return err
+		}
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if _, err := fmt.Fprintf(w, "data: %s\n", line); err != nil {
+			return err
+		}
+	}
+	_, err = fmt.Fprint(w, "\n")
+	return err
+}
+
+func writeSSEComment(w io.Writer, comment string) error {
+	_, err := fmt.Fprintf(w, ": %s\n\n", strings.TrimSpace(comment))
+	return err
+}
+
+type upstreamSSEBlock struct {
+	EventName string
+	Data      string
+	Raw       string
+}
+
+func readUpstreamSSEBlock(reader *bufio.Reader) (upstreamSSEBlock, error) {
+	var (
+		block      upstreamSSEBlock
+		rawLines   []string
+		dataLines  []string
+		eventName  string
+		haveFields bool
+	)
+
+	flush := func() upstreamSSEBlock {
+		block.EventName = strings.TrimSpace(eventName)
+		block.Data = strings.Join(dataLines, "\n")
+		block.Raw = strings.Join(rawLines, "\n")
+		return block
+	}
+
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return upstreamSSEBlock{}, err
+		}
+
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
+			if haveFields || len(rawLines) > 0 {
+				return flush(), nil
+			}
+			if errors.Is(err, io.EOF) {
+				return upstreamSSEBlock{}, io.EOF
+			}
+			continue
+		}
+
+		rawLines = append(rawLines, line)
+		haveFields = true
+
+		switch {
+		case strings.HasPrefix(line, "event:"):
+			eventName = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		case strings.HasPrefix(line, "data:"):
+			dataLine := strings.TrimPrefix(line, "data:")
+			if strings.HasPrefix(dataLine, " ") {
+				dataLine = dataLine[1:]
+			}
+			dataLines = append(dataLines, dataLine)
+		case strings.HasPrefix(line, ":"):
+			// SSE comment/heartbeat; preserve in Raw only.
+		default:
+			// Some providers emit raw JSON lines instead of proper SSE fields.
+		}
+
+		if errors.Is(err, io.EOF) {
+			return flush(), nil
+		}
+	}
 }
 
 func lenInterfaceSlice(v interface{}) int {
