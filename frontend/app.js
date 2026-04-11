@@ -59,6 +59,7 @@ let config = {
     userBubbleTheme: 'ocean', // Options: 'ocean', 'lime', 'sunset', 'amber', 'magenta'
     streamingScrollMode: 'auto', // Options: 'auto', 'label-top'
     markdownRenderMode: 'fast', // Options: 'fast', 'balanced', 'final'
+    autoDismissMobileKeyboard: false,
     hapticsEnabled: true
 };
 
@@ -1981,6 +1982,46 @@ function updateViewportMetrics() {
     updateScrollToBottomButton();
 }
 
+function isIOSMobileEnvironment() {
+    const ua = navigator.userAgent || '';
+    return /iPad|iPhone|iPod/i.test(ua)
+        || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+function isAndroidMobileEnvironment() {
+    return /Android/i.test(navigator.userAgent || '');
+}
+
+function shouldAutoDismissMobileKeyboardOnSend() {
+    return config.autoDismissMobileKeyboard === true
+        && (isIOSMobileEnvironment() || isAndroidMobileEnvironment());
+}
+
+function dismissMobileKeyboardAfterSend() {
+    if (!shouldAutoDismissMobileKeyboardOnSend()) return;
+
+    const activeElement = document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    const editableElement = activeElement
+        && (activeElement.matches('textarea, input, [contenteditable="true"]') || activeElement.isContentEditable)
+        ? activeElement
+        : null;
+    const blurTarget = editableElement || messageInput;
+
+    window.setTimeout(() => {
+        blurTarget?.blur?.();
+        updateViewportMetrics();
+
+        if (isIOSMobileEnvironment()) {
+            window.setTimeout(() => {
+                window.scrollTo(0, 0);
+                updateViewportMetrics();
+            }, 120);
+        }
+    }, 0);
+}
+
 function restoreChatScrollPosition(scrollTop) {
     if (!chatMessages || !Number.isFinite(scrollTop)) return;
     const nextTop = Math.max(0, scrollTop);
@@ -2895,6 +2936,7 @@ function loadConfig() {
     config.reasoning = normalizeReasoningValue(config.reasoning);
     config.showReasoningControl = config.showReasoningControl !== false;
     config.forceShowReasoningControl = config.forceShowReasoningControl === true;
+    config.autoDismissMobileKeyboard = config.autoDismissMobileKeyboard === true;
     config.hapticsEnabled = config.hapticsEnabled !== false;
     config.osTtsRate = Number(config.osTtsRate) > 0 ? Number(config.osTtsRate) : 1.0;
     config.osTtsPitch = Number(config.osTtsPitch) >= 0 ? Number(config.osTtsPitch) : 1.0;
@@ -2978,6 +3020,8 @@ function loadConfig() {
     if (streamingScrollModeEl) streamingScrollModeEl.value = config.streamingScrollMode;
     const markdownRenderModeEl = document.getElementById('cfg-markdown-render-mode');
     if (markdownRenderModeEl) markdownRenderModeEl.value = config.markdownRenderMode;
+    const autoDismissKeyboardEl = document.getElementById('cfg-auto-dismiss-mobile-keyboard');
+    if (autoDismissKeyboardEl) autoDismissKeyboardEl.checked = config.autoDismissMobileKeyboard === true;
     const hapticsEl = document.getElementById('cfg-enable-haptics');
     if (hapticsEl) hapticsEl.checked = config.hapticsEnabled;
     syncHapticsPreference();
@@ -3075,7 +3119,7 @@ function setupSettingsListeners() {
     });
 
     // Selects & Inputs: save on change
-    const autoSaveIds = ['cfg-api', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-os-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-context-strategy', 'cfg-show-reasoning-control', 'cfg-force-show-reasoning-control', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model', 'cfg-tts-engine', 'cfg-streaming-scroll-mode', 'cfg-markdown-render-mode', 'cfg-enable-haptics', 'cfg-embedding-model', 'cfg-mic-layout'];
+    const autoSaveIds = ['cfg-api', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-os-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-context-strategy', 'cfg-show-reasoning-control', 'cfg-force-show-reasoning-control', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model', 'cfg-tts-engine', 'cfg-streaming-scroll-mode', 'cfg-markdown-render-mode', 'cfg-auto-dismiss-mobile-keyboard', 'cfg-enable-haptics', 'cfg-embedding-model', 'cfg-mic-layout'];
     autoSaveIds.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.onchange = () => saveConfig(false);
@@ -3334,6 +3378,7 @@ function saveConfig(closeModal = true) {
     config.userBubbleTheme = USER_BUBBLE_THEMES[config.userBubbleTheme] ? config.userBubbleTheme : 'ocean';
     config.streamingScrollMode = document.getElementById('cfg-streaming-scroll-mode')?.value === 'label-top' ? 'label-top' : 'auto';
     config.markdownRenderMode = document.getElementById('cfg-markdown-render-mode')?.value || 'balanced';
+    config.autoDismissMobileKeyboard = document.getElementById('cfg-auto-dismiss-mobile-keyboard')?.checked === true;
     config.hapticsEnabled = document.getElementById('cfg-enable-haptics')?.checked !== false;
     config.chatFontSize = Math.max(12, Math.min(24, parseInt(config.chatFontSize, 10) || 16));
 
@@ -5735,6 +5780,7 @@ async function sendMessage(options = {}) {
     messageInput.value = '';
     removeImage();
     autoResizeInput();
+    dismissMobileKeyboardAfterSend();
 
     // Prepare Assistant Placeholder
     AppState.chat.isGenerating = true;
