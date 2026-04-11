@@ -698,9 +698,9 @@
         }
 
         .mcp-help-modal {
-            max-width: 1000px;
-            width: min(1000px, 94vw);
-            max-height: min(86vh, 920px);
+            max-width: 840px;
+            width: min(840px, 92vw);
+            max-height: min(82vh, 860px);
         }
 
         .doc-help-modal {
@@ -709,41 +709,49 @@
             max-height: min(82vh, 860px);
         }
 
-        .mcp-help-layout {
-            display: grid;
-            grid-template-rows: minmax(0, 2fr) minmax(220px, 1fr);
-            gap: 14px;
-            min-height: min(72vh, 760px);
-        }
-
-        .mcp-help-section {
-            min-height: 0;
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            background: rgba(255, 255, 255, 0.025);
-            overflow: hidden;
-        }
-
-        .mcp-help-section-header {
+        .mcp-inline-json-header {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            gap: 12px;
-            padding: 12px 14px;
-            border-bottom: 1px solid var(--border-color);
-            background: rgba(255, 255, 255, 0.03);
+            gap: 16px;
+            margin-top: 18px;
+            margin-bottom: 10px;
         }
 
-        .mcp-help-section-title {
+        .mcp-inline-json-title {
             font-size: 12px;
-            letter-spacing: 0.08em;
+            letter-spacing: 0.18em;
             text-transform: uppercase;
             color: var(--text-secondary);
+            font-weight: 800;
+        }
+
+        .mcp-inline-json-copy {
+            flex-shrink: 0;
+        }
+
+        .mcp-inline-json-caption {
+            margin: 0 0 10px;
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
+
+        .mcp-inline-json-box {
+            margin: 0 0 4px;
+            padding: 14px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: #0b1016;
+            color: #d7e3f0;
+            font-family: "JetBrains Mono", Consolas, monospace;
+            font-size: 13px;
+            line-height: 1.6;
+            overflow: auto;
+            white-space: pre;
         }
 
         .mcp-help-markdown {
-            padding: 16px;
-            height: 100%;
+            padding: 20px;
             overflow: auto;
             line-height: 1.65;
             color: var(--text-color);
@@ -924,41 +932,9 @@
             display: block;
         }
 
-        .mcp-json-panel {
-            display: flex;
-            flex-direction: column;
-            min-height: 0;
-        }
-
-        .mcp-json-caption {
-            padding: 0 14px 12px;
-            color: var(--text-secondary);
-            font-size: 12px;
-        }
-
-        .mcp-json-box {
-            margin: 0 14px 14px;
-            padding: 14px;
-            border-radius: 10px;
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            background: #0b1016;
-            color: #d7e3f0;
-            font-family: "JetBrains Mono", Consolas, monospace;
-            font-size: 13px;
-            line-height: 1.6;
-            overflow: auto;
-            white-space: pre;
-            flex: 1;
-        }
-
         @media (max-width: 900px) {
             .mcp-help-modal {
-                width: min(1000px, 96vw);
-            }
-
-            .mcp-help-layout {
-                grid-template-rows: minmax(0, 1.7fr) minmax(200px, 1fr);
-                min-height: min(78vh, 820px);
+                width: min(840px, 96vw);
             }
         }
 
@@ -1646,26 +1622,8 @@
                     <span class="material-icons-round">close</span>
                 </button>
             </div>
-            <div class="modal-body">
-                <div class="mcp-help-layout">
-                    <section class="mcp-help-section">
-                        <div class="mcp-help-section-header">
-                            <div class="mcp-help-section-title">Guide</div>
-                        </div>
-                        <div id="mcp-help-markdown" class="mcp-help-markdown is-loading">Loading help document...</div>
-                    </section>
-                    <section class="mcp-help-section mcp-json-panel">
-                        <div class="mcp-help-section-header">
-                            <div class="mcp-help-section-title">mcp.json Example</div>
-                            <button class="btn btn-secondary btn-compact" type="button" onclick="copyMcpJsonExample()">
-                                <span class="material-icons-round">content_copy</span>
-                                Copy JSON
-                            </button>
-                        </div>
-                        <div class="mcp-json-caption">Use the current server address shown below in LM Studio's <code>mcp.json</code>.</div>
-                        <pre class="mcp-json-box"><code id="mcp-json-example"></code></pre>
-                    </section>
-                </div>
+            <div class="modal-body doc-help-body">
+                <div id="mcp-help-markdown" class="mcp-help-markdown is-loading">Loading help document...</div>
             </div>
             <div class="modal-footer" style="display: flex; justify-content: flex-end;">
                 <button class="btn btn-primary" onclick="closeMcpHelpModal()">Close</button>
@@ -2413,10 +2371,25 @@
             }, null, 2);
         }
 
-        function updateMcpJsonExample() {
-            const codeEl = document.getElementById('mcp-json-example');
-            if (!codeEl) return;
-            codeEl.textContent = buildMcpJsonExample(getCurrentMcpServerUrl());
+        function buildMcpJsonAppendixHtml() {
+            const jsonText = buildMcpJsonExample(getCurrentMcpServerUrl());
+            return `
+                <div class="mcp-inline-json">
+                    <div class="mcp-inline-json-header">
+                        <div class="mcp-inline-json-title">MCP.JSON EXAMPLE</div>
+                        <button class="btn btn-secondary btn-compact mcp-inline-json-copy" type="button" onclick="copyMcpJsonExample()">
+                            <span class="material-icons-round">content_copy</span>
+                            Copy JSON
+                        </button>
+                    </div>
+                    <p class="mcp-inline-json-caption">Use the current server address shown below in LM Studio's <code>mcp.json</code>.</p>
+                    <pre class="mcp-inline-json-box"><code>${escapeHtml(jsonText)}</code></pre>
+                </div>
+            `;
+        }
+
+        function renderMcpHelpContent(markdown) {
+            return renderSimpleMarkdown(markdown) + buildMcpJsonAppendixHtml();
         }
 
         function renderSimpleMarkdown(markdown) {
@@ -2519,14 +2492,13 @@
         async function openMcpHelpModal() {
             const modal = document.getElementById('mcp-help-modal');
             const markdownEl = document.getElementById('mcp-help-markdown');
-            updateMcpJsonExample();
             modal.style.display = 'flex';
 
             if (!markdownEl) return;
 
             if (mcpHelpMarkdownLoaded && mcpHelpMarkdownSource) {
                 markdownEl.classList.remove('is-loading', 'is-error');
-                markdownEl.innerHTML = renderSimpleMarkdown(mcpHelpMarkdownSource);
+                markdownEl.innerHTML = renderMcpHelpContent(mcpHelpMarkdownSource);
                 resolveHelpAssetPaths(markdownEl, 'public/help/LMStudio_MCP.md');
                 return;
             }
@@ -2538,7 +2510,7 @@
             try {
                 const markdown = await loadMcpHelpMarkdown();
                 markdownEl.classList.remove('is-loading', 'is-error');
-                markdownEl.innerHTML = renderSimpleMarkdown(markdown);
+                markdownEl.innerHTML = renderMcpHelpContent(markdown);
                 resolveHelpAssetPaths(markdownEl, 'public/help/LMStudio_MCP.md');
             } catch (e) {
                 console.error('Failed to load MCP help markdown:', e);
@@ -3049,7 +3021,11 @@
             } else {
                 document.getElementById('mcp-port-input').value = '-';
             }
-            updateMcpJsonExample();
+            const markdownEl = document.getElementById('mcp-help-markdown');
+            if (markdownEl && mcpHelpMarkdownLoaded && mcpHelpMarkdownSource) {
+                markdownEl.innerHTML = renderMcpHelpContent(mcpHelpMarkdownSource);
+                resolveHelpAssetPaths(markdownEl, 'public/help/LMStudio_MCP.md');
+            }
         }
 
         async function savePort() {
