@@ -2341,6 +2341,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	mux.HandleFunc("/api/logout", handleLogout(authMgr))
 	mux.HandleFunc("/api/logout-all-sessions", AuthMiddleware(authMgr, handleLogoutAllSessions(authMgr)))
 	mux.HandleFunc("/api/auth/check", handleAuthCheck(authMgr))
+	mux.HandleFunc("/api/mcp/session-url", AuthMiddleware(authMgr, handleMCPSessionURL(app, authMgr)))
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(app.CheckHealth())
@@ -2360,9 +2361,53 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	mux.HandleFunc("/api/saved-turns", AuthMiddleware(authMgr, handleSavedTurns()))
 	mux.HandleFunc("/api/saved-turns/title-refresh", AuthMiddleware(authMgr, handleSavedTurnTitleRefresh()))
 
-	// MCP Endpoints (Conditional)
 	// MCP Endpoints (Always Enabled if server runs)
 	log.Println("[Server] MCP Support Active")
+
+	// Register MCP context resolver
+	mcp.SetRequestContextResolver(func(r *http.Request) mcp.ToolContext {
+		ctx := mcp.ToolContext{UserID: "default"}
+		var user *User
+		var valid bool
+
+		if mcpAPIKey := extractMCPAPIKeyFromRequest(r); mcpAPIKey != "" {
+			user, valid = authMgr.FindUserByMCPAPIKey(mcpAPIKey)
+			if valid && user != nil {
+				log.Printf("[MCP-Resolver] Resolved MCP API key for user: %s", user.ID)
+			}
+		}
+
+		if bindingID := strings.TrimSpace(r.URL.Query().Get("mcp_session")); bindingID != "" {
+			user, valid = authMgr.ResolveMCPSessionBinding(bindingID)
+			if valid && user != nil {
+				log.Printf("[MCP-Resolver] Resolved MCP session binding for user: %s", user.ID)
+			}
+		}
+
+		token := extractSessionTokenFromRequest(r)
+		if token == "" {
+			token = r.URL.Query().Get("token")
+		}
+		if !valid && token != "" {
+			user, valid = authMgr.ValidateSession(token)
+		}
+
+		if valid && user != nil {
+			ctx.UserID = user.ID
+			ctx.EnableMemory = true
+			if user.Settings.EnableMemory != nil {
+				ctx.EnableMemory = *user.Settings.EnableMemory
+			}
+			ctx.DisabledTools = expandDisabledToolAliases(user.Settings.DisabledTools)
+			ctx.DisallowedCmds = user.Settings.DisallowedCommands
+			ctx.DisallowedDirs = user.Settings.DisallowedDirectories
+			log.Printf("[MCP-Resolver] Identified User: %s (Memory: %v)", user.ID, ctx.EnableMemory)
+		} else {
+			log.Printf("[MCP-Resolver] Unidentified Request from %s -> Default Context (token required for user-scoped memory)", r.RemoteAddr)
+		}
+		return ctx
+	})
+
 	mux.HandleFunc("/mcp/sse", mcp.HandleSSE)
 	mux.HandleFunc("/mcp/messages", mcp.HandleMessages)
 
@@ -2457,10 +2502,6 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 					if newCfg.EnableMemory != nil {
 						user.Settings.EnableMemory = newCfg.EnableMemory
 						updated = true
-						// Sync to MCP context
-						// We need disallowed lists here too, but handleConfig is partial update.
-						// Let's retrieve full user settings to be safe.
-						mcp.SetContext(user.ID, *newCfg.EnableMemory, user.Settings.DisabledTools, "", user.Settings.DisallowedCommands, user.Settings.DisallowedDirectories)
 					}
 					if newCfg.StatefulTurnLimit != nil {
 						value := *newCfg.StatefulTurnLimit
@@ -2839,6 +2880,88 @@ func handleAuthCheck(am *AuthManager) http.HandlerFunc {
 			"role":          user.Role,
 		})
 	}
+}
+
+func handleMCPSessionURL(app *App, am *AuthManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		token := extractSessionTokenFromRequest(r)
+		if token == "" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		bindingID, expiresAt, err := am.CreateMCPSessionBinding(token, 12*time.Hour)
+		if err != nil {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		mcpURL := buildMCPSessionURL(r, app, bindingID)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"url":        mcpURL,
+			"expires_at": expiresAt.UTC().Format(time.RFC3339),
+		})
+	}
+}
+
+func buildMCPSessionURL(r *http.Request, app *App, bindingID string) string {
+	host := strings.TrimSpace(r.Host)
+	if host == "" {
+		host = strings.TrimSpace(r.URL.Host)
+	}
+
+	hostName := host
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+		hostName = parsedHost
+	}
+	if hostName == "" {
+		hostName = "127.0.0.1"
+	}
+
+	app.serverMux.Lock()
+	portText := strings.TrimSpace(app.port)
+	app.serverMux.Unlock()
+
+	basePort, err := strconv.Atoi(portText)
+	if err != nil || basePort <= 0 {
+		if _, hostPort, splitErr := net.SplitHostPort(host); splitErr == nil {
+			if parsedPort, parseErr := strconv.Atoi(hostPort); parseErr == nil && parsedPort > 0 {
+				basePort = parsedPort
+			}
+		}
+	}
+	if basePort <= 0 {
+		basePort = 7860
+	}
+
+	mcpHost := net.JoinHostPort(hostName, strconv.Itoa(basePort+1))
+	return fmt.Sprintf("http://%s/mcp/sse?mcp_session=%s", mcpHost, bindingID)
+}
+
+func extractMCPAPIKeyFromRequest(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+
+	if key := strings.TrimSpace(r.Header.Get("X-API-Key")); key != "" {
+		return key
+	}
+	if key := strings.TrimSpace(r.Header.Get("X-MCP-API-Key")); key != "" {
+		return key
+	}
+
+	authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
+	if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
+		return strings.TrimSpace(authHeader[len("Bearer "):])
+	}
+
+	return ""
 }
 
 // handleUsers returns list of users
@@ -3939,9 +4062,15 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		enableMCP = false
 	}
 
-	// Set MCP Context for this user interaction
-	// This ensures that when LM Studio calls back to MCP, it has the correct context
-	mcp.SetContext(userID, enableMemory, disabledTools, locationInfo, disallowedCmds, disallowedDirs)
+	// Prepare MCP Context for this user interaction
+	mcpCtx := mcp.ToolContext{
+		UserID:         userID,
+		EnableMemory:   enableMemory,
+		DisabledTools:  disabledTools,
+		LocationInfo:   locationInfo,
+		DisallowedCmds: disallowedCmds,
+		DisallowedDirs: disallowedDirs,
+	}
 	log.Printf("[handleChat-DEBUG] userID=%s, enableMemory=%v, disabledTools=%v, Location=%s, DisallowedCmds=%v, DisallowedDirs=%v", userID, enableMemory, disabledTools, locationInfo, disallowedCmds, disallowedDirs)
 	AddDebugTrace("chat", "request.context", "Resolved chat execution context", map[string]interface{}{
 		"user":                userID,
@@ -5461,7 +5590,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 					"count": toolSignatureCounts[toolSig],
 				})
 			} else {
-				result, err = mcp.ExecuteToolByName(lastToolName, []byte(lastToolArgsStr), userID, enableMemory, disabledTools)
+				result, err = mcp.ExecuteToolByName(mcpCtx.Clone(), lastToolName, []byte(lastToolArgsStr))
 			}
 			var toolResultEvt map[string]interface{}
 			if err != nil {

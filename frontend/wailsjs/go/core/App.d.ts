@@ -81,6 +81,8 @@ export function GetUserDisallowedCommands(arg1:string):Promise<Array<string>>;
 
 export function GetUserDisallowedDirectories(arg1:string):Promise<Array<string>>;
 
+export function GetUserMCPAPIKey(arg1:string):Promise<string>;
+
 export function GetUserMemoryRetentionConfig(arg1:string):Promise<mcp.MemoryRetentionConfig>;
 
 export function GetUsers():Promise<Array<Record<string, string>>>;
@@ -146,6 +148,8 @@ export function SetUserDisabledTools(arg1:string,arg2:Array<string>):Promise<voi
 export function SetUserDisallowedCommands(arg1:string,arg2:Array<string>):Promise<void>;
 
 export function SetUserDisallowedDirectories(arg1:string,arg2:Array<string>):Promise<void>;
+
+export function SetUserMCPAPIKey(arg1:string,arg2:string):Promise<void>;
 
 export function SetUserMemoryRetentionConfig(arg1:string,arg2:mcp.MemoryRetentionConfig):Promise<void>;
 

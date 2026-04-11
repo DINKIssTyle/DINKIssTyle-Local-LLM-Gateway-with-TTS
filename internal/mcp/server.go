@@ -1,3 +1,4 @@
+// Created by DINKIssTyle on 2026. Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
 package mcp
 
 import (
@@ -10,6 +11,29 @@ import (
 	"sync"
 	"time"
 )
+
+type RequestContextResolver func(r *http.Request) ToolContext
+
+var (
+	requestContextResolver RequestContextResolver
+	resolverMu             sync.RWMutex
+)
+
+func SetRequestContextResolver(resolver RequestContextResolver) {
+	resolverMu.Lock()
+	defer resolverMu.Unlock()
+	requestContextResolver = resolver
+}
+
+func ResolveRequestContext(r *http.Request) ToolContext {
+	resolverMu.RLock()
+	resolver := requestContextResolver
+	resolverMu.RUnlock()
+	if resolver != nil {
+		return resolver(r)
+	}
+	return ToolContext{UserID: "default"}
+}
 
 // Simplified MCP Server implementation
 
@@ -69,7 +93,7 @@ func Broadcast(msg string) int {
 }
 
 // buildResponse constructs a JSON-RPC response for a given request
-func buildResponse(req *JSONRPCRequest, userID string, enableMemory bool, disabledTools []string, disallowedCmds []string, disallowedDirs []string) *JSONRPCResponse {
+func buildResponse(req *JSONRPCRequest, ctx ToolContext) *JSONRPCResponse {
 	res := &JSONRPCResponse{
 		JSONRPC: "2.0",
 		ID:      req.ID,
@@ -96,7 +120,7 @@ func buildResponse(req *JSONRPCRequest, userID string, enableMemory bool, disabl
 		}
 
 	case "tools/call":
-		handleToolCall(req, res, userID, enableMemory, disabledTools, disallowedCmds, disallowedDirs)
+		handleToolCall(req, res, ctx)
 
 	case "notifications/initialized":
 		log.Println("[MCP] Client Initialized")
@@ -117,7 +141,7 @@ func HandleSSE(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Access-Control-Allow-Headers", "Authorization, X-Session-Token, X-API-Key, X-MCP-API-Key, Content-Type")
 
 	if r.Method == "OPTIONS" {
 		w.WriteHeader(http.StatusOK)
@@ -158,14 +182,17 @@ func HandleSSE(w http.ResponseWriter, r *http.Request) {
 		scheme = "https"
 	}
 	endpointURL := fmt.Sprintf("%s://%s/mcp/messages", scheme, r.Host)
+	if r.URL.RawQuery != "" {
+		endpointURL += "?" + r.URL.RawQuery
+	}
 	fmt.Fprintf(w, "event: endpoint\ndata: %s\n\n", endpointURL)
 	flusher.Flush()
 	log.Printf("[MCP-DEBUG] Advertised Endpoint: %s", endpointURL)
 
 	// If we captured an initial request, process it immediately in the stream
 	if initialReq != nil {
-		ctx := GetContext()
-		res := buildResponse(initialReq, ctx.UserID, ctx.EnableMemory, ctx.DisabledTools, ctx.DisallowedCmds, ctx.DisallowedDirs)
+		ctx := ResolveRequestContext(r)
+		res := buildResponse(initialReq, ctx)
 		if res != nil {
 			respBytes, _ := json.Marshal(res)
 			fmt.Fprintf(w, "event: message\ndata: %s\n\n", string(respBytes))
@@ -205,7 +232,7 @@ func HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Access-Control-Allow-Headers", "Authorization, X-Session-Token, X-API-Key, X-MCP-API-Key, Content-Type")
 	w.Header().Set("Content-Type", "application/json")
 
 	if r.Method == "OPTIONS" {
@@ -228,13 +255,13 @@ func HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("[MCP-DEBUG] Request Method: %s (ID: %v)", req.Method, req.ID)
+	ctx := ResolveRequestContext(r)
 
 	w.WriteHeader(http.StatusAccepted)
 
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		ctx := GetContext()
-		res := buildResponse(&req, ctx.UserID, ctx.EnableMemory, ctx.DisabledTools, ctx.DisallowedCmds, ctx.DisallowedDirs)
+		res := buildResponse(&req, ctx)
 		if res != nil {
 			respBytes, _ := json.Marshal(res)
 			count := Broadcast(string(respBytes))
@@ -243,7 +270,7 @@ func HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, enableMemory bool, disabledTools []string, disallowedCmds []string, disallowedDirs []string) {
+func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, ctx ToolContext) {
 	var params struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
@@ -255,7 +282,7 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 
 	log.Printf("[MCP] Tool Call: %s", params.Name)
 
-	content, err := ExecuteToolByName(params.Name, params.Arguments, userID, enableMemory, disabledTools)
+	content, err := ExecuteToolByName(ctx, params.Name, params.Arguments)
 	if err != nil {
 		res.Result = map[string]interface{}{
 			"content": []map[string]interface{}{

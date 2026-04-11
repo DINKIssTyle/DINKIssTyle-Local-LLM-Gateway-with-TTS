@@ -1,3 +1,4 @@
+// Created by DINKIssTyle on 2026. Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
 package mcp
 
 import (
@@ -36,6 +37,17 @@ type ToolContext struct {
 	LocationInfo   string
 	DisallowedCmds []string
 	DisallowedDirs []string
+}
+
+func (c ToolContext) Clone() ToolContext {
+	return ToolContext{
+		UserID:         c.UserID,
+		EnableMemory:   c.EnableMemory,
+		DisabledTools:  append([]string(nil), c.DisabledTools...),
+		LocationInfo:   c.LocationInfo,
+		DisallowedCmds: append([]string(nil), c.DisallowedCmds...),
+		DisallowedDirs: append([]string(nil), c.DisallowedDirs...),
+	}
 }
 
 type ToolHost interface {
@@ -88,8 +100,6 @@ func (h ToolHostFuncs) ReadTerminalTail(lines int, maxWaitMs int, idleMs int) (s
 var (
 	currentHost           ToolHost
 	hostMu                sync.RWMutex
-	currentContext        = ToolContext{UserID: "default"}
-	contextMu             sync.RWMutex
 	currentHooks          ToolHooks
 	hooksMu               sync.RWMutex
 	verboseLoggingEnabled atomic.Uint32
@@ -133,32 +143,7 @@ func getHost() ToolHost {
 	return currentHost
 }
 
-func SetContext(userID string, enableMemory bool, disabledTools []string, locationInfo string, disallowedCmds []string, disallowedDirs []string) {
-	contextMu.Lock()
-	defer contextMu.Unlock()
-	currentContext = ToolContext{
-		UserID:         userID,
-		EnableMemory:   enableMemory,
-		DisabledTools:  append([]string(nil), disabledTools...),
-		LocationInfo:   locationInfo,
-		DisallowedCmds: append([]string(nil), disallowedCmds...),
-		DisallowedDirs: append([]string(nil), disallowedDirs...),
-	}
-	log.Printf("[MCP] Set Context -> User: %s, Memory: %v, DisabledTools: %v, Location: %s, DisallowedCmds: %v, DisallowedDirs: %v", userID, enableMemory, disabledTools, locationInfo, disallowedCmds, disallowedDirs)
-}
 
-func GetContext() ToolContext {
-	contextMu.RLock()
-	defer contextMu.RUnlock()
-	return ToolContext{
-		UserID:         currentContext.UserID,
-		EnableMemory:   currentContext.EnableMemory,
-		DisabledTools:  append([]string(nil), currentContext.DisabledTools...),
-		LocationInfo:   currentContext.LocationInfo,
-		DisallowedCmds: append([]string(nil), currentContext.DisallowedCmds...),
-		DisallowedDirs: append([]string(nil), currentContext.DisallowedDirs...),
-	}
-}
 
 func GetToolList() []Tool {
 	tools := []Tool{
@@ -622,18 +607,11 @@ func normalizeToolArguments(toolName string, argumentsJSON []byte) (string, []by
 	return toolName, argumentsJSON
 }
 
-func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, enableMemory bool, disabledTools []string) (string, error) {
+func ExecuteToolByName(ctx ToolContext, toolName string, argumentsJSON []byte) (string, error) {
 	start := time.Now()
-	ctx := GetContext()
-	if userID == "" {
-		userID = ctx.UserID
-	}
-	if disabledTools == nil {
-		disabledTools = ctx.DisabledTools
-	}
-	if !enableMemory {
-		enableMemory = ctx.EnableMemory
-	}
+	userID := ctx.UserID
+	enableMemory := ctx.EnableMemory
+	disabledTools := ctx.DisabledTools
 
 	log.Printf("[MCP] ExecuteToolByName: %s (User: %s, Memory: %v, Loc: %s)", toolName, userID, enableMemory, ctx.LocationInfo)
 	toolName, argumentsJSON = normalizeToolArguments(toolName, argumentsJSON)

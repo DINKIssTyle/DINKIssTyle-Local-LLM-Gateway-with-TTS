@@ -154,6 +154,10 @@ export function GetUserDisallowedDirectories(arg1) {
   return window['go']['core']['App']['GetUserDisallowedDirectories'](arg1);
 }
 
+export function GetUserMCPAPIKey(arg1) {
+  return window['go']['core']['App']['GetUserMCPAPIKey'](arg1);
+}
+
 export function GetUserMemoryRetentionConfig(arg1) {
   return window['go']['core']['App']['GetUserMemoryRetentionConfig'](arg1);
 }
@@ -284,6 +288,10 @@ export function SetUserDisallowedCommands(arg1, arg2) {
 
 export function SetUserDisallowedDirectories(arg1, arg2) {
   return window['go']['core']['App']['SetUserDisallowedDirectories'](arg1, arg2);
+}
+
+export function SetUserMCPAPIKey(arg1, arg2) {
+  return window['go']['core']['App']['SetUserMCPAPIKey'](arg1, arg2);
 }
 
 export function SetUserMemoryRetentionConfig(arg1, arg2) {

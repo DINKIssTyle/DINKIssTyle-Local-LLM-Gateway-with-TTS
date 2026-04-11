@@ -1239,6 +1239,16 @@ func (a *App) GetUserApiToken(id string) (string, error) {
 	return a.authMgr.GetUserApiToken(id)
 }
 
+// SetUserMCPAPIKey sets MCP API key for a specific user (exposed to Wails)
+func (a *App) SetUserMCPAPIKey(id, token string) error {
+	return a.authMgr.SetUserMCPAPIKey(id, token)
+}
+
+// GetUserMCPAPIKey returns MCP API key for a specific user (exposed to Wails)
+func (a *App) GetUserMCPAPIKey(id string) (string, error) {
+	return a.authMgr.GetUserMCPAPIKey(id)
+}
+
 // GetUserMemoryRetentionConfig returns the current memory retention policy for a user.
 func (a *App) GetUserMemoryRetentionConfig(id string) (mcp.MemoryRetentionConfig, error) {
 	return a.authMgr.GetUserMemoryRetentionConfig(id)

@@ -1824,6 +1824,20 @@
                     <div style="font-size: 11px; color: var(--text-secondary); margin-top: -8px;">
                         This API key will be used when this user makes LLM requests.
                     </div>
+                    <div class="form-group" style="margin-top: 16px;">
+                        <label>MCP API Key</label>
+                        <div style="display: flex; gap: 8px;">
+                            <input type="password" id="edit-user-mcp-api-key" placeholder="Enter MCP API key for this user" oninput="updateUserMcpJsonPreview()">
+                            <button class="btn btn-secondary btn-compact" type="button" onclick="generateUserMcpApiKey()">Generate</button>
+                        </div>
+                    </div>
+                    <div style="font-size: 11px; color: var(--text-secondary); margin-top: -8px;">
+                        This key is for LM Studio MCP access to this user's tools and memory. Add it to <code>mcp.json</code> as <code>X-API-Key</code>.
+                    </div>
+                    <div style="margin-top: 12px;">
+                        <label style="display: block; margin-bottom: 6px;">mcp.json Preview</label>
+                        <pre class="mcp-json-box" style="margin: 0;"><code id="edit-user-mcp-json-preview"></code></pre>
+                    </div>
                 </div>
 
                 <!-- Memory Retention Section -->
@@ -2394,7 +2408,27 @@
             }
         }
 
-        function getCurrentMcpServerUrl() {
+        let currentMcpSessionUrl = '';
+        let currentMcpSessionUrlPromise = null;
+
+        function buildSessionFetchOptions(extra = {}) {
+            const { headers: extraHeaders = {}, ...rest } = extra || {};
+            const headers = {
+                ...extraHeaders
+            };
+            const sessionToken = localStorage.getItem('sessionToken') || '';
+            if (sessionToken && !headers.Authorization) {
+                headers.Authorization = `Bearer ${sessionToken}`;
+            }
+            return {
+                credentials: 'include',
+                cache: 'no-store',
+                headers,
+                ...rest
+            };
+        }
+
+        function buildFallbackMcpServerUrl() {
             const configuredPort = parseInt(document.getElementById('port-input')?.value, 10);
             const mcpPort = !Number.isNaN(configuredPort) ? configuredPort + 1 : 7861;
             const host = (window.location && window.location.hostname && window.location.hostname !== 'localhost')
@@ -2403,11 +2437,48 @@
             return `http://${host}:${mcpPort}/mcp/sse`;
         }
 
-        function buildMcpJsonExample(url) {
+        function getCurrentMcpServerUrl() {
+            return currentMcpSessionUrl || buildFallbackMcpServerUrl();
+        }
+
+        async function refreshCurrentMcpServerUrl(force = false) {
+            if (!force && currentMcpSessionUrl) {
+                return currentMcpSessionUrl;
+            }
+            if (!force && currentMcpSessionUrlPromise) {
+                return currentMcpSessionUrlPromise;
+            }
+
+            currentMcpSessionUrlPromise = (async () => {
+                const fallbackUrl = buildFallbackMcpServerUrl();
+                try {
+                    const response = await fetch('/api/mcp/session-url', buildSessionFetchOptions());
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                    const payload = await response.json();
+                    const resolvedUrl = String(payload?.url || '').trim();
+                    currentMcpSessionUrl = resolvedUrl || fallbackUrl;
+                } catch (e) {
+                    console.error('Failed to fetch MCP session URL:', e);
+                    currentMcpSessionUrl = fallbackUrl;
+                } finally {
+                    currentMcpSessionUrlPromise = null;
+                }
+                return currentMcpSessionUrl;
+            })();
+
+            return currentMcpSessionUrlPromise;
+        }
+
+        function buildMcpJsonExample(url, apiKey = 'YOUR_USER_MCP_API_KEY') {
             return JSON.stringify({
                 mcpServers: {
                     "dinkisstyle-gateway": {
-                        url
+                        url,
+                        headers: {
+                            "X-API-Key": apiKey
+                        }
                     }
                 }
             }, null, 2);
@@ -2416,7 +2487,7 @@
         function updateMcpJsonExample() {
             const codeEl = document.getElementById('mcp-json-example');
             if (!codeEl) return;
-            codeEl.textContent = buildMcpJsonExample(getCurrentMcpServerUrl());
+            codeEl.textContent = buildMcpJsonExample(buildFallbackMcpServerUrl());
         }
 
         function renderSimpleMarkdown(markdown) {
@@ -2519,6 +2590,7 @@
         async function openMcpHelpModal() {
             const modal = document.getElementById('mcp-help-modal');
             const markdownEl = document.getElementById('mcp-help-markdown');
+            await refreshCurrentMcpServerUrl(true);
             updateMcpJsonExample();
             modal.style.display = 'flex';
 
@@ -2582,7 +2654,7 @@
         }
 
         async function copyMcpJsonExample() {
-            const text = buildMcpJsonExample(getCurrentMcpServerUrl());
+            const text = buildMcpJsonExample(buildFallbackMcpServerUrl());
             try {
                 if (window.runtime && typeof window.runtime.ClipboardSetText === 'function') {
                     await window.runtime.ClipboardSetText(text);
@@ -3049,6 +3121,7 @@
             } else {
                 document.getElementById('mcp-port-input').value = '-';
             }
+            currentMcpSessionUrl = '';
             updateMcpJsonExample();
         }
 
@@ -3092,6 +3165,15 @@
             try {
                 const status = await window.go.core.App.GetServerStatus();
                 llmActivityBusy = !!status.llmBusy;
+                if (status.running) {
+                    refreshCurrentMcpServerUrl().then(() => {
+                        if (isRunning) {
+                            updateUI(true, status.port, status.llmBusy);
+                        }
+                    }).catch(() => { });
+                } else {
+                    currentMcpSessionUrl = '';
+                }
                 updateUI(status.running, status.port, status.llmBusy);
             } catch (e) {
                 console.error('Status update failed:', e);
@@ -3122,7 +3204,7 @@
 
                 const mcpPort = parseInt(port) + 1;
                 const webUrl = `https://localhost:${port}`;
-                const mcpUrl = `http://localhost:${mcpPort}/mcp/sse`;
+                const mcpUrl = buildFallbackMcpServerUrl();
 
                 portDisplay.innerHTML = `
                     <div style="text-align: right; display: flex; flex-direction: column; gap: 2px;">
@@ -3301,6 +3383,27 @@
         // Edit User Modal Functions
         let editUserOriginalRole = '';
 
+        function generateUserMcpApiKey() {
+            const bytes = new Uint8Array(24);
+            if (window.crypto && typeof window.crypto.getRandomValues === 'function') {
+                window.crypto.getRandomValues(bytes);
+            } else {
+                for (let i = 0; i < bytes.length; i += 1) {
+                    bytes[i] = Math.floor(Math.random() * 256);
+                }
+            }
+            const token = `mcpu_${Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('')}`;
+            document.getElementById('edit-user-mcp-api-key').value = token;
+            updateUserMcpJsonPreview();
+        }
+
+        function updateUserMcpJsonPreview() {
+            const previewEl = document.getElementById('edit-user-mcp-json-preview');
+            if (!previewEl) return;
+            const apiKey = (document.getElementById('edit-user-mcp-api-key')?.value || '').trim() || 'YOUR_USER_MCP_API_KEY';
+            previewEl.textContent = buildMcpJsonExample(buildFallbackMcpServerUrl(), apiKey);
+        }
+
         async function openEditUserModal(userId) {
             if (typeof window.go === 'undefined') return;
 
@@ -3322,6 +3425,10 @@
                 // Load API Key (full token)
                 const apiKey = await window.go.core.App.GetUserApiToken(userId);
                 document.getElementById('edit-user-api-key').value = apiKey || '';
+
+                const mcpApiKey = await window.go.core.App.GetUserMCPAPIKey(userId);
+                document.getElementById('edit-user-mcp-api-key').value = mcpApiKey || '';
+                updateUserMcpJsonPreview();
 
                 const retention = await window.go.core.App.GetUserMemoryRetentionConfig(userId);
                 document.getElementById('edit-retention-core-days').value = String(retention?.coreDays ?? 0);
@@ -3448,6 +3555,7 @@
             const userId = document.getElementById('edit-user-id').value;
             const isAdmin = document.getElementById('edit-user-admin').checked;
             const apiKey = document.getElementById('edit-user-api-key').value;
+            const mcpApiKey = document.getElementById('edit-user-mcp-api-key').value;
             const newRole = isAdmin ? 'admin' : 'user';
             const coreDays = parseInt(document.getElementById('edit-retention-core-days').value || '0', 10);
             const workingDays = parseInt(document.getElementById('edit-retention-working-days').value || '0', 10);
@@ -3466,6 +3574,7 @@
 
                 // Update API key
                 await window.go.core.App.SetUserApiToken(userId, apiKey);
+                await window.go.core.App.SetUserMCPAPIKey(userId, mcpApiKey);
 
                 // Update account memory retention policy
                 await window.go.core.App.SetUserMemoryRetentionConfig(userId, {

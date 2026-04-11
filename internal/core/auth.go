@@ -28,6 +28,7 @@ import (
 type UserSettings struct {
 	ApiEndpoint           *string                    `json:"api_endpoint,omitempty"`
 	ApiToken              *string                    `json:"api_token,omitempty"`
+	MCPAPIKey             *string                    `json:"mcp_api_key,omitempty"`
 	SecondaryModel        *string                    `json:"secondary_model,omitempty"`
 	LLMMode               *string                    `json:"llm_mode,omitempty"`
 	ContextStrategy       *string                    `json:"context_strategy,omitempty"`
@@ -60,12 +61,20 @@ type Session struct {
 	ExpiresAt time.Time
 }
 
+type mcpSessionBinding struct {
+	TokenHash string
+	UserID    string
+	ExpiresAt time.Time
+}
+
 // AuthManager handles user authentication
 type AuthManager struct {
-	users     map[string]*User
-	usersFile string
-	mu        sync.RWMutex
-	sessionMu sync.RWMutex
+	users              map[string]*User
+	usersFile          string
+	mu                 sync.RWMutex
+	sessionMu          sync.RWMutex
+	mcpSessionMu       sync.RWMutex
+	mcpSessionBindings map[string]mcpSessionBinding
 }
 
 var disabledToolAliasGroups = map[string][]string{
@@ -161,8 +170,9 @@ outer:
 // NewAuthManager creates a new AuthManager
 func NewAuthManager(usersFile string) *AuthManager {
 	am := &AuthManager{
-		users:     make(map[string]*User),
-		usersFile: usersFile,
+		users:              make(map[string]*User),
+		usersFile:          usersFile,
+		mcpSessionBindings: make(map[string]mcpSessionBinding),
 	}
 	am.LoadUsers()
 
@@ -346,16 +356,16 @@ func (am *AuthManager) Authenticate(id, password string, rememberMe bool, userAg
 	return token, nil
 }
 
-// ValidateSession checks if a session token is valid
-func (am *AuthManager) ValidateSession(token string) (*User, bool) {
+func (am *AuthManager) validateSessionDetails(token string) (*User, mcp.AuthSessionEntry, bool) {
+	var zero mcp.AuthSessionEntry
 	tokenHash := hashToken(token)
 	session, err := mcp.GetAuthSessionByTokenHash(tokenHash)
 	if err != nil {
-		return nil, false
+		return nil, zero, false
 	}
 	if time.Now().After(session.ExpiresAt) {
 		_ = mcp.DeleteAuthSession(tokenHash)
-		return nil, false
+		return nil, zero, false
 	}
 	_ = mcp.TouchAuthSession(tokenHash, time.Now())
 
@@ -363,19 +373,91 @@ func (am *AuthManager) ValidateSession(token string) (*User, bool) {
 	user := am.users[session.UserID]
 	am.mu.RUnlock()
 
-	return user, user != nil
+	return user, session, user != nil
+}
+
+// ValidateSession checks if a session token is valid
+func (am *AuthManager) ValidateSession(token string) (*User, bool) {
+	user, _, ok := am.validateSessionDetails(token)
+	return user, ok
+}
+
+func (am *AuthManager) CreateMCPSessionBinding(token string, ttl time.Duration) (string, time.Time, error) {
+	user, session, ok := am.validateSessionDetails(token)
+	if !ok || user == nil {
+		return "", time.Time{}, fmt.Errorf("invalid session")
+	}
+
+	if ttl <= 0 {
+		ttl = 12 * time.Hour
+	}
+
+	expiresAt := session.ExpiresAt
+	if capped := time.Now().Add(ttl); capped.Before(expiresAt) {
+		expiresAt = capped
+	}
+
+	bindingID := generateToken()
+	am.purgeExpiredMCPSessionBindings(time.Now())
+
+	am.mcpSessionMu.Lock()
+	am.mcpSessionBindings[bindingID] = mcpSessionBinding{
+		TokenHash: hashToken(token),
+		UserID:    user.ID,
+		ExpiresAt: expiresAt,
+	}
+	am.mcpSessionMu.Unlock()
+
+	return bindingID, expiresAt, nil
+}
+
+func (am *AuthManager) ResolveMCPSessionBinding(bindingID string) (*User, bool) {
+	bindingID = strings.TrimSpace(bindingID)
+	if bindingID == "" {
+		return nil, false
+	}
+
+	now := time.Now()
+	am.purgeExpiredMCPSessionBindings(now)
+
+	am.mcpSessionMu.RLock()
+	binding, ok := am.mcpSessionBindings[bindingID]
+	am.mcpSessionMu.RUnlock()
+	if !ok || now.After(binding.ExpiresAt) {
+		return nil, false
+	}
+
+	session, err := mcp.GetAuthSessionByTokenHash(binding.TokenHash)
+	if err != nil || now.After(session.ExpiresAt) || session.UserID != binding.UserID {
+		am.removeMCPSessionBinding(bindingID)
+		return nil, false
+	}
+	_ = mcp.TouchAuthSession(binding.TokenHash, now)
+
+	am.mu.RLock()
+	user := am.users[session.UserID]
+	am.mu.RUnlock()
+	if user == nil {
+		am.removeMCPSessionBinding(bindingID)
+		return nil, false
+	}
+	return user, true
 }
 
 // InvalidateSession removes a session
 func (am *AuthManager) InvalidateSession(token string) {
-	_ = mcp.DeleteAuthSession(hashToken(token))
+	tokenHash := hashToken(token)
+	am.removeMCPSessionBindingsByTokenHash(tokenHash)
+	_ = mcp.DeleteAuthSession(tokenHash)
 }
 
 func (am *AuthManager) InvalidateAllSessions() error {
+	am.clearAllMCPSessionBindings()
 	return mcp.DeleteAllAuthSessions()
 }
 
 func (am *AuthManager) InvalidateAllSessionsForUser(id string) error {
+	am.removeMCPSessionBindingsByUser(id)
 	return mcp.DeleteAuthSessionsByUser(id)
 }
 
@@ -417,13 +499,25 @@ func (am *AuthManager) GetUserDetail(id string) (map[string]interface{}, error) 
 		}
 	}
 
+	mcpAPIKey := ""
+	if user.Settings.MCPAPIKey != nil && *user.Settings.MCPAPIKey != "" {
+		token := *user.Settings.MCPAPIKey
+		if len(token) > 4 {
+			mcpAPIKey = "••••••••" + token[len(token)-4:]
+		} else {
+			mcpAPIKey = "••••"
+		}
+	}
+
 	return map[string]interface{}{
-		"id":             user.ID,
-		"role":           user.Role,
-		"created_at":     user.CreatedAt,
-		"has_api_key":    user.Settings.ApiToken != nil && *user.Settings.ApiToken != "",
-		"api_key_masked": apiToken,
-		"disabled_tools": user.Settings.DisabledTools,
+		"id":                 user.ID,
+		"role":               user.Role,
+		"created_at":         user.CreatedAt,
+		"has_api_key":        user.Settings.ApiToken != nil && *user.Settings.ApiToken != "",
+		"api_key_masked":     apiToken,
+		"has_mcp_api_key":    user.Settings.MCPAPIKey != nil && *user.Settings.MCPAPIKey != "",
+		"mcp_api_key_masked": mcpAPIKey,
+		"disabled_tools":     user.Settings.DisabledTools,
 	}, nil
 }
 
@@ -501,6 +595,62 @@ func (am *AuthManager) GetUserApiToken(id string) (string, error) {
 	}
 
 	return *user.Settings.ApiToken, nil
+}
+
+func (am *AuthManager) SetUserMCPAPIKey(id, token string) error {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+
+	user, exists := am.users[id]
+	if !exists {
+		return fmt.Errorf("user not found")
+	}
+
+	token = strings.TrimSpace(token)
+	if strings.HasPrefix(strings.ToLower(token), "bearer ") {
+		token = strings.TrimSpace(token[7:])
+	}
+
+	user.Settings.MCPAPIKey = &token
+	return am.saveUsersLocked()
+}
+
+func (am *AuthManager) GetUserMCPAPIKey(id string) (string, error) {
+	am.mu.RLock()
+	defer am.mu.RUnlock()
+
+	user, exists := am.users[id]
+	if !exists {
+		return "", fmt.Errorf("user not found")
+	}
+
+	if user.Settings.MCPAPIKey == nil {
+		return "", nil
+	}
+
+	return *user.Settings.MCPAPIKey, nil
+}
+
+func (am *AuthManager) FindUserByMCPAPIKey(token string) (*User, bool) {
+	token = strings.TrimSpace(token)
+	if strings.HasPrefix(strings.ToLower(token), "bearer ") {
+		token = strings.TrimSpace(token[7:])
+	}
+	if token == "" {
+		return nil, false
+	}
+
+	am.mu.RLock()
+	defer am.mu.RUnlock()
+	for _, user := range am.users {
+		if user == nil || user.Settings.MCPAPIKey == nil {
+			continue
+		}
+		if strings.TrimSpace(*user.Settings.MCPAPIKey) == token {
+			return user, true
+		}
+	}
+	return nil, false
 }
 
 func (am *AuthManager) GetUserMemoryRetentionConfig(id string) (mcp.MemoryRetentionConfig, error) {
@@ -592,6 +742,48 @@ func generateToken() string {
 func hashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
+}
+
+func (am *AuthManager) purgeExpiredMCPSessionBindings(now time.Time) {
+	am.mcpSessionMu.Lock()
+	defer am.mcpSessionMu.Unlock()
+	for id, binding := range am.mcpSessionBindings {
+		if now.After(binding.ExpiresAt) {
+			delete(am.mcpSessionBindings, id)
+		}
+	}
+}
+
+func (am *AuthManager) removeMCPSessionBinding(bindingID string) {
+	am.mcpSessionMu.Lock()
+	defer am.mcpSessionMu.Unlock()
+	delete(am.mcpSessionBindings, bindingID)
+}
+
+func (am *AuthManager) removeMCPSessionBindingsByTokenHash(tokenHash string) {
+	am.mcpSessionMu.Lock()
+	defer am.mcpSessionMu.Unlock()
+	for id, binding := range am.mcpSessionBindings {
+		if binding.TokenHash == tokenHash {
+			delete(am.mcpSessionBindings, id)
+		}
+	}
+}
+
+func (am *AuthManager) removeMCPSessionBindingsByUser(userID string) {
+	am.mcpSessionMu.Lock()
+	defer am.mcpSessionMu.Unlock()
+	for id, binding := range am.mcpSessionBindings {
+		if binding.UserID == userID {
+			delete(am.mcpSessionBindings, id)
+		}
+	}
+}
+
+func (am *AuthManager) clearAllMCPSessionBindings() {
+	am.mcpSessionMu.Lock()
+	defer am.mcpSessionMu.Unlock()
+	clear(am.mcpSessionBindings)
 }
 
 func getClientAddress(r *http.Request) string {
