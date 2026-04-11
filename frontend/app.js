@@ -181,6 +181,7 @@ let AppState = {
         reconnectWatchdogTimer: null,
         reconnectCardVisible: false,
         localStreamOwnershipReleased: false,
+        retryRecoveryInProgress: false,
         lastFetchPromise: null,
         foregroundSyncTimers: [],
         replay: {
@@ -4257,7 +4258,7 @@ async function syncCurrentChatSessionFromServerInternal() {
     applyCurrentChatSessionSnapshot(session);
     const hasLocalInFlightResponse = !!AppState.chat.activeLocalTurnId || !!AppState.chat.activeLocalAssistantId || !!AppState.chat.isGenerating;
     const hasServerOwnedSession = !!session && String(session?.Status || '').trim().length > 0;
-    if (hasLocalInFlightResponse && hasServerOwnedSession) {
+    if (hasLocalInFlightResponse && hasServerOwnedSession && !AppState.session.retryRecoveryInProgress) {
         relinquishLocalStreamOwnership(`session-sync:${session?.Status || 'none'}`);
     }
 
@@ -5651,6 +5652,7 @@ async function sendMessage(options = {}) {
                     && config.llmMode === 'stateful'
                     && attempt === 0) {
                     retryOverrides = buildRepeatRecoveryOverrides();
+                    AppState.session.retryRecoveryInProgress = true;
                     await stopGeneration({ preserveAssistantUI: true });
                     updateMessageContent(assistantId, '');
                     finalizeReasoningStatus(assistantId, 'failed', t('warning.repeatRetrying'));
@@ -5676,6 +5678,7 @@ async function sendMessage(options = {}) {
             setAssistantActionBarReady(assistantId);
         }
     } finally {
+        AppState.session.retryRecoveryInProgress = false;
         AppState.input.pendingVoiceInputAutoTTS = false;
         AppState.chat.isGenerating = false;
         syncWakeLock(); // Release wake lock if nothing else is active
@@ -5720,7 +5723,7 @@ async function stopGeneration({ preserveAssistantUI = false } = {}) {
     if (!preserveAssistantUI) {
         relinquishLocalStreamOwnership('stop-generation');
     } else {
-        AppState.session.localStreamOwnershipReleased = true;
+        AppState.session.localStreamOwnershipReleased = false;
     }
     // Stop any currently playing audio/TTS
     stopAllAudio();
