@@ -7179,12 +7179,12 @@ function finalizeAssistantStatusCards(elementId, outcome = 'done', detail = '') 
 }
 
 function renderInitialAssistantMarkdown(text) {
-    const normalized = normalizeMarkdownForRender(text || '');
-    if (!normalized.trim()) {
+    const rendered = buildRenderedMarkdownState(text || '');
+    if (!rendered.normalized.trim()) {
         return '<div class="markdown-committed"></div><div class="markdown-pending"></div>';
     }
     return `
-        <div class="markdown-committed">${sanitizeRenderedMarkdownHtml(marked.parse(normalized))}</div>
+        <div class="markdown-committed">${rendered.html}</div>
         <div class="markdown-pending"></div>
     `;
 }
@@ -7353,18 +7353,26 @@ function renderMathWithKatex(host) {
     }
 }
 
+function buildRenderedMarkdownState(markdownText) {
+    const normalized = normalizeMarkdownForRender(markdownText || '');
+    const renderer = getMarkdownRenderer();
+    const html = normalized.trim()
+        ? sanitizeRenderedMarkdownHtml(renderer.render(normalized))
+        : '';
+
+    return { normalized, renderer, html };
+}
+
 function renderMarkdownIntoHost(host, markdownText, options = {}) {
     if (!host) return;
     const allowLooseFallback = options.allowLooseFallback !== false;
-    const normalized = normalizeMarkdownForRender(markdownText || '');
-    host.dataset.markdownSource = normalized;
-
-    const renderer = getMarkdownRenderer();
-    host.innerHTML = normalized.trim() ? sanitizeRenderedMarkdownHtml(renderer.render(normalized)) : '';
-    if (allowLooseFallback && shouldFallbackToLooseMarkdown(host, normalized)) {
-        host.innerHTML = sanitizeRenderedMarkdownHtml(renderLooseMarkdownToHtml(normalized));
+    const rendered = buildRenderedMarkdownState(markdownText || '');
+    host.dataset.markdownSource = rendered.normalized;
+    host.innerHTML = rendered.html;
+    if (allowLooseFallback && shouldFallbackToLooseMarkdown(host, rendered.normalized)) {
+        host.innerHTML = sanitizeRenderedMarkdownHtml(renderLooseMarkdownToHtml(rendered.normalized));
     }
-    if (renderer.name !== 'remark') {
+    if (rendered.renderer.name !== 'remark') {
         renderMathInHost(host);
     }
     host.querySelectorAll('a').forEach((link) => {
