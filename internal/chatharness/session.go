@@ -252,7 +252,7 @@ func compactToolSnapshotDetail(toolName string, args interface{}, summary string
 	argsMap, _ := args.(map[string]interface{})
 	if argsMap != nil {
 		switch strings.TrimSpace(toolName) {
-		case "search_web", "naver_search", "read_buffered_source", "search_memory":
+		case "search_web", "naver_search", "read_buffered_source", "read_help", "search_memory":
 			if query := extractStringValue(argsMap, []string{"query", "keyword", "text"}); query != "" {
 				return compactText(query, 220)
 			}

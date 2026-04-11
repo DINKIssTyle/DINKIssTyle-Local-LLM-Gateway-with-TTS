@@ -315,7 +315,7 @@ func buildImplicitToolArgs(toolName string, explicitText string, userText string
 		queryText = trimmedUser
 	}
 	switch strings.TrimSpace(toolName) {
-	case "search_memory", "search_web", "naver_search", "namu_wiki":
+	case "search_memory", "search_web", "naver_search", "namu_wiki", "read_help":
 		if queryText == "" {
 			return "", nil, false
 		}
@@ -371,7 +371,7 @@ func parseBareToolCallTag(raw string, userText string) (string, string, interfac
 	if explicit := regexp.MustCompile(`(?s)^([a-zA-Z_][a-zA-Z0-9_]*)(?:\s*[:=]\s*|\s+query\s*[:=]\s*)(.+)$`).FindStringSubmatch(inner); len(explicit) >= 3 {
 		toolName = strings.TrimSpace(explicit[1])
 		explicitQuery = strings.TrimSpace(explicit[2])
-	} else if compact := regexp.MustCompile(`(?s)^(search_memory|search_web|naver_search|namu_wiki|read_buffered_source)\s*query\s*[:=]\s*(.+)$`).FindStringSubmatch(inner); len(compact) >= 3 {
+	} else if compact := regexp.MustCompile(`(?s)^(search_memory|search_web|naver_search|namu_wiki|read_buffered_source|read_help)\s*query\s*[:=]\s*(.+)$`).FindStringSubmatch(inner); len(compact) >= 3 {
 		toolName = strings.TrimSpace(compact[1])
 		explicitQuery = strings.TrimSpace(compact[2])
 	} else {
@@ -399,6 +399,7 @@ func looksLikeToolMarkup(raw string) bool {
 		"<read_memory",
 		"<read_memory_context",
 		"<read_buffered_source",
+		"<read_help",
 		"<search_web",
 		"<naver_search",
 		"<namu_wiki",
@@ -1279,6 +1280,11 @@ func compactToolSnapshotDetail(toolName string, args interface{}, summary string
 			if sourceID != "" {
 				return compactText("버퍼 문서 읽기: "+sourceID, 220)
 			}
+		case "read_help":
+			if queryLike != "" {
+				return compactText("도움말 읽기: "+queryLike, 220)
+			}
+			return "도움말 읽기"
 		case "search_memory":
 			if queryLike != "" {
 				return compactText("메모리 검색: "+queryLike, 220)
@@ -3026,7 +3032,7 @@ func handleChatSessionEventsStream() http.HandlerFunc {
 
 		tick := time.NewTicker(350 * time.Millisecond)
 		defer tick.Stop()
-		heartbeat := time.NewTicker(15 * time.Second)
+		heartbeat := time.NewTicker(10 * time.Second)
 		defer heartbeat.Stop()
 
 		var (
@@ -3035,7 +3041,11 @@ func handleChatSessionEventsStream() http.HandlerFunc {
 			lastClearedAt        string
 			lastSessionStatus    string
 			lastHasSession       bool
+			sentInitialSnapshot  bool
 		)
+
+		log.Printf("[ChatSessionSSE] Open stream for user=%s remote=%s after_seq=%d", userID, r.RemoteAddr, afterSeq)
+		defer log.Printf("[ChatSessionSSE] Close stream for user=%s remote=%s last_seq=%d", userID, r.RemoteAddr, afterSeq)
 
 		sendSessionSnapshot := func(session *mcp.ChatSessionEntry) error {
 			payload := map[string]interface{}{
@@ -3098,7 +3108,8 @@ func handleChatSessionEventsStream() http.HandlerFunc {
 				}
 			}
 
-			sessionChanged := hasSession != lastHasSession ||
+			sessionChanged := !sentInitialSnapshot ||
+				hasSession != lastHasSession ||
 				currentSessionID != lastSessionID ||
 				currentUpdatedAt != lastSessionUpdatedAt ||
 				currentClearedAt != lastClearedAt ||
@@ -3119,6 +3130,7 @@ func handleChatSessionEventsStream() http.HandlerFunc {
 					}
 				}
 				flusher.Flush()
+				sentInitialSnapshot = true
 				lastHasSession = hasSession
 				lastSessionID = currentSessionID
 				lastSessionUpdatedAt = currentUpdatedAt
@@ -5177,7 +5189,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 						}
 
 						// 🧪 Special Handling for Command-R / GPT-OSS Format (<|channel|>)
-						if enableMCP && !isBuffering && (looksLikeChannelToolMarkup(content) || strings.Contains(content, "<|tool_code|>") || strings.Contains(content, "<tool_call>") || strings.Contains(content, "<execute_command") || strings.Contains(content, "<search_memory") || strings.Contains(content, "<read_memory") || strings.Contains(content, "<read_memory_context") || strings.Contains(content, "<read_buffered_source")) {
+						if enableMCP && !isBuffering && (looksLikeChannelToolMarkup(content) || strings.Contains(content, "<|tool_code|>") || strings.Contains(content, "<tool_call>") || strings.Contains(content, "<execute_command") || strings.Contains(content, "<search_memory") || strings.Contains(content, "<read_memory") || strings.Contains(content, "<read_memory_context") || strings.Contains(content, "<read_buffered_source") || strings.Contains(content, "<read_help")) {
 							log.Printf("[handleChat] Detected Command-R/GPT-OSS/Qwen Tool Call Pattern. Switching to buffering mode.")
 							isBuffering = true
 							buffer = content
@@ -5205,7 +5217,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 								strings.Contains(lc, "personal_memory") ||
 								strings.Contains(lc, "read_user_document") ||
 								strings.Contains(lc, "read_web_page") ||
-								strings.Contains(lc, "read_buffered_source")
+								strings.Contains(lc, "read_buffered_source") ||
+								strings.Contains(lc, "read_help")
 
 							if strings.Contains(lc, "<|") ||
 								strings.Contains(lc, "function") ||
