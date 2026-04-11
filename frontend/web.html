@@ -259,6 +259,13 @@
                         </select>
                     </div>
                     <div class="setting-item">
+                        <div class="setting-toggle" onclick="toggleSwitch('cfg-auto-dismiss-mobile-keyboard')">
+                            <span data-i18n="setting.autoDismissMobileKeyboard.label">소프트웨어 키보드 자동 내림</span>
+                            <input type="checkbox" id="cfg-auto-dismiss-mobile-keyboard">
+                        </div>
+                        <p class="setting-desc" data-i18n="setting.autoDismissMobileKeyboard.desc">모바일 환경에서 메시지 전송 후 입력창 포커스를 해제해 키보드를 자동으로 내립니다.</p>
+                    </div>
+                    <div class="setting-item">
                         <div class="setting-toggle" onclick="toggleSwitch('cfg-enable-haptics')">
                             <span data-i18n="setting.hapticsEnabled.label">햅틱 활성화</span>
                             <input type="checkbox" id="cfg-enable-haptics" checked>
