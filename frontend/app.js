@@ -145,7 +145,6 @@ let AppState = {
                 clientHeight: 0,
                 isNearBottom: true
             },
-            pendingFrame: null,
             pendingInputFocusTop: null,
             pendingFirstInputRepairTop: null
         },
@@ -177,7 +176,6 @@ let AppState = {
         pendingSync: false,
         refreshPromise: null,
         pendingRefresh: false,
-        retryTimer: null,
         pollTimer: null,
         reconnectWatchdogTimer: null,
         eventStreamSource: null,
@@ -1370,10 +1368,6 @@ function normalizeTemperatureValue(value, fallback = null) {
     return Math.round(clamped * 10) / 10;
 }
 
-function isTemperatureAuto(value = config.temperature) {
-    return normalizeTemperatureValue(value, null) === null;
-}
-
 function formatTemperatureSettingLabel(value = config.temperature) {
     const normalized = normalizeTemperatureValue(value, null);
     return normalized === null ? t('setting.temperature.auto') : normalized.toFixed(1);
@@ -1405,20 +1399,6 @@ function setTemperatureAuto() {
     config.temperature = null;
     syncTemperatureUI();
     saveConfig(false);
-}
-
-function formatBytes(value) {
-    const bytes = Number(value || 0);
-    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
-    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-    let size = bytes;
-    let unitIndex = 0;
-    while (size >= 1024 && unitIndex < units.length - 1) {
-        size /= 1024;
-        unitIndex += 1;
-    }
-    const digits = size >= 100 ? 0 : size >= 10 ? 1 : 2;
-    return `${size.toFixed(digits)} ${units[unitIndex]}`;
 }
 
 function generateTurnId() {
@@ -1736,15 +1716,6 @@ function commitChatScrollMetrics(metrics) {
 
 function refreshChatScrollMetrics() {
     return commitChatScrollMetrics(readChatScrollMetrics());
-}
-
-function scheduleChatScrollMetricsRefresh() {
-    if (!chatMessages || AppState.ui.scroll.pendingFrame != null) return;
-    AppState.ui.scroll.pendingFrame = requestAnimationFrame(() => {
-        AppState.ui.scroll.pendingFrame = null;
-        refreshChatScrollMetrics();
-        updateScrollToBottomButton();
-    });
 }
 
 if (chatMessages) {
@@ -2397,10 +2368,6 @@ function ensurePassiveSyncPlaceholder(turnId = '', sessionId = 'default', eventS
     return assistantId;
 }
 
-function ensurePassiveSyncPlaceholderForRunningSession(session = AppState.session.currentCache) {
-    return '';
-}
-
 function syncSnapshotUserMessages(session = AppState.session.currentCache) {
     const sessionUISnapshot = getCurrentChatSessionUISnapshot(session);
     const snapshotTurns = getSessionSnapshotTurns(sessionUISnapshot);
@@ -2564,29 +2531,6 @@ async function retryChatReconnect() {
 
 function broadcastSavedTurnsChange(reason = 'updated') {
     return sessionController.broadcastSavedTurnsChange(reason);
-}
-
-function restoreLastSessionIntoChatView() {
-    if (!AppState.session.lastCache || hasSubstantiveChatMessages()) return false;
-    const userText = String(AppState.session.lastCache.user_message || '').trim();
-    const assistantText = String(AppState.session.lastCache.assistant_message || '').trim();
-    if (!userText || !assistantText) return false;
-
-    const turnId = generateTurnId();
-    const restoredUser = { role: 'user', content: userText, turnId };
-    const restoredAssistant = { role: 'assistant', content: assistantText, turnId };
-    appendMessage(restoredUser, { skipScroll: true });
-    appendMessage(restoredAssistant, { skipScroll: true });
-    AppState.chat.messages.push(restoredUser, restoredAssistant);
-    holdAutoScrollAtBottom(1200);
-    ensureChatRestoredToLatest();
-    return true;
-}
-
-function clearLastSessionRetryTimer() {
-    if (!AppState.session.retryTimer) return;
-    clearTimeout(AppState.session.retryTimer);
-    AppState.session.retryTimer = null;
 }
 
 function relinquishLocalStreamOwnership(reason = 'server-sync') {
@@ -5690,6 +5634,9 @@ async function sendMessage(options = {}) {
         await stopGeneration();
         await new Promise((resolve) => setTimeout(resolve, 120));
     }
+    if (usesStatefulConversationContext()) {
+        await ensureStatefulContextBudget(text);
+    }
 
     dismissStartupCards();
 
@@ -6541,11 +6488,6 @@ function toggleReasoningCard(btn) {
     card.dataset.userExpanded = nextCollapsed ? 'false' : 'true';
 }
 
-function formatStripDuration(startedAt, fallbackMs = 0) {
-    const durationMs = startedAt ? Math.max(0, Date.now() - Number(startedAt)) : fallbackMs;
-    return formatThoughtDuration(durationMs);
-}
-
 function ensureToolCard(elementId, toolName = 'Tool') {
     const { msgEl, toolsHost } = getAssistantMessageParts(elementId);
     if (!msgEl || !toolsHost) return null;
@@ -7184,81 +7126,6 @@ function getMarkdownRenderMode() {
     return 'balanced';
 }
 
-function splitStreamingMarkdown(text) {
-    const normalized = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    if (!normalized) {
-        return { committedText: '', pendingText: '' };
-    }
-
-    const lines = normalized.split('\n');
-    let inCodeBlock = false;
-    let cursor = 0;
-    let committedParts = [];
-    let pendingParts = [];
-    let currentBlock = [];
-    let currentBlockStart = 0;
-
-    const flushCommittedBlock = (endOffsetInclusive) => {
-        if (endOffsetInclusive <= currentBlockStart) {
-            currentBlock = [];
-            return;
-        }
-        committedParts.push(normalized.slice(currentBlockStart, endOffsetInclusive));
-        currentBlock = [];
-        currentBlockStart = endOffsetInclusive;
-    };
-
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        const lineWithBreak = i < lines.length - 1 ? `${line}\n` : line;
-        const trimmed = line.trim();
-        const lineStart = cursor;
-        const lineEnd = cursor + lineWithBreak.length;
-
-        if (/^```/.test(trimmed)) {
-            if (!inCodeBlock && currentBlock.length === 0) {
-                currentBlockStart = lineStart;
-            }
-            inCodeBlock = !inCodeBlock;
-            currentBlock.push(lineWithBreak);
-            if (!inCodeBlock) flushCommittedBlock(lineEnd);
-            cursor = lineEnd;
-            continue;
-        }
-
-        if (inCodeBlock) {
-            currentBlock.push(lineWithBreak);
-            cursor = lineEnd;
-            continue;
-        }
-
-        if (trimmed === '') {
-            if (currentBlock.length > 0) {
-                flushCommittedBlock(lineStart);
-            }
-            committedParts.push(lineWithBreak);
-            currentBlockStart = lineEnd;
-            cursor = lineEnd;
-            continue;
-        }
-
-        if (currentBlock.length === 0) {
-            currentBlockStart = lineStart;
-        }
-        currentBlock.push(lineWithBreak);
-        cursor = lineEnd;
-    }
-
-    if (currentBlock.length > 0) {
-        pendingParts.push(normalized.slice(currentBlockStart));
-    }
-
-    return {
-        committedText: committedParts.join(''),
-        pendingText: pendingParts.join('')
-    };
-}
-
 function highlightMarkdownBlocks(container) {
     if (!container) return;
     const hljs = window.hljs;
@@ -7712,16 +7579,8 @@ function toggleSTT() {
     return micController.toggle();
 }
 
-function startSTT() {
-    return micController.start();
-}
-
 function stopSTT(options = {}) {
     return micController.stop(options);
-}
-
-function updateSTTButtonState() {
-    // Legacy wrapper if still called elsewhere
 }
 
 function updateMicUIForGeneration(generating) {

@@ -9,6 +9,7 @@ const toolConfigText = `
 search_web = enable
 read_web_page = enable
 read_buffered_source = enable
+read_help = enable
 get_current_time = enable
 search_memory = enable
 read_memory = enable

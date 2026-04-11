@@ -9,10 +9,12 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -197,6 +199,16 @@ func GetToolList() []Tool {
 			},
 		},
 		{
+			Name:        "read_help",
+			Description: "Read the app's built-in help guides for setup and usage questions. Use this when the user asks how to use the app, configure LM Studio or MCP, certificates, endpoints, or built-in features. This returns a buffered help source handle plus summary; if more detail is needed, call read_buffered_source with the source_id and the user's actual question.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"query": map[string]interface{}{"type": "string", "description": "Optional help topic or the user's question to prioritize matching guides."},
+				},
+			},
+		},
+		{
 			Name:        "get_current_time",
 			Description: "Get the current local date and time. Use this when you need to know the current date, time, or day of the week for scheduling or age calculations.",
 			InputSchema: map[string]interface{}{
@@ -361,7 +373,7 @@ func GetToolList() []Tool {
 		},
 		{
 			Name:        "execute_command",
-			Description: "Execute a shell command on the host (with restrictions). Use this only for real shell/system tasks. Do not use it to imitate built-in tools such as search_memory, search_web, read_memory, read_memory_context, read_web_page, or read_buffered_source.",
+			Description: "Execute a shell command on the host (with restrictions). Use this only for real shell/system tasks. Do not use it to imitate built-in tools such as search_memory, search_web, read_memory, read_memory_context, read_web_page, read_help, or read_buffered_source.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -452,6 +464,179 @@ func readBufferedToolSource(userID, sourceID, query string, maxChunks int) (stri
 		return "", fmt.Errorf("buffered source reading is not supported")
 	}
 	return hooks.ReadBufferedSource(userID, sourceID, query, maxChunks)
+}
+
+func runReadHelpTool(userID, query string) (string, error) {
+	title, content, err := loadHelpDocumentContent(query)
+	if err != nil {
+		return "", err
+	}
+	return bufferToolResult(userID, "read_help", query, "local://help", title, content)
+}
+
+func loadHelpDocumentContent(query string) (string, string, error) {
+	helpDir, err := findHelpDocsDir()
+	if err != nil {
+		return "", "", err
+	}
+
+	entries, err := os.ReadDir(helpDir)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to read help docs directory: %w", err)
+	}
+
+	type helpDoc struct {
+		Name    string
+		Title   string
+		Content string
+		Score   int
+	}
+
+	normalizedQuery := defaultNormalizeSearchQuery(query)
+	terms := strings.Fields(strings.ToLower(normalizedQuery))
+	var docs []helpDoc
+	hasMainHelpDoc := false
+	mainHelpDocEmpty := false
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := strings.TrimSpace(entry.Name())
+		if !strings.HasSuffix(strings.ToLower(name), ".md") {
+			continue
+		}
+
+		path := filepath.Join(helpDir, name)
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to read help doc %s: %w", name, err)
+		}
+		content := strings.TrimSpace(string(raw))
+		if strings.EqualFold(name, "Help.md") {
+			hasMainHelpDoc = true
+			mainHelpDocEmpty = content == ""
+		}
+		if content == "" {
+			continue
+		}
+
+		title := extractHelpDocTitle(name, content)
+		score := 0
+		if len(terms) > 0 {
+			score += scoreBufferedChunk(strings.ToLower(content), terms)
+			score += scoreBufferedChunk(strings.ToLower(name), terms)
+			score += scoreBufferedChunk(strings.ToLower(title), terms)
+		}
+		if strings.EqualFold(name, "Help.md") {
+			score += 1
+		}
+		docs = append(docs, helpDoc{
+			Name:    name,
+			Title:   title,
+			Content: content,
+			Score:   score,
+		})
+	}
+
+	if len(docs) == 0 {
+		if hasMainHelpDoc && mainHelpDocEmpty {
+			return "", "", fmt.Errorf("help documents are present but Help.md is empty and no additional help guides contain content")
+		}
+		return "", "", fmt.Errorf("no readable help markdown documents found in %s", helpDir)
+	}
+
+	sort.SliceStable(docs, func(i, j int) bool {
+		if docs[i].Score != docs[j].Score {
+			return docs[i].Score > docs[j].Score
+		}
+		if strings.EqualFold(docs[i].Name, "Help.md") != strings.EqualFold(docs[j].Name, "Help.md") {
+			return strings.EqualFold(docs[i].Name, "Help.md")
+		}
+		return docs[i].Name < docs[j].Name
+	})
+
+	var b strings.Builder
+	title := "Help Center"
+	if normalizedQuery != "" {
+		title = fmt.Sprintf("Help: %s", compactMemoryText(normalizedQuery, 80))
+		fmt.Fprintf(&b, "# App Help Search\n\nRequested topic: %s\n\n", normalizedQuery)
+	} else {
+		b.WriteString("# App Help Center\n\n")
+	}
+	if mainHelpDocEmpty {
+		b.WriteString("Note: `Help.md` is currently empty, so this help bundle was assembled from the topic guides in the same help directory.\n\n")
+	}
+	b.WriteString("Available help documents:\n")
+	for _, doc := range docs {
+		fmt.Fprintf(&b, "- %s (%s)\n", doc.Title, doc.Name)
+	}
+	for _, doc := range docs {
+		fmt.Fprintf(&b, "\n\n---\n\n# %s\nSource file: %s\n\n%s\n", doc.Title, doc.Name, doc.Content)
+	}
+
+	return title, strings.TrimSpace(b.String()), nil
+}
+
+func extractHelpDocTitle(name, content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#") {
+			trimmed = strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
+		}
+		if trimmed != "" {
+			return compactMemoryText(trimmed, 120)
+		}
+	}
+	base := strings.TrimSuffix(name, filepath.Ext(name))
+	if base == "" {
+		return "Help Document"
+	}
+	return base
+}
+
+func findHelpDocsDir() (string, error) {
+	var roots []string
+	if wd, err := os.Getwd(); err == nil && strings.TrimSpace(wd) != "" {
+		roots = append(roots, wd)
+	}
+	if exePath, err := os.Executable(); err == nil && strings.TrimSpace(exePath) != "" {
+		roots = append(roots, filepath.Dir(exePath))
+	}
+
+	seen := make(map[string]struct{})
+	candidates := []string{
+		filepath.Join("frontend", "public", "help"),
+		filepath.Join("public", "help"),
+		"help",
+	}
+
+	for _, root := range roots {
+		dir := root
+		for depth := 0; depth < 8; depth++ {
+			for _, rel := range candidates {
+				candidate := filepath.Clean(filepath.Join(dir, rel))
+				if _, ok := seen[candidate]; ok {
+					continue
+				}
+				seen[candidate] = struct{}{}
+				info, err := os.Stat(candidate)
+				if err == nil && info.IsDir() {
+					return candidate, nil
+				}
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
+		}
+	}
+
+	return "", fmt.Errorf("help docs directory not found")
 }
 
 func runSearchMemoryHook(userID, query string) (string, error) {
@@ -605,6 +790,12 @@ func normalizeToolArguments(toolName string, argumentsJSON []byte) (string, []by
 				raw["query"] = question
 			}
 		}
+	case "read_help":
+		if strings.TrimSpace(readString("query")) == "" {
+			if question := readString("question", "text"); question != "" {
+				raw["query"] = question
+			}
+		}
 	case "read_memory", "read_memory_context":
 		if _, ok := raw["memory_id"]; !ok {
 			if query := readString("query", "question", "text"); query != "" {
@@ -704,6 +895,17 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 			return "", fmt.Errorf("invalid arguments for read_buffered_source: %v", err)
 		}
 		result, err := readBufferedToolSource(userID, args.SourceID, args.Query, args.MaxChunks)
+		emitToolResultTrace(toolName, start, result, err)
+		return result, err
+
+	case "read_help":
+		var args struct {
+			Query string `json:"query"`
+		}
+		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
+			return "", fmt.Errorf("invalid arguments for read_help: %v", err)
+		}
+		result, err := runReadHelpTool(userID, args.Query)
 		emitToolResultTrace(toolName, start, result, err)
 		return result, err
 
