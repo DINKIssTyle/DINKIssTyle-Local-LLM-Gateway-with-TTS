@@ -70,6 +70,10 @@
             display: grid;
             grid-template-columns: 345px 345px;
             gap: 16px;
+            width: 100%;
+            max-width: 706px;
+            margin-left: auto;
+            margin-right: auto;
             flex: 1;
             min-height: 0;
             align-items: stretch;
@@ -79,6 +83,7 @@
 
         body.debug-enabled .main-layout {
             grid-template-columns: 345px 345px 1fr;
+            max-width: 1320px;
         }
 
         .col {
@@ -786,6 +791,19 @@
             margin: 0 0 12px;
         }
 
+        .mcp-help-markdown p + hr,
+        .mcp-help-markdown ul + hr,
+        .mcp-help-markdown ol + hr,
+        .mcp-help-markdown blockquote + hr,
+        .mcp-help-markdown pre + hr,
+        .mcp-help-markdown hr + p,
+        .mcp-help-markdown hr + ul,
+        .mcp-help-markdown hr + ol,
+        .mcp-help-markdown hr + blockquote,
+        .mcp-help-markdown hr + pre {
+            margin-top: 16px;
+        }
+
         .mcp-help-markdown ul,
         .mcp-help-markdown ol {
             padding-left: 20px;
@@ -818,6 +836,27 @@
             color: #c2cfdb;
         }
 
+        .mcp-help-markdown .md-callout {
+            margin: 0 0 12px;
+            padding: 12px 14px;
+            border-radius: 10px;
+            border: 1px solid rgba(88, 166, 255, 0.22);
+            background: rgba(88, 166, 255, 0.08);
+        }
+
+        .mcp-help-markdown .md-callout-title {
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #9fcdff;
+            margin-bottom: 6px;
+        }
+
+        .mcp-help-markdown .md-callout-body {
+            color: #d6e6f7;
+        }
+
         .mcp-help-markdown a {
             color: #79b8ff;
         }
@@ -831,7 +870,7 @@
         .mcp-help-markdown hr {
             border: 0;
             border-top: 1px solid var(--border-color);
-            margin: 20px 0;
+            margin: 16px 0;
         }
 
         .mcp-help-markdown.is-loading,
@@ -890,6 +929,19 @@
             margin: 0 0 12px;
         }
 
+        .doc-help-markdown p + hr,
+        .doc-help-markdown ul + hr,
+        .doc-help-markdown ol + hr,
+        .doc-help-markdown blockquote + hr,
+        .doc-help-markdown pre + hr,
+        .doc-help-markdown hr + p,
+        .doc-help-markdown hr + ul,
+        .doc-help-markdown hr + ol,
+        .doc-help-markdown hr + blockquote,
+        .doc-help-markdown hr + pre {
+            margin-top: 16px;
+        }
+
         .doc-help-markdown ul,
         .doc-help-markdown ol {
             padding-left: 20px;
@@ -922,6 +974,27 @@
             color: #c2cfdb;
         }
 
+        .doc-help-markdown .md-callout {
+            margin: 0 0 12px;
+            padding: 12px 14px;
+            border-radius: 10px;
+            border: 1px solid rgba(88, 166, 255, 0.22);
+            background: rgba(88, 166, 255, 0.08);
+        }
+
+        .doc-help-markdown .md-callout-title {
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #9fcdff;
+            margin-bottom: 6px;
+        }
+
+        .doc-help-markdown .md-callout-body {
+            color: #d6e6f7;
+        }
+
         .doc-help-markdown a {
             color: #79b8ff;
         }
@@ -930,6 +1003,12 @@
             max-width: 100%;
             height: auto;
             display: block;
+        }
+
+        .doc-help-markdown hr {
+            border: 0;
+            border-top: 1px solid var(--border-color);
+            margin: 16px 0;
         }
 
         @media (max-width: 900px) {
@@ -2392,6 +2471,35 @@
             return renderSimpleMarkdown(markdown) + buildMcpJsonAppendixHtml();
         }
 
+        function formatInlineMarkdown(text) {
+            return escapeHtml(String(text || ''))
+                .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+                .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+                .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+                .replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+        }
+
+        function renderBlockquoteGroup(raw) {
+            const lines = String(raw || '')
+                .split('\n')
+                .map((line) => line.replace(/^>\s?/, ''));
+            if (lines.length === 0) {
+                return '';
+            }
+
+            const firstLine = String(lines[0] || '').trim();
+            const calloutMatch = firstLine.match(/^\[!([A-Z]+)\]$/);
+            if (calloutMatch) {
+                const title = calloutMatch[1];
+                const bodyLines = lines.slice(1);
+                const bodyHtml = bodyLines.map((line) => formatInlineMarkdown(line)).join('<br>');
+                return `<div class="md-callout md-callout-${title.toLowerCase()}"><div class="md-callout-title">${title}</div><div class="md-callout-body">${bodyHtml}</div></div>`;
+            }
+
+            const bodyHtml = lines.map((line) => formatInlineMarkdown(line)).join('<br>');
+            return `<blockquote>${bodyHtml}</blockquote>`;
+        }
+
         function renderSimpleMarkdown(markdown) {
             const normalized = String(markdown || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
             const codeBlocks = [];
@@ -2409,12 +2517,18 @@
                 return `@@HTMLTAG_${index}@@`;
             });
 
+            source = source.replace(/(^>.*(?:\n>.*)*)/gm, (match) => {
+                const index = htmlTags.length;
+                htmlTags.push(renderBlockquoteGroup(match));
+                return `@@HTMLTAG_${index}@@`;
+            });
+
             let html = escapeHtml(source);
             html = html
+                .replace(/^(?:-{3,}|\*{3,}|_{3,})$/gm, '<hr>')
                 .replace(/^### (.+)$/gm, '<h3>$1</h3>')
                 .replace(/^## (.+)$/gm, '<h2>$1</h2>')
                 .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-                .replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>')
                 .replace(/(?:^|\n)([-*] .+(?:\n[-*] .+)*)/g, (match) => {
                     const items = match.trim().split('\n').map((line) => `<li>${line.replace(/^[-*] /, '')}</li>`).join('');
                     return `\n<ul>${items}</ul>`;
@@ -2429,7 +2543,7 @@
                 .replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
 
             const blocks = html.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean).map((block) => {
-                if (/^(?:@@HTMLTAG_\d+@@|<(h1|h2|h3|ul|ol|pre|blockquote))/.test(block)) {
+                if (/^(?:@@HTMLTAG_\d+@@|<(h1|h2|h3|ul|ol|pre|blockquote|hr|div))/.test(block)) {
                     return block;
                 }
                 return `<p>${block.replace(/\n/g, '<br>')}</p>`;
