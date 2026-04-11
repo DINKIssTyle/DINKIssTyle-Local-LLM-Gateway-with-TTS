@@ -155,7 +155,6 @@
             }
 
             scrollToBottomBtn.classList.toggle('is-visible', shouldShow);
-            scrollToBottomBtn.hidden = !shouldShow;
             if (shouldShow) {
                 scrollToBottomBtn.removeAttribute('aria-hidden');
                 scrollToBottomBtn.removeAttribute('inert');
