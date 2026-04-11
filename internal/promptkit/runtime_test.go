@@ -122,6 +122,12 @@ func TestBuildRuntimeInstructionsIncludesMemoryAndEnvironment(t *testing.T) {
 	if !strings.Contains(got, "ENVIRONMENT INFO:") {
 		t.Fatalf("expected environment info in runtime instructions")
 	}
+	if !strings.Contains(got, "Use USER PROFILE only when it is directly relevant to the user's current request.") {
+		t.Fatalf("expected user profile relevance guardrail in runtime instructions")
+	}
+	if !strings.Contains(got, "Mention only the minimum profile details needed for the answer. Do not list or volunteer unrelated profile facts.") {
+		t.Fatalf("expected minimal user profile disclosure guardrail in runtime instructions")
+	}
 }
 
 func TestBuildRuntimeInstructionsAddsGemmaSpecificRules(t *testing.T) {
@@ -154,5 +160,11 @@ func TestBuildRuntimeInstructionsOmitsToolGuidanceWhenNativeIntegrationsDisabled
 	}
 	if !strings.Contains(got, "### MEMORY CONTEXT ###") {
 		t.Fatalf("expected passive memory context to still be injected")
+	}
+	if !strings.Contains(got, "Use USER PROFILE only when it is directly relevant to the user's current request.") {
+		t.Fatalf("expected passive user profile relevance guardrail in runtime instructions")
+	}
+	if !strings.Contains(got, "Mention only the minimum profile details needed for the answer. Do not list or volunteer unrelated profile facts.") {
+		t.Fatalf("expected passive minimal user profile disclosure guardrail in runtime instructions")
 	}
 }

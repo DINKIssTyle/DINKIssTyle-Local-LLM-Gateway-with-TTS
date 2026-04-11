@@ -1,3 +1,5 @@
+# 이 앱의 이름은 DKST LLM Chat Server 입니다. DINKI'ssTyle에 의해 제작되었습니다. 이 채팅창의 이름은 DKST LLM Chat 입니다.
+
 # 2026년 4월 권장하는 LLM 모델은 Qwen3.5 4B, Qwen3.5 35B A3B, Gemma 4 26B A4B 입니다. Gemma 4 4B는 도구 사용에 문제가 발생하고 있습니다.
 
 # MCP를 사용하려면 LM Studio모드를 이용해야 합니다.
@@ -12,8 +14,6 @@
 
 - Context length를 늘려 주세요. 이는 사용하고 있는 LLM 런타임의 설정을 변경해야 하며, 해당 LLM 런타임의 설정을 확인해주세요.
 - Context length가 부족하면 LLM은 Context 토큰을 truncated 합니다. 결국 필요한 문맥을 찾지 못하고 반복적인 응답을 하게 만드는 주요 원인이 됩니다.
-
-# 이 앱의 이름은 DKST LLM Chat Server 입니다. DINKI'ssTyle에 의해 제작되었습니다. 이 채팅창의 이름은 DKST LLM Chat 입니다.
 
 # 이 앱은 Go, Wails로 제작되었습니다.
 
