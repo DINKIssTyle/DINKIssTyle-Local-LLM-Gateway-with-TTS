@@ -217,29 +217,33 @@ func buildMemoryTemplate(staticMemory string, recentContext string, userProfile 
 	rules := []string{
 		"1. Treat RECENT CONTEXT as the primary source for continuity about the latest few turns.",
 		"2. Treat USER PROFILE Known Facts as ground truth for personal details about the user. These never require search_memory.",
-		"3. If the user explicitly asks you to search memory, recall prior chats, or find what was said before, you MUST use 'search_memory' before answering.",
-		"4. If past details are missing or uncertain, use 'search_memory' instead of saying you do not know.",
-		"5. After 'search_memory', prefer 'read_memory_context' for the best candidate before relying on it. Use 'read_memory' only when you need the full original text.",
-		"6. 'read_memory' and 'read_memory_context' require 'memory_id'. Never use 'source_id', 'query', or 'question' with memory tools.",
-		"7. If memory search still does not answer the question and the remaining question is about factual/public knowledge, use web search next instead of stopping at 'I do not know'.",
-		"8. Only 'read_buffered_source' uses 'source_id' for web evidence.",
-		"9. Try alternative names, relationships, or synonyms if the first search fails.",
-		"10. Do not guess past details.",
-		"11. When the user tells you personal facts (name, birthday, preferences, etc.), proactively use 'save_user_fact' to save them to their permanent profile.",
+		"3. Use USER PROFILE only when it is directly relevant to the user's current request.",
+		"4. Mention only the minimum profile details needed for the answer. Do not list or volunteer unrelated profile facts.",
+		"5. If the user explicitly asks you to search memory, recall prior chats, or find what was said before, you MUST use 'search_memory' before answering.",
+		"6. If past details are missing or uncertain, use 'search_memory' instead of saying you do not know.",
+		"7. After 'search_memory', prefer 'read_memory_context' for the best candidate before relying on it. Use 'read_memory' only when you need the full original text.",
+		"8. 'read_memory' and 'read_memory_context' require 'memory_id'. Never use 'source_id', 'query', or 'question' with memory tools.",
+		"9. If memory search still does not answer the question and the remaining question is about factual/public knowledge, use web search next instead of stopping at 'I do not know'.",
+		"10. Only 'read_buffered_source' uses 'source_id' for web evidence.",
+		"11. Try alternative names, relationships, or synonyms if the first search fails.",
+		"12. Do not guess past details.",
+		"13. When the user tells you personal facts (name, birthday, preferences, etc.), proactively use 'save_user_fact' to save them to their permanent profile.",
 	}
 	if retrievalInjected && strings.TrimSpace(activeContext) != "" {
 		rules = []string{
 			"1. Treat RECENT CONTEXT as the primary source for continuity about the latest few turns.",
 			"2. ACTIVE CONTEXT was already retrieved for this turn. Prefer answering from RECENT CONTEXT plus ACTIVE CONTEXT when they are sufficient.",
 			"3. Treat USER PROFILE Known Facts as ground truth for personal details about the user. These never require search_memory.",
-			"4. If the user explicitly asks you to search memory, recall prior chats, or find what was said before, you MUST use 'search_memory' before answering.",
-			"5. Use 'search_memory' whenever RECENT CONTEXT and ACTIVE CONTEXT are clearly insufficient or contradictory. Do not simply say you do not know without trying memory search first.",
-			"6. If you must inspect memory further, prefer 'read_memory_context' after 'search_memory'. Use 'read_memory' only for the full original text.",
-			"7. 'read_memory' and 'read_memory_context' require 'memory_id'. Never use 'source_id', 'query', or 'question' with memory tools.",
-			"8. If memory search still does not answer the question and the remaining question is about factual/public knowledge, use web search next instead of stopping at 'I do not know'.",
-			"9. Only 'read_buffered_source' uses 'source_id' for web evidence.",
-			"10. Do not guess past details.",
-			"11. When the user tells you personal facts (name, birthday, preferences, etc.), proactively use 'save_user_fact' to save them to their permanent profile.",
+			"4. Use USER PROFILE only when it is directly relevant to the user's current request.",
+			"5. Mention only the minimum profile details needed for the answer. Do not list or volunteer unrelated profile facts.",
+			"6. If the user explicitly asks you to search memory, recall prior chats, or find what was said before, you MUST use 'search_memory' before answering.",
+			"7. Use 'search_memory' whenever RECENT CONTEXT and ACTIVE CONTEXT are clearly insufficient or contradictory. Do not simply say you do not know without trying memory search first.",
+			"8. If you must inspect memory further, prefer 'read_memory_context' after 'search_memory'. Use 'read_memory' only for the full original text.",
+			"9. 'read_memory' and 'read_memory_context' require 'memory_id'. Never use 'source_id', 'query', or 'question' with memory tools.",
+			"10. If memory search still does not answer the question and the remaining question is about factual/public knowledge, use web search next instead of stopping at 'I do not know'.",
+			"11. Only 'read_buffered_source' uses 'source_id' for web evidence.",
+			"12. Do not guess past details.",
+			"13. When the user tells you personal facts (name, birthday, preferences, etc.), proactively use 'save_user_fact' to save them to their permanent profile.",
 		}
 	}
 	return fmt.Sprintf(`
@@ -287,8 +291,10 @@ func buildPassiveMemoryTemplate(recentContext string, userProfile string, active
 
 MEMORY USAGE RULES:
 1. Use RECENT CONTEXT, USER PROFILE, and ACTIVE CONTEXT only as provided reference context for this answer.
-2. Do not mention tools, integrations, MCP, or hidden retrieval steps.
-3. If the provided memory context is insufficient, answer normally from the visible conversation and your model knowledge.
-4. Do not invent or claim to have searched additional memory when no tool access is available.
+2. Use USER PROFILE only when it is directly relevant to the user's current request.
+3. Mention only the minimum profile details needed for the answer. Do not list or volunteer unrelated profile facts.
+4. Do not mention tools, integrations, MCP, or hidden retrieval steps.
+5. If the provided memory context is insufficient, answer normally from the visible conversation and your model knowledge.
+6. Do not invent or claim to have searched additional memory when no tool access is available.
 `, recentContext, combinedProfile, activeContext)
 }
