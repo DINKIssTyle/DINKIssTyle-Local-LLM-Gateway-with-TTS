@@ -2341,6 +2341,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	mux.HandleFunc("/api/logout", handleLogout(authMgr))
 	mux.HandleFunc("/api/logout-all-sessions", AuthMiddleware(authMgr, handleLogoutAllSessions(authMgr)))
 	mux.HandleFunc("/api/auth/check", handleAuthCheck(authMgr))
+	mux.HandleFunc("/api/setup/initialize", handleInitialAdminSetup(authMgr))
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(app.CheckHealth())
@@ -2731,7 +2732,12 @@ func handleLogin(am *AuthManager) http.HandlerFunc {
 		if err != nil || token == "" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(map[string]string{"error": "Invalid credentials"})
+			response := map[string]interface{}{"error": "Invalid credentials"}
+			if !am.HasUsers() {
+				response["setup_required"] = true
+				response["error"] = "Initial admin setup required"
+			}
+			json.NewEncoder(w).Encode(response)
 			return
 		}
 
@@ -2821,14 +2827,20 @@ func handleAuthCheck(am *AuthManager) http.HandlerFunc {
 		token := extractSessionTokenFromRequest(r)
 		if token == "" {
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{"authenticated": false})
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"authenticated":  false,
+				"setup_required": !am.HasUsers(),
+			})
 			return
 		}
 
 		user, valid := am.ValidateSession(token)
 		if !valid {
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{"authenticated": false})
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"authenticated":  false,
+				"setup_required": !am.HasUsers(),
+			})
 			return
 		}
 
@@ -2838,6 +2850,38 @@ func handleAuthCheck(am *AuthManager) http.HandlerFunc {
 			"user_id":       user.ID,
 			"role":          user.Role,
 		})
+	}
+}
+
+func handleInitialAdminSetup(am *AuthManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req struct {
+			ID       string `json:"id"`
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request", http.StatusBadRequest)
+			return
+		}
+
+		if err := am.InitializeAdmin(req.ID, req.Password); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			status := http.StatusConflict
+			if strings.Contains(strings.ToLower(err.Error()), "required") {
+				status = http.StatusBadRequest
+			}
+			w.WriteHeader(status)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	}
 }
 

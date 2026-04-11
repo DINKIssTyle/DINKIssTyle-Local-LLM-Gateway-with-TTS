@@ -166,11 +166,6 @@ func NewAuthManager(usersFile string) *AuthManager {
 	}
 	am.LoadUsers()
 
-	// Create default admin if no users exist
-	if len(am.users) == 0 {
-		am.AddUser("admin", "admin", "admin")
-	}
-
 	return am
 }
 
@@ -242,9 +237,39 @@ func (am *AuthManager) saveUsersLocked() error {
 func (am *AuthManager) AddUser(id, password, role string) error {
 	am.mu.Lock()
 	defer am.mu.Unlock()
+	return am.addUserLocked(id, password, role)
+}
 
+func (am *AuthManager) HasUsers() bool {
+	am.mu.RLock()
+	defer am.mu.RUnlock()
+	return len(am.users) > 0
+}
+
+func (am *AuthManager) InitializeAdmin(id, password string) error {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+
+	if len(am.users) > 0 {
+		return fmt.Errorf("users already initialized")
+	}
+	return am.addUserLocked(id, password, "admin")
+}
+
+func (am *AuthManager) addUserLocked(id, password, role string) error {
+	id = strings.TrimSpace(id)
+	role = strings.TrimSpace(role)
+	if id == "" {
+		return fmt.Errorf("user id is required")
+	}
+	if password == "" {
+		return fmt.Errorf("password is required")
+	}
+	if role != "admin" && role != "user" {
+		return fmt.Errorf("invalid role: must be 'admin' or 'user'")
+	}
 	if _, exists := am.users[id]; exists {
-		return nil // User already exists
+		return fmt.Errorf("user already exists")
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
@@ -252,14 +277,9 @@ func (am *AuthManager) AddUser(id, password, role string) error {
 		return err
 	}
 
-	// Default User Settings
-	// User requested defaults:
-	// Enable MCP: true
-	// Enable TTS: true
-	// TTS Config: Voice F1, Speed 1.1, Threads 2
 	enableMCP := true
 	enableTTS := true
-	voiceStyle := "F1" // F1.json usually
+	voiceStyle := "F1"
 	speed := float32(1.1)
 	threads := 2
 	engine := "supertonic"
@@ -272,10 +292,9 @@ func (am *AuthManager) AddUser(id, password, role string) error {
 		Role:         role,
 		CreatedAt:    time.Now().Format(time.RFC3339),
 		Settings: UserSettings{
-			// Initialize with pointers to defaults
 			EnableMCP:    &enableMCP,
 			EnableTTS:    &enableTTS,
-			EnableMemory: &enableMCP, // Default to same as MCP for new users, or false? Let's default true if new user.
+			EnableMemory: &enableMCP,
 			TTSConfig: &ServerTTSConfig{
 				Engine:     engine,
 				VoiceStyle: voiceStyle,
@@ -296,7 +315,6 @@ func (am *AuthManager) AddUser(id, password, role string) error {
 		},
 	}
 
-	// Save while still holding lock
 	return am.saveUsersLocked()
 }
 
