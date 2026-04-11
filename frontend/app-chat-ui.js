@@ -102,6 +102,16 @@
                 actionBar.classList.remove('is-pending');
                 delete actionBar.dataset.readyScheduled;
                 attachStreamingAudioButtonToMessage?.(msgEl);
+                if (getStreamingScrollMode?.() === 'label-top' && chatMessages) {
+                    global.requestAnimationFrame(() => {
+                        const pinnedScrollTop = getMessagePinnedScrollTop(elementId);
+                        if (!Number.isFinite(pinnedScrollTop)) return;
+                        suppressNextScrollEvent = true;
+                        chatMessages.scrollTop = pinnedScrollTop;
+                        chatScrollMetrics = syncChatScrollMetrics();
+                        updateScrollToBottomButton();
+                    });
+                }
             };
 
             if (actionBar.dataset.readyScheduled === 'true') {
@@ -207,6 +217,14 @@
             if (!activeMessage) return null;
             const topPadding = 12;
             return Math.max(0, activeMessage.offsetTop - topPadding);
+        }
+
+        function getMessagePinnedScrollTop(elementId) {
+            if (!chatMessages || !elementId) return null;
+            const message = global.document.getElementById(elementId);
+            if (!message) return null;
+            const topPadding = 12;
+            return Math.max(0, message.offsetTop - topPadding);
         }
 
         function hasActiveStreamingResponseContent() {
@@ -444,7 +462,12 @@
         }
 
         function stopStreamingMessageAutoScroll() {
-            logScrollTrace('stopStreamingMessageAutoScroll', { clearingMessageId: activeStreamingMessageId });
+            const shouldPreservePinnedPosition = getStreamingScrollMode?.() === 'label-top';
+            const pinnedScrollTop = shouldPreservePinnedPosition ? getActiveMessagePinnedScrollTop() : null;
+            logScrollTrace('stopStreamingMessageAutoScroll', {
+                clearingMessageId: activeStreamingMessageId,
+                pinnedScrollTop: Number.isFinite(pinnedScrollTop) ? Math.round(pinnedScrollTop) : null
+            });
             activeStreamingMessagePinnedToTop = false;
             activeStreamingMessagePinPending = false;
             activeStreamingMessageId = null;
@@ -456,6 +479,14 @@
             if (autoScrollResizeObserver) {
                 autoScrollResizeObserver.disconnect();
                 autoScrollResizeObserver = null;
+            }
+            if (shouldPreservePinnedPosition && Number.isFinite(pinnedScrollTop) && chatMessages) {
+                global.requestAnimationFrame(() => {
+                    suppressNextScrollEvent = true;
+                    chatMessages.scrollTop = pinnedScrollTop;
+                    chatScrollMetrics = syncChatScrollMetrics();
+                    updateScrollToBottomButton();
+                });
             }
         }
 
