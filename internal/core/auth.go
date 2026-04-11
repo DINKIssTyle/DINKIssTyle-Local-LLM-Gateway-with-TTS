@@ -26,11 +26,12 @@ import (
 
 // UserSettings holds user-specific overrides
 type UserSettings struct {
-	ApiEndpoint           *string                    `json:"api_endpoint,omitempty"`
-	ApiToken              *string                    `json:"api_token,omitempty"`
-	SecondaryModel        *string                    `json:"secondary_model,omitempty"`
-	LLMMode               *string                    `json:"llm_mode,omitempty"`
-	ContextStrategy       *string                    `json:"context_strategy,omitempty"`
+	ApiEndpoint     *string `json:"api_endpoint,omitempty"`
+	ApiToken        *string `json:"api_token,omitempty"`
+	SecondaryModel  *string `json:"secondary_model,omitempty"`
+	LLMMode         *string `json:"llm_mode,omitempty"`
+	ContextStrategy *string `json:"context_strategy,omitempty"`
+	// TTS state is kept browser-local now, but these fields remain for legacy users.json reads.
 	EnableTTS             *bool                      `json:"enable_tts,omitempty"`
 	EnableMCP             *bool                      `json:"enable_mcp,omitempty"`
 	EnableMemory          *bool                      `json:"enable_memory,omitempty"`
@@ -174,15 +175,33 @@ func NewAuthManager(usersFile string) *AuthManager {
 	return am
 }
 
-// LoadUsers loads users from JSON file
-func (am *AuthManager) LoadUsers() error {
-	am.mu.Lock()
-	defer am.mu.Unlock()
+func stripLocalOnlySettings(settings UserSettings) UserSettings {
+	settings.EnableTTS = nil
+	settings.TTSConfig = nil
+	return settings
+}
 
+func normalizePersistedSettings(settings UserSettings) UserSettings {
+	settings = stripLocalOnlySettings(settings)
+	settings.DisabledTools = expandDisabledToolAliases(settings.DisabledTools)
+	if settings.DisabledTools == nil {
+		settings.DisabledTools = []string{}
+	}
+	if settings.DisallowedCommands == nil {
+		settings.DisallowedCommands = []string{}
+	}
+	if settings.DisallowedDirectories == nil {
+		settings.DisallowedDirectories = []string{}
+	}
+	return settings
+}
+
+func (am *AuthManager) loadUsersFromJSONLocked() error {
 	data, err := os.ReadFile(am.usersFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil // File doesn't exist yet
+			am.users = make(map[string]*User)
+			return nil
 		}
 		return err
 	}
@@ -194,15 +213,103 @@ func (am *AuthManager) LoadUsers() error {
 
 	am.users = make(map[string]*User)
 	for _, u := range users {
+		if u == nil || strings.TrimSpace(u.ID) == "" {
+			continue
+		}
+		u.Settings.DisabledTools = expandDisabledToolAliases(u.Settings.DisabledTools)
 		am.users[u.ID] = u
 	}
 	return nil
 }
 
-// SaveUsers saves users to JSON file
+func (am *AuthManager) replaceUsersInDBLocked() error {
+	records := make([]mcp.AccountSettingsRecord, 0, len(am.users))
+	now := time.Now().UTC().Format(time.RFC3339)
+	for _, u := range am.users {
+		if u == nil || strings.TrimSpace(u.ID) == "" {
+			continue
+		}
+		settingsJSON, err := json.Marshal(normalizePersistedSettings(u.Settings))
+		if err != nil {
+			return err
+		}
+		createdAt := strings.TrimSpace(u.CreatedAt)
+		if createdAt == "" {
+			createdAt = now
+		}
+		records = append(records, mcp.AccountSettingsRecord{
+			AccountID:    u.ID,
+			PasswordHash: u.PasswordHash,
+			Role:         u.Role,
+			CreatedAt:    createdAt,
+			UpdatedAt:    now,
+			SettingsJSON: string(settingsJSON),
+		})
+	}
+	return mcp.ReplaceAccountsWithSettings(records)
+}
+
+func (am *AuthManager) loadUsersFromDBLocked() error {
+	records, err := mcp.ListAccountsWithSettings()
+	if err != nil {
+		return err
+	}
+
+	if len(records) == 0 {
+		if err := am.loadUsersFromJSONLocked(); err != nil {
+			return err
+		}
+		if len(am.users) == 0 {
+			return nil
+		}
+		if err := am.replaceUsersInDBLocked(); err != nil {
+			return err
+		}
+		records, err = mcp.ListAccountsWithSettings()
+		if err != nil {
+			return err
+		}
+	}
+
+	am.users = make(map[string]*User, len(records))
+	for _, rec := range records {
+		settings := UserSettings{}
+		if strings.TrimSpace(rec.SettingsJSON) != "" {
+			if err := json.Unmarshal([]byte(rec.SettingsJSON), &settings); err != nil {
+				return fmt.Errorf("failed to parse settings for %s: %w", rec.AccountID, err)
+			}
+		}
+		settings.DisabledTools = expandDisabledToolAliases(settings.DisabledTools)
+		am.users[rec.AccountID] = &User{
+			ID:           rec.AccountID,
+			PasswordHash: rec.PasswordHash,
+			Role:         rec.Role,
+			CreatedAt:    rec.CreatedAt,
+			Settings:     settings,
+		}
+	}
+	return nil
+}
+
+// LoadUsers loads users from JSON file
+func (am *AuthManager) LoadUsers() error {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+
+	if mcp.DBReady() {
+		return am.loadUsersFromDBLocked()
+	}
+	return am.loadUsersFromJSONLocked()
+}
+
+// SaveUsers saves users to DB when available, otherwise falls back to the legacy JSON file.
 func (am *AuthManager) SaveUsers() error {
 	am.mu.RLock()
 	defer am.mu.RUnlock()
+
+	if mcp.DBReady() {
+		return am.replaceUsersInDBLocked()
+	}
 
 	users := make([]*User, 0, len(am.users))
 	for _, u := range am.users {
@@ -217,8 +324,12 @@ func (am *AuthManager) SaveUsers() error {
 	return os.WriteFile(am.usersFile, data, 0600)
 }
 
-// saveUsersLocked saves users to JSON file (assumes lock is already held)
+// saveUsersLocked saves users to DB when available, otherwise falls back to the legacy JSON file.
 func (am *AuthManager) saveUsersLocked() error {
+	if mcp.DBReady() {
+		return am.replaceUsersInDBLocked()
+	}
+
 	users := make([]*User, 0, len(am.users))
 	for _, u := range am.users {
 		users = append(users, u)
@@ -252,19 +363,8 @@ func (am *AuthManager) AddUser(id, password, role string) error {
 		return err
 	}
 
-	// Default User Settings
-	// User requested defaults:
-	// Enable MCP: true
-	// Enable TTS: true
-	// TTS Config: Voice F1, Speed 1.1, Threads 2
+	// Default user settings persisted on the server.
 	enableMCP := true
-	enableTTS := true
-	voiceStyle := "F1" // F1.json usually
-	speed := float32(1.1)
-	threads := 2
-	engine := "supertonic"
-	osRate := float32(1.0)
-	osPitch := float32(1.0)
 
 	am.users[id] = &User{
 		ID:           id,
@@ -272,18 +372,8 @@ func (am *AuthManager) AddUser(id, password, role string) error {
 		Role:         role,
 		CreatedAt:    time.Now().Format(time.RFC3339),
 		Settings: UserSettings{
-			// Initialize with pointers to defaults
 			EnableMCP:    &enableMCP,
-			EnableTTS:    &enableTTS,
 			EnableMemory: &enableMCP, // Default to same as MCP for new users, or false? Let's default true if new user.
-			TTSConfig: &ServerTTSConfig{
-				Engine:     engine,
-				VoiceStyle: voiceStyle,
-				Speed:      speed,
-				Threads:    threads,
-				OSRate:     osRate,
-				OSPitch:    osPitch,
-			},
 			DisallowedCommands: []string{
 				"rm", "rmdir", "unlink", "dd", "mkfs", "mkfs.ext4", "mkfs.xfs", "mkfs.apfs",
 				"fsck", "fsck.ext4", "fsck.xfs", "fsck_apfs", "mount", "umount", "chmod", "chown", "chgrp",
