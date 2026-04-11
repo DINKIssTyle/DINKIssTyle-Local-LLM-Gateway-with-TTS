@@ -3191,14 +3191,12 @@ function buildServerConfigSignature(serverCfg) {
             llm_mode: serverCfg?.llm_mode || '',
             context_strategy: serverCfg?.context_strategy || '',
             secondary_model: serverCfg?.secondary_model || '',
-            enable_tts: serverCfg?.enable_tts === true,
             enable_mcp: serverCfg?.enable_mcp === true,
             enable_memory: serverCfg?.enable_memory === true,
             stateful_turn_limit: Number(serverCfg?.stateful_turn_limit || 0),
             stateful_char_budget: Number(serverCfg?.stateful_char_budget || 0),
             stateful_token_budget: Number(serverCfg?.stateful_token_budget || 0),
-            embedding_config: serverCfg?.embedding_config || null,
-            tts_config: serverCfg?.tts_config || null
+            embedding_config: serverCfg?.embedding_config || null
         });
     } catch (_) {
         return '';
@@ -3457,28 +3455,15 @@ function saveConfig(closeModal = true) {
         secondary_model: config.secondaryModel,
         llm_mode: config.llmMode,
         context_strategy: config.contextStrategy,
-        enable_tts: config.enableTTS,
         enable_mcp: config.enableMCP,
         enable_memory: config.enableMemory,
         stateful_turn_limit: config.statefulTurnLimit,
         stateful_char_budget: config.statefulCharBudget,
         stateful_token_budget: config.statefulTokenBudget,
-        tts_threads: config.ttsThreads,
         embedding_config: {
             provider: config.embeddingProvider,
             modelId: config.embeddingModelId,
             enabled: config.enableEmbeddings
-        },
-        tts_config: {
-            engine: config.ttsEngine,
-            voiceStyle: config.ttsVoice,
-            speed: config.ttsSpeed,
-            threads: config.ttsThreads,
-            osVoiceURI: config.osTtsVoiceURI,
-            osVoiceName: config.osTtsVoiceName,
-            osVoiceLang: config.osTtsVoiceLang,
-            osRate: config.osTtsRate,
-            osPitch: config.osTtsPitch
         }
     };
 
@@ -4929,48 +4914,6 @@ async function syncServerConfig(options = {}) {
                 config.secondaryModel = String(serverCfg.secondary_model || '').trim();
                 const el = document.getElementById('cfg-secondary-model');
                 if (el) el.value = config.secondaryModel;
-            }
-            if (serverCfg.enable_tts !== undefined) {
-                config.enableTTS = serverCfg.enable_tts;
-                document.getElementById('cfg-enable-tts').checked = config.enableTTS;
-            }
-            if (serverCfg.tts_config) {
-                const ttsCfg = serverCfg.tts_config;
-                config.ttsEngine = ttsCfg.engine || config.ttsEngine || 'supertonic';
-                config.ttsVoice = ttsCfg.voiceStyle || config.ttsVoice;
-                config.ttsSpeed = Number(ttsCfg.speed) > 0 ? Number(ttsCfg.speed) : config.ttsSpeed;
-                config.ttsThreads = Number(ttsCfg.threads) > 0 ? Number(ttsCfg.threads) : config.ttsThreads;
-                config.osTtsVoiceURI = ttsCfg.osVoiceURI || config.osTtsVoiceURI || '';
-                config.osTtsVoiceName = ttsCfg.osVoiceName || config.osTtsVoiceName || '';
-                config.osTtsVoiceLang = ttsCfg.osVoiceLang || config.osTtsVoiceLang || '';
-                config.osTtsRate = Number(ttsCfg.osRate) > 0 ? Number(ttsCfg.osRate) : (config.osTtsRate || 1.0);
-                config.osTtsPitch = Number(ttsCfg.osPitch) > 0 ? Number(ttsCfg.osPitch) : (config.osTtsPitch || 1.0);
-
-                const engineEl = document.getElementById('cfg-tts-engine');
-                if (engineEl) engineEl.value = config.ttsEngine;
-                const voiceEl = document.getElementById('cfg-tts-voice');
-                if (voiceEl && config.ttsVoice) voiceEl.value = config.ttsVoice.replace('.json', '');
-                const speedEl = document.getElementById('cfg-tts-speed');
-                if (speedEl) speedEl.value = config.ttsSpeed || 1.0;
-                const speedValEl = document.getElementById('speed-val');
-                if (speedValEl) speedValEl.textContent = String(config.ttsSpeed || 1.0);
-                const threadsEl = document.getElementById('cfg-tts-threads');
-                if (threadsEl) threadsEl.value = config.ttsThreads || 4;
-                const threadsValEl = document.getElementById('threads-val');
-                if (threadsValEl) threadsValEl.textContent = String(config.ttsThreads || 4);
-                const osRateEl = document.getElementById('cfg-os-tts-rate');
-                if (osRateEl) osRateEl.value = config.osTtsRate || 1.0;
-                const osRateValEl = document.getElementById('os-rate-val');
-                if (osRateValEl) osRateValEl.textContent = String(config.osTtsRate || 1.0);
-                const osPitchEl = document.getElementById('cfg-os-tts-pitch');
-                if (osPitchEl) osPitchEl.value = config.osTtsPitch || 1.0;
-                const osPitchValEl = document.getElementById('os-pitch-val');
-                if (osPitchValEl) osPitchValEl.textContent = String(config.osTtsPitch || 1.0);
-                populateOSTTSVoiceList();
-                if (osTTSVoiceSelect && config.osTtsVoiceURI && ttsController.isVoicesReady()) {
-                    osTTSVoiceSelect.value = config.osTtsVoiceURI;
-                }
-                updateTTSSettingsVisibility();
             }
             if (serverCfg.embedding_config) {
                 const embeddingCfg = serverCfg.embedding_config;

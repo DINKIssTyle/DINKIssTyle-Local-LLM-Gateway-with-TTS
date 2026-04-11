@@ -271,6 +271,23 @@ func createSchema() error {
 		FOREIGN KEY(chunk_id) REFERENCES web_source_chunks(id)
 	);
 
+	CREATE TABLE IF NOT EXISTS accounts (
+		id TEXT PRIMARY KEY,
+		password_hash TEXT NOT NULL,
+		role TEXT NOT NULL DEFAULT 'user',
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_accounts_role ON accounts(role);
+
+	CREATE TABLE IF NOT EXISTS user_settings (
+		account_id TEXT PRIMARY KEY,
+		settings_json TEXT NOT NULL DEFAULT '{}',
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
+	);
+
 	CREATE TABLE IF NOT EXISTS auth_sessions (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		user_id TEXT NOT NULL,
