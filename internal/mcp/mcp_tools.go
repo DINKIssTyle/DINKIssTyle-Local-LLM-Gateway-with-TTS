@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"net/url"
@@ -94,6 +95,8 @@ var (
 	contextMu             sync.RWMutex
 	currentHooks          ToolHooks
 	hooksMu               sync.RWMutex
+	helpDocsFS            fs.FS
+	helpDocsFSRoot        string
 	verboseLoggingEnabled atomic.Uint32
 )
 
@@ -121,6 +124,13 @@ func SetToolHooks(hooks ToolHooks) {
 	hooksMu.Lock()
 	defer hooksMu.Unlock()
 	currentHooks = hooks
+}
+
+func SetHelpDocsFS(fsys fs.FS, root string) {
+	contextMu.Lock()
+	defer contextMu.Unlock()
+	helpDocsFS = fsys
+	helpDocsFSRoot = strings.Trim(strings.TrimSpace(root), "/")
 }
 
 func getToolHooks() ToolHooks {
@@ -475,6 +485,10 @@ func runReadHelpTool(userID, query string) (string, error) {
 }
 
 func loadHelpDocumentContent(query string) (string, string, error) {
+	if title, content, err := loadHelpDocumentContentFromEmbeddedFS(query); err == nil {
+		return title, content, nil
+	}
+
 	helpDir, err := findHelpDocsDir()
 	if err != nil {
 		return "", "", err
@@ -576,6 +590,130 @@ func loadHelpDocumentContent(query string) (string, string, error) {
 	}
 
 	return title, strings.TrimSpace(b.String()), nil
+}
+
+func loadHelpDocumentContentFromEmbeddedFS(query string) (string, string, error) {
+	contextMu.RLock()
+	fsys := helpDocsFS
+	root := helpDocsFSRoot
+	contextMu.RUnlock()
+
+	if fsys == nil || root == "" {
+		return "", "", fmt.Errorf("embedded help docs not configured")
+	}
+
+	entries, err := fs.ReadDir(fsys, root)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to read embedded help docs directory: %w", err)
+	}
+
+	return assembleHelpDocuments(query, entries, func(name string) ([]byte, error) {
+		return fs.ReadFile(fsys, pathJoinSlash(root, name))
+	}, "embedded:"+root)
+}
+
+func assembleHelpDocuments(query string, entries []fs.DirEntry, readFile func(name string) ([]byte, error), sourceLabel string) (string, string, error) {
+	type helpDoc struct {
+		Name    string
+		Title   string
+		Content string
+		Score   int
+	}
+
+	normalizedQuery := defaultNormalizeSearchQuery(query)
+	terms := strings.Fields(strings.ToLower(normalizedQuery))
+	var docs []helpDoc
+	hasMainHelpDoc := false
+	mainHelpDocEmpty := false
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := strings.TrimSpace(entry.Name())
+		if !strings.HasSuffix(strings.ToLower(name), ".md") {
+			continue
+		}
+
+		raw, err := readFile(name)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to read help doc %s: %w", name, err)
+		}
+		content := strings.TrimSpace(string(raw))
+		if strings.EqualFold(name, "Help.md") {
+			hasMainHelpDoc = true
+			mainHelpDocEmpty = content == ""
+		}
+		if content == "" {
+			continue
+		}
+
+		title := extractHelpDocTitle(name, content)
+		score := 0
+		if len(terms) > 0 {
+			score += scoreBufferedChunk(strings.ToLower(content), terms)
+			score += scoreBufferedChunk(strings.ToLower(name), terms)
+			score += scoreBufferedChunk(strings.ToLower(title), terms)
+		}
+		if strings.EqualFold(name, "Help.md") {
+			score += 1
+		}
+		docs = append(docs, helpDoc{
+			Name:    name,
+			Title:   title,
+			Content: content,
+			Score:   score,
+		})
+	}
+
+	if len(docs) == 0 {
+		if hasMainHelpDoc && mainHelpDocEmpty {
+			return "", "", fmt.Errorf("help documents are present but Help.md is empty and no additional help guides contain content")
+		}
+		return "", "", fmt.Errorf("no readable help markdown documents found in %s", sourceLabel)
+	}
+
+	sort.SliceStable(docs, func(i, j int) bool {
+		if docs[i].Score != docs[j].Score {
+			return docs[i].Score > docs[j].Score
+		}
+		if strings.EqualFold(docs[i].Name, "Help.md") != strings.EqualFold(docs[j].Name, "Help.md") {
+			return strings.EqualFold(docs[i].Name, "Help.md")
+		}
+		return docs[i].Name < docs[j].Name
+	})
+
+	var b strings.Builder
+	title := "Help Center"
+	if normalizedQuery != "" {
+		title = fmt.Sprintf("Help: %s", compactMemoryText(normalizedQuery, 80))
+		fmt.Fprintf(&b, "# App Help Search\n\nRequested topic: %s\n\n", normalizedQuery)
+	} else {
+		b.WriteString("# App Help Center\n\n")
+	}
+	if mainHelpDocEmpty {
+		b.WriteString("Note: `Help.md` is currently empty, so this help bundle was assembled from the topic guides in the same help directory.\n\n")
+	}
+	b.WriteString("Available help documents:\n")
+	for _, doc := range docs {
+		fmt.Fprintf(&b, "- %s (%s)\n", doc.Title, doc.Name)
+	}
+	for _, doc := range docs {
+		fmt.Fprintf(&b, "\n\n---\n\n# %s\nSource file: %s\n\n%s\n", doc.Title, doc.Name, doc.Content)
+	}
+
+	return title, strings.TrimSpace(b.String()), nil
+}
+
+func pathJoinSlash(parts ...string) string {
+	filtered := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.Trim(strings.TrimSpace(part), "/")
+		if trimmed != "" {
+			filtered = append(filtered, trimmed)
+		}
+	}
+	return strings.Join(filtered, "/")
 }
 
 func extractHelpDocTitle(name, content string) string {

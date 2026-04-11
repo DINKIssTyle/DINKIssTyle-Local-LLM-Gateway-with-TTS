@@ -319,6 +319,7 @@ func NewApp(assets embed.FS) *App {
 		assets:  assets,
 	}
 	globalApp = a
+	mcp.SetHelpDocsFS(assets, "frontend/public/help")
 	mcp.SetUserMemoryRetentionProvider(func(userID string) (mcp.MemoryRetentionConfig, bool) {
 		if strings.TrimSpace(userID) == "" {
 			return mcp.DefaultMemoryRetentionConfig(), false
