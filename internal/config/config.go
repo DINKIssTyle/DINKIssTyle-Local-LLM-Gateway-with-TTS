@@ -10,10 +10,10 @@ const (
 	AppVersion = "3.0.1"
 
 	// Window Constants
-	NormalWindowWidth  = 755
-	NormalWindowHeight = 800
+	NormalWindowWidth  = 780
+	NormalWindowHeight = 820
 	DebugWindowWidth   = 1200
-	DebugWindowHeight  = 800
-	WindowMinWidth     = 755
-	WindowMinHeight    = 600 // Height min from frontend sync logic
+	DebugWindowHeight  = 820
+	WindowMinWidth     = 780
+	WindowMinHeight    = 820 // Height min from frontend sync logic
 )
