@@ -4369,8 +4369,12 @@ function applyCurrentChatSessionEvent(entry) {
                 finalizeAssistantStatusCards(AppState.session.replay.currentAssistantId, 'done');
                 setAssistantActionBarReady(AppState.session.replay.currentAssistantId);
                 cleanupAssistantMessagesForTurn(AppState.session.replay.currentTurnId || entryTurnId, AppState.session.replay.currentAssistantId);
-                holdAutoScrollAtBottom(900);
-                scrollToBottom(true);
+                if (getStreamingScrollMode() !== 'label-top') {
+                    holdAutoScrollAtBottom(900);
+                    scrollToBottom(true);
+                } else {
+                    updateScrollToBottomButton();
+                }
             }
             hideProgressDock();
             cleanupTrailingEmptyAssistantMessages();
