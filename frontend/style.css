@@ -3463,12 +3463,11 @@ body.layout-mic-bottom {
 }
 
 @media (hover: none), (pointer: coarse) {
-  button:hover,
+  button:not(.scroll-to-bottom-btn):hover,
   .btn:hover,
   .icon-btn:hover,
   .settings-action-btn:hover,
   .model-picker-main:hover,
-  .scroll-to-bottom-btn:hover,
   .theme-swatch-btn:hover,
   .startup-action-btn:hover,
   .message-actions .icon-btn:hover,
