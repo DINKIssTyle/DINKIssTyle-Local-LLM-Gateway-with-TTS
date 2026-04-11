@@ -33,7 +33,11 @@
         let activeStreamingMessagePinnedToTop = false;
         let activeStreamingMessagePinPending = false;
         let pendingScrollToBottom = false;
-        const ENABLE_SCROLL_TRACE = false;
+        const isSafariBrowser = (() => {
+            const ua = String(global.navigator?.userAgent || '');
+            const vendor = String(global.navigator?.vendor || '');
+            return /Safari/i.test(ua) && /Apple/i.test(vendor) && !/CriOS|Chrome|Chromium|EdgiOS|Edg|FxiOS/i.test(ua);
+        })();
         let chatScrollMetrics = {
             scrollTop: 0,
             scrollHeight: 0,
@@ -42,23 +46,6 @@
             nearBottom: true,
             longScrollable: false
         };
-
-        function logScrollTrace(event, details = {}) {
-            if (!ENABLE_SCROLL_TRACE) return;
-            if (!global.console?.debug) return;
-            const metrics = chatMessages ? {
-                top: Math.round(chatMessages.scrollTop || 0),
-                height: Math.round(chatMessages.scrollHeight || 0),
-                client: Math.round(chatMessages.clientHeight || 0)
-            } : null;
-            global.console.debug('[ScrollTrace:UI]', event, {
-                activeStreamingMessageId,
-                shouldAutoScroll,
-                lockScrollToLatest,
-                metrics,
-                ...details
-            });
-        }
 
         function syncChatScrollMetrics() {
             const metrics = refreshChatScrollMetrics?.();
@@ -103,14 +90,11 @@
                 delete actionBar.dataset.readyScheduled;
                 attachStreamingAudioButtonToMessage?.(msgEl);
                 if (getStreamingScrollMode?.() === 'label-top' && chatMessages) {
-                    global.requestAnimationFrame(() => {
-                        const pinnedScrollTop = getMessagePinnedScrollTop(elementId);
-                        if (!Number.isFinite(pinnedScrollTop)) return;
-                        suppressNextScrollEvent = true;
-                        chatMessages.scrollTop = pinnedScrollTop;
-                        chatScrollMetrics = syncChatScrollMetrics();
-                        updateScrollToBottomButton();
-                    });
+                    const pinnedScrollTop = getMessagePinnedScrollTop(elementId);
+                    stabilizePinnedScrollTopValue(
+                        pinnedScrollTop,
+                        isSafariBrowser ? [0, 70, 160, 320] : [0]
+                    );
                 }
             };
 
@@ -191,24 +175,10 @@
             const delta = targetRect.bottom - desiredBottom;
 
             if (delta > 0) {
-                logScrollTrace('scrollActiveMessageIntoView', {
-                    targetId: activeStreamingMessageId,
-                    delta: Math.round(delta)
-                });
                 suppressNextScrollEvent = true;
                 chatMessages.scrollTop += delta;
                 updateScrollToBottomButton();
             }
-        }
-
-        function getActiveMessageTopDelta() {
-            if (!chatMessages || !activeStreamingMessageId) return null;
-            const activeMessage = global.document.getElementById(activeStreamingMessageId);
-            if (!activeMessage) return null;
-            const containerRect = chatMessages.getBoundingClientRect();
-            const targetRect = activeMessage.getBoundingClientRect();
-            const topPadding = 12;
-            return targetRect.top - containerRect.top - topPadding;
         }
 
         function getActiveMessagePinnedScrollTop() {
@@ -225,6 +195,28 @@
             if (!message) return null;
             const topPadding = 12;
             return Math.max(0, message.offsetTop - topPadding);
+        }
+
+        function stabilizePinnedScrollTopValue(pinnedScrollTop, delays = [0]) {
+            if (getStreamingScrollMode?.() !== 'label-top' || !chatMessages || !Number.isFinite(pinnedScrollTop)) return;
+
+            delays.forEach((delayMs, index) => {
+                const apply = () => {
+                    suppressNextScrollEvent = true;
+                    chatMessages.scrollTop = pinnedScrollTop;
+                    chatScrollMetrics = syncChatScrollMetrics();
+                    updateScrollToBottomButton();
+                };
+
+                if (index === 0 && delayMs === 0) {
+                    global.requestAnimationFrame(apply);
+                    return;
+                }
+
+                global.setTimeout(() => {
+                    global.requestAnimationFrame(apply);
+                }, Math.max(0, delayMs));
+            });
         }
 
         function hasActiveStreamingResponseContent() {
@@ -292,16 +284,8 @@
                     const pinnedScrollTop = getActiveMessagePinnedScrollTop();
                     if (pinnedScrollTop != null) {
                         nextScrollTop = Math.min(nextScrollTop, pinnedScrollTop);
-                        logScrollTrace('scheduleChatScrollToBottom:labelTopClamp', {
-                            pinnedScrollTop: Math.round(pinnedScrollTop),
-                            bottomScrollTop: Math.round(Math.max(0, metrics.scrollHeight - metrics.clientHeight))
-                        });
                     }
                 }
-                logScrollTrace('scheduleChatScrollToBottom', {
-                    targetScrollHeight: Math.round(metrics.scrollHeight),
-                    nextScrollTop: Math.round(nextScrollTop)
-                });
                 suppressNextScrollEvent = true;
                 chatMessages.scrollTop = nextScrollTop;
                 chatScrollMetrics = {
@@ -444,7 +428,6 @@
             activeStreamingMessageId = messageId;
             activeStreamingMessagePinnedToTop = false;
             activeStreamingMessagePinPending = false;
-            logScrollTrace('startStreamingMessageAutoScroll', { messageId });
             const activeMessage = global.document.getElementById(messageId);
             if (!activeMessage || !chatMessages) return;
 
@@ -464,10 +447,6 @@
         function stopStreamingMessageAutoScroll() {
             const shouldPreservePinnedPosition = getStreamingScrollMode?.() === 'label-top';
             const pinnedScrollTop = shouldPreservePinnedPosition ? getActiveMessagePinnedScrollTop() : null;
-            logScrollTrace('stopStreamingMessageAutoScroll', {
-                clearingMessageId: activeStreamingMessageId,
-                pinnedScrollTop: Number.isFinite(pinnedScrollTop) ? Math.round(pinnedScrollTop) : null
-            });
             activeStreamingMessagePinnedToTop = false;
             activeStreamingMessagePinPending = false;
             activeStreamingMessageId = null;
@@ -481,12 +460,10 @@
                 autoScrollResizeObserver = null;
             }
             if (shouldPreservePinnedPosition && Number.isFinite(pinnedScrollTop) && chatMessages) {
-                global.requestAnimationFrame(() => {
-                    suppressNextScrollEvent = true;
-                    chatMessages.scrollTop = pinnedScrollTop;
-                    chatScrollMetrics = syncChatScrollMetrics();
-                    updateScrollToBottomButton();
-                });
+                stabilizePinnedScrollTopValue(
+                    pinnedScrollTop,
+                    isSafariBrowser ? [0, 70, 160, 320] : [0]
+                );
             }
         }
 
