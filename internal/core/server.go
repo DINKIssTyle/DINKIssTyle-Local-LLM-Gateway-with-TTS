@@ -503,7 +503,7 @@ type savedTurnTitleOptions struct {
 
 func defaultContextStrategyForMode(mode string) string {
 	if strings.EqualFold(strings.TrimSpace(mode), "stateful") {
-		return "stateful"
+		return "retrieval"
 	}
 	return "history"
 }

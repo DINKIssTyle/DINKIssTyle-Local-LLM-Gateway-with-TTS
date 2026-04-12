@@ -34,25 +34,25 @@ import (
 
 // App struct for Wails binding
 type App struct {
-	ctx              context.Context
-	server           *http.Server // HTTPS Server
-	httpServer       *http.Server // HTTP Compatibility Server
-	serverMux        sync.Mutex
-	isRunning        bool
-	port             string
-	llmEndpoint      string
-	llmApiToken      string
-	llmMode          string // "standard" or "stateful"
-	enableTTS        bool
-	enableMCP        bool
-	enableDebugTrace bool
-	certDomain       string
-	authMgr          *AuthManager
-	assets           embed.FS
-	IsQuitting       bool
-	welcomeDismissed bool
+	ctx               context.Context
+	server            *http.Server // HTTPS Server
+	httpServer        *http.Server // HTTP Compatibility Server
+	serverMux         sync.Mutex
+	isRunning         bool
+	port              string
+	llmEndpoint       string
+	llmApiToken       string
+	llmMode           string // "standard" or "stateful"
+	enableTTS         bool
+	enableMCP         bool
+	enableDebugTrace  bool
+	certDomain        string
+	authMgr           *AuthManager
+	assets            embed.FS
+	IsQuitting        bool
+	welcomeDismissed  bool
 	alwaysShowWelcome bool
-	serverUILanguage string
+	serverUILanguage  string
 
 	// Server-side Model Cache
 	modelCache     []byte
@@ -350,13 +350,15 @@ func (a *App) loadConfig() {
 	// Set defaults
 	a.port = "8080"
 	a.llmEndpoint = "http://127.0.0.1:1234"
-	a.enableTTS = false
+	a.enableTTS = true
+	a.enableMCP = true
+	a.llmMode = "stateful"
 	a.certDomain = "localhost"
 	ttsConfig = ServerTTSConfig{
 		Engine:     "supertonic",
-		VoiceStyle: "M1.json",
+		VoiceStyle: "F1.json",
 		Speed:      1.0,
-		Threads:    4,
+		Threads:    1,
 		OSRate:     1.0,
 		OSPitch:    1.0,
 	}
@@ -382,8 +384,8 @@ func (a *App) loadConfig() {
 	if cfg.LLMEndpoint != "" {
 		a.llmEndpoint = cfg.LLMEndpoint
 	}
-	// Default to standard if empty
-	a.llmMode = "standard"
+	// Default to LM Studio if empty
+	a.llmMode = "stateful"
 	if cfg.LLMMode != "" {
 		a.llmMode = cfg.LLMMode
 	}

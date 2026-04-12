@@ -96,7 +96,7 @@
                         <select id="cfg-context-strategy" onchange="updateSettingsVisibility()"></select>
                     </div>
 
-                    <div class="setting-section">
+                    <div class="setting-section" id="container-embedding-section">
                         <div class="setting-section-title" data-i18n="section.embedding">임베딩 검색</div>
 
                         <div class="setting-item">
@@ -187,7 +187,7 @@
                             위에 reasoning control 바를 표시합니다.</p>
                     </div>
 
-                    <div class="setting-item">
+                    <div class="setting-item" id="container-force-show-reasoning-control">
                         <div class="setting-toggle" onclick="toggleSwitch('cfg-force-show-reasoning-control')">
                             <span data-i18n="setting.forceShowReasoningControl.label">Force show reasoning
                                 control</span>
@@ -302,14 +302,6 @@
                 <!-- TTS Settings Section -->
                 <div class="setting-section">
                     <div class="setting-section-title" data-i18n="section.tts">TTS Engine</div>
-
-                    <div class="setting-item">
-                        <div class="setting-toggle" onclick="toggleSwitch('cfg-enable-tts')">
-                            <span data-i18n="setting.enableTTS.label">Enable TTS</span>
-                            <input type="checkbox" id="cfg-enable-tts">
-                        </div>
-                        <p class="setting-desc" data-i18n="setting.enableTTS.desc">응답을 음성으로 재생합니다.</p>
-                    </div>
 
                     <div class="setting-item">
                         <div class="setting-toggle" onclick="toggleSwitch('cfg-auto-tts')">
@@ -457,6 +449,10 @@
                         <span data-i18n="action.save">저장</span>
                     </button>
                 </div>
+                <button class="btn btn-logout" onclick="logoutCurrentDevice()" style="margin-top: 8px;">
+                    <span class="material-icons-round">logout</span>
+                    <span data-i18n="action.logoutCurrentDevice">현재 기기 로그아웃</span>
+                </button>
                 <button class="btn btn-logout" onclick="logoutAllSessions()" style="margin-top: 8px;">
                     <span class="material-icons-round">logout</span>
                     <span data-i18n="action.logoutAllSessions">모든 위치에서 로그아웃</span>

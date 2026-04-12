@@ -36,14 +36,14 @@ type ManagedModelStatus struct {
 var embeddingConfig = EmbeddingModelConfig{
 	Provider: "local",
 	ModelID:  "multilingual-e5-small",
-	Enabled:  false,
+	Enabled:  true,
 }
 
 func defaultEmbeddingConfig() EmbeddingModelConfig {
 	return EmbeddingModelConfig{
 		Provider: "local",
 		ModelID:  "multilingual-e5-small",
-		Enabled:  false,
+		Enabled:  true,
 	}
 }
 

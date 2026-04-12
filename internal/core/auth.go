@@ -365,6 +365,14 @@ func (am *AuthManager) AddUser(id, password, role string) error {
 
 	// Default user settings persisted on the server.
 	enableMCP := true
+	enableMemory := true
+	defaultLLMMode := "stateful"
+	defaultContextStrategy := "retrieval"
+	defaultEmbeddingConfig := normalizeEmbeddingConfig(EmbeddingModelConfig{
+		Provider: "local",
+		ModelID:  "multilingual-e5-small",
+		Enabled:  true,
+	})
 
 	am.users[id] = &User{
 		ID:           id,
@@ -372,8 +380,11 @@ func (am *AuthManager) AddUser(id, password, role string) error {
 		Role:         role,
 		CreatedAt:    time.Now().Format(time.RFC3339),
 		Settings: UserSettings{
-			EnableMCP:    &enableMCP,
-			EnableMemory: &enableMCP, // Default to same as MCP for new users, or false? Let's default true if new user.
+			LLMMode:         &defaultLLMMode,
+			ContextStrategy: &defaultContextStrategy,
+			EnableMCP:       &enableMCP,
+			EnableMemory:    &enableMemory,
+			EmbeddingConfig: &defaultEmbeddingConfig,
 			DisallowedCommands: []string{
 				"rm", "rmdir", "unlink", "dd", "mkfs", "mkfs.ext4", "mkfs.xfs", "mkfs.apfs",
 				"fsck", "fsck.ext4", "fsck.xfs", "fsck_apfs", "mount", "umount", "chmod", "chown", "chgrp",

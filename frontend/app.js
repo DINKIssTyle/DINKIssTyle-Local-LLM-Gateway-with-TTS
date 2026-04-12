@@ -22,21 +22,20 @@ let config = {
     temperature: null,     // null => Auto (omit from payload)
     historyCount: 10,
     enableTTS: true,       // Default: True
-    enableTTS: true,       // Default: True
     enableMCP: true,       // Default: True
-    enableMemory: false,   // Default: False
+    enableMemory: true,    // Default: True
     ttsLang: 'ko',
     chunkSize: 100,        // Default: 100 (Smart Chunking)
     systemPrompt: 'You are a helpful AI assistant.',
     ttsEngine: 'supertonic', // 'supertonic' or 'os'
     ttsVoice: 'F1',        // Default: F1
     ttsSpeed: 1.1,         // Default: 1.1
-    autoTTS: true,         // Default: True (Auto-play)
+    autoTTS: false,        // Default: False (Auto-play)
     voiceInputAutoTTS: true, // Default: True (Override auto-play for STT messages)
     ttsFormat: 'wav',      // Default: wav
     ttsSteps: 5,           // Default: 5
-    ttsThreads: 2,         // Default: 2
-    enableEmbeddings: false,
+    ttsThreads: 1,         // Default: 1
+    enableEmbeddings: true,
     embeddingProvider: 'local',
     embeddingModelId: 'multilingual-e5-small',
     osTtsVoiceURI: '',
@@ -46,20 +45,20 @@ let config = {
     osTtsPitch: 1.0,
     language: 'ko', // UI language
     apiToken: '',
-    llmMode: 'standard', // 'standard' or 'stateful'
-    contextStrategy: 'history', // LM Studio: retrieval/stateful/none, OpenAI: retrieval/history/none
+    llmMode: 'stateful', // 'standard' or 'stateful'
+    contextStrategy: 'retrieval', // LM Studio: retrieval/stateful/none, OpenAI: retrieval/history/none
     reasoning: '',
     showReasoningControl: true,
     forceShowReasoningControl: false,
     statefulTurnLimit: DEFAULT_STATEFUL_TURN_LIMIT,
     statefulCharBudget: DEFAULT_STATEFUL_CHAR_BUDGET,
     statefulTokenBudget: DEFAULT_STATEFUL_TOKEN_BUDGET,
-    micLayout: 'none', // 'none', 'left', 'right', 'bottom', 'inline'
+    micLayout: 'inline', // 'none', 'left', 'right', 'bottom', 'inline'
     chatFontSize: 16,
     userBubbleTheme: 'ocean', // Options: 'ocean', 'lime', 'sunset', 'amber', 'magenta'
-    streamingScrollMode: 'auto', // Options: 'auto', 'label-top'
+    streamingScrollMode: 'label-top', // Options: 'auto', 'label-top'
     markdownRenderMode: 'fast', // Options: 'fast', 'balanced', 'final'
-    autoDismissMobileKeyboard: false,
+    autoDismissMobileKeyboard: true,
     hapticsEnabled: true
 };
 
@@ -311,7 +310,7 @@ const {
 const { applyTranslations: applyI18nTranslations, t: translateKey, translations } = appI18n;
 
 function getDefaultContextStrategyForMode(mode) {
-    return mode === 'stateful' ? 'stateful' : 'history';
+    return mode === 'stateful' ? 'retrieval' : 'history';
 }
 
 function normalizeContextStrategyForMode(mode, strategy) {
@@ -2766,6 +2765,14 @@ async function logout() {
     }
 }
 
+async function logoutCurrentDevice() {
+    const confirmation = t('action.logoutCurrentDevice') === '현재 기기 로그아웃'
+        ? '현재 기기에서만 로그아웃할까요? 다른 기기의 로그인 상태는 유지됩니다.'
+        : 'Log out only on this device? Other devices will stay signed in.';
+    if (!confirm(confirmation)) return;
+    return logout();
+}
+
 async function logoutAllSessions() {
     const confirmation = t('action.logoutAllSessions') === '모든 위치에서 로그아웃'
         ? '이 계정의 모든 로그인 유지 세션을 해제하고, 모든 위치에서 로그아웃할까요?'
@@ -2882,6 +2889,7 @@ function loadConfig() {
     config.forceShowReasoningControl = config.forceShowReasoningControl === true;
     config.autoDismissMobileKeyboard = config.autoDismissMobileKeyboard === true;
     config.hapticsEnabled = config.hapticsEnabled !== false;
+    config.ttsLang = String(config.ttsLang || config.language || 'ko').trim() || 'ko';
     config.osTtsRate = Number(config.osTtsRate) > 0 ? Number(config.osTtsRate) : 1.0;
     config.osTtsPitch = Number(config.osTtsPitch) >= 0 ? Number(config.osTtsPitch) : 1.0;
     config.voiceInputAutoTTS = config.voiceInputAutoTTS !== false;
@@ -2907,7 +2915,6 @@ function loadConfig() {
     if (mcpEl) mcpEl.checked = config.enableMCP || false;
     updateSettingsVisibility(); // Update UI visibility based on mode
     renderReasoningControl();
-    document.getElementById('cfg-enable-tts').checked = config.enableTTS;
 
     // Load Memory Setting
     const memEl = document.getElementById('setting-enable-memory');
@@ -2928,15 +2935,15 @@ function loadConfig() {
     document.getElementById('cfg-tts-lang').value = config.ttsLang;
     document.getElementById('cfg-enable-embeddings').checked = config.enableEmbeddings || false;
     document.getElementById('cfg-embedding-model').value = config.embeddingModelId || 'multilingual-e5-small';
-    document.getElementById('cfg-chunk-size').value = config.chunkSize || 300;
+    document.getElementById('cfg-chunk-size').value = config.chunkSize || 100;
     document.getElementById('cfg-system-prompt').value = config.systemPrompt || 'You are a helpful AI assistant.';
     if (config.ttsVoice) document.getElementById('cfg-tts-voice').value = String(config.ttsVoice).replace(/\.json$/i, '');
     document.getElementById('cfg-tts-speed').value = config.ttsSpeed || 1.0;
     document.getElementById('speed-val').textContent = config.ttsSpeed || 1.0;
     document.getElementById('cfg-tts-steps').value = config.ttsSteps || 5;
     document.getElementById('steps-val').textContent = config.ttsSteps || 5;
-    document.getElementById('cfg-tts-threads').value = config.ttsThreads || 4;
-    document.getElementById('threads-val').textContent = config.ttsThreads || 4;
+    document.getElementById('cfg-tts-threads').value = config.ttsThreads || 1;
+    document.getElementById('threads-val').textContent = config.ttsThreads || 1;
     document.getElementById('cfg-os-tts-rate').value = config.osTtsRate || 1.0;
     document.getElementById('os-rate-val').textContent = config.osTtsRate || 1.0;
     document.getElementById('cfg-os-tts-pitch').value = config.osTtsPitch || 1.0;
@@ -2957,7 +2964,7 @@ function loadConfig() {
 
     config.userBubbleTheme = USER_BUBBLE_THEMES[config.userBubbleTheme] ? config.userBubbleTheme : 'ocean';
     config.streamingScrollMode = ['auto', 'label-top'].includes(config.streamingScrollMode) ? config.streamingScrollMode : 'auto';
-    config.markdownRenderMode = ['fast', 'balanced', 'final'].includes(config.markdownRenderMode) ? config.markdownRenderMode : 'balanced';
+    config.markdownRenderMode = ['fast', 'balanced', 'final'].includes(config.markdownRenderMode) ? config.markdownRenderMode : 'fast';
     applyUserBubbleTheme();
     renderUserBubbleThemeOptions();
     const streamingScrollModeEl = document.getElementById('cfg-streaming-scroll-mode');
@@ -3003,7 +3010,10 @@ function updateSettingsVisibility() {
     const mcpContainer = document.getElementById('container-enable-mcp');
     const memContainer = document.getElementById('container-enable-memory');
     const statefulBudgetContainer = document.getElementById('container-stateful-budget');
+    const embeddingSection = document.getElementById('container-embedding-section');
+    const forceReasoningContainer = document.getElementById('container-force-show-reasoning-control');
     const micLayoutValue = document.getElementById('cfg-mic-layout')?.value || config.micLayout || 'none';
+    const showReasoningControl = document.getElementById('cfg-show-reasoning-control')?.checked ?? config.showReasoningControl;
     config.llmMode = mode;
     renderContextStrategyOptions();
     config.contextStrategy = normalizeContextStrategyForMode(mode, document.getElementById('cfg-context-strategy')?.value || config.contextStrategy);
@@ -3017,6 +3027,7 @@ function updateSettingsVisibility() {
     const showHistory = usesHistoryConversationContext();
     const showMCP = mode === 'stateful';
     const showStatefulBudget = usesStatefulConversationContext();
+    const showEmbeddingSettings = usesRetrievalConversationContext();
     const voiceInputAutoTTSContainer = document.getElementById('container-voice-input-auto-tts');
     const mcpEl = document.getElementById('cfg-enable-mcp');
     if (mcpEl) {
@@ -3028,6 +3039,8 @@ function updateSettingsVisibility() {
     if (contextStrategyContainer) contextStrategyContainer.style.display = 'block';
     if (mcpContainer) mcpContainer.style.display = showMCP ? 'block' : 'none';
     if (statefulBudgetContainer) statefulBudgetContainer.style.display = showStatefulBudget ? 'block' : 'none';
+    if (embeddingSection) embeddingSection.style.display = showEmbeddingSettings ? 'block' : 'none';
+    if (forceReasoningContainer) forceReasoningContainer.style.display = showReasoningControl ? 'block' : 'none';
     if (voiceInputAutoTTSContainer) voiceInputAutoTTSContainer.style.display = micLayoutValue !== 'none' ? 'block' : 'none';
 
     if (memContainer) memContainer.style.display = usesRetrievalConversationContext() ? 'block' : 'none';
@@ -3136,6 +3149,7 @@ function buildServerConfigSignature(serverCfg) {
             context_strategy: serverCfg?.context_strategy || '',
             secondary_model: serverCfg?.secondary_model || '',
             enable_mcp: serverCfg?.enable_mcp === true,
+            enable_tts: serverCfg?.enable_tts === true,
             enable_memory: serverCfg?.enable_memory === true,
             stateful_turn_limit: Number(serverCfg?.stateful_turn_limit || 0),
             stateful_char_budget: Number(serverCfg?.stateful_char_budget || 0),
@@ -3279,7 +3293,6 @@ function saveConfig(closeModal = true) {
     config.temperature = normalizeTemperatureValue(config.temperature, null);
     delete config.maxTokens;
     config.historyCount = parseInt(document.getElementById('cfg-history').value);
-    config.enableTTS = document.getElementById('cfg-enable-tts').checked;
 
     // Save MCP setting
     const mcpEl = document.getElementById('cfg-enable-mcp');
@@ -3319,12 +3332,12 @@ function saveConfig(closeModal = true) {
     config.micLayout = document.getElementById('cfg-mic-layout').value;
     config.userBubbleTheme = USER_BUBBLE_THEMES[config.userBubbleTheme] ? config.userBubbleTheme : 'ocean';
     config.streamingScrollMode = document.getElementById('cfg-streaming-scroll-mode')?.value === 'label-top' ? 'label-top' : 'auto';
-    config.markdownRenderMode = document.getElementById('cfg-markdown-render-mode')?.value || 'balanced';
+    config.markdownRenderMode = document.getElementById('cfg-markdown-render-mode')?.value || 'fast';
     config.autoDismissMobileKeyboard = document.getElementById('cfg-auto-dismiss-mobile-keyboard')?.checked === true;
     config.hapticsEnabled = document.getElementById('cfg-enable-haptics')?.checked !== false;
     config.chatFontSize = Math.max(12, Math.min(24, parseInt(config.chatFontSize, 10) || 16));
 
-    config.chunkSize = parseInt(document.getElementById('cfg-chunk-size').value) || 300;
+    config.chunkSize = parseInt(document.getElementById('cfg-chunk-size').value) || 100;
     config.systemPrompt = document.getElementById('cfg-system-prompt').value.trim() || 'You are a helpful AI assistant.';
     config.ttsVoice = document.getElementById('cfg-tts-voice').value;
     config.ttsSpeed = parseFloat(document.getElementById('cfg-tts-speed').value);
@@ -3367,7 +3380,6 @@ function saveConfig(closeModal = true) {
         window.go.core.App.SetLLMEndpoint(config.apiEndpoint).catch(console.error);
         window.go.core.App.SetLLMApiToken(config.apiToken).catch(console.error);
         window.go.core.App.SetLLMMode(config.llmMode).catch(console.error);
-        window.go.core.App.SetEnableTTS(config.enableTTS);
         window.go.core.App.SetEnableMCP(config.enableMCP);
         window.go.core.App.SetServerTTSConfig({
             engine: config.ttsEngine,
@@ -4873,6 +4885,9 @@ async function syncServerConfig(options = {}) {
                 config.enableMCP = serverCfg.llm_mode === 'stateful' ? serverCfg.enable_mcp : false;
                 const mcpEl = document.getElementById('cfg-enable-mcp');
                 if (mcpEl) mcpEl.checked = config.enableMCP;
+            }
+            if (serverCfg.enable_tts !== undefined) {
+                config.enableTTS = serverCfg.enable_tts === true;
             }
             if (serverCfg.enable_memory !== undefined) {
                 config.enableMemory = serverCfg.enable_memory;
