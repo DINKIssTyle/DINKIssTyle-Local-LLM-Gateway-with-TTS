@@ -51,6 +51,8 @@ type App struct {
 	assets           embed.FS
 	IsQuitting       bool
 	welcomeDismissed bool
+	alwaysShowWelcome bool
+	serverUILanguage string
 
 	// Server-side Model Cache
 	modelCache     []byte
@@ -76,6 +78,8 @@ type AppConfig struct {
 	CertDomain        string               `json:"certDomain"`
 	DebugTraceEnabled bool                 `json:"debugTraceEnabled"`
 	WelcomeDismissed  bool                 `json:"welcomeDismissed"`
+	AlwaysShowWelcome bool                 `json:"alwaysShowWelcome"`
+	ServerUILanguage  string               `json:"serverUILanguage"`
 }
 
 type WelcomeState struct {
@@ -387,6 +391,11 @@ func (a *App) loadConfig() {
 	a.enableTTS = cfg.EnableTTS
 	a.enableDebugTrace = cfg.DebugTraceEnabled
 	a.welcomeDismissed = cfg.WelcomeDismissed
+	a.alwaysShowWelcome = cfg.AlwaysShowWelcome
+	a.serverUILanguage = "ko"
+	if strings.EqualFold(cfg.ServerUILanguage, "en") {
+		a.serverUILanguage = "en"
+	}
 	setDebugTraceCollectorEnabled(a.enableDebugTrace)
 	if cfg.CertDomain != "" {
 		a.certDomain = cfg.CertDomain
@@ -441,6 +450,8 @@ func (a *App) saveConfig() {
 	cfg.DebugTraceEnabled = a.enableDebugTrace
 	cfg.CertDomain = a.certDomain
 	cfg.WelcomeDismissed = a.welcomeDismissed
+	cfg.AlwaysShowWelcome = a.alwaysShowWelcome
+	cfg.ServerUILanguage = a.GetServerUILanguage()
 	cfg.TTS = ttsConfig
 	cfg.Embedding = currentEmbeddingModelConfig()
 
@@ -1724,9 +1735,10 @@ func (a *App) DownloadAssets() error {
 func (a *App) GetWelcomeState() WelcomeState {
 	requiresMigration, migrationMessage := detectLegacyStorageNeedsMigration(GetAppDataDir())
 	requiresTTSDownload := !a.CheckAssets()
+	showModal := a.alwaysShowWelcome || !a.welcomeDismissed || requiresMigration
 
 	state := WelcomeState{
-		ShowModal:           !a.welcomeDismissed || requiresMigration,
+		ShowModal:           showModal,
 		RequiresMigration:   requiresMigration,
 		MigrationMessage:    migrationMessage,
 		RequiresTTSDownload: requiresTTSDownload,
@@ -1740,7 +1752,7 @@ func (a *App) GetWelcomeState() WelcomeState {
 		state.PrimaryMessage = "Welcome back."
 		state.SecondaryMessage = "We found an older storage layout that should be reorganized once."
 	}
-	if !requiresMigration && !requiresTTSDownload && a.welcomeDismissed {
+	if !requiresMigration && !requiresTTSDownload && a.welcomeDismissed && !a.alwaysShowWelcome {
 		state.ShowModal = false
 	}
 	return state
@@ -1749,6 +1761,31 @@ func (a *App) GetWelcomeState() WelcomeState {
 func (a *App) DismissWelcome() {
 	a.welcomeDismissed = true
 	a.saveConfig()
+}
+
+func (a *App) SetAlwaysShowWelcome(enabled bool) {
+	a.alwaysShowWelcome = enabled
+	a.saveConfig()
+}
+
+func (a *App) GetAlwaysShowWelcome() bool {
+	return a.alwaysShowWelcome
+}
+
+func (a *App) SetServerUILanguage(language string) {
+	if strings.EqualFold(strings.TrimSpace(language), "en") {
+		a.serverUILanguage = "en"
+	} else {
+		a.serverUILanguage = "ko"
+	}
+	a.saveConfig()
+}
+
+func (a *App) GetServerUILanguage() string {
+	if strings.EqualFold(strings.TrimSpace(a.serverUILanguage), "en") {
+		return "en"
+	}
+	return "ko"
 }
 
 // GetLicenseText returns the content of LICENSE files
