@@ -147,13 +147,39 @@
             font-weight: 600;
         }
 
+        .header-spacer {
+            margin-left: auto;
+        }
+
+        .header-language-select {
+            appearance: none;
+            -webkit-appearance: none;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--text-color);
+            font-size: 12px;
+            font-weight: 600;
+            padding: 7px 28px 7px 10px;
+            min-width: 110px;
+            background-image: linear-gradient(45deg, transparent 50%, var(--text-secondary) 50%),
+                linear-gradient(135deg, var(--text-secondary) 50%, transparent 50%);
+            background-position: calc(100% - 16px) calc(50% - 1px), calc(100% - 11px) calc(50% - 1px);
+            background-size: 5px 5px, 5px 5px;
+            background-repeat: no-repeat;
+        }
+
+        .header-language-select:focus {
+            outline: none;
+            border-color: var(--accent-color);
+        }
+
         .llm-activity-indicator {
             width: 18px;
             height: 18px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            margin-left: auto;
             opacity: 0.5;
             transition: opacity 0.18s ease;
         }
@@ -1345,6 +1371,11 @@
                 <img src="public/logo.png" alt="DKST LLM Chat Server Icon" class="header-logo">
                 <h1>DKST LLM Chat Server</h1>
             </div>
+            <div class="header-spacer"></div>
+            <select id="server-language-select" class="header-language-select" onchange="setServerLanguage(this.value)" aria-label="Select language">
+                <option value="ko">한국어</option>
+                <option value="en">English</option>
+            </select>
             <div id="llm-activity-indicator" class="llm-activity-indicator" aria-hidden="true" title="LLM idle">
                 <span class="llm-activity-indicator__dot"></span>
             </div>
@@ -1354,11 +1385,11 @@
         <div id="restart-banner" class="restart-banner">
             <div style="display: flex; align-items: center; gap: 10px;">
                 <span class="material-icons-round" style="color: #eab308;">warning</span>
-                <span>Server configuration has changed. Restart the server to apply changes.</span>
+                <span data-i18n="banner.restart.message">Server configuration has changed. Restart the server to apply changes.</span>
             </div>
             <div class="restart-banner-actions">
-                <button class="btn btn-save-only" onclick="dismissRestartBanner()">Save Only</button>
-                <button class="btn btn-restart-now" onclick="restartServer()">Restart Now</button>
+                <button class="btn btn-save-only" onclick="dismissRestartBanner()" data-i18n="action.saveOnly">Save Only</button>
+                <button class="btn btn-restart-now" onclick="restartServer()" data-i18n="action.restartNow">Restart Now</button>
             </div>
         </div>
 
@@ -1368,27 +1399,27 @@
                 <!-- Server Status -->
                 <div class="card">
                     <div class="card-header">
-                        <div class="card-title">Server Status</div>
-                        <button class="icon-btn help-icon-btn" type="button" onclick="openMcpHelpModal()" title="MCP Help" aria-label="Open MCP help">
+                        <div class="card-title" data-i18n="card.serverStatus">Server Status</div>
+                        <button class="icon-btn help-icon-btn" type="button" onclick="openMcpHelpModal()" data-i18n-title="help.mcp.title" data-i18n-aria-label="help.mcp.ariaLabel">
                             <span class="material-icons-round">help</span>
                         </button>
                     </div>
                     <div class="status-row">
                         <div class="status-indicator">
                             <span class="status-dot" id="status-dot"></span>
-                            <span id="status-text">Stopped</span>
+                            <span id="status-text" data-i18n="status.stopped">Stopped</span>
                         </div>
                         <span id="port-display" style="color: var(--text-secondary); font-size: 13px;"></span>
                     </div>
                     <div class="form-row server-port-row">
                         <div class="form-group">
-                            <label>Web Port (HTTPS)</label>
+                            <label data-i18n="label.webPort">Web Port (HTTPS)</label>
                             <input type="text" id="port-input" value="7860" placeholder="7860" onkeyup="updateMcpPort()"
                                 onchange="savePort()">
                         </div>
                         <div class="form-group mcp-port-group">
                             <div class="mcp-port-label-row">
-                                <label for="mcp-port-input">MCP Port (HTTP)</label>
+                                <label for="mcp-port-input" data-i18n="label.mcpPort">MCP Port (HTTP)</label>
                             </div>
                             <input type="text" id="mcp-port-input" value="7861" readonly
                                 style="background: rgba(255,255,255,0.05); color: var(--text-secondary); cursor: not-allowed;">
@@ -1396,52 +1427,52 @@
                     </div>
                     <button class="btn btn-primary btn-block" id="toggle-btn" onclick="toggleServer()">
                         <span class="material-icons-round">play_arrow</span>
-                        Start Server
+                        <span data-i18n="action.startServer">Start Server</span>
                     </button>
                 </div>
 
                 <!-- LLM Settings -->
                 <div class="card">
                     <div class="card-header">
-                        <div class="card-title">LLM Configuration</div>
+                        <div class="card-title" data-i18n="card.llmConfiguration">LLM Configuration</div>
                         <button class="icon-btn help-icon-btn" type="button"
-                            onclick="openDocHelpModal('LLM Endpoint Help', 'public/help/LMStdio_Endpoint.md')"
-                            title="LLM Endpoint Help" aria-label="Open LLM Endpoint help">
+                            onclick="openDocHelpModalByKey('help.llmEndpoint.title', 'public/help/LMStdio_Endpoint.md')"
+                            data-i18n-title="help.llmEndpoint.title" data-i18n-aria-label="help.llmEndpoint.ariaLabel">
                             <span class="material-icons-round">help</span>
                         </button>
                     </div>
                     <div class="form-group">
-                        <label>LLM Endpoint</label>
+                        <label data-i18n="label.llmEndpoint">LLM Endpoint</label>
                         <input type="text" id="llm-endpoint" value="http://127.0.0.1:1234"
                             placeholder="http://127.0.0.1:1234" onchange="saveLLMEndpoint()">
                     </div>
                     <div class="form-group">
-                        <label>API Key <span style="color: var(--text-secondary); font-weight: normal;">(*Required if
+                        <label data-i18n-html="label.apiKeyHelp">API Key <span style="color: var(--text-secondary); font-weight: normal;">(*Required if
                                 “Require Auth” is enabled.)</span></label>
-                        <input type="password" id="llm-api-key" placeholder="lm-studio or custom key"
+                        <input type="password" id="llm-api-key" placeholder="lm-studio or custom key" data-i18n-placeholder="placeholder.apiKey"
                             onchange="saveLLMApiKey()">
                     </div>
                 </div>
 
                 <!-- Startup Settings -->
                 <div class="card">
-                    <div class="card-title">Startup Settings</div>
+                    <div class="card-title" data-i18n="card.startupSettings">Startup Settings</div>
                     <div class="form-group">
                         <div class="setting-row"
                             style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding: 4px 0;">
-                            <label style="margin:0; font-weight: 500;">Start on Boot</label>
+                            <label style="margin:0; font-weight: 500;" data-i18n="label.startOnBoot">Start on Boot</label>
                             <input type="checkbox" id="start-on-boot" style="width: auto;"
                                 onchange="toggleStartOnBoot()">
                         </div>
                         <div class="setting-row"
                             style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding: 4px 0;">
-                            <label style="margin:0; font-weight: 500;">Minimize to Tray</label>
+                            <label style="margin:0; font-weight: 500;" data-i18n="label.minimizeToTray">Minimize to Tray</label>
                             <input type="checkbox" id="minimize-to-tray" style="width: auto;"
                                 onchange="toggleMinimizeToTray()" checked>
                         </div>
                         <div class="setting-row"
                             style="display: flex; align-items: center; justify-content: space-between; padding: 4px 0;">
-                            <label style="margin:0; font-weight: 500;">Auto Start Server</label>
+                            <label style="margin:0; font-weight: 500;" data-i18n="label.autoStartServer">Auto Start Server</label>
                             <input type="checkbox" id="auto-start-server" style="width: auto;"
                                 onchange="toggleAutoStartServer()">
                         </div>
@@ -1454,11 +1485,11 @@
             <div class="col right-col">
                 <!-- Additional Assets -->
                 <div class="card">
-                    <div class="card-title">Additional Assets</div>
+                    <div class="card-title" data-i18n="card.additionalAssets">Additional Assets</div>
                     <div class="form-group">
                         <div class="setting-row"
                             style="display: flex; align-items: center; justify-content: space-between; padding: 4px 0;">
-                            <label style="margin:0; font-weight: 500;">Enable TTS &amp; Vector DB</label>
+                            <label style="margin:0; font-weight: 500;" data-i18n="label.enableAssets">Enable TTS &amp; Vector DB</label>
                             <input type="checkbox" id="enable-tts" style="width: auto;" onchange="toggleEnableTTS()">
                         </div>
                     </div>
@@ -1468,10 +1499,10 @@
                         style="margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--border-color);">
                         <div
                             style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                            <label style="margin:0;">Asset Status</label>
+                            <label style="margin:0;" data-i18n="label.assetStatus">Asset Status</label>
                             <div style="display: flex; align-items: center; gap: 6px;">
                                 <span class="status-dot" id="asset-status-dot"></span>
-                                <span id="asset-status-text" style="font-size: 12px;">Checking...</span>
+                                <span id="asset-status-text" style="font-size: 12px;" data-i18n="status.checking">Checking...</span>
                             </div>
                         </div>
                     </div>
@@ -1479,7 +1510,7 @@
                     <div class="inline-actions">
                         <button class="btn btn-secondary btn-block" onclick="openModelManagerModal()">
                             <span class="material-icons-round">inventory_2</span>
-                            Model Manager
+                            <span data-i18n="modal.modelManager.title">Model Manager</span>
                         </button>
                     </div>
                 </div>
@@ -1487,29 +1518,29 @@
                 <!-- Advanced Settings -->
                 <div class="card">
                     <div class="card-header">
-                        <div class="card-title">Advanced Settings</div>
+                        <div class="card-title" data-i18n="card.advancedSettings">Advanced Settings</div>
                         <button class="icon-btn help-icon-btn" type="button"
-                            onclick="openDocHelpModal('Certificate Help', 'public/help/Certificates.md')"
-                            title="Certificate Help" aria-label="Open Certificate help">
+                            onclick="openDocHelpModalByKey('help.certificate.title', 'public/help/Certificates.md')"
+                            data-i18n-title="help.certificate.title" data-i18n-aria-label="help.certificate.ariaLabel">
                             <span class="material-icons-round">help</span>
                         </button>
                     </div>
                     <div class="form-group">
-                        <label>Certificate Domain / Address</label>
+                        <label data-i18n="label.certificateDomain">Certificate Domain / Address</label>
                         <input type="text" id="cert-domain" value="localhost" placeholder="localhost or domain.com"
                             autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false"
                             inputmode="url" oninput="saveCertDomain()" />
-                        <div style="margin-top: 8px; font-size: 12px; color: var(--text-secondary);">
+                        <div style="margin-top: 8px; font-size: 12px; color: var(--text-secondary);" data-i18n-html="help.certificates.stored">
                             Certificates are stored in the <code>cert</code> folder.
                         </div>
                         <div class="inline-actions" style="margin-top: 10px;">
                             <button class="btn btn-secondary btn-mini" onclick="generateCertificate()">
                                 <span class="material-icons-round">security</span>
-                                Generate Certificate
+                                <span data-i18n="action.generateCertificate">Generate Certificate</span>
                             </button>
                             <button class="btn btn-secondary btn-mini" onclick="openCertFolder()">
                                 <span class="material-icons-round">folder_open</span>
-                                Open Certificate Local
+                                <span data-i18n="action.openCertificateFolder">Open Certificate Local</span>
                             </button>
                         </div>
                     </div>
@@ -1517,7 +1548,7 @@
                         style="margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--border-color);">
                         <div class="setting-row"
                             style="display: flex; align-items: center; justify-content: space-between; padding: 4px 0;">
-                            <label style="margin:0; font-weight: 500;">Enable Debug Trace</label>
+                            <label style="margin:0; font-weight: 500;" data-i18n="label.enableDebugTrace">Enable Debug Trace</label>
                             <input type="checkbox" id="enable-debug-trace" style="width: auto;"
                                 onchange="toggleDebugTrace()">
                         </div>
@@ -1526,51 +1557,55 @@
 
                 <!-- Account Management -->
                 <div class="card user-card">
-                    <div class="card-title">Account Management</div>
+                    <div class="card-title" data-i18n="card.accountManagement">Account Management</div>
                     <button class="btn btn-block"
                         style="background: var(--border-color); color: var(--text-color); margin-top: 12px; flex-shrink: 0;"
                         onclick="openAccountManagementModal()">
                         <span class="material-icons-round">manage_accounts</span>
-                        Manage Accounts
+                        <span data-i18n="action.manageAccounts">Manage Accounts</span>
                     </button>
                     <button class="btn btn-block"
                         style="background: rgba(248,81,73,0.18); color: #ffb4ad; margin-top: 10px; flex-shrink: 0;"
                         onclick="confirmLogoutAllSessions()">
                         <span class="material-icons-round">logout</span>
-                        Logout All Sessions
+                        <span data-i18n="action.logoutAllSessions">Logout All Sessions</span>
                     </button>
                 </div>
             </div>
 
             <div class="col debug-col">
                 <div class="card debug-card">
-                    <div class="card-title">Debug Trace</div>
+                    <div class="card-title" data-i18n="card.debugTrace">Debug Trace</div>
                     <div class="trace-toolbar">
                         <div class="trace-meta">
                             <span id="trace-live-dot" class="trace-live-dot"></span>
-                            <span id="trace-status-text">Disabled</span>
+                            <span id="trace-status-text" data-i18n="status.disabled">Disabled</span>
                         </div>
                         <div class="trace-meta">
                             <span id="trace-count">0 entries</span>
                         </div>
                     </div>
                     <div id="debug-trace-list" class="trace-list">
-                        <div class="trace-empty">Debug trace is disabled. Turn it on in Advanced Settings to inspect the
+                        <div class="trace-empty" data-i18n="debug.empty">Debug trace is disabled. Turn it on in Advanced Settings to inspect the
                             request pipeline.</div>
                     </div>
                     <div class="inline-actions" style="margin-top: 12px; flex-shrink: 0;">
                         <button class="btn btn-secondary btn-mini" onclick="refreshDebugTrace()">
                             <span class="material-icons-round">refresh</span>
-                            Refresh
+                            <span data-i18n="action.refresh">Refresh</span>
                         </button>
                         <button class="btn btn-secondary btn-mini" onclick="copyDebugTrace()">
                             <span class="material-icons-round">content_copy</span>
-                            Copy Trace
+                            <span data-i18n="action.copyTrace">Copy Trace</span>
                         </button>
                         <button class="btn btn-secondary btn-mini" onclick="clearDebugTrace()">
                             <span class="material-icons-round">delete_sweep</span>
-                            Clear Trace
+                            <span data-i18n="action.clearTrace">Clear Trace</span>
                         </button>
+                        <label style="margin-left: auto; display: inline-flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 12px; cursor: pointer;">
+                            <input type="checkbox" id="always-show-welcome" style="width: 16px; height: 16px;" onchange="toggleAlwaysShowWelcome()">
+                            <span data-i18n="label.alwaysShowWelcome">Always show welcome</span>
+                        </label>
                     </div>
                 </div>
             </div>
@@ -1580,17 +1615,10 @@
         <div
             style="margin-top: auto; padding-top: 20px; display: flex; justify-content: space-between; align-items: center;">
             <button class="btn" style="background: transparent; color: var(--text-secondary); width: auto; padding: 0;"
-                onclick="clearContext()">
-                <div style="display: flex; align-items: center; gap: 6px;">
-                    <span class="material-icons-round" style="font-size: 18px;">restart_alt</span>
-                    <span data-i18n="action.clearContext">Reset Context</span>
-                </div>
-            </button>
-            <button class="btn" style="background: transparent; color: var(--text-secondary); width: auto; padding: 0;"
                 onclick="showAbout()">
                 <div style="display: flex; align-items: center; gap: 6px;">
                     <span class="material-icons-round" style="font-size: 18px;">info</span>
-                    <span>About</span>
+                    <span data-i18n="action.about">About</span>
                 </div>
             </button>
             <div class="footer" style="margin-top: 0;">© 2026 DINKI'ssTyle</div>
@@ -1601,7 +1629,7 @@
     <div class="modal-overlay" id="account-management-modal">
         <div class="modal" style="max-width: 520px;">
             <div class="modal-header">
-                <div class="modal-title">Account Management</div>
+                <div class="modal-title" data-i18n="modal.accountManagement.title">Account Management</div>
                 <button class="icon-btn" onclick="closeAccountManagementModal()">
                     <span class="material-icons-round">close</span>
                 </button>
@@ -1611,10 +1639,10 @@
             </div>
             <div class="modal-footer" style="display: flex; gap: 8px; justify-content: space-between;">
                 <button class="btn" style="background: var(--border-color);"
-                    onclick="closeAccountManagementModal()">Close</button>
+                    onclick="closeAccountManagementModal()" data-i18n="action.close">Close</button>
                 <button class="btn btn-primary" onclick="addUser()">
                     <span class="material-icons-round">person_add</span>
-                    Add Account
+                    <span data-i18n="action.addAccount">Add Account</span>
                 </button>
             </div>
         </div>
@@ -1624,31 +1652,31 @@
     <div class="modal-overlay" id="add-user-modal">
         <div class="modal" style="max-width: 300px;">
             <div class="modal-header">
-                <div class="modal-title">Add Account</div>
+                <div class="modal-title" data-i18n="modal.addAccount.title">Add Account</div>
                 <button class="icon-btn" onclick="closeAddUserModal()">
                     <span class="material-icons-round">close</span>
                 </button>
             </div>
             <div class="modal-body">
                 <div class="form-group">
-                    <label>Username</label>
-                    <input type="text" id="new-user-id" placeholder="Enter username">
+                    <label data-i18n="label.username">Username</label>
+                    <input type="text" id="new-user-id" placeholder="Enter username" data-i18n-placeholder="placeholder.username">
                 </div>
                 <div class="form-group">
-                    <label>Password</label>
-                    <input type="password" id="new-user-password" placeholder="Enter password">
+                    <label data-i18n="label.password">Password</label>
+                    <input type="password" id="new-user-password" placeholder="Enter password" data-i18n-placeholder="placeholder.password">
                 </div>
                 <div class="form-group" style="margin-top: 8px;">
                     <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
                         <input type="checkbox" id="new-user-admin" style="width: 18px; height: 18px;">
-                        <span style="color: #e6edf3; font-size: 14px;">Admin Role</span>
+                        <span style="color: #e6edf3; font-size: 14px;" data-i18n="label.adminRole">Admin Role</span>
                     </label>
                 </div>
             </div>
             <div class="modal-footer" style="display: flex; gap: 8px; justify-content: flex-end;">
                 <button class="btn" style="background: var(--border-color);"
-                    onclick="closeAddUserModal()">Cancel</button>
-                <button class="btn btn-primary" onclick="submitAddUser()">Add Account</button>
+                    onclick="closeAddUserModal()" data-i18n="action.cancel">Cancel</button>
+                <button class="btn btn-primary" onclick="submitAddUser()" data-i18n="action.addAccount">Add Account</button>
             </div>
         </div>
     </div>
@@ -1657,15 +1685,15 @@
     <div class="modal-overlay" id="confirm-modal">
         <div class="modal" style="max-width: 300px;">
             <div class="modal-header">
-                <div class="modal-title">Confirm</div>
+                <div class="modal-title" data-i18n="modal.confirm.title">Confirm</div>
             </div>
             <div class="modal-body">
                 <p id="confirm-message">Are you sure?</p>
             </div>
             <div class="modal-footer" style="display: flex; gap: 8px; justify-content: flex-end;">
                 <button class="btn" style="background: var(--border-color);"
-                    onclick="closeConfirmModal(false)">Cancel</button>
-                <button class="btn btn-danger" onclick="closeConfirmModal(true)">Confirm</button>
+                    onclick="closeConfirmModal(false)" data-i18n="action.cancel">Cancel</button>
+                <button class="btn btn-danger" onclick="closeConfirmModal(true)" data-i18n="action.confirm">Confirm</button>
             </div>
         </div>
     </div>
@@ -1686,9 +1714,9 @@
             <div class="modal-footer" style="display: flex; gap: 8px; justify-content: flex-end;">
                 <button class="btn btn-secondary btn-compact" onclick="copyOpenTracePayload()">
                     <span class="material-icons-round">content_copy</span>
-                    Copy Payload
+                    <span data-i18n="action.copyPayload">Copy Payload</span>
                 </button>
-                <button class="btn btn-primary" onclick="closeTracePayloadModal()">Close</button>
+                <button class="btn btn-primary" onclick="closeTracePayloadModal()" data-i18n="action.close">Close</button>
             </div>
         </div>
     </div>
@@ -1696,16 +1724,16 @@
     <div class="modal-overlay" id="mcp-help-modal">
         <div class="modal mcp-help-modal">
             <div class="modal-header">
-                <div class="modal-title">LM Studio MCP Help</div>
+                <div class="modal-title" data-i18n="modal.mcpHelp.title">LM Studio MCP Help</div>
                 <button class="icon-btn" onclick="closeMcpHelpModal()">
                     <span class="material-icons-round">close</span>
                 </button>
             </div>
             <div class="modal-body doc-help-body">
-                <div id="mcp-help-markdown" class="mcp-help-markdown is-loading">Loading help document...</div>
+                <div id="mcp-help-markdown" class="mcp-help-markdown is-loading" data-i18n="help.loading">Loading help document...</div>
             </div>
             <div class="modal-footer" style="display: flex; justify-content: flex-end;">
-                <button class="btn btn-primary" onclick="closeMcpHelpModal()">Close</button>
+                <button class="btn btn-primary" onclick="closeMcpHelpModal()" data-i18n="action.close">Close</button>
             </div>
         </div>
     </div>
@@ -1719,10 +1747,10 @@
                 </button>
             </div>
             <div class="modal-body doc-help-body">
-                <div id="doc-help-markdown" class="doc-help-markdown is-loading">Loading help document...</div>
+                <div id="doc-help-markdown" class="doc-help-markdown is-loading" data-i18n="help.loading">Loading help document...</div>
             </div>
             <div class="modal-footer" style="display: flex; justify-content: flex-end;">
-                <button class="btn btn-primary" onclick="closeDocHelpModal()">Close</button>
+                <button class="btn btn-primary" onclick="closeDocHelpModal()" data-i18n="action.close">Close</button>
             </div>
         </div>
     </div>
@@ -1730,7 +1758,7 @@
     <div class="modal-overlay" id="welcome-modal">
         <div class="modal welcome-modal">
             <div class="modal-header">
-                <div class="modal-title">Welcome</div>
+                <div class="modal-title" data-i18n="modal.welcome.title">Welcome</div>
                 <button class="icon-btn" onclick="dismissWelcomeModal()">
                     <span class="material-icons-round">close</span>
                 </button>
@@ -1749,9 +1777,9 @@
             </div>
             <div class="modal-footer" style="display:flex; gap:8px; justify-content:flex-end;">
                 <button class="btn btn-secondary btn-compact" id="welcome-skip-btn" onclick="dismissWelcomeModal()">
-                    Continue Later
+                    <span data-i18n="action.continueLater">Continue Later</span>
                 </button>
-                <button class="btn btn-primary" onclick="dismissWelcomeModal(true)">Done</button>
+                <button class="btn btn-primary" onclick="dismissWelcomeModal(true)" data-i18n="action.done">Done</button>
             </div>
         </div>
     </div>
@@ -1760,14 +1788,14 @@
     <div class="modal-overlay" id="model-manager-modal">
         <div class="modal" style="max-width: 720px;">
             <div class="modal-header">
-                <div class="modal-title">Model Manager</div>
+                <div class="modal-title" data-i18n="modal.modelManager.title">Model Manager</div>
                 <button class="icon-btn" onclick="closeModelManagerModal()">
                     <span class="material-icons-round">close</span>
                 </button>
             </div>
             <div class="modal-body">
                 <div class="form-group">
-                    <label>Model Storage Folder</label>
+                    <label data-i18n="label.modelStorageFolder">Model Storage Folder</label>
                     <div id="models-root-dir"
                         style="font-size: 12px; color: var(--text-secondary); word-break: break-all;">...</div>
                 </div>
@@ -1776,9 +1804,9 @@
             <div class="modal-footer" style="display: flex; gap: 8px; justify-content: flex-end;">
                 <button class="btn btn-secondary btn-compact" onclick="refreshManagedModels()">
                     <span class="material-icons-round">refresh</span>
-                    Refresh
+                    <span data-i18n="action.refresh">Refresh</span>
                 </button>
-                <button class="btn btn-primary" onclick="closeModelManagerModal()">Close</button>
+                <button class="btn btn-primary" onclick="closeModelManagerModal()" data-i18n="action.close">Close</button>
             </div>
         </div>
     </div>
@@ -1815,7 +1843,7 @@
     <div class="modal-overlay" id="edit-user-modal">
         <div class="modal" style="max-width: 400px;">
             <div class="modal-header">
-                <div class="modal-title">Edit Account: <span id="edit-user-id-display"></span></div>
+                <div class="modal-title"><span data-i18n="modal.editAccount.title">Edit Account</span>: <span id="edit-user-id-display"></span></div>
                 <button class="icon-btn" onclick="closeEditUserModal()">
                     <span class="material-icons-round">close</span>
                 </button>
@@ -1825,92 +1853,92 @@
 
                 <!-- Change Password Section -->
                 <div style="margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border-color);">
-                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);">Change Password</div>
+                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);" data-i18n="edit.section.changePassword">Change Password</div>
                     <div class="form-group">
-                        <label>New Password</label>
-                        <input type="password" id="edit-new-password" placeholder="Enter new password">
+                        <label data-i18n="edit.label.newPassword">New Password</label>
+                        <input type="password" id="edit-new-password" placeholder="Enter new password" data-i18n-placeholder="edit.placeholder.newPassword">
                     </div>
                     <div class="form-group">
-                        <label>Confirm New Password</label>
-                        <input type="password" id="edit-confirm-password" placeholder="Confirm new password">
+                        <label data-i18n="edit.label.confirmNewPassword">Confirm New Password</label>
+                        <input type="password" id="edit-confirm-password" placeholder="Confirm new password" data-i18n-placeholder="edit.placeholder.confirmNewPassword">
                     </div>
                     <button class="btn btn-primary" style="width: 100%;" onclick="changeUserPassword()">
                         <span class="material-icons-round" style="font-size: 16px;">lock</span>
-                        Change Password
+                        <span data-i18n="edit.action.changePassword">Change Password</span>
                     </button>
                 </div>
 
                 <!-- Admin Role Section -->
                 <div style="margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border-color);">
-                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);">User Role</div>
+                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);" data-i18n="edit.section.userRole">User Role</div>
                     <div class="form-group" style="margin-bottom: 0;">
                         <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
                             <input type="checkbox" id="edit-user-admin" style="width: 18px; height: 18px;">
-                            <span style="color: #e6edf3; font-size: 14px;">Admin Role</span>
+                            <span style="color: #e6edf3; font-size: 14px;" data-i18n="label.adminRole">Admin Role</span>
                         </label>
                     </div>
                 </div>
 
                 <!-- API Key Section -->
                 <div style="margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border-color);">
-                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);">API Key</div>
+                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);" data-i18n="edit.section.apiKey">API Key</div>
                     <div class="form-group">
-                        <label>LLM API Key</label>
-                        <input type="password" id="edit-user-api-key" placeholder="Enter API key for this user">
+                        <label data-i18n="edit.label.llmApiKey">LLM API Key</label>
+                        <input type="password" id="edit-user-api-key" placeholder="Enter API key for this user" data-i18n-placeholder="edit.placeholder.userApiKey">
                     </div>
-                    <div style="font-size: 11px; color: var(--text-secondary); margin-top: -8px;">
+                    <div style="font-size: 11px; color: var(--text-secondary); margin-top: -8px;" data-i18n="edit.help.apiKey">
                         This API key will be used when this user makes LLM requests.
                     </div>
                 </div>
 
                 <!-- Memory Retention Section -->
                 <div style="margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border-color);">
-                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);">Memory Retention</div>
-                    <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 12px;">
+                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);" data-i18n="edit.section.memoryRetention">Memory Retention</div>
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 12px;" data-i18n-html="edit.help.memoryRetention">
                         Account policy. Set days to keep each memory tier for this user. Use <code>0</code> to disable
                         automatic deletion.
                     </div>
                     <div class="form-row">
                         <div class="form-group">
-                            <label>Core Days</label>
+                            <label data-i18n="edit.label.coreDays">Core Days</label>
                             <input type="number" id="edit-retention-core-days" min="0" step="1" placeholder="0">
                         </div>
                         <div class="form-group">
-                            <label>Working Days</label>
+                            <label data-i18n="edit.label.workingDays">Working Days</label>
                             <input type="number" id="edit-retention-working-days" min="0" step="1" placeholder="45">
                         </div>
                     </div>
                     <div class="form-group" style="margin-bottom: 0;">
-                        <label>Ephemeral Days</label>
+                        <label data-i18n="edit.label.ephemeralDays">Ephemeral Days</label>
                         <input type="number" id="edit-retention-ephemeral-days" min="0" step="1" placeholder="14">
                     </div>
                 </div>
 
                 <!-- Disallowed Commands/Directories Section -->
                 <div style="margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border-color);">
-                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);">Security Restrictions
+                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);" data-i18n="edit.section.securityRestrictions">Security Restrictions
                     </div>
 
                     <div class="form-group">
-                        <label>Disallowed Commands (comma separated)</label>
+                        <label data-i18n="edit.label.disallowedCommands">Disallowed Commands (comma separated)</label>
                         <textarea id="edit-disallowed-cmds" class="settings-input"
-                            style="width: 100%; height: 60px; resize: vertical;"
-                            placeholder="rm, shutdown, reboot"></textarea>
+                                style="width: 100%; height: 60px; resize: vertical;"
+                            placeholder="rm, shutdown, reboot" data-i18n-placeholder="edit.placeholder.disallowedCommands"></textarea>
                     </div>
 
                     <div class="form-group">
-                        <label>Disallowed Directories (comma separated)</label>
+                        <label data-i18n="edit.label.disallowedDirectories">Disallowed Directories (comma separated)</label>
                         <textarea id="edit-disallowed-dirs" class="settings-input"
-                            style="width: 100%; height: 60px; resize: vertical;"
-                            placeholder="/etc, /var, C:\Windows"></textarea>
+                                style="width: 100%; height: 60px; resize: vertical;"
+                            placeholder="/etc, /var, C:\Windows" data-i18n-placeholder="edit.placeholder.disallowedDirectories"></textarea>
                     </div>
                 </div>
 
                 <!-- MCP Tool Permissions Section -->
                 <div>
-                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);">MCP Tool Permissions
+                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);" data-i18n="edit.section.toolPermissions">MCP Tool Permissions
                     </div>
-                    <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 12px;">
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 12px;" data-i18n="edit.help.toolPermissions">
                         Uncheck to disable specific tools for this user.
                     </div>
                     <div id="edit-user-tools-list" style="display: flex; flex-direction: column; gap: 8px;">
@@ -1920,8 +1948,8 @@
             </div>
             <div class="modal-footer" style="display: flex; gap: 8px; justify-content: flex-end;">
                 <button class="btn" style="background: var(--border-color);"
-                    onclick="closeEditUserModal()">Cancel</button>
-                <button class="btn btn-primary" onclick="saveUserSettings()">Save Changes</button>
+                    onclick="closeEditUserModal()" data-i18n="action.cancel">Cancel</button>
+                <button class="btn btn-primary" onclick="saveUserSettings()" data-i18n="edit.action.saveChanges">Save Changes</button>
             </div>
         </div>
     </div>
@@ -2011,10 +2039,14 @@
         let mcpHelpMarkdownLoaded = false;
         let mcpHelpMarkdownSource = '';
         const docHelpMarkdownCache = new Map();
+        let openDocHelpPath = '';
         let managedModelsRefreshTimer = null;
         let statusRefreshTimer = null;
         let welcomeState = null;
         let llmActivityBusy = false;
+        const SERVER_LANG_STORAGE_KEY = 'dkst-server-ui-language';
+        let currentServerLanguage = 'ko';
+        let alwaysShowWelcome = false;
         let windowConfig = {
             normalWidth: 755,
             normalHeight: 800,
@@ -2023,14 +2055,506 @@
             minHeight: 600
         };
 
+        const SERVER_TRANSLATIONS = {
+            ko: {
+                'banner.restart.message': '서버 설정이 변경되었습니다. 적용하려면 서버를 다시 시작하세요.',
+                'action.saveOnly': '저장만',
+                'action.restartNow': '지금 재시작',
+                'card.serverStatus': '서버 상태',
+                'help.mcp.title': 'MCP 도움말',
+                'help.mcp.ariaLabel': 'MCP 도움말 열기',
+                'status.stopped': '중지됨',
+                'status.running': '실행 중',
+                'status.checking': '확인 중...',
+                'status.disabled': '비활성화',
+                'status.loading': '불러오는 중...',
+                'status.downloading': '다운로드 중',
+                'status.ready': '준비됨',
+                'status.failed': '실패',
+                'status.unknown': '알 수 없음',
+                'label.webPort': '웹 포트 (HTTPS)',
+                'label.mcpPort': 'MCP 포트 (HTTP)',
+                'action.startServer': '서버 시작',
+                'action.stopServer': '서버 중지',
+                'card.additionalAssets': '추가 자산',
+                'card.llmConfiguration': 'LLM 설정',
+                'card.startupSettings': '시작 설정',
+                'label.enableAssets': 'TTS 및 벡터 DB 활성화',
+                'label.assetStatus': '자산 상태',
+                'label.llmEndpoint': 'LLM 엔드포인트',
+                'label.apiKeyHelp': 'API Key <span style="color: var(--text-secondary); font-weight: normal;">(*"Require Auth"가 활성화된 경우 필수)</span>',
+                'placeholder.apiKey': 'lm-studio 또는 커스텀 키',
+                'label.startOnBoot': '부팅 시 시작',
+                'label.minimizeToTray': '트레이로 최소화',
+                'label.autoStartServer': '서버 자동 시작',
+                'modal.modelManager.title': '모델 관리자',
+                'card.advancedSettings': '고급 설정',
+                'help.certificate.title': '인증서 도움말',
+                'help.certificate.ariaLabel': '인증서 도움말 열기',
+                'help.llmEndpoint.title': 'LLM 엔드포인트 도움말',
+                'help.llmEndpoint.ariaLabel': 'LLM 엔드포인트 도움말 열기',
+                'label.certificateDomain': '인증서 도메인 / 주소',
+                'help.certificates.stored': '인증서는 <code>cert</code> 폴더에 저장됩니다.',
+                'action.generateCertificate': '인증서 생성',
+                'action.openCertificateFolder': '인증서 폴더 열기',
+                'label.enableDebugTrace': '디버그 트레이스 활성화',
+                'label.alwaysShowWelcome': '항상 웰컴화면 표시',
+                'card.accountManagement': '계정 관리',
+                'action.manageAccounts': '계정 관리',
+                'action.logoutAllSessions': '모든 세션 로그아웃',
+                'card.debugTrace': '디버그 트레이스',
+                'debug.empty': '디버그 트레이스가 비활성화되어 있습니다. 요청 파이프라인을 보려면 고급 설정에서 활성화하세요.',
+                'action.refresh': '새로고침',
+                'action.copyTrace': '트레이스 복사',
+                'action.clearTrace': '트레이스 지우기',
+                'action.about': '정보',
+                'action.close': '닫기',
+                'action.cancel': '취소',
+                'action.confirm': '확인',
+                'action.addAccount': '계정 추가',
+                'action.copyPayload': '페이로드 복사',
+                'action.continueLater': '나중에 계속',
+                'action.done': '완료',
+                'modal.accountManagement.title': '계정 관리',
+                'modal.addAccount.title': '계정 추가',
+                'modal.editAccount.title': '계정 편집',
+                'modal.confirm.title': '확인',
+                'modal.mcpHelp.title': 'LM Studio MCP 도움말',
+                'modal.welcome.title': '환영합니다',
+                'label.username': '사용자 이름',
+                'label.password': '비밀번호',
+                'label.adminRole': '관리자 권한',
+                'placeholder.username': '사용자 이름 입력',
+                'placeholder.password': '비밀번호 입력',
+                'label.modelStorageFolder': '모델 저장 폴더',
+                'help.loading': '도움말 문서를 불러오는 중...',
+                'help.loadFailed': '도움말 문서를 불러오지 못했습니다.',
+                'help.modalTitle.default': '도움말',
+                'edit.section.changePassword': '비밀번호 변경',
+                'edit.section.userRole': '사용자 역할',
+                'edit.section.apiKey': 'API 키',
+                'edit.section.memoryRetention': '메모리 보존',
+                'edit.section.securityRestrictions': '보안 제한',
+                'edit.section.toolPermissions': 'MCP 도구 권한',
+                'edit.label.newPassword': '새 비밀번호',
+                'edit.label.confirmNewPassword': '새 비밀번호 확인',
+                'edit.label.llmApiKey': 'LLM API 키',
+                'edit.label.coreDays': '핵심 메모리 일수',
+                'edit.label.workingDays': '작업 메모리 일수',
+                'edit.label.ephemeralDays': '일회성 메모리 일수',
+                'edit.label.disallowedCommands': '금지 명령어 (쉼표로 구분)',
+                'edit.label.disallowedDirectories': '금지 디렉터리 (쉼표로 구분)',
+                'edit.placeholder.newPassword': '새 비밀번호 입력',
+                'edit.placeholder.confirmNewPassword': '새 비밀번호 다시 입력',
+                'edit.placeholder.userApiKey': '이 사용자용 API 키 입력',
+                'edit.placeholder.disallowedCommands': 'rm, shutdown, reboot',
+                'edit.placeholder.disallowedDirectories': '/etc, /var, C:\\Windows',
+                'edit.help.apiKey': '이 API 키는 이 사용자가 LLM 요청을 보낼 때 사용됩니다.',
+                'edit.help.memoryRetention': '계정 정책입니다. 각 메모리 계층별 보존 일수를 설정하세요. <code>0</code>이면 자동 삭제를 끕니다.',
+                'edit.help.toolPermissions': '체크를 해제하면 해당 사용자에 대해 특정 도구를 비활성화합니다.',
+                'edit.action.changePassword': '비밀번호 변경',
+                'edit.action.saveChanges': '변경사항 저장',
+                'welcome.primary.default': 'DKST LLM Chat Server에 오신 것을 환영합니다.',
+                'welcome.secondary.default': '모든 기능을 사용하기 전에 한 번만 필요한 설정이 있을 수 있습니다.',
+                'welcome.primary.returning': '다시 오신 것을 환영합니다.',
+                'welcome.secondary.returning': '이전 저장소 구조가 감지되어 한 번 정리가 필요합니다.',
+                'welcome.restartNote': '마이그레이션은 현재 사용 중인 파일에 영향을 줄 수 있습니다. 이후에도 이상하면 앱을 한 번 재시작하세요.',
+                'welcome.card.migration.title': '저장소 마이그레이션',
+                'welcome.card.required': '필수',
+                'welcome.card.recommended': '권장',
+                'welcome.card.localPackages.title': '로컬 AI 패키지',
+                'welcome.card.localPackages.body': '필요한 것만 설치하세요. 다운로드 파일은 이 기기에만 저장되며 음성 재생과 로컬 의미 검색 기능을 활성화합니다.',
+                'welcome.card.ready.title': '준비 완료',
+                'welcome.card.ready.body': '현재 설정에 필요한 항목이 모두 준비되어 있습니다.',
+                'welcome.action.runMigration': '마이그레이션 실행',
+                'welcome.action.running': '실행 중...',
+                'welcome.action.downloading': '다운로드 중...',
+                'welcome.migration.default': '이전 파일이 발견되었습니다. 새 폴더 구조로 옮기는 것이 좋습니다.',
+                'welcome.ttsDownload.default': 'Supertonic TTS 및 관련 로컬 기능을 사용하려면 로컬 런타임 파일을 다운로드하세요.',
+                'message.migration.completed': '마이그레이션이 완료되었습니다.',
+                'message.runtime.completed': '런타임 다운로드가 완료되었습니다.',
+                'message.userSettingsSaved': '사용자 설정을 저장했습니다.',
+                'message.passwordChanged': '비밀번호를 변경했습니다.',
+                'error.loadHelp': '도움말 문서를 불러오지 못했습니다.',
+                'error.loadMcpHelp': 'MCP 도움말을 불러오지 못했습니다.',
+                'error.loadWelcomeState': '웰컴 상태를 불러오지 못했습니다.',
+                'error.dismissWelcome': '웰컴 모달을 닫지 못했습니다.',
+                'error.loadUserDetails': '사용자 상세 정보를 불러오지 못했습니다: {error}',
+                'error.newPasswordRequired': '새 비밀번호를 입력하세요.',
+                'error.passwordMismatch': '새 비밀번호와 확인 값이 일치하지 않습니다.',
+                'error.changePassword': '비밀번호 변경 실패: {error}',
+                'error.runMigration': '마이그레이션 실행 실패: {error}',
+                'error.downloadRuntime': '런타임 다운로드 실패: {error}',
+                'error.enterUsername': '사용자 이름을 입력하세요.',
+                'error.enterPassword': '비밀번호를 입력하세요.',
+                'error.failedPrefix': '실패: {error}',
+                'confirm.deleteAccount': '계정 "{id}"을(를) 삭제할까요?',
+                'confirm.logoutAllSessions': '모든 기기와 브라우저에서 모든 계정을 즉시 로그아웃할까요?',
+                'message.sessionsCleared': 'SQLite에 저장된 모든 로그인 세션이 삭제되었습니다.',
+                'debug.noEntries': '복사할 디버그 트레이스 항목이 없습니다.',
+                'debug.copied': '디버그 트레이스를 클립보드에 복사했습니다.',
+                'debug.copyFailed': '디버그 트레이스 복사 실패: {error}',
+                'trace.entryMissing': '선택한 트레이스 항목을 찾을 수 없습니다.',
+                'trace.bufferedSource': '버퍼된 소스',
+                'trace.bufferedExcerpts': '버퍼된 발췌문',
+                'trace.payloadTitle': '트레이스 페이로드',
+                'trace.copied': '트레이스 페이로드를 클립보드에 복사했습니다.',
+                'trace.copyFailed': '트레이스 페이로드 복사 실패: {error}',
+                'trace.noPayload': '복사할 페이로드가 없습니다.',
+                'mcp.json.title': 'MCP.JSON 예시',
+                'action.copyJson': 'JSON 복사',
+                'mcp.json.caption': 'LM Studio의 <code>mcp.json</code>에서 아래 현재 서버 주소를 사용하세요.',
+                'llm.processing': 'LLM 처리 중',
+                'llm.idle': 'LLM 대기 중',
+                'models.button.download': '다운로드',
+                'models.button.redownload': '재다운로드',
+                'models.meta.provider': '제공자',
+                'models.meta.modelId': '모델 ID',
+                'models.meta.backend': '백엔드',
+                'models.meta.installDir': '설치 폴더',
+                'models.meta.state': '상태',
+                'models.progress.default': '다운로드 중...',
+                'models.message.preparing': '다운로드 준비 중...',
+                'models.downloadCompleted': '모델 다운로드가 완료되었습니다.',
+                'models.downloadFailed': '모델 다운로드 실패: {error}',
+                'trace.count': '{count}개 항목',
+                'about.version': '버전 {version}'
+            },
+            en: {
+                'banner.restart.message': 'Server configuration has changed. Restart the server to apply changes.',
+                'action.saveOnly': 'Save Only',
+                'action.restartNow': 'Restart Now',
+                'card.serverStatus': 'Server Status',
+                'help.mcp.title': 'MCP Help',
+                'help.mcp.ariaLabel': 'Open MCP help',
+                'status.stopped': 'Stopped',
+                'status.running': 'Running',
+                'status.checking': 'Checking...',
+                'status.disabled': 'Disabled',
+                'status.loading': 'Loading...',
+                'status.downloading': 'Downloading',
+                'status.ready': 'Ready',
+                'status.failed': 'Failed',
+                'status.unknown': 'Unknown',
+                'label.webPort': 'Web Port (HTTPS)',
+                'label.mcpPort': 'MCP Port (HTTP)',
+                'action.startServer': 'Start Server',
+                'action.stopServer': 'Stop Server',
+                'card.additionalAssets': 'Additional Assets',
+                'card.llmConfiguration': 'LLM Configuration',
+                'card.startupSettings': 'Startup Settings',
+                'label.enableAssets': 'Enable TTS & Vector DB',
+                'label.assetStatus': 'Asset Status',
+                'label.llmEndpoint': 'LLM Endpoint',
+                'label.apiKeyHelp': 'API Key <span style="color: var(--text-secondary); font-weight: normal;">(*Required if "Require Auth" is enabled.)</span>',
+                'placeholder.apiKey': 'lm-studio or custom key',
+                'label.startOnBoot': 'Start on Boot',
+                'label.minimizeToTray': 'Minimize to Tray',
+                'label.autoStartServer': 'Auto Start Server',
+                'modal.modelManager.title': 'Model Manager',
+                'card.advancedSettings': 'Advanced Settings',
+                'help.certificate.title': 'Certificate Help',
+                'help.certificate.ariaLabel': 'Open Certificate help',
+                'help.llmEndpoint.title': 'LLM Endpoint Help',
+                'help.llmEndpoint.ariaLabel': 'Open LLM Endpoint help',
+                'label.certificateDomain': 'Certificate Domain / Address',
+                'help.certificates.stored': 'Certificates are stored in the <code>cert</code> folder.',
+                'action.generateCertificate': 'Generate Certificate',
+                'action.openCertificateFolder': 'Open Certificate Local',
+                'label.enableDebugTrace': 'Enable Debug Trace',
+                'label.alwaysShowWelcome': 'Always show welcome',
+                'card.accountManagement': 'Account Management',
+                'action.manageAccounts': 'Manage Accounts',
+                'action.logoutAllSessions': 'Logout All Sessions',
+                'card.debugTrace': 'Debug Trace',
+                'debug.empty': 'Debug trace is disabled. Turn it on in Advanced Settings to inspect the request pipeline.',
+                'action.refresh': 'Refresh',
+                'action.copyTrace': 'Copy Trace',
+                'action.clearTrace': 'Clear Trace',
+                'action.about': 'About',
+                'action.close': 'Close',
+                'action.cancel': 'Cancel',
+                'action.confirm': 'Confirm',
+                'action.addAccount': 'Add Account',
+                'action.copyPayload': 'Copy Payload',
+                'action.continueLater': 'Continue Later',
+                'action.done': 'Done',
+                'modal.accountManagement.title': 'Account Management',
+                'modal.addAccount.title': 'Add Account',
+                'modal.editAccount.title': 'Edit Account',
+                'modal.confirm.title': 'Confirm',
+                'modal.mcpHelp.title': 'LM Studio MCP Help',
+                'modal.welcome.title': 'Welcome',
+                'label.username': 'Username',
+                'label.password': 'Password',
+                'label.adminRole': 'Admin Role',
+                'placeholder.username': 'Enter username',
+                'placeholder.password': 'Enter password',
+                'label.modelStorageFolder': 'Model Storage Folder',
+                'help.loading': 'Loading help document...',
+                'help.loadFailed': 'Failed to load help document.',
+                'help.modalTitle.default': 'Help',
+                'edit.section.changePassword': 'Change Password',
+                'edit.section.userRole': 'User Role',
+                'edit.section.apiKey': 'API Key',
+                'edit.section.memoryRetention': 'Memory Retention',
+                'edit.section.securityRestrictions': 'Security Restrictions',
+                'edit.section.toolPermissions': 'MCP Tool Permissions',
+                'edit.label.newPassword': 'New Password',
+                'edit.label.confirmNewPassword': 'Confirm New Password',
+                'edit.label.llmApiKey': 'LLM API Key',
+                'edit.label.coreDays': 'Core Days',
+                'edit.label.workingDays': 'Working Days',
+                'edit.label.ephemeralDays': 'Ephemeral Days',
+                'edit.label.disallowedCommands': 'Disallowed Commands (comma separated)',
+                'edit.label.disallowedDirectories': 'Disallowed Directories (comma separated)',
+                'edit.placeholder.newPassword': 'Enter new password',
+                'edit.placeholder.confirmNewPassword': 'Confirm new password',
+                'edit.placeholder.userApiKey': 'Enter API key for this user',
+                'edit.placeholder.disallowedCommands': 'rm, shutdown, reboot',
+                'edit.placeholder.disallowedDirectories': '/etc, /var, C:\\Windows',
+                'edit.help.apiKey': 'This API key will be used when this user makes LLM requests.',
+                'edit.help.memoryRetention': 'Account policy. Set days to keep each memory tier for this user. Use <code>0</code> to disable automatic deletion.',
+                'edit.help.toolPermissions': 'Uncheck to disable specific tools for this user.',
+                'edit.action.changePassword': 'Change Password',
+                'edit.action.saveChanges': 'Save Changes',
+                'welcome.primary.default': 'Welcome to DKST LLM Chat Server.',
+                'welcome.secondary.default': 'A few one-time setup actions may be needed before everything is ready.',
+                'welcome.primary.returning': 'Welcome back.',
+                'welcome.secondary.returning': 'We found an older storage layout that should be reorganized once.',
+                'welcome.restartNote': 'Migration can affect files already in use. If something still looks stale afterward, restart the app once.',
+                'welcome.card.migration.title': 'Storage migration',
+                'welcome.card.required': 'Required',
+                'welcome.card.recommended': 'Recommended',
+                'welcome.card.localPackages.title': 'Local AI Packages',
+                'welcome.card.localPackages.body': 'Install only what you want to use. These downloads stay on your machine and unlock voice playback plus local semantic retrieval.',
+                'welcome.card.ready.title': 'Ready to go',
+                'welcome.card.ready.body': 'Everything needed for the current setup is already in place.',
+                'welcome.action.runMigration': 'Run Migration',
+                'welcome.action.running': 'Running...',
+                'welcome.action.downloading': 'Downloading...',
+                'welcome.migration.default': 'Legacy files were found and should be moved into the new folder layout.',
+                'welcome.ttsDownload.default': 'Download the local runtime files to use Supertonic TTS and related local features.',
+                'message.migration.completed': 'Migration completed.',
+                'message.runtime.completed': 'Runtime download completed.',
+                'message.userSettingsSaved': 'User settings saved successfully.',
+                'message.passwordChanged': 'Password changed successfully.',
+                'error.loadHelp': 'Failed to load help document.',
+                'error.loadMcpHelp': 'Failed to load MCP help markdown.',
+                'error.loadWelcomeState': 'Failed to load welcome state.',
+                'error.dismissWelcome': 'Failed to dismiss welcome modal.',
+                'error.loadUserDetails': 'Failed to load user details: {error}',
+                'error.newPasswordRequired': 'Please enter a new password.',
+                'error.passwordMismatch': 'New password and confirmation do not match.',
+                'error.changePassword': 'Failed to change password: {error}',
+                'error.runMigration': 'Failed to run migration: {error}',
+                'error.downloadRuntime': 'Failed to download runtime: {error}',
+                'error.enterUsername': 'Please enter a username.',
+                'error.enterPassword': 'Please enter a password.',
+                'error.failedPrefix': 'Failed: {error}',
+                'confirm.deleteAccount': 'Delete account "{id}"?',
+                'confirm.logoutAllSessions': 'Log out every account on every device and browser now?',
+                'message.sessionsCleared': 'All login sessions have been cleared from SQLite.',
+                'debug.noEntries': 'There are no debug trace entries to copy.',
+                'debug.copied': 'Debug trace copied to clipboard.',
+                'debug.copyFailed': 'Failed to copy debug trace: {error}',
+                'trace.entryMissing': 'Could not find the selected trace entry.',
+                'trace.bufferedSource': 'Buffered Source',
+                'trace.bufferedExcerpts': 'Buffered Excerpts',
+                'trace.payloadTitle': 'Trace Payload',
+                'trace.copied': 'Trace payload copied to clipboard.',
+                'trace.copyFailed': 'Failed to copy trace payload: {error}',
+                'trace.noPayload': 'There is no payload to copy.',
+                'mcp.json.title': 'MCP.JSON EXAMPLE',
+                'action.copyJson': 'Copy JSON',
+                'mcp.json.caption': 'Use the current server address shown below in LM Studio\'s <code>mcp.json</code>.',
+                'llm.processing': 'LLM processing',
+                'llm.idle': 'LLM idle',
+                'models.button.download': 'Download',
+                'models.button.redownload': 'Redownload',
+                'models.meta.provider': 'Provider',
+                'models.meta.modelId': 'Model ID',
+                'models.meta.backend': 'Backend',
+                'models.meta.installDir': 'Install Dir',
+                'models.meta.state': 'State',
+                'models.progress.default': 'Downloading...',
+                'models.message.preparing': 'Preparing download...',
+                'models.downloadCompleted': 'Model download completed.',
+                'models.downloadFailed': 'Model download failed: {error}',
+                'trace.count': '{count} entries',
+                'about.version': 'Version {version}'
+            }
+        };
+
+        function translateServer(key, vars = {}) {
+            const dict = SERVER_TRANSLATIONS[currentServerLanguage] || SERVER_TRANSLATIONS.en;
+            const fallbackDict = SERVER_TRANSLATIONS.en;
+            const template = dict[key] ?? fallbackDict[key] ?? key;
+            return String(template).replace(/\{(\w+)\}/g, (_, name) => {
+                const value = vars[name];
+                return value === undefined || value === null ? '' : String(value);
+            });
+        }
+
+        function t(key, vars = {}) {
+            return translateServer(key, vars);
+        }
+
+        function getStoredServerLanguage() {
+            try {
+                const stored = localStorage.getItem(SERVER_LANG_STORAGE_KEY);
+                return stored === 'en' ? 'en' : 'ko';
+            } catch (_) {
+                return 'ko';
+            }
+        }
+
+        function applyServerI18n(root = document) {
+            if (!root || typeof root.querySelectorAll !== 'function') return;
+            document.documentElement.lang = currentServerLanguage;
+
+            root.querySelectorAll('[data-i18n]').forEach((el) => {
+                el.textContent = t(el.getAttribute('data-i18n'));
+            });
+            root.querySelectorAll('[data-i18n-html]').forEach((el) => {
+                el.innerHTML = t(el.getAttribute('data-i18n-html'));
+            });
+            root.querySelectorAll('[data-i18n-placeholder]').forEach((el) => {
+                el.setAttribute('placeholder', t(el.getAttribute('data-i18n-placeholder')));
+            });
+            root.querySelectorAll('[data-i18n-title]').forEach((el) => {
+                el.setAttribute('title', t(el.getAttribute('data-i18n-title')));
+            });
+            root.querySelectorAll('[data-i18n-aria-label]').forEach((el) => {
+                el.setAttribute('aria-label', t(el.getAttribute('data-i18n-aria-label')));
+            });
+
+            const languageSelect = document.getElementById('server-language-select');
+            if (languageSelect) {
+                languageSelect.value = currentServerLanguage;
+                languageSelect.setAttribute('aria-label', currentServerLanguage === 'ko' ? '언어 선택' : 'Select language');
+            }
+            const restartNoteEl = document.getElementById('welcome-restart-note');
+            if (restartNoteEl) {
+                restartNoteEl.textContent = t('welcome.restartNote');
+            }
+        }
+
+        function setServerLanguage(nextLanguage) {
+            currentServerLanguage = nextLanguage === 'en' ? 'en' : 'ko';
+            try {
+                localStorage.setItem(SERVER_LANG_STORAGE_KEY, currentServerLanguage);
+            } catch (_) {
+                // Ignore storage failures and keep in-memory selection.
+            }
+            if (typeof window.go !== 'undefined') {
+                window.go.core.App.SetServerUILanguage(currentServerLanguage).catch((e) => {
+                    console.error('Failed to persist server UI language:', e);
+                });
+            }
+            applyServerI18n(document);
+            updateUI(isRunning, document.getElementById('port-input')?.value || '', llmActivityBusy);
+            renderDebugTrace();
+            updateLlmActivityIndicator(llmActivityBusy);
+            if (welcomeState) {
+                renderWelcomeModal(false);
+            }
+            const mcpHelpEl = document.getElementById('mcp-help-markdown');
+            if (mcpHelpEl && mcpHelpMarkdownLoaded && mcpHelpMarkdownSource) {
+                mcpHelpEl.innerHTML = renderMcpHelpContent(extractLocalizedMarkdown(mcpHelpMarkdownSource));
+                resolveHelpAssetPaths(mcpHelpEl, 'public/help/LMStudio_MCP.md');
+            }
+            const docHelpModal = document.getElementById('doc-help-modal');
+            const docHelpEl = document.getElementById('doc-help-markdown');
+            const docHelpTitleEl = document.getElementById('doc-help-modal-title');
+            if (docHelpModal && docHelpEl && docHelpTitleEl && docHelpModal.style.display === 'flex') {
+                const cachedMarkdown = openDocHelpPath ? docHelpMarkdownCache.get(openDocHelpPath) : '';
+                if (cachedMarkdown) {
+                    docHelpEl.innerHTML = renderSimpleMarkdown(extractLocalizedMarkdown(cachedMarkdown));
+                    resolveHelpAssetPaths(docHelpEl, openDocHelpPath);
+                }
+            }
+            const editUserModal = document.getElementById('edit-user-modal');
+            const currentEditUserId = document.getElementById('edit-user-id')?.value || '';
+            if (editUserModal && editUserModal.style.display === 'flex' && currentEditUserId) {
+                openEditUserModal(currentEditUserId);
+            }
+        }
+
+        function extractLocalizedMarkdown(markdown, lang = currentServerLanguage) {
+            const source = String(markdown || '');
+            const blockRegex = /<!--\s*lang:(ko|en)\s*-->([\s\S]*?)<!--\s*\/lang\s*-->/gi;
+            const matches = [];
+            let match;
+            while ((match = blockRegex.exec(source)) !== null) {
+                matches.push({
+                    lang: String(match[1] || '').toLowerCase(),
+                    body: match[2] || ''
+                });
+            }
+            if (!matches.length) {
+                return source;
+            }
+            const selected = matches.filter((item) => item.lang === lang).map((item) => item.body.trim()).filter(Boolean);
+            if (selected.length) {
+                return selected.join('\n\n');
+            }
+            const fallback = matches.filter((item) => item.lang === 'en').map((item) => item.body.trim()).filter(Boolean);
+            if (fallback.length) {
+                return fallback.join('\n\n');
+            }
+            return matches.map((item) => item.body.trim()).filter(Boolean).join('\n\n');
+        }
+
+        async function loadAlwaysShowWelcomeSetting() {
+            if (typeof window.go === 'undefined') return;
+            try {
+                alwaysShowWelcome = !!(await window.go.core.App.GetAlwaysShowWelcome());
+                const checkbox = document.getElementById('always-show-welcome');
+                if (checkbox) checkbox.checked = alwaysShowWelcome;
+            } catch (e) {
+                console.error('Failed to load always-show-welcome setting:', e);
+            }
+        }
+
+        async function toggleAlwaysShowWelcome() {
+            const checkbox = document.getElementById('always-show-welcome');
+            const enabled = !!checkbox?.checked;
+            try {
+                await window.go.core.App.SetAlwaysShowWelcome(enabled);
+                alwaysShowWelcome = enabled;
+            } catch (e) {
+                console.error('Failed to update always-show-welcome setting:', e);
+                if (checkbox) checkbox.checked = alwaysShowWelcome;
+            }
+        }
+
         async function init() {
+            if (typeof window.go !== 'undefined') {
+                try {
+                    currentServerLanguage = await window.go.core.App.GetServerUILanguage();
+                } catch (e) {
+                    console.warn('Failed to load server UI language from config, falling back to localStorage:', e);
+                    currentServerLanguage = getStoredServerLanguage();
+                }
+            } else {
+                currentServerLanguage = getStoredServerLanguage();
+            }
+
+            try {
+                localStorage.setItem(SERVER_LANG_STORAGE_KEY, currentServerLanguage);
+            } catch (_) {
+                // Ignore storage failures and keep in-memory selection.
+            }
+            applyServerI18n(document);
+
             if (typeof window.go !== 'undefined') {
                 try {
                     const status = await window.go.core.App.GetServerStatus();
                     windowConfig = await window.go.core.App.GetWindowDimensions() || windowConfig;
                     const about = await window.go.core.App.GetAboutInfo();
                     document.getElementById('about-app-name').textContent = about.name;
-                    document.getElementById('app-version-text').textContent = `Version ${about.version}`;
+                    document.getElementById('app-version-text').textContent = t('about.version', { version: about.version });
                     document.getElementById('about-app-copyright').textContent = about.copyright;
                     console.log(`${about.name} v${about.version}`);
                     updateUI(status.running, status.port, status.llmBusy);
@@ -2048,6 +2572,7 @@
                     loadAdvancedConfig();
                     await refreshWelcomeState();
                     await loadDebugTraceConfig();
+                    await loadAlwaysShowWelcomeSetting();
                     await updateStatus();
                     if (statusRefreshTimer === null) {
                         statusRefreshTimer = window.setInterval(updateStatus, 3000);
@@ -2083,9 +2608,9 @@
                     window.runtime.EventsOn("managed-model-download-finished", (state) => {
                         const ok = !!state?.success;
                         if (ok) {
-                            showAlert('Model download completed.');
+                            showAlert(t('models.downloadCompleted'));
                         } else {
-                            showAlert('Model download failed: ' + (state?.message || 'Unknown error'));
+                            showAlert(t('models.downloadFailed', { error: state?.message || 'Unknown error' }));
                         }
                         refreshManagedModels();
                         checkAssetStatus();
@@ -2144,8 +2669,8 @@
             if (!modal || !primaryEl || !secondaryEl || !actionsEl || !restartNoteEl || !skipBtn) return;
 
             const state = welcomeState || {};
-            primaryEl.textContent = state.primaryMessage || 'Welcome to DKST LLM Chat Server.';
-            secondaryEl.textContent = state.secondaryMessage || 'A few one-time setup actions may be needed before everything is ready.';
+            primaryEl.textContent = state.primaryMessage || t('welcome.primary.default');
+            secondaryEl.textContent = state.secondaryMessage || t('welcome.secondary.default');
             restartNoteEl.style.display = state.restartRecommended ? '' : 'none';
             skipBtn.style.display = state.requiresMigration ? '' : '';
 
@@ -2161,14 +2686,14 @@
                 cards.push(`
                     <div class="welcome-action-card">
                         <div class="welcome-action-top">
-                            <div class="welcome-action-title">Storage migration</div>
-                            <span class="welcome-action-badge">Required</span>
+                            <div class="welcome-action-title">${escapeHtml(t('welcome.card.migration.title'))}</div>
+                            <span class="welcome-action-badge">${escapeHtml(t('welcome.card.required'))}</span>
                         </div>
-                        <div class="welcome-action-body">${escapeHtml(state.migrationMessage || 'Legacy files were found and should be moved into the new folder layout.')}</div>
+                        <div class="welcome-action-body">${escapeHtml(state.migrationMessage || t('welcome.migration.default'))}</div>
                         <div class="managed-model-actions">
                             <button class="btn btn-primary btn-compact" id="welcome-migration-btn" onclick="runWelcomeMigration()">
                                 <span class="material-icons-round">drive_file_move</span>
-                                Run Migration
+                                ${escapeHtml(t('welcome.action.runMigration'))}
                             </button>
                         </div>
                     </div>
@@ -2179,10 +2704,10 @@
                 cards.push(`
                     <div class="welcome-action-card">
                         <div class="welcome-action-top">
-                            <div class="welcome-action-title">Local AI Packages</div>
-                            <span class="welcome-action-badge">Recommended</span>
+                            <div class="welcome-action-title">${escapeHtml(t('welcome.card.localPackages.title'))}</div>
+                            <span class="welcome-action-badge">${escapeHtml(t('welcome.card.recommended'))}</span>
                         </div>
-                        <div class="welcome-action-body">Install only what you want to use. These downloads stay on your machine and unlock voice playback plus local semantic retrieval.</div>
+                        <div class="welcome-action-body">${escapeHtml(t('welcome.card.localPackages.body'))}</div>
                         <div class="welcome-models-grid">
                             ${managedModels.map((item) => renderManagedModelCard(item, { scope: 'welcome', simplified: true })).join('')}
                         </div>
@@ -2192,10 +2717,10 @@
                 cards.push(`
                     <div class="welcome-action-card">
                         <div class="welcome-action-top">
-                            <div class="welcome-action-title">Local AI Packages</div>
-                            <span class="welcome-action-badge">Recommended</span>
+                            <div class="welcome-action-title">${escapeHtml(t('welcome.card.localPackages.title'))}</div>
+                            <span class="welcome-action-badge">${escapeHtml(t('welcome.card.recommended'))}</span>
                         </div>
-                        <div class="welcome-action-body">${escapeHtml(state.ttsDownloadMessage || 'Download the local runtime files to use Supertonic TTS and related local features.')}</div>
+                        <div class="welcome-action-body">${escapeHtml(state.ttsDownloadMessage || t('welcome.ttsDownload.default'))}</div>
                     </div>
                 `);
             }
@@ -2203,9 +2728,9 @@
                 cards.push(`
                     <div class="welcome-action-card">
                         <div class="welcome-action-top">
-                            <div class="welcome-action-title">Ready to go</div>
+                            <div class="welcome-action-title">${escapeHtml(t('welcome.card.ready.title'))}</div>
                         </div>
-                        <div class="welcome-action-body">Everything needed for the current setup is already in place.</div>
+                        <div class="welcome-action-body">${escapeHtml(t('welcome.card.ready.body'))}</div>
                     </div>
                 `);
             }
@@ -2241,16 +2766,16 @@
             try {
                 if (btn) {
                     btn.disabled = true;
-                    btn.innerHTML = '<span class="material-icons-round">sync</span> Running...';
+                    btn.innerHTML = `<span class="material-icons-round">sync</span> ${escapeHtml(t('welcome.action.running'))}`;
                 }
                 const summary = await window.go.core.App.RunStorageMigration();
                 await checkAssetStatus();
                 await refreshManagedModels();
                 await refreshWelcomeState(true);
-                showAlert(summary || 'Migration completed.');
+                showAlert(summary || t('message.migration.completed'));
             } catch (e) {
                 console.error('Failed to run welcome migration:', e);
-                showAlert('Failed to run migration: ' + e);
+                showAlert(t('error.runMigration', { error: e?.message || e }));
             } finally {
                 if (btn) {
                     btn.disabled = false;
@@ -2265,7 +2790,7 @@
             try {
                 if (btn) {
                     btn.disabled = true;
-                    btn.innerHTML = '<span class="material-icons-round">sync</span> Downloading...';
+                    btn.innerHTML = `<span class="material-icons-round">sync</span> ${escapeHtml(t('welcome.action.downloading'))}`;
                 }
                 await window.go.core.App.DownloadAssets();
                 await checkAssetStatus();
@@ -2277,10 +2802,10 @@
                     const modal = document.getElementById('welcome-modal');
                     if (modal) modal.style.display = 'none';
                 }
-                showAlert('Runtime download completed.');
+                showAlert(t('message.runtime.completed'));
             } catch (e) {
                 console.error('Failed to download runtime assets:', e);
-                showAlert('Failed to download runtime: ' + e);
+                showAlert(t('error.downloadRuntime', { error: e?.message || e }));
             } finally {
                 if (btn) {
                     btn.disabled = false;
@@ -2342,7 +2867,7 @@
 
         async function copyDebugTrace() {
             if (!debugTraceEntries.length) {
-                showAlert('There are no debug trace entries to copy.');
+                showAlert(t('debug.noEntries'));
                 return;
             }
 
@@ -2365,17 +2890,17 @@
                 } else {
                     throw new Error('Clipboard API unavailable');
                 }
-                showAlert('Debug trace copied to clipboard.');
+                showAlert(t('debug.copied'));
             } catch (e) {
                 console.error('Failed to copy debug trace:', e);
-                showAlert('Failed to copy debug trace: ' + e.message);
+                showAlert(t('debug.copyFailed', { error: e.message }));
             }
         }
 
         function openTracePayloadById(entryId) {
             const entry = debugTraceEntries.find((item) => String(item.id) === String(entryId));
             if (!entry) {
-                showAlert('Could not find the selected trace entry.');
+                showAlert(t('trace.entryMissing'));
                 return;
             }
             openTracePayload(entry);
@@ -2388,11 +2913,11 @@
             const titleEl = document.getElementById('trace-payload-title');
             if (titleEl) {
                 if (entry.stage === 'buffer.saved') {
-                    titleEl.textContent = 'Buffered Source';
+                    titleEl.textContent = t('trace.bufferedSource');
                 } else if (entry.stage === 'buffer.read') {
-                    titleEl.textContent = 'Buffered Excerpts';
+                    titleEl.textContent = t('trace.bufferedExcerpts');
                 } else {
-                    titleEl.textContent = 'Trace Payload';
+                    titleEl.textContent = t('trace.payloadTitle');
                 }
             }
             document.getElementById('trace-payload-meta').textContent =
@@ -2405,14 +2930,14 @@
             openTracePayloadEntry = null;
             const titleEl = document.getElementById('trace-payload-title');
             if (titleEl) {
-                titleEl.textContent = 'Trace Payload';
+                titleEl.textContent = t('trace.payloadTitle');
             }
             document.getElementById('trace-payload-modal').style.display = 'none';
         }
 
         async function copyOpenTracePayload() {
             if (!openTracePayloadEntry?.payload) {
-                showAlert('There is no payload to copy.');
+                showAlert(t('trace.noPayload'));
                 return;
             }
 
@@ -2424,10 +2949,10 @@
                 } else {
                     throw new Error('Clipboard API unavailable');
                 }
-                showAlert('Trace payload copied to clipboard.');
+                showAlert(t('trace.copied'));
             } catch (e) {
                 console.error('Failed to copy trace payload:', e);
-                showAlert('Failed to copy trace payload: ' + e.message);
+                showAlert(t('trace.copyFailed', { error: e.message }));
             }
         }
 
@@ -2455,13 +2980,13 @@
             return `
                 <div class="mcp-inline-json">
                     <div class="mcp-inline-json-header">
-                        <div class="mcp-inline-json-title">MCP.JSON EXAMPLE</div>
+                        <div class="mcp-inline-json-title">${escapeHtml(t('mcp.json.title'))}</div>
                         <button class="btn btn-secondary btn-compact mcp-inline-json-copy" type="button" onclick="copyMcpJsonExample()">
                             <span class="material-icons-round">content_copy</span>
-                            Copy JSON
+                            ${escapeHtml(t('action.copyJson'))}
                         </button>
                     </div>
-                    <p class="mcp-inline-json-caption">Use the current server address shown below in LM Studio's <code>mcp.json</code>.</p>
+                    <p class="mcp-inline-json-caption">${t('mcp.json.caption')}</p>
                     <pre class="mcp-inline-json-box"><code>${escapeHtml(jsonText)}</code></pre>
                 </div>
             `;
@@ -2612,25 +3137,25 @@
 
             if (mcpHelpMarkdownLoaded && mcpHelpMarkdownSource) {
                 markdownEl.classList.remove('is-loading', 'is-error');
-                markdownEl.innerHTML = renderMcpHelpContent(mcpHelpMarkdownSource);
+                markdownEl.innerHTML = renderMcpHelpContent(extractLocalizedMarkdown(mcpHelpMarkdownSource));
                 resolveHelpAssetPaths(markdownEl, 'public/help/LMStudio_MCP.md');
                 return;
             }
 
             markdownEl.classList.add('is-loading');
             markdownEl.classList.remove('is-error');
-            markdownEl.textContent = 'Loading help document...';
+            markdownEl.textContent = t('help.loading');
 
             try {
                 const markdown = await loadMcpHelpMarkdown();
                 markdownEl.classList.remove('is-loading', 'is-error');
-                markdownEl.innerHTML = renderMcpHelpContent(markdown);
+                markdownEl.innerHTML = renderMcpHelpContent(extractLocalizedMarkdown(markdown));
                 resolveHelpAssetPaths(markdownEl, 'public/help/LMStudio_MCP.md');
             } catch (e) {
                 console.error('Failed to load MCP help markdown:', e);
                 markdownEl.classList.remove('is-loading');
                 markdownEl.classList.add('is-error');
-                markdownEl.textContent = 'Failed to load help document.';
+                markdownEl.textContent = t('help.loadFailed');
             }
         }
 
@@ -2644,26 +3169,32 @@
             const markdownEl = document.getElementById('doc-help-markdown');
             if (!modal || !titleEl || !markdownEl) return;
 
-            titleEl.textContent = title || 'Help';
+            openDocHelpPath = path || '';
+            titleEl.textContent = title || t('help.modalTitle.default');
             modal.style.display = 'flex';
             markdownEl.classList.add('is-loading');
             markdownEl.classList.remove('is-error');
-            markdownEl.textContent = 'Loading help document...';
+            markdownEl.textContent = t('help.loading');
 
             try {
                 const markdown = await loadDocHelpMarkdown(path);
                 markdownEl.classList.remove('is-loading', 'is-error');
-                markdownEl.innerHTML = renderSimpleMarkdown(markdown);
+                markdownEl.innerHTML = renderSimpleMarkdown(extractLocalizedMarkdown(markdown));
                 resolveHelpAssetPaths(markdownEl, path);
             } catch (e) {
                 console.error('Failed to load help markdown:', path, e);
                 markdownEl.classList.remove('is-loading');
                 markdownEl.classList.add('is-error');
-                markdownEl.textContent = 'Failed to load help document.';
+                markdownEl.textContent = t('help.loadFailed');
             }
         }
 
+        async function openDocHelpModalByKey(titleKey, path) {
+            return openDocHelpModal(t(titleKey || 'help.modalTitle.default'), path);
+        }
+
         function closeDocHelpModal() {
+            openDocHelpPath = '';
             document.getElementById('doc-help-modal').style.display = 'none';
         }
 
@@ -2677,10 +3208,10 @@
                 } else {
                     throw new Error('Clipboard API unavailable');
                 }
-                showAlert('mcp.json example copied to clipboard.');
+                showAlert(currentServerLanguage === 'ko' ? 'mcp.json 예시를 클립보드에 복사했습니다.' : 'mcp.json example copied to clipboard.');
             } catch (e) {
                 console.error('Failed to copy mcp.json example:', e);
-                showAlert('Failed to copy mcp.json example: ' + e.message);
+                showAlert((currentServerLanguage === 'ko' ? 'mcp.json 예시 복사 실패: ' : 'Failed to copy mcp.json example: ') + e.message);
             }
         }
 
@@ -2700,18 +3231,20 @@
             const liveDot = document.getElementById('trace-live-dot');
             if (!list || !countEl || !statusEl || !liveDot) return;
 
-            statusEl.textContent = debugTraceEnabled ? 'Live' : 'Disabled';
+            statusEl.textContent = debugTraceEnabled
+                ? (currentServerLanguage === 'ko' ? '실시간' : 'Live')
+                : t('status.disabled');
             liveDot.classList.toggle('enabled', debugTraceEnabled);
-            countEl.textContent = `${debugTraceEntries.length} ${debugTraceEntries.length === 1 ? 'entry' : 'entries'}`;
+            countEl.textContent = t('trace.count', { count: debugTraceEntries.length });
 
             if (!debugTraceEnabled && debugTraceEntries.length === 0) {
-                list.innerHTML = '<div class="trace-empty">Debug trace is disabled. Turn it on in Advanced Settings to inspect the request pipeline.</div>';
+                list.innerHTML = `<div class="trace-empty">${escapeHtml(t('debug.empty'))}</div>`;
                 adjustLayout();
                 return;
             }
 
             if (debugTraceEntries.length === 0) {
-                list.innerHTML = '<div class="trace-empty">No trace events yet. Send a request with debug trace enabled and events will appear here.</div>';
+                list.innerHTML = `<div class="trace-empty">${escapeHtml(currentServerLanguage === 'ko' ? '아직 트레이스 이벤트가 없습니다. 디버그 트레이스를 켜고 요청을 보내면 여기에 표시됩니다.' : 'No trace events yet. Send a request with debug trace enabled and events will appear here.')}</div>`;
                 adjustLayout();
                 return;
             }
@@ -2735,10 +3268,10 @@
             const hasPayload = !!(entry.payload && String(entry.payload).trim());
             const entryId = hasPayload ? String(entry.id || '') : '';
             const hint = entry.stage === 'buffer.saved'
-                ? 'Click to inspect buffered source'
+                ? (currentServerLanguage === 'ko' ? '클릭하여 버퍼된 소스를 확인' : 'Click to inspect buffered source')
                 : entry.stage === 'buffer.read'
-                    ? 'Click to inspect selected excerpts'
-                    : 'Click to view payload';
+                    ? (currentServerLanguage === 'ko' ? '클릭하여 선택된 발췌문 확인' : 'Click to inspect selected excerpts')
+                    : (currentServerLanguage === 'ko' ? '클릭하여 페이로드 보기' : 'Click to view payload');
 
             return `
                 <div class="trace-entry ${hasPayload ? 'has-payload' : ''}" ${hasPayload ? `onclick="openTracePayloadById('${escapeHtml(entryId)}')"` : ''}>
@@ -2770,7 +3303,7 @@
         async function generateCertificate() {
             const domain = document.getElementById('cert-domain').value.trim();
             if (!domain) {
-                showAlert("Please enter a domain.");
+                showAlert(currentServerLanguage === 'ko' ? '도메인을 입력하세요.' : 'Please enter a domain.');
                 return;
             }
 
@@ -2779,18 +3312,18 @@
                 const btn = document.querySelector('button[onclick="generateCertificate()"]');
                 const originalContent = btn.innerHTML;
                 btn.disabled = true;
-                btn.innerHTML = '<span class="material-icons-round">sync</span> Generating...';
+                btn.innerHTML = `<span class="material-icons-round">sync</span> ${currentServerLanguage === 'ko' ? '생성 중...' : 'Generating...'}`;
 
                 await window.go.core.App.GenerateCertificate(domain);
 
-                showAlert("Certificate generated successfully!");
+                showAlert(currentServerLanguage === 'ko' ? '인증서가 생성되었습니다.' : 'Certificate generated successfully!');
                 checkRestartRequired();
 
                 btn.disabled = false;
                 btn.innerHTML = originalContent;
             } catch (e) {
                 console.error('Failed to generate certificate:', e);
-                showAlert("Failed to generate certificate: " + e);
+                showAlert((currentServerLanguage === 'ko' ? '인증서 생성 실패: ' : 'Failed to generate certificate: ') + e);
             }
         }
 
@@ -2799,7 +3332,7 @@
                 await window.go.core.App.OpenCertFolder();
             } catch (e) {
                 console.error('Failed to open certificate folder:', e);
-                showAlert("Failed to open folder: " + e);
+                showAlert((currentServerLanguage === 'ko' ? '폴더 열기 실패: ' : 'Failed to open folder: ') + e);
             }
         }
 
@@ -2825,7 +3358,7 @@
                 toggleBtn.innerHTML = '<span class="material-icons-round">sync</span> Restarting...';
 
                 document.getElementById('status-dot').style.backgroundColor = '#eab308';
-                document.getElementById('status-text').innerText = 'Restarting...';
+                document.getElementById('status-text').innerText = currentServerLanguage === 'ko' ? '재시작 중...' : 'Restarting...';
 
                 await window.go.core.App.RestartServer();
 
@@ -2854,29 +3387,36 @@
 
             if (ready) {
                 dot.className = 'status-dot running'; // Re-use running class for green
-                text.textContent = 'Ready';
+                text.textContent = t('status.ready');
                 text.style.color = 'var(--success-color)';
             } else {
                 dot.className = 'status-dot'; // Default red
-                text.textContent = 'Download required';
+                text.textContent = currentServerLanguage === 'ko' ? '다운로드 필요' : 'Download required';
                 text.style.color = 'var(--danger-color)';
             }
         }
 
         function getManagedModelIntro(item) {
             if (item?.kind === 'tts') {
-                return 'Supertonic 2 is the local speech runtime used for natural text-to-speech playback inside the app.';
+                return currentServerLanguage === 'ko'
+                    ? 'Supertonic 2는 앱 안에서 자연스러운 TTS 재생을 위해 사용하는 로컬 음성 런타임입니다.'
+                    : 'Supertonic 2 is the local speech runtime used for natural text-to-speech playback inside the app.';
             }
             if (item?.kind === 'embedding') {
-                return 'Multilingual E5 Small powers local semantic search and memory retrieval so Korean and multilingual context can be found more accurately.';
+                return currentServerLanguage === 'ko'
+                    ? 'Multilingual E5 Small은 로컬 의미 검색과 메모리 검색을 담당해 한국어와 다국어 문맥을 더 정확하게 찾도록 도와줍니다.'
+                    : 'Multilingual E5 Small powers local semantic search and memory retrieval so Korean and multilingual context can be found more accurately.';
             }
-            return 'This package adds local AI features that work directly on your device.';
+            return currentServerLanguage === 'ko'
+                ? '이 패키지는 기기에서 직접 동작하는 로컬 AI 기능을 추가합니다.'
+                : 'This package adds local AI features that work directly on your device.';
         }
 
         function renderManagedModelCard(item, options = {}) {
             const simplified = options.simplified === true;
             const scope = String(options.scope || 'manager');
-            const status = escapeHtml(String(item.status || 'unknown'));
+            const rawStatus = String(item.status || 'unknown');
+            const status = escapeHtml(rawStatus);
             const displayName = escapeHtml(String(item.displayName || item.modelId || item.key || 'Model'));
             const installDir = escapeHtml(String(item.installDir || ''));
             const message = escapeHtml(String(item.message || ''));
@@ -2888,7 +3428,7 @@
             const currentFile = escapeHtml(String(item.currentFile || ''));
             const progressText = escapeHtml(String(item.progressText || ''));
             const canDownload = !!item.canDownload;
-            const buttonLabel = item.installed ? 'Redownload' : 'Download';
+            const buttonLabel = item.installed ? t('models.button.redownload') : t('models.button.download');
             const modelKey = escapeHtml(String(item.key || ''));
             const domKey = managedModelDomKey(String(item.key || ''));
             const metaHtml = simplified
@@ -2900,11 +3440,11 @@
                 `
                 : `
                     <div class="managed-model-meta">
-                        <div><strong>Provider:</strong> ${provider}</div>
-                        <div><strong>Model ID:</strong> ${modelId}</div>
-                        ${backend ? `<div><strong>Backend:</strong> ${backend}</div>` : ''}
-                        <div><strong>Install Dir:</strong> ${installDir}</div>
-                        <div><strong>State:</strong> <span id="${scope}-managed-model-message-${domKey}">${message}</span></div>
+                        <div><strong>${escapeHtml(t('models.meta.provider'))}:</strong> ${provider}</div>
+                        <div><strong>${escapeHtml(t('models.meta.modelId'))}:</strong> ${modelId}</div>
+                        ${backend ? `<div><strong>${escapeHtml(t('models.meta.backend'))}:</strong> ${backend}</div>` : ''}
+                        <div><strong>${escapeHtml(t('models.meta.installDir'))}:</strong> ${installDir}</div>
+                        <div><strong>${escapeHtml(t('models.meta.state'))}:</strong> <span id="${scope}-managed-model-message-${domKey}">${message}</span></div>
                     </div>
                 `;
 
@@ -2912,7 +3452,7 @@
                 <div class="managed-model-card${simplified ? ' welcome-model-card' : ''}" id="${scope}-managed-model-card-${domKey}">
                     <div class="managed-model-header">
                         <div class="managed-model-title">${displayName}</div>
-                        <span class="managed-model-chip ${status}" id="${scope}-managed-model-chip-${domKey}">${status}</span>
+                        <span class="managed-model-chip ${status}" id="${scope}-managed-model-chip-${domKey}">${escapeHtml(t(`status.${rawStatus}`))}</span>
                     </div>
                     ${metaHtml}
                     <div class="managed-model-progress" id="${scope}-managed-model-progress-${domKey}" style="${downloading || progressPct > 0 ? '' : 'display:none;'}">
@@ -2920,7 +3460,7 @@
                             <div class="managed-model-progress-fill" id="${scope}-managed-model-progress-fill-${domKey}" style="width: ${Math.max(0, Math.min(progressPct, 100))}%;"></div>
                         </div>
                         <div class="managed-model-progress-meta">
-                            <span id="${scope}-managed-model-progress-text-${domKey}">${progressText || 'Downloading...'}</span>
+                            <span id="${scope}-managed-model-progress-text-${domKey}">${progressText || escapeHtml(t('models.progress.default'))}</span>
                             <span id="${scope}-managed-model-progress-pct-${domKey}">${Math.round(progressPct)}%</span>
                         </div>
                         <div class="managed-model-progress-file" id="${scope}-managed-model-progress-file-${domKey}" style="${currentFile ? '' : 'display:none;'}">${currentFile}</div>
@@ -2988,7 +3528,7 @@
 
             if (chipEl) {
                 chipEl.className = `managed-model-chip ${status}`;
-                chipEl.textContent = status;
+                chipEl.textContent = t(`status.${status}`);
             }
             if (messageEl) {
                 messageEl.textContent = String(state?.message || '');
@@ -3000,7 +3540,7 @@
                 fillEl.style.width = `${Math.max(0, Math.min(progressPct, 100))}%`;
             }
             if (textEl) {
-                textEl.textContent = String(state?.message || 'Downloading...');
+                textEl.textContent = String(state?.message || t('models.progress.default'));
             }
             if (pctEl) {
                 pctEl.textContent = `${Math.round(progressPct)}%`;
@@ -3026,7 +3566,7 @@
             const listEl = document.getElementById('managed-models-list');
             const rootEl = document.getElementById('models-root-dir');
             if (listEl) {
-                listEl.innerHTML = '<div style="color: var(--text-secondary); font-size: 13px;">Loading...</div>';
+                listEl.innerHTML = `<div style="color: var(--text-secondary); font-size: 13px;">${escapeHtml(t('status.loading'))}</div>`;
             }
 
             try {
@@ -3042,14 +3582,14 @@
                 if (!listEl) return;
                 const items = Array.isArray(managedModels) ? managedModels : [];
                 if (!items.length) {
-                    listEl.innerHTML = '<div style="color: var(--text-secondary); font-size: 13px;">No managed models available.</div>';
+                    listEl.innerHTML = `<div style="color: var(--text-secondary); font-size: 13px;">${escapeHtml(currentServerLanguage === 'ko' ? '관리 가능한 모델이 없습니다.' : 'No managed models available.')}</div>`;
                     return;
                 }
 
                 listEl.innerHTML = items.map((item) => renderManagedModelCard(item, { scope: 'manager' })).join('');
             } catch (e) {
                 if (listEl) {
-                    listEl.innerHTML = '<div style="color: var(--danger-color); font-size: 13px;">Failed to load model status.</div>';
+                    listEl.innerHTML = `<div style="color: var(--danger-color); font-size: 13px;">${escapeHtml(currentServerLanguage === 'ko' ? '모델 상태를 불러오지 못했습니다.' : 'Failed to load model status.')}</div>`;
                 }
             }
         }
@@ -3059,17 +3599,17 @@
                 await window.go.core.App.StartManagedModelDownload(String(key || ''));
                 refreshManagedModels();
             } catch (e) {
-                showAlert('Failed to start download: ' + (e?.message || e));
+                showAlert((currentServerLanguage === 'ko' ? '다운로드 시작 실패: ' : 'Failed to start download: ') + (e?.message || e));
             }
         }
 
         async function exportEmbeddingManifest() {
             try {
                 const path = await window.go.core.App.ExportEmbeddingModelManifest();
-                showAlert('Manifest saved: ' + path);
+                showAlert((currentServerLanguage === 'ko' ? '매니페스트 저장됨: ' : 'Manifest saved: ') + path);
                 refreshManagedModels();
             } catch (e) {
-                showAlert('Manifest export failed: ' + (e?.message || e));
+                showAlert((currentServerLanguage === 'ko' ? '매니페스트 내보내기 실패: ' : 'Manifest export failed: ') + (e?.message || e));
             }
         }
 
@@ -3195,7 +3735,7 @@
             }
             activity.classList.toggle('is-active', !!llmBusy);
             activity.setAttribute('aria-hidden', llmBusy ? 'false' : 'true');
-            activity.title = llmBusy ? 'LLM processing' : 'LLM idle';
+            activity.title = llmBusy ? t('llm.processing') : t('llm.idle');
         }
 
         function updateUI(running, port, llmBusy = false) {
@@ -3208,7 +3748,7 @@
 
             if (running) {
                 dot.classList.add('running');
-                text.textContent = 'Running';
+                text.textContent = t('status.running');
 
                 const mcpPort = parseInt(port) + 1;
                 const webUrl = `https://localhost:${port}`;
@@ -3223,13 +3763,13 @@
                 `;
 
                 btn.className = 'btn btn-danger btn-block';
-                btn.innerHTML = '<span class="material-icons-round">stop</span> Stop Server';
+                btn.innerHTML = `<span class="material-icons-round">stop</span> ${escapeHtml(t('action.stopServer'))}`;
             } else {
                 dot.classList.remove('running');
-                text.textContent = 'Stopped';
+                text.textContent = t('status.stopped');
                 portDisplay.textContent = '';
                 btn.className = 'btn btn-primary btn-block';
-                btn.innerHTML = '<span class="material-icons-round">play_arrow</span> Start Server';
+                btn.innerHTML = `<span class="material-icons-round">play_arrow</span> ${escapeHtml(t('action.startServer'))}`;
             }
         }
 
@@ -3263,9 +3803,9 @@
                 const users = await window.go.core.App.GetUsers();
                 const list = document.getElementById('user-list');
                 list.innerHTML = users.map(u => `
-                    <div class="user-item" onclick="openEditUserModal('${u.id}')" style="cursor: pointer;" title="Click to edit">
+                    <div class="user-item" onclick="openEditUserModal('${u.id}')" style="cursor: pointer;" title="${escapeHtml(currentServerLanguage === 'ko' ? '클릭하여 편집' : 'Click to edit')}">
                         <span>${u.id} <span style="color: var(--text-secondary);">(${u.role})</span></span>
-                        <button class="icon-btn" onclick="event.stopPropagation(); deleteUser('${u.id}')" title="Delete">
+                        <button class="icon-btn" onclick="event.stopPropagation(); deleteUser('${u.id}')" title="${escapeHtml(currentServerLanguage === 'ko' ? '삭제' : 'Delete')}">
                             <span class="material-icons-round" style="font-size: 18px;">delete</span>
                         </button>
                     </div>
@@ -3303,11 +3843,11 @@
             const isAdmin = document.getElementById('new-user-admin').checked;
 
             if (!id) {
-                showAlert('Please enter a username.');
+                showAlert(t('error.enterUsername'));
                 return;
             }
             if (!password) {
-                showAlert('Please enter a password.');
+                showAlert(t('error.enterPassword'));
                 return;
             }
 
@@ -3318,7 +3858,7 @@
                 closeAddUserModal();
                 loadUsers();
             } catch (e) {
-                showAlert('Failed: ' + e.message);
+                showAlert(t('error.failedPrefix', { error: e.message }));
             }
         }
 
@@ -3347,25 +3887,25 @@
         }
 
         async function deleteUser(id) {
-            showConfirm(`Delete account "${id}"?`, async (confirmed) => {
+            showConfirm(t('confirm.deleteAccount', { id }), async (confirmed) => {
                 if (!confirmed) return;
                 try {
                     await window.go.core.App.DeleteUser(id);
                     loadUsers();
                 } catch (e) {
-                    showAlert('Failed: ' + e.message);
+                    showAlert(t('error.failedPrefix', { error: e.message }));
                 }
             });
         }
 
         async function confirmLogoutAllSessions() {
-            showConfirm('Log out every account on every device and browser now?', async (confirmed) => {
+            showConfirm(t('confirm.logoutAllSessions'), async (confirmed) => {
                 if (!confirmed) return;
                 try {
                     await window.go.core.App.LogoutAllSessions();
-                    showAlert('All login sessions have been cleared from SQLite.');
+                    showAlert(t('message.sessionsCleared'));
                 } catch (e) {
-                    showAlert('Failed to clear login sessions: ' + (e?.message || e));
+                    showAlert((currentServerLanguage === 'ko' ? '세션 정리 실패: ' : 'Failed to clear login sessions: ') + (e?.message || e));
                 }
             });
         }
@@ -3441,16 +3981,56 @@
 
                 // Populate Tool List
                 const allTools = [
-                    { id: 'search_web', name: 'Web Search', desc: 'Search DuckDuckGo' },
-                    { id: 'read_web_page', name: 'Read Web Page', desc: 'Read URL content' },
-                    { id: 'read_buffered_source', name: 'Read Buffered Source', desc: 'Read cached excerpts from buffered web content' },
-                    { id: 'namu_wiki', name: 'Namuwiki', desc: 'Search/Read Namuwiki' },
-                    { id: 'naver_search', name: 'Naver Search', desc: 'Search Naver (Dictionary, Weather, News)' },
-                    { id: 'personal_memory', name: 'Personal Memory', desc: 'Access long-term memory' },
-                    { id: 'get_current_time', name: 'Current Time', desc: 'Get date/time' },
-                    { id: 'get_current_location', name: 'Current Location', desc: 'Get client location' },
-                    { id: 'read_user_document', name: 'Read Documents', desc: 'Read static/work memory files' },
-                    { id: 'execute_command', name: 'Terminal / Command', desc: 'Execute system commands' }
+                    {
+                        id: 'search_web',
+                        name: currentServerLanguage === 'ko' ? '웹 검색' : 'Web Search',
+                        desc: currentServerLanguage === 'ko' ? 'DuckDuckGo 검색' : 'Search DuckDuckGo'
+                    },
+                    {
+                        id: 'read_web_page',
+                        name: currentServerLanguage === 'ko' ? '웹 페이지 읽기' : 'Read Web Page',
+                        desc: currentServerLanguage === 'ko' ? 'URL 콘텐츠 읽기' : 'Read URL content'
+                    },
+                    {
+                        id: 'read_buffered_source',
+                        name: currentServerLanguage === 'ko' ? '버퍼된 소스 읽기' : 'Read Buffered Source',
+                        desc: currentServerLanguage === 'ko' ? '버퍼된 웹 콘텐츠의 캐시 발췌문 읽기' : 'Read cached excerpts from buffered web content'
+                    },
+                    {
+                        id: 'namu_wiki',
+                        name: 'Namuwiki',
+                        desc: currentServerLanguage === 'ko' ? '나무위키 검색/읽기' : 'Search/Read Namuwiki'
+                    },
+                    {
+                        id: 'naver_search',
+                        name: currentServerLanguage === 'ko' ? '네이버 검색' : 'Naver Search',
+                        desc: currentServerLanguage === 'ko' ? '네이버 검색 (사전, 날씨, 뉴스)' : 'Search Naver (Dictionary, Weather, News)'
+                    },
+                    {
+                        id: 'personal_memory',
+                        name: currentServerLanguage === 'ko' ? '개인 메모리' : 'Personal Memory',
+                        desc: currentServerLanguage === 'ko' ? '장기 메모리 접근' : 'Access long-term memory'
+                    },
+                    {
+                        id: 'get_current_time',
+                        name: currentServerLanguage === 'ko' ? '현재 시간' : 'Current Time',
+                        desc: currentServerLanguage === 'ko' ? '날짜/시간 가져오기' : 'Get date/time'
+                    },
+                    {
+                        id: 'get_current_location',
+                        name: currentServerLanguage === 'ko' ? '현재 위치' : 'Current Location',
+                        desc: currentServerLanguage === 'ko' ? '클라이언트 위치 가져오기' : 'Get client location'
+                    },
+                    {
+                        id: 'read_user_document',
+                        name: currentServerLanguage === 'ko' ? '문서 읽기' : 'Read Documents',
+                        desc: currentServerLanguage === 'ko' ? '정적/작업 메모리 파일 읽기' : 'Read static/work memory files'
+                    },
+                    {
+                        id: 'execute_command',
+                        name: currentServerLanguage === 'ko' ? '터미널 / 명령어' : 'Terminal / Command',
+                        desc: currentServerLanguage === 'ko' ? '시스템 명령 실행' : 'Execute system commands'
+                    }
                 ];
 
                 const toolsContainer = document.getElementById('edit-user-tools-list');
@@ -3472,7 +4052,7 @@
                 document.getElementById('edit-user-modal').style.display = 'flex';
             } catch (e) {
                 console.error('Failed to load user details:', e);
-                showAlert('Failed to load user details: ' + e.message);
+                showAlert(t('error.loadUserDetails', { error: e.message }));
             }
         }
 
@@ -3515,22 +4095,22 @@
             const confirmPassword = document.getElementById('edit-confirm-password').value;
 
             if (!newPassword) {
-                showAlert('Please enter a new password.');
+                showAlert(t('error.newPasswordRequired'));
                 return;
             }
             if (newPassword !== confirmPassword) {
-                showAlert('New password and confirmation do not match.');
+                showAlert(t('error.passwordMismatch'));
                 return;
             }
 
             try {
                 await window.go.core.App.UpdateUserPassword(userId, newPassword);
-                showAlert('Password changed successfully.');
+                showAlert(t('message.passwordChanged'));
                 // Clear password fields
                 document.getElementById('edit-new-password').value = '';
                 document.getElementById('edit-confirm-password').value = '';
             } catch (e) {
-                showAlert('Failed to change password: ' + e.message);
+                showAlert(t('error.changePassword', { error: e.message }));
             }
         }
 
@@ -3544,7 +4124,7 @@
             const ephemeralDays = parseInt(document.getElementById('edit-retention-ephemeral-days').value || '0', 10);
 
             if ([coreDays, workingDays, ephemeralDays].some((value) => Number.isNaN(value) || value < 0)) {
-                showAlert('Memory retention days must be zero or a positive integer.');
+                showAlert(currentServerLanguage === 'ko' ? '메모리 보존 일수는 0 이상 정수여야 합니다.' : 'Memory retention days must be zero or a positive integer.');
                 return;
             }
 
@@ -3586,9 +4166,9 @@
 
                 closeEditUserModal();
                 loadUsers();
-                showAlert('User settings saved successfully.');
+                showAlert(t('message.userSettingsSaved'));
             } catch (e) {
-                showAlert('Failed to save settings: ' + e.message);
+                showAlert((currentServerLanguage === 'ko' ? '설정 저장 실패: ' : 'Failed to save settings: ') + e.message);
             }
         }
 

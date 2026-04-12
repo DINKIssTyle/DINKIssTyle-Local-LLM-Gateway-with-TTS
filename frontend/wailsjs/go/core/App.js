@@ -62,6 +62,10 @@ export function GetAboutInfo() {
   return window['go']['core']['App']['GetAboutInfo']();
 }
 
+export function GetAlwaysShowWelcome() {
+  return window['go']['core']['App']['GetAlwaysShowWelcome']();
+}
+
 export function GetAppVersion() {
   return window['go']['core']['App']['GetAppVersion']();
 }
@@ -116,6 +120,10 @@ export function GetModelsRootDir() {
 
 export function GetServerStatus() {
   return window['go']['core']['App']['GetServerStatus']();
+}
+
+export function GetServerUILanguage() {
+  return window['go']['core']['App']['GetServerUILanguage']();
 }
 
 export function GetStartOnBoot() {
@@ -210,6 +218,10 @@ export function RunStorageMigration() {
   return window['go']['core']['App']['RunStorageMigration']();
 }
 
+export function SetAlwaysShowWelcome(arg1) {
+  return window['go']['core']['App']['SetAlwaysShowWelcome'](arg1);
+}
+
 export function SetAutoStartServer(arg1) {
   return window['go']['core']['App']['SetAutoStartServer'](arg1);
 }
@@ -256,6 +268,10 @@ export function SetPort(arg1) {
 
 export function SetServerTTSConfig(arg1) {
   return window['go']['core']['App']['SetServerTTSConfig'](arg1);
+}
+
+export function SetServerUILanguage(arg1) {
+  return window['go']['core']['App']['SetServerUILanguage'](arg1);
 }
 
 export function SetStartOnBoot(arg1) {

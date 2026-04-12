@@ -35,6 +35,8 @@ export function GenerateCertificate(arg1:string):Promise<void>;
 
 export function GetAboutInfo():Promise<Record<string, string>>;
 
+export function GetAlwaysShowWelcome():Promise<boolean>;
+
 export function GetAppVersion():Promise<string>;
 
 export function GetAutoStartServer():Promise<boolean>;
@@ -62,6 +64,8 @@ export function GetMinimizeToTray():Promise<boolean>;
 export function GetModelsRootDir():Promise<string>;
 
 export function GetServerStatus():Promise<Record<string, any>>;
+
+export function GetServerUILanguage():Promise<string>;
 
 export function GetStartOnBoot():Promise<boolean>;
 
@@ -109,6 +113,8 @@ export function RestartServer():Promise<void>;
 
 export function RunStorageMigration():Promise<string>;
 
+export function SetAlwaysShowWelcome(arg1:boolean):Promise<void>;
+
 export function SetAutoStartServer(arg1:boolean):Promise<void>;
 
 export function SetCertDomain(arg1:string):Promise<void>;
@@ -132,6 +138,8 @@ export function SetMinimizeToTray(arg1:boolean):Promise<void>;
 export function SetPort(arg1:string):Promise<void>;
 
 export function SetServerTTSConfig(arg1:core.ServerTTSConfig):Promise<void>;
+
+export function SetServerUILanguage(arg1:string):Promise<void>;
 
 export function SetStartOnBoot(arg1:boolean):Promise<void>;
 
