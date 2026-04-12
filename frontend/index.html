@@ -1371,12 +1371,17 @@
                 <img src="public/logo.png" alt="DKST LLM Chat Server Icon" class="header-logo">
                 <h1>DKST LLM Chat Server</h1>
             </div>
+
             <div class="header-spacer"></div>
+
+            <span class="material-icons-round" style="font-size: 18px; color: var(--text-color);">language</span>
+
             <select id="server-language-select" class="header-language-select" onchange="setServerLanguage(this.value)"
                 aria-label="Select language">
                 <option value="ko">한국어</option>
                 <option value="en">English</option>
             </select>
+
             <div id="llm-activity-indicator" class="llm-activity-indicator" aria-hidden="true" title="LLM idle">
                 <span class="llm-activity-indicator__dot"></span>
             </div>
