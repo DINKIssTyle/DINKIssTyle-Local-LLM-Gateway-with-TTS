@@ -7,6 +7,5 @@ dinkisstyle-chat
 *.log
 dinkisstyle-chat-test
 dinkisstyle-chat-test-context
-/note/os_tts_test
-/note/Normalization_Testing_Tool
 note/
+all_funcs.txt
