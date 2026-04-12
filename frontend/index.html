@@ -1808,9 +1808,10 @@
             </div>
             <div class="modal-body">
                 <div class="welcome-intro">
-                    <div class="welcome-title" id="welcome-primary-message">Welcome to DKST LLM Chat Server.</div>
-                    <div class="welcome-subtitle" id="welcome-secondary-message">A few one-time setup actions may be
-                        needed before everything is ready.</div>
+                    <div class="welcome-title" id="welcome-primary-message" data-i18n="welcome.primary.default">DKST LLM
+                        Chat Server에 오신 것을 환영합니다.</div>
+                    <div class="welcome-subtitle" id="welcome-secondary-message" data-i18n="welcome.secondary.default">
+                        모든 기능을 사용하기 전에 한 번만 필요한 설정이 있을 수 있습니다.</div>
                 </div>
                 <div class="welcome-actions-list" id="welcome-actions-list"></div>
                 <div class="welcome-note" id="welcome-restart-note" style="display:none;">
@@ -2131,6 +2132,7 @@
                 'status.disabled': '비활성화',
                 'status.loading': '불러오는 중...',
                 'status.downloading': '다운로드 중',
+                'status.missing': '없음',
                 'status.ready': '준비됨',
                 'status.failed': '실패',
                 'status.unknown': '알 수 없음',
@@ -2217,7 +2219,7 @@
                 'edit.action.changePassword': '비밀번호 변경',
                 'edit.action.saveChanges': '변경사항 저장',
                 'welcome.primary.default': 'DKST LLM Chat Server에 오신 것을 환영합니다.',
-                'welcome.secondary.default': '모든 기능을 사용하기 전에 한 번만 필요한 설정이 있을 수 있습니다.',
+                'welcome.secondary.default': '모든 기능을 사용하려면 외부 모델을 다운로드해야 합니다.',
                 'welcome.primary.returning': '다시 오신 것을 환영합니다.',
                 'welcome.secondary.returning': '이전 저장소 구조가 감지되어 한 번 정리가 필요합니다.',
                 'welcome.restartNote': '마이그레이션은 현재 사용 중인 파일에 영향을 줄 수 있습니다. 이후에도 이상하면 앱을 한 번 재시작하세요.',
@@ -2225,7 +2227,7 @@
                 'welcome.card.required': '필수',
                 'welcome.card.recommended': '권장',
                 'welcome.card.localPackages.title': '로컬 AI 패키지',
-                'welcome.card.localPackages.body': '필요한 것만 설치하세요. 다운로드 파일은 이 기기에만 저장되며 음성 재생과 로컬 의미 검색 기능을 활성화합니다.',
+                'welcome.card.localPackages.body': '다운로드 파일은 이 기기에 저장되며 음성 재생과 로컬 의미 검색 기능을 활성화합니다.',
                 'welcome.card.ready.title': '준비 완료',
                 'welcome.card.ready.body': '현재 설정에 필요한 항목이 모두 준비되어 있습니다.',
                 'welcome.action.runMigration': '마이그레이션 실행',
@@ -2296,6 +2298,7 @@
                 'status.disabled': 'Disabled',
                 'status.loading': 'Loading...',
                 'status.downloading': 'Downloading',
+                'status.missing': 'Missing',
                 'status.ready': 'Ready',
                 'status.failed': 'Failed',
                 'status.unknown': 'Unknown',
@@ -3024,9 +3027,23 @@
         function getCurrentMcpServerUrl() {
             const configuredPort = parseInt(document.getElementById('port-input')?.value, 10);
             const mcpPort = !Number.isNaN(configuredPort) ? configuredPort + 1 : 7861;
-            const host = (window.location && window.location.hostname && window.location.hostname !== 'localhost')
-                ? window.location.hostname
-                : '127.0.0.1';
+            let host = 'localhost';
+
+            try {
+                const protocol = String(window?.location?.protocol || '').toLowerCase();
+                const hostname = String(window?.location?.hostname || '').trim().toLowerCase();
+                const isBrowserProtocol = protocol === 'http:' || protocol === 'https:';
+                const isUsableHost = hostname
+                    && hostname !== 'wails'
+                    && hostname !== 'localhost'
+                    && !hostname.includes(':');
+                if (isBrowserProtocol && isUsableHost) {
+                    host = hostname;
+                }
+            } catch (_) {
+                // Fall back to localhost for Wails/internal runtimes.
+            }
+
             return `http://${host}:${mcpPort}/mcp/sse`;
         }
 
@@ -3469,8 +3486,8 @@
             }
             if (item?.kind === 'embedding') {
                 return currentServerLanguage === 'ko'
-                    ? 'Multilingual E5 Small은 로컬 의미 검색과 메모리 검색을 담당해 한국어와 다국어 문맥을 더 정확하게 찾도록 도와줍니다.'
-                    : 'Multilingual E5 Small powers local semantic search and memory retrieval so Korean and multilingual context can be found more accurately.';
+                    ? 'Multilingual E5 Small은 메모리 내용의 의미 검색을 담당해 한국어와 다국어 문맥을 더 정확하게 찾도록 도와줍니다.'
+                    : 'Multilingual E5 Small powers local semantic search and memory retrieval so multilingual context can be found more accurately.';
             }
             return currentServerLanguage === 'ko'
                 ? '이 패키지는 기기에서 직접 동작하는 로컬 AI 기능을 추가합니다.'

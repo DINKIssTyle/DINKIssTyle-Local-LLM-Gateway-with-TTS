@@ -1107,12 +1107,18 @@ function extractRuntimeErrorMessage(errorLike) {
 }
 
 function getSuggestedMcpServerUrl() {
-    const defaultUrl = 'http://127.0.0.1:8081/mcp/sse';
+    const defaultUrl = 'http://localhost:8081/mcp/sse';
 
     try {
         const protocol = String(window?.location?.protocol || '').toLowerCase();
-        const host = String(window?.location?.host || '').trim();
-        if ((protocol === 'http:' || protocol === 'https:') && host) {
+        const hostname = String(window?.location?.hostname || '').trim().toLowerCase();
+        const port = String(window?.location?.port || '').trim();
+        const isUsableHost = hostname
+            && hostname !== 'wails'
+            && hostname !== 'localhost'
+            && !hostname.includes(':');
+        if ((protocol === 'http:' || protocol === 'https:') && isUsableHost) {
+            const host = port ? `${hostname}:${port}` : hostname;
             return `http://${host}/mcp/sse`;
         }
     } catch (_) {
@@ -1124,7 +1130,7 @@ function getSuggestedMcpServerUrl() {
         || ''
     ).trim();
     if (configuredPort) {
-        return `http://127.0.0.1:${configuredPort}/mcp/sse`;
+        return `http://localhost:${configuredPort}/mcp/sse`;
     }
 
     return defaultUrl;
