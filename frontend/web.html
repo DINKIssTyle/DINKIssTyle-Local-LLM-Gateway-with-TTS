@@ -46,7 +46,9 @@
             <div class="modal-body">
                 <!-- Language Selector -->
                 <div class="lang-selector">
-                    <label>🌐 Language</label>
+                    <span class="material-icons-round"
+                        style="font-size: 26px; color: var(--text-color);">language_korean_latin</span><label>
+                        Language</label>
                     <select id="cfg-lang" onchange="setLanguage(this.value)">
                         <option value="ko">한국어</option>
                         <option value="en">English</option>
@@ -470,10 +472,12 @@
                     <span class="material-icons-round">logout</span>
                     <span data-i18n="action.logoutCurrentDevice">현재 기기 로그아웃</span>
                 </button>
-                <button class="btn btn-logout" onclick="logoutAllSessions()" style="margin-top: 8px;">
-                    <span class="material-icons-round">logout</span>
-                    <span data-i18n="action.logoutAllSessions">모든 위치에서 로그아웃</span>
-                </button>
+                <div style="text-align: center; margin-bottom: 4px;">
+                    <a href="#" onclick="logoutAllSessions(); return false;"
+                        style="color: var(--text-secondary); font-size: 13px; text-decoration: underline; cursor: pointer;">
+                        <span data-i18n="action.logoutAllSessions">모든 위치에서 로그아웃</span>
+                    </a>
+                </div>
                 <div class="modal-footer-info">
                     &copy; 2026 DINKI'ssTyle
                 </div>

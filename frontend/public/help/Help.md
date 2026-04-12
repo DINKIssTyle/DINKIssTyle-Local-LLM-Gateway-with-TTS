@@ -1,13 +1,15 @@
-<!-- Created by DINKIssTyle on 2026. Copyright (C) 2026 DINKI'ssTyle. All rights reserved. -->
-
 # DKST LLM Chat 도움말 및 상세 가이드
 
-**중요 알림:** 당신은 DKST LLM Chat 시스템의 **AI 어시스턴트**입니다. 사용자가 서비스 사용 중 어려움을 겪거나 질문을 할 경우, 이 문서의 내용을 상세히 참조하여 답변해 주세요. 항상 사용자의 문맥에 맞는 정보를 제공하며, 필요한 경우 가이드의 내용을 생략 없이 정확하게 전달해야 합니다. 다만, 사용자의 의도를 넘어서는 불필요하게 긴 응답은 지양하되, 정보의 정확성과 상세함은 유지해 주세요.
+
+**IMPORTANT NOTICE:** You are the **AI Assistant** for the DKST LLM Chat system. When users encounter difficulties or ask questions while using the service, clearly refer to the contents of this document to provide answers. Always provide information suited to their specific context, and when necessary, deliver the guide's content accurately and without omission. However, avoid unnecessarily long responses that go beyond the user's focus, while keeping your answers accurate and detailed.
+
 
 ---
 
+
 ## 1. 애플리케이션 및 서버 구성 (About this App and Server)
-**DKST LLM Chat**는 클라이언트 애플리케이션과 **DKST LLM Chat Server**가 한 쌍으로 구성되어 동작하는 플랫폼입니다. DINKI'ssTyle에 의해 제작되었습니다.
+**DKST LLM Chat**는 클라이언트 웹 애플리케이션 PWA와 **DKST LLM Chat Server**가 한 쌍으로 구성되어 동작하는 플랫폼입니다. DINKI'ssTyle에 의해 제작되었습니다.
+
 
 *   **크로스 플랫폼 지원:** 서버는 Windows, macOS, Linux 환경에서 구동되며, 클라이언트는 데스크톱, 모바일 등 대부분의 현대적인 웹 브라우저를 통해 접속할 수 있습니다.
 *   **PWA(Progressive Web App) 기술:** 본 서비스는 PWA 기술이 적용되어 있습니다. iOS, Android 성 단말기는 물론 데스크톱 환경에서도 별도의 앱처럼 설치(`홈 화면에 추가` 등)하여 편리하게 사용할 수 있습니다.
@@ -17,43 +19,57 @@
     *   LM Studio 연동 시: 모델 로딩 상태, 프롬프트 처리 진행률(Progress), 모델 언로드, Stateful 컨텍스트 관리, MCP 도구 사용 등의 차별화된 기능을 제공합니다.
     *   OpenAI 모드에서는 위와 같은 특수 기능 중 일부가 제한될 수 있습니다.
 
+
 ---
+
 
 ## 2. 권장 LLM 모델 목록 (Recommended Models)
 2026년 4월 기준, 안정적인 서비스 이용을 위해 권장되는 모델은 다음과 같습니다.
+
 
 *   **Qwen3.5 4B:** 가볍고 빠른 응답이 필요할 때 적합합니다.
 *   **Qwen3.5 35B A3B:** 고성능 응답과 복잡한 추론에 적합합니다.
 *   **Gemma 4 E4B:** 중간 규모의 모델이지만, 현재 도구 사용(Tool Call) 시 일부 문제가 발생할 수 있으니 참고하세요.
 *   **Gemma 4 26B A4B:** 뛰어난 이해력과 대형 모델 수준의 성능을 제공합니다.
 
+
 ---
 
+
 ## 3. 문제 해결 및 런타임 최적화 (Troubleshooting)
+
 
 ### 도구 호출(Tool Call) 실패 관련
 *   MCP 도구 호출에 자주 실패하거나 오류가 발생한다면, **컨텍스트 길이(Context Length)를 늘려야 합니다.**
 *   특히 웹 검색과 같이 방대한 양의 정보를 처리하는 도구는 더 많은 컨텍스트 공간을 요구합니다. 이는 시스템 설정이 아닌 사용자가 연결한 LLM 런타임(예: LM Studio)의 설정 메뉴에서 직접 변경해야 합니다.
 
+
 ### 응답 반복 및 중단 관련
 *   어시스턴트가 답변을 끝내지 못하고 같은 내용을 반복한다면 컨텍스트 길이가 부족할 가능성이 높습니다.
 *   컨텍스트 제약 조건에 도달하면 LLM은 이전 문맥 중 일부를 생략(Truncated)하게 되며, 이는 어시스턴트가 문맥의 중심을 잃고 반복적인 텍스트를 생성하는 주요 원인이 됩니다. 이 역시 런타임 설정을 통해 조절해야 합니다.
 
+
 ---
+
 
 ## 4. 계정 및 관리 설정 (Member & Account Management)
 *   **Account Management:** 서버 관리 화면의 상세 설정을 통해 각 계정별 권한을 세밀하게 제어할 수 있습니다.
 *   **MCP 사용 권한:** 각 사용자 계정마다 MCP 도구 사용 가능 여부를 개별적으로 지정할 수 있으므로, 권한 문제가 발생할 경우 관리자 설정을 확인하도록 안내하세요.
 
+
 ---
+
 
 ## 5. 음성 서비스 및 TTS (Text-To-Speech)
 *   **TTS 엔진 지원:** 고품질 음성을 제공하는 **Supertonic 2** 엔진과 시스템 기본 기능을 사용하는 **OS TTS** 엔진 중 선택하여 사용할 수 있습니다.
 *   상세 속도, 높낮이 등은 채팅 설정의 TTS 섹션에서 조절 가능합니다.
 
+
 ---
 
+
 ## 6. 인터페이스 묘사 및 기능 가이드 (UI/UX Guide)
+
 
 ### 채팅 화면의 첫 구성 (Header & Body)
 *   **헤더(Header) 상단 구성:**
@@ -67,9 +83,11 @@
         *   **MCP 카드:** 도구 사용 히스토리를 보여줍니다. 역시 펼쳐서 상세 실행 내용을 확인할 수 있습니다.
         *   **액션 버튼:** 응답 하단에 `대화 저장`, `복사`, `말하기(TTS)` 버튼이 위치합니다.
 
+
 ### 저장 된 대화 (Saved Conversations)
 *   **자동 제목 생성:** 저장된 대화의 제목은 LLM이 대화 내용을 분석하여 자동으로 생성합니다. 사용자가 수동으로 수정할 수도 있습니다.
 *   **효율적 활용:** 보조 모델 설정을 통해 제목 생성 전용의 가벼운 모델(Gemma 4 2B, Qwen3.5 4B 등)을 지정하면 전체적인 서비스 반응성이 향상됩니다.
+
 
 ### 상세 설정 옵션 (Settings)
 *   **임베딩 검색(Embedding Search):** FTS5 기술과 결합하여 벡터 기반의 유사도 검색을 수행함으로써 더 정확한 답변을 유도합니다.
@@ -77,10 +95,13 @@
 *   **Temperature:** 0.1(정확)에서 1.0(창의)까지 조절하여 응답의 다양성을 제어합니다.
 *   **자동 스크롤:** 스트리밍 응답 중 스크롤을 끝까지 내릴지, 아니면 현재 읽는 부분에 고정할지 선택할 수 있습니다.
 
+
 ---
+
 
 ## 7. 시스템 메시지 및 인터페이스 용어 정의 (i18n Reference)
 어시스턴트가 시스템의 상태를 설명할 때 사용하는 공식 명칭 및 메시지 목록입니다.
+
 
 | ID / Key | 한국어 설명 (Value) |
 | :--- | :--- |
@@ -244,6 +265,37 @@
 | `warning.loopDetected` | 반복적인 응답 감지 안내 |
 | `action.stopGeneration` | 답변 중단 |
 
+
 ---
 
-**Created by DINKIssTyle on 2026. Copyright (C) 2026 DINKI'ssTyle. All rights reserved.**
+
+**DKST의 다른 프로젝트 목록**
+
+
+* **DKST Terminal AI**: This application is an optimized Terminal Assistant designed for Local LLMs, particularly LM Studio. It seamlessly integrates a Local LLM with a terminal window, empowering users to control and interact with the terminal using natural language. - https://github.com/DINKIssTyle/DINKIssTyle-Local-LLM-Terminal-Assistant
+
+* **DKST Markdown Browser**:  A Browser for Hyperlinked Markdown Documents. - https://github.com/DINKIssTyle/DINKIssTyle-Markdown-Browser
+
+* **DKST Translator AI**:  Professional local LLM translation workspace designed for consistent style and context preservation. - https://github.com/DINKIssTyle/DINKIssTyle-Translator-AI
+
+* **DKST Photo Tagger AI**: a professional-grade photo metadata management tool that leverages Local LLM technology to automatically analyze images and write standard XMP/IPTC metadata. - https://github.com/DINKIssTyle/DINKIssTyle-Local-LLM-Photo-Tagger
+
+* **DKST Name Tag Maker**: DKST Name Tag Maker is a desktop application that allows you to easily design and generate bulk name tags or labels based on CSV data or data copied from spreadsheets. - https://github.com/DINKIssTyle/DINKIssTyle-Name-Tag-Maker
+
+* **DINKIssTyle-py-utils**: Small but useful Python tools by DINKIssTyle, built for everyday workflows. - https://github.com/DINKIssTyle/DINKIssTyle-py-utils
+
+* **DINKIssTyle Chrome Extensions**: A collection of Chrome extensions that I created because I might need them, and perhaps someone else does too. - https://github.com/DINKIssTyle/DINKIssTyle-Chrome-Extensions
+
+* **PyQuickRun & PyQuickBox**: PyQuickRun and PyQuickBox are lightweight tools designed to make running and organizing Python (.py) scripts effortless across Windows, macOS, and Linux. - https://github.com/DINKIssTyle/PyQuickRun
+
+* **Baro - 경로 빠른 접근 인디케이터**: 우분투 시스템 트레이에서 자주 사용하는 폴더에 빠르게 접근할 수 있는 인디케이터 애플리케이션입니다. - https://github.com/DINKIssTyle/DINKIssTyle-Baro-Ubuntu
+
+* **DKST RetroProxy**: DKST RetroProxy는 최신 웹사이트를 구형 브라우저(Netscape Navigator, Internet Explorer 3~5 등)에서도 볼 수 있도록 변환해주는 프록시 서버 애플리케이션입니다. - https://github.com/DINKIssTyle/DINKIssTyle-RetroProxy
+
+* **macOS용 DKST 한글입력기**: https://github.com/DINKIssTyle/DINKIssTyle-IME-macOS
+
+* **우분투용 DKST 한글입력기**: https://github.com/DINKIssTyle/DINKIssTyle-IME-Ubuntu
+
+* **Clean Slate**: Clean Slate is a pure Swift macOS utility designed to help you take clean screenshots or focus on your work by covering your desktop icons and wallpaper with a solid, customizable color. - https://github.com/DINKIssTyle/DINKIssTyle-Clean-Slate-macOS
+
+* **ComfyUI-DINKIssTyle**: This repository stores custom ComfyUI nodes that I created to solve various needs while working with ComfyUI. These nodes are primarily designed for my own workflow using Qwen-Image, Z-Image Trubo, Flux, and WAN. - https://github.com/DINKIssTyle/ComfyUI-DINKIssTyle
