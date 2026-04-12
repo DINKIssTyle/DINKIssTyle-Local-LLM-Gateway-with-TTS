@@ -1,315 +1,249 @@
-**중요! 당신은 AI Assistant입니다. DKST LLM Chat라는 공간에서 사용자와 대화하는 인공지능으로 사용자에게 도움이 필요한 경우 이 문서를 참고하여 도움을 줄 수 있습니다. 항상 도움이 필요한 부분만 발췌하고 생각해서 응답하세요. 지나치게 확장 해석하여 불필요한 내용을 길게 응답할 필요 없습니다.**
+<!-- Created by DINKIssTyle on 2026. Copyright (C) 2026 DINKI'ssTyle. All rights reserved. -->
 
-# 이 앱에 관하여 (About this App and Server)
-**DKST LLM Chat는 DKST LLM Chat Server와 한쌍으로 구성되어 있습니다.** DINKI'ssTyle이 제작했습니다.
-Windows, macOS, Linux 모두에서 작동하는 서버와 데스크탑, 모바일 등 대부분의 모던한 웹브라우져에서 DKST LLM Chat로 접속하여 사용할 수 있습니다.
-**PWA 기술이 적용되어 있음**으로 iOS, Android, Desktop에서 마치 앱 처럼 설치하여 DKST LLM Chat 를 사용할 수 있습니다.
-DKST LLM Chat는 DKST LLM Chat Server이 직접 제공하는 MCP 도구를 사용할 수 있습니다.
-**사용가능한 MCP 도구목록은 광고되는 도구 목록을 확인하여 필요시 답변에 제공하세요.**
-기술 스택은 Go, Wails 입니다.
+# DKST LLM Chat 도움말 및 상세 가이드
 
-OpenAI 엔드포인트를 지원하지만, **LM Studio와 가장 밀접하게 연동**되어 작동합니다.
-**LM Studio 0.4.0**이상에서는 모델 로딩, 프롬프트 처리 프로그레스가 표시되며, 로드 된 모델, 모델 언로드, LM Studio의 Stateful (Context 관리), MCP 도구 사용 등의 기능을 사용할 수 있습니다. OpanAI 모드로 설정되었을 경우에는 그렇지 않습니다.
+**중요 알림:** 당신은 DKST LLM Chat 시스템의 **AI 어시스턴트**입니다. 사용자가 서비스 사용 중 어려움을 겪거나 질문을 할 경우, 이 문서의 내용을 상세히 참조하여 답변해 주세요. 항상 사용자의 문맥에 맞는 정보를 제공하며, 필요한 경우 가이드의 내용을 생략 없이 정확하게 전달해야 합니다. 다만, 사용자의 의도를 넘어서는 불필요하게 긴 응답은 지양하되, 정보의 정확성과 상세함은 유지해 주세요.
 
-# 권장하는 LLM 모델 목록
-2026년 4월 권장하는 LLM 모델은
-- Qwen3.5 4B
-- Qwen3.5 35B A3B
-- Gemma 4 E4B
-- Gemma 4 26B A4B
-* 참고 Gemma 4 E4B는 도구 사용에 문제가 발생하고 있습니다.
+---
 
+## 1. 애플리케이션 및 서버 구성 (About this App and Server)
+**DKST LLM Chat**는 클라이언트 애플리케이션과 **DKST LLM Chat Server**가 한 쌍으로 구성되어 동작하는 플랫폼입니다. DINKI'ssTyle에 의해 제작되었습니다.
 
-# Tool call 도구 호출 실패 관련
+*   **크로스 플랫폼 지원:** 서버는 Windows, macOS, Linux 환경에서 구동되며, 클라이언트는 데스크톱, 모바일 등 대부분의 현대적인 웹 브라우저를 통해 접속할 수 있습니다.
+*   **PWA(Progressive Web App) 기술:** 본 서비스는 PWA 기술이 적용되어 있습니다. iOS, Android 성 단말기는 물론 데스크톱 환경에서도 별도의 앱처럼 설치(`홈 화면에 추가` 등)하여 편리하게 사용할 수 있습니다.
+*   **MCP 도구 지원:** DKST LLM Chat Server가 직접 제공하는 **Model Context Protocol(MCP)** 도구를 사용할 수 있습니다. 사용 가능한 도구 목록은 서버에서 광고되는 정보를 확인하여 답변에 반영하세요.
+*   **기술 스택:** 백엔드는 Go 언어로 작성되었으며, 데스크톱 앱 구성에는 Wails 프레임워크가 사용되었습니다.
+*   **런타임 연동:** OpenAI API 엔드포인트를 지원하지만, **LM Studio**(특히 0.4.0 버전 이상)와 가장 밀접하고 최적화되어 작동합니다.
+    *   LM Studio 연동 시: 모델 로딩 상태, 프롬프트 처리 진행률(Progress), 모델 언로드, Stateful 컨텍스트 관리, MCP 도구 사용 등의 차별화된 기능을 제공합니다.
+    *   OpenAI 모드에서는 위와 같은 특수 기능 중 일부가 제한될 수 있습니다.
 
-- MCP 도구 호출에 자주 실패한다면 Context 길이를 늘려야 합니다. 특히 **웹검색과 같이 대량의 정보를 다루는 경우에 더 많은 Context length가 필요**할 수 있습니다. 이는 사용하고 있는 LLM 런타임의 설정을 변경해야 하며, 해당 LLM 런타임의 설정을 확인해주세요.
+---
 
-# LLM 응답을 마치지 못하고 반복 된 응답을 하는 경우
+## 2. 권장 LLM 모델 목록 (Recommended Models)
+2026년 4월 기준, 안정적인 서비스 이용을 위해 권장되는 모델은 다음과 같습니다.
 
-- Context length를 늘려 주세요. 이는 사용하고 있는 LLM 런타임의 설정을 변경해야 하며, 해당 LLM 런타임의 설정을 확인해주세요.
-- Context length가 부족하면 LLM은 Context 토큰을 truncated 합니다. 결국 필요한 문맥을 찾지 못하고 반복적인 응답을 하게 만드는 주요 원인이 됩니다.
+*   **Qwen3.5 4B:** 가볍고 빠른 응답이 필요할 때 적합합니다.
+*   **Qwen3.5 35B A3B:** 고성능 응답과 복잡한 추론에 적합합니다.
+*   **Gemma 4 E4B:** 중간 규모의 모델이지만, 현재 도구 사용(Tool Call) 시 일부 문제가 발생할 수 있으니 참고하세요.
+*   **Gemma 4 26B A4B:** 뛰어난 이해력과 대형 모델 수준의 성능을 제공합니다.
 
-# 사용자 계정별 설정 가능한 것
-## 서버 관리 화면에서 Account Management에서 각 계정의 상세 설정을 변경할 수 있습니다.
-- MCP 사용 권한은 Account Management에서 각 계정마다 설정할 수 있습니다.
+---
 
-# TTS 음성 재생에 관련하여,
-- TTS 엔진으로 Supertonic2와 DKST LLM Chat이 구동되는 환경에서 제공하는 OS TTS 엔진을 사용할 수 있습니다.
+## 3. 문제 해결 및 런타임 최적화 (Troubleshooting)
 
-# 채팅창 화면에 관련하여
-- 우측 상단 -, + 버튼으로 채팅 창에 표시되는 글시 크기를 조절 할 수 있습니다.
-- 어시스턴트가 응답한 내용 하단에는 다음과 같은 액션 버튼이 있습니다.
--   -- 대화 저장, 복사, 말하기
-- **대화 저장**: 현재 어시스턴트가 응답한 내용을 저장 된 대화 목록에 저장합니다.
-- **복사**: 현재 어시스턴트가 응답한 내용을 복사합니다.
-- **말하기**: 현재 어시스턴트가 응답한 내용을 TTS로 재생합니다.
+### 도구 호출(Tool Call) 실패 관련
+*   MCP 도구 호출에 자주 실패하거나 오류가 발생한다면, **컨텍스트 길이(Context Length)를 늘려야 합니다.**
+*   특히 웹 검색과 같이 방대한 양의 정보를 처리하는 도구는 더 많은 컨텍스트 공간을 요구합니다. 이는 시스템 설정이 아닌 사용자가 연결한 LLM 런타임(예: LM Studio)의 설정 메뉴에서 직접 변경해야 합니다.
 
-- 저장 된 어시스턴트와의 대화는 좌측 상단 저장 된 대화 버튼으로 열람할 수 있습니다.
+### 응답 반복 및 중단 관련
+*   어시스턴트가 답변을 끝내지 못하고 같은 내용을 반복한다면 컨텍스트 길이가 부족할 가능성이 높습니다.
+*   컨텍스트 제약 조건에 도달하면 LLM은 이전 문맥 중 일부를 생략(Truncated)하게 되며, 이는 어시스턴트가 문맥의 중심을 잃고 반복적인 텍스트를 생성하는 주요 원인이 됩니다. 이 역시 런타임 설정을 통해 조절해야 합니다.
 
-# 저장 된 대화 기능에 관하여
-- **저장 된 대화의 제목은 LLM이 자동으로 작성합니다.** 사용자가 직접 수정도 가능합니다. 
-- 채팅 설정 옵션에서 보조 모델로 가벼운 모델을 선택하면 빠르게 제목이 생성됩니다. 보조 모델로는 Gemma 4 E4B, Gemma 4 2B, Qwen3.5 4B가 좋습니다.
+---
 
+## 4. 계정 및 관리 설정 (Member & Account Management)
+*   **Account Management:** 서버 관리 화면의 상세 설정을 통해 각 계정별 권한을 세밀하게 제어할 수 있습니다.
+*   **MCP 사용 권한:** 각 사용자 계정마다 MCP 도구 사용 가능 여부를 개별적으로 지정할 수 있으므로, 권한 문제가 발생할 경우 관리자 설정을 확인하도록 안내하세요.
 
-# 채팅 설정화면 옵션들에 관하여
-- 임베딩 검색을 활성화하면 더 나은 유사도 검색을 병행합니다.
-- Reasoning (추론) 컨트롤바를 표시하도록 설정할 수 있습니다. 만약 모델이 추론 조절이 가능한데 자동으로 표시되지 않는 경우 추론 컨트롤바를 강제로 표시하게 할수도 있습니다.
-- 시스템 프롬프트 설정에서 어시스턴트에게 기본으로 주입 될 페르소나 롤을 사용자 화 할수 있습니다.
-- 기본 프롬프트는 "You are a helpful AI assistant." 입니다.
-- "You are an English teacher. Turn the user’s input into natural English conversation, then teach it by breaking it down into phrases using the user’s original language. Do not use tables in your responses, and write in a way that is easy to read aloud with text-to-speech. " 와 같은 영어선생님 프리셋도 선택할 수 있습니다. 
-- prompt_preset.json을 수정하여 자신만의 프리셋을 만들 수도 있습니다.
-- 채팅 설정화면에서 Temperature를 조절할 수 있습니다. 기본은 Auto로 LLM런타임이 지정한 값을 사용하지만, 0.1로 낮춰 정확도를 올리거나 1.0으로 올려 창의력을 높일 수도 있습니다.
-- 채팅 설정화면에서 사용자 말풍선의 색상을 5개중 고를 수 있습니다.
-- 채팅 설정화면에서 자동 스크롤을 조절할 수 있습니다. LLM의 응답이 너무 빠른경우 '자동 스크롤 안함'을 선택하여 응답의 첫 부분에 멈춰 스크롤을 멈출 수 있습니다.
+---
 
+## 5. 음성 서비스 및 TTS (Text-To-Speech)
+*   **TTS 엔진 지원:** 고품질 음성을 제공하는 **Supertonic 2** 엔진과 시스템 기본 기능을 사용하는 **OS TTS** 엔진 중 선택하여 사용할 수 있습니다.
+*   상세 속도, 높낮이 등은 채팅 설정의 TTS 섹션에서 조절 가능합니다.
 
-# 다음은 이 앱의 i18n 파일 내용입니다.
-## 이 힌트들이 앱의 기능을 파악하고 사용자에게 도움을 줄 수 있으니 생각하여 답변하세요.
-**중요! 참고로 당신은 현재 사용자의 설정값을 읽을 수 없습니다.**
+---
 
-"ko": {
-            "modal.settings.title": "설정",
-            "section.llm": "LLM 설정",
-            "section.appearance": "채팅 외형",
-            "section.voiceInput": "음성 입력",
-            "section.tts": "TTS 엔진",
-            "section.embedding": "임베딩 검색",
-            "server.stopped": "서버: 중지됨",
-            "server.running": "서버: 실행중",
-            "server.port": "서버 포트",
-            "server.start": "서버 시작",
-            "server.stop": "서버 중지",
-            "action.clearChat": "대화 기록 삭제",
-            "action.logout": "로그아웃",
-            "action.logoutAllSessions": "모든 위치에서 로그아웃",
-            "action.save": "저장",
-            "action.saveTurn": "대화 저장",
-            "action.close": "닫기",
-            "action.cancel": "취소",
-            "action.reload": "새로고침",
-            "action.manageModels": "모델 관리",
-            "action.refreshModels": "상태 새로고침",
-            "action.clearContext": "문맥 초기화",
-            "library.searchPlaceholder": "저장된 대화를 검색하세요...",
-            "library.empty": "저장된 대화가 없습니다.",
-            "library.emptyFiltered": "검색 결과가 없습니다.",
-            "library.saved": "대화를 저장했습니다.",
-            "library.deleted": "저장된 대화를 삭제했습니다.",
-            "library.saveFailed": "대화를 저장하지 못했습니다.",
-            "library.titleRefresh": "제목 생성",
-            "library.titleRefreshed": "제목을 생성했습니다.",
-            "library.titleRefreshFailed": "제목을 생성하지 못했습니다.",
-            "library.titleLabel": "제목",
-            "library.titlePlaceholder": "제목을 입력하세요",
-            "library.titleUpdated": "제목을 저장했습니다.",
-            "library.titleUpdateFailed": "제목을 저장하지 못했습니다.",
-            "library.deleteConfirm": "이 저장된 대화를 삭제할까요?",
-            "library.deleteFailed": "저장된 대화를 삭제하지 못했습니다.",
-            "library.modalTitle": "저장된 대화",
-            "library.prompt": "프롬프트",
-            "library.response": "응답",
-            "library.savedAt": "저장 시각",
-            "clipboard.copied": "클립보드에 복사했습니다.",
-            "clipboard.copyFailed": "복사하지 못했습니다.",
-            "setting.llmEndpoint.label": "LLM 엔드포인트",
-            "setting.model.label": "모델 이름",
-            "setting.model.desc": "LLM서버에서 현재 로드되어 있는 모델 이름을 적어주세요.",
-            "setting.secondaryModel.label": "보조 모델",
-            "setting.secondaryModel.desc": "저장된 대화 제목 생성 같은 가벼운 작업에 우선 사용할 보조 모델입니다.",
-            "setting.hideThink.label": "Hide <think>",
-            "setting.hideThink.desc": "LLM이 생각하는 과정을 채팅창에 보여주지 않습니다.",
-            "setting.systemPrompt.label": "시스템 프롬프트",
-            "setting.systemPrompt.desc": "LLM의 역할을 지정하세요. 예: \"당신은 나의 영어 선생님입니다.\" System_prompt.json에서 수정할 수 있습니다.",
-            "setting.temperature.label": "Temperature",
-            "setting.temperature.desc": "Auto면 모델 기본값을 사용하고, 직접 지정하면 0.1 단위로 조절합니다.",
-            "setting.temperature.auto": "Auto",
-            "setting.temperature.modalDesc": "0은 Auto이며, 이 경우 temperature 필드를 요청에 넣지 않습니다.",
-            "setting.history.label": "대화 기억 횟수",
-            "setting.history.desc": "(기본값: 10) 기억할 대화 상자의 개수입니다.",
-            "setting.apiToken.label": "API 토큰",
-            "setting.apiToken.desc": "LM Studio API 토큰 (인증 활성화 시 필요)",
-            "setting.apiToken.placeholder": "비워두면 기본값 사용",
-            "setting.llmMode.label": "연결 모드",
-            "setting.llmMode.desc": "OpenAI 호환 모드와 LM Studio 모드 중 선택하세요.",
-            "setting.llmMode.option.standard": "OpenAI 호환",
-            "setting.llmMode.option.stateful": "LM Studio",
-            "setting.contextStrategy.label": "배경 / 문맥 메모리",
-            "setting.contextStrategy.desc": "현재 모드에서 대화 문맥을 유지하는 방식을 선택합니다.",
-            "setting.contextStrategy.option.retrieval": "FTS5 + Vector",
-            "setting.contextStrategy.option.stateful": "Stateful",
-            "setting.contextStrategy.option.none": "비활성화",
-            "setting.contextStrategy.option.history": "단순 히스토리",
-            "setting.enableMCP.label": "MCP 기능 활성화",
-            "setting.enableMCP.desc": "Model Context Protocol 통합 기능을 사용합니다 (웹 검색, 브라우징 등)",
-            "setting.enableMemory.label": "개인 메모리 활성화",
-            "setting.enableMemory.desc": "LLM이 로컬 파일에 개인적인 세부 사항을 기억하도록 허용합니다.",
-            "setting.showReasoningControl.label": "Reasoning 컨트롤 표시",
-            "setting.showReasoningControl.desc": "선택한 모델이 Reasoning을 지원할 때 입력창 위에 컨트롤 바를 표시합니다.",
-            "setting.forceShowReasoningControl.label": "Reasoning 컨트롤 강제 표시",
-            "setting.forceShowReasoningControl.desc": "모델 메타데이터에 정보가 없어도 컨트롤 바를 강제로 표시합니다.",
-            "setting.statefulTurnLimit.label": "Stateful 턴 제한",
-            "setting.statefulTurnLimit.desc": "(기본값: 8) 대화가 요약되어 정리되기 전까지 유지할 턴 수입니다.",
-            "setting.statefulCharBudget.label": "Stateful 글자수 예산",
-            "setting.statefulCharBudget.desc": "(기본값: 32000) 활성 문맥이 이 글자수를 넘으면 자동으로 요약 및 정리가 수행됩니다.",
-            "setting.statefulTokenBudget.label": "Stateful 토큰 예산",
-            "setting.statefulTokenBudget.desc": "(기본값: 30000) 자동 문맥 압축을 트리거하는 주요 토큰 임계값입니다.",
-            "setting.memory.warning": "주의: 개인 데이터는 암호화되지 않은 상태로 로컬 디스크에 저장됩니다.",
-            "setting.memory.open": "파일 열기",
-            "setting.memory.reset": "메모리 초기화",
-            "setting.memory.reset.confirm": "개인 메모리를 초기화하시겠습니까? 이 작업은 되돌릴 수 없습니다.",
-            "setting.memory.reset.success": "메모리가 성공적으로 초기화되었습니다.",
-            "setting.userBubbleTheme.label": "사용자 말풍선 스타일",
-            "setting.userBubbleTheme.desc": "사용자 메시지 말풍선의 그라데이션 프리셋을 선택합니다.",
-            "setting.streamingScrollMode.label": "스크롤 방식",
-            "setting.streamingScrollMode.desc": "어시스턴트 응답이 스트리밍되는 동안 채팅 화면 스크롤 동작을 선택합니다.",
-            "setting.streamingScrollMode.option.auto": "자동 스크롤",
-            "setting.streamingScrollMode.option.labelTop": "자동 스크롤 안 함",
-            "setting.markdownRenderMode.label": "마크다운 렌더링 모드",
-            "setting.markdownRenderMode.desc": "응답 스트리밍 중 마크다운 렌더링의 공격성을 선택합니다.",
-            "setting.markdownRenderMode.option.fast": "빠른 렌더링",
-            "setting.markdownRenderMode.option.balanced": "약간 지연된 렌더링",
-            "setting.markdownRenderMode.option.final": "완료 후 렌더링",
-            "setting.autoDismissMobileKeyboard.label": "소프트웨어 키보드 자동 내림",
-            "setting.autoDismissMobileKeyboard.desc": "iOS, Android 등 모바일 환경에서 메시지 전송 후 입력창 포커스를 해제해 키보드를 자동으로 내립니다.",
-            "setting.hapticsEnabled.label": "진동(햅틱) 활성화",
-            "setting.hapticsEnabled.desc": "지원되는 기기에서 버튼 클릭 시 진동 피드백을 줍니다.",
-            "setting.micLayout.label": "마이크 배치",
-            "setting.micLayout.desc": "화면에 마이크 버튼을 배치하는 방식입니다.",
-            "setting.micLayout.option.none": "표시 안 함",
-            "setting.micLayout.option.left": "왼쪽 사이드",
-            "setting.micLayout.option.right": "오른쪽 사이드",
-            "setting.micLayout.option.bottom": "하단 중앙",
-            "setting.micLayout.option.inline": "입력창 내부",
-            "setting.voiceInputAutoPlay.label": "음성 입력 시 자동 재생",
-            "setting.voiceInputAutoPlay.desc": "마이크로 보낸 메시지는 TTS 자동 재생 설정과 관계없이 이 옵션을 따릅니다.",
-            "status.thinking": "생각 중...",
-            "status.live": "LIVE",
-            "status.running": "실행 중",
-            "status.done": "완료",
-            "status.failed": "실패",
-            "status.stopped": "중단됨",
-            "status.unexpectedStop": "응답이 예기치 않게 중단되었습니다.",
-            "status.thoughtForSeconds": "{seconds}초 동안 생각함",
-            "status.thoughtForMinutes": "{minutes}분 동안 생각함",
-            "status.thoughtForMinutesSeconds": "{minutes}분 {seconds}초 동안 생각함",
-            "tool.currentTimeChecked": "현재 시간을 확인했습니다.",
-            "tool.currentLocationChecked": "사용자 위치를 확인했습니다.",
-            "tool.fallbackName": "도구",
-            "tool.executeCommand": "명령어 실행: {value}",
-            "tool.searchQuery": "검색어: {value}",
-            "tool.openUrl": "페이지 열기: {value}",
-            "tool.readBufferedSource": "소스 읽기: {value}",
-            "tool.searchMemory": "메모리 검색: {value}",
-            "tool.readMemory": "메모리 읽기: ID {value}",
-            "tool.deleteMemory": "메모리 삭제: ID {value}",
-            "tool.executionFinished": "도구 실행이 완료되었습니다.",
-            "tool.noQueryDetails": "상세 쿼리 없음",
-            "tool.unknownError": "알 수 없는 오류",
-            "progress.processingPrompt": "프롬프트 처리 중",
-            "progress.loadingModel": "모델 로드 중",
-            "progress.modelLoaded": "모델 로드 완료",
-            "background.savedTurnTitle": "대화 제목 생성 중...",
-            "background.serverChatContinuing": "서버 응답 재개 중...",
-            "setting.enableTTS.label": "TTS 활성화",
-            "setting.enableTTS.desc": "응답을 음성으로 재생합니다.",
-            "setting.autoPlay.label": "자동 재생",
-            "setting.autoPlay.desc": "응답을 자동으로 음성 재생합니다.",
-            "setting.ttsEngine.label": "TTS 엔진",
-            "setting.ttsEngine.desc": "Supertonic 2와 운영체제 기본 음성 중 선택하세요.",
-            "setting.ttsEngine.option.supertonic": "Supertonic 2",
-            "setting.ttsEngine.option.os": "OS TTS",
-            "setting.voiceStyle.label": "목소리 스타일",
-            "setting.voiceStyle.desc": "TTS 목소리 스타일을 선택하세요.",
-            "setting.osVoice.label": "OS 목소리",
-            "setting.osVoice.desc": "운영체제에서 제공하는 목소리를 선택하세요.",
-            "setting.osRate.label": "OS 속도",
-            "setting.osRate.desc": "운영체제 목소리의 재생 속도입니다.",
-            "setting.osPitch.label": "OS 음조",
-            "setting.osPitch.desc": "운영체제 목소리의 높낮이입니다.",
-            "setting.osVoice.loading": "목소리 불러오는 중...",
-            "setting.osVoice.unavailable": "OS TTS 사용 불가",
-            "setting.speed.label": "재생 속도",
-            "setting.speed.desc": "음성 재생 속도입니다.",
-            "setting.ttsLang.label": "TTS 언어",
-            "setting.ttsLang.desc": "선호하는 언어를 선택하세요.",
-            "setting.chunkSize.label": "스마트 청킹",
-            "setting.chunkSize.desc": "(추천: 150~300) TTS가 한 번에 읽을 글자 수입니다.",
-            "setting.steps.label": "추론 단계(Steps)",
-            "setting.steps.desc": "(추천: 2~8, 기본: 5) 높을수록 자연스럽습니다.",
-            "setting.threads.label": "CPU 스레드",
-            "setting.threads.desc": "(기본: 2) TTS 생성에 사용할 스레드 수입니다.",
-            "setting.format.label": "오디오 형식",
-            "setting.format.desc": "MP3는 WAV에서 변환됩니다.",
-            "setting.format.note": "WAV 형식을 사용하면 모바일에서 화면이 꺼져도 재생이 됩니다.",
-            "setting.enableEmbeddings.label": "임베딩 검색 활성화",
-            "setting.enableEmbeddings.desc": "FTS5와 함께 임베딩 유사도 검색을 병행합니다.",
-            "setting.embeddingModel.label": "임베딩 모델",
-            "setting.embeddingModel.desc": "로컬 임베딩 모델을 선택하세요.",
-            "modal.models.title": "모델 관리자",
-            "setting.modelsRoot.label": "모델 저장 폴더",
-            "action.downloadModel": "다운로드",
-            "action.redownloadModel": "재다운로드",
-            "action.exportManifest": "매니페스트",
-            "status.downloading": "다운로드 중",
-            "models.loading": "불러오는 중...",
-            "models.empty": "관리 가능한 모델이 없습니다.",
-            "models.loadFailed": "모델 정보를 가져오지 못했습니다.",
-            "models.downloadStarted": "다운로드가 시작되었습니다.",
-            "models.downloadFinished": "다운로드가 완료되었습니다.",
-            "models.downloadFailed": "다운로드에 실패했습니다.",
-            "models.modalTitle": "모델 선택",
-            "models.loaded": "로드됨",
-            "models.unload": "언로드",
-            "models.unloading": "언로드 중...",
-            "models.progressBytes": "{downloaded} / {total}",
-            "section.advanced": "고급 설정",
-            "setting.cert.label": "HTTPS 인증서",
-            "setting.cert.desc": "이 기기에서 서버를 신뢰하도록 인증서를 다운로드하세요.",
-            "action.downloadCert": "인증서 다운로드",
-            "chat.welcome": "반가워요! 대화할 준비가 되었습니다.",
-            "chat.instruction": "설정(⚙️)에서 엔진을 구성할 수 있습니다.",
-            "chat.startup.welcomeTitle": "환영합니다.",
-            "chat.startup.welcomeBody": "바로 대화를 시작하실 수 있습니다.",
-            "chat.startup.issueBody": "아래 항목들을 확인해주세요.",
-            "chat.startup.restore": "이전 대화 불러오기",
-            "chat.startup.restoreLoaded": "이전 대화가 로드되었습니다.",
-            "chat.startup.restoreMissing": "불러올 대화가 없습니다.",
-            "chat.startup.restoreFailed": "대화를 불러오지 못했습니다.",
-            "chat.reconnect.title": "연결이 끊어진 것 같습니다.",
-            "chat.reconnect.body": "백그라운드에서 복귀한 후 동기화가 중단되었습니다.",
-            "chat.reconnect.action": "다시 연결",
-            "chat.passiveSyncWaiting": "다른 창에서 응답을 생성 중입니다...",
-            "chat.passiveSyncThinking": "다른 창에서 생각 중입니다...",
-            "chat.passiveSyncTool": "다른 창에서 도구를 사용 중입니다...",
-            "input.placeholder": "메시지를 입력하세요...",
-            "input.placeholder.sttA": "말씀하세요...",
-            "input.placeholder.sttB": "듣고 있어요...",
-            "input.placeholder.restoring": "이전 대화를 복구하는 중...",
-            "reasoning.auto": "자동",
-            "progress.restoringHistory": "이전 대화 복구 중",
-            "restore.skeletonTitle": "이전 대화 복원 중",
-            "restore.skeletonBody": "서버에서 기록과 상태를 가져오고 있습니다.",
-            "health.systemReady": "시스템 준비됨",
-            "health.checkRequired": "시스템 체크 필요",
-            "health.checkFailed": "시스템 체크 실패",
-            "health.backendError": "백엔드와 통신할 수 없습니다 (Wails/API 모두 불가).",
-            "health.llm": "LLM",
-            "health.tts": "TTS",
-            "health.status.connected": "연결됨",
-            "health.status.ready": "준비됨",
-            "health.status.disabled": "비활성화",
-            "health.status.unreachable": "도달 불가",
-            "health.mode": "모드",
-            "health.checkToken": " -> **API 토큰**을 확인하세요.",
-            "health.checkServer": " -> **LM Studio 서버**가 켜져 있는지 확인하세요.",
-            "error.authFailed": "LM Studio 인증 실패.\n\n해결 방법:\n1. LM Studio -> Developer -> Server Settings\n2. 'Require Authentication' 끄기\n3. 또는 토큰을 생성해 설정에 입력하세요.\n\n오류: ",
-            "error.mcpFailed": "LM Studio MCP 연결 실패.\n\n해결 방법:\n1. LM Studio -> Developer -> Server Settings\n2. 'Allow calling servers from mcp.json' 켜기\n3. 또는 설정에서 MCP 기능을 끄세요.\n\n오류: ",
-            "error.contextExceeded": "대화 문맥 길이가 초과되었습니다. 사이드바 하단의 [문맥 초기화] 버튼을 눌러주세요.",
-            "error.visionNotSupported": "선택한 모델은 이미지를 인식할 수 없습니다. 비전(Vision) 모델을 선택해주세요.",
-            "warning.loopDetected": "[⚠️ 반복적인 응답이 감지되어 중단되었습니다.]",
-            "warning.repeatRetrying": "[⚠️ 반복이 감지되어 LM Studio 가중치를 조정해 다시 시도합니다.]",
-            "warning.repeatStopped": "[⚠️ 반복이 감지되어 응답을 중단했습니다.]",
-            "error.mcpPluginToolsUnavailable": "현재 LM Studio에서 MCP 도구를 호출할 수 없습니다. `mcp.json`를 확인해주세요.\n\n아래는 현재 서버 설정값을 참조한 예시입니다.\n```json\n{\n  \"mcpServers\": {\n    \"dinkisstyle-gateway\": {\n      \"url\": \"{url}\"\n    }\n  }\n}\n```",
-            "action.stop": "중단",
-            "action.stopGeneration": "답변 중단"
-        
+## 6. 인터페이스 묘사 및 기능 가이드 (UI/UX Guide)
+
+### 채팅 화면의 첫 구성 (Header & Body)
+*   **헤더(Header) 상단 구성:**
+    *   **좌측:** 저장된 대화(Library) 진입 버튼.
+    *   **바로 옆:** 모델 선택 드롭다운 메뉴. 현재 로드된 모델의 상태를 확인하고 필요 시 언로드할 수 있습니다.
+    *   **우측:** 채팅창 글자 크기 조절(`-`, `+`), 채팅 내용 전체 초기화(휴지통 아이콘), 설정 화면 진입(기어 아이콘).
+*   **채팅 창(Chat Body):**
+    *   **사용자 메시지:** 'You' 라는 라벨 아래 컬러풀한 버블 형태로 표시됩니다. 버블 색상은 설정에서 변경 가능합니다.
+    *   **어시스턴트 응답:** 'ASSISTANT' 라벨 아래 별도의 버블 없이 출력됩니다.
+        *   **Reasoning 카드:** 추론 모델의 경우 생각하는 과정을 컴팩트한 카드로 보여줍니다. 클릭하여 펼쳐볼 수 있습니다.
+        *   **MCP 카드:** 도구 사용 히스토리를 보여줍니다. 역시 펼쳐서 상세 실행 내용을 확인할 수 있습니다.
+        *   **액션 버튼:** 응답 하단에 `대화 저장`, `복사`, `말하기(TTS)` 버튼이 위치합니다.
+
+### 저장 된 대화 (Saved Conversations)
+*   **자동 제목 생성:** 저장된 대화의 제목은 LLM이 대화 내용을 분석하여 자동으로 생성합니다. 사용자가 수동으로 수정할 수도 있습니다.
+*   **효율적 활용:** 보조 모델 설정을 통해 제목 생성 전용의 가벼운 모델(Gemma 4 2B, Qwen3.5 4B 등)을 지정하면 전체적인 서비스 반응성이 향상됩니다.
+
+### 상세 설정 옵션 (Settings)
+*   **임베딩 검색(Embedding Search):** FTS5 기술과 결합하여 벡터 기반의 유사도 검색을 수행함으로써 더 정확한 답변을 유도합니다.
+*   **시스템 프롬프트:** 어시스턴트에게 특정 페르소나를 부여할 수 있습니다. (예: "You are a helpful AI assistant.")
+*   **Temperature:** 0.1(정확)에서 1.0(창의)까지 조절하여 응답의 다양성을 제어합니다.
+*   **자동 스크롤:** 스트리밍 응답 중 스크롤을 끝까지 내릴지, 아니면 현재 읽는 부분에 고정할지 선택할 수 있습니다.
+
+---
+
+## 7. 시스템 메시지 및 인터페이스 용어 정의 (i18n Reference)
+어시스턴트가 시스템의 상태를 설명할 때 사용하는 공식 명칭 및 메시지 목록입니다.
+
+| ID / Key | 한국어 설명 (Value) |
+| :--- | :--- |
+| `modal.settings.title` | 설정 |
+| `section.llm` | LLM 설정 |
+| `section.appearance` | 채팅 외형 |
+| `section.voiceInput` | 음성 입력 |
+| `section.tts` | TTS 엔진 |
+| `section.embedding` | 임베딩 검색 |
+| `server.stopped` | 서버: 중지됨 |
+| `server.running` | 서버: 실행중 |
+| `server.port` | 서버 포트 |
+| `server.start` | 서버 시작 |
+| `server.stop` | 서버 중지 |
+| `action.clearChat` | 대화 기록 삭제 |
+| `action.logout` | 로그아웃 |
+| `action.logoutAllSessions` | 모든 위치에서 로그아웃 |
+| `action.save` | 저장 |
+| `action.saveTurn` | 대화 저장 |
+| `action.close` | 닫기 |
+| `action.cancel` | 취소 |
+| `action.reload` | 새로고침 |
+| `action.manageModels` | 모델 관리 |
+| `action.refreshModels` | 상태 새로고침 |
+| `action.clearContext` | 문맥 초기화 |
+| `library.searchPlaceholder` | 저장된 대화를 검색하세요... |
+| `library.empty` | 저장된 대화가 없습니다. |
+| `library.emptyFiltered` | 검색 결과가 없습니다. |
+| `library.saved` | 대화를 저장했습니다. |
+| `library.deleted` | 저장된 대화를 삭제했습니다. |
+| `library.saveFailed` | 대화를 저장하지 못했습니다. |
+| `library.titleRefresh` | 제목 생성 |
+| `library.titleRefreshed` | 제목을 생성했습니다. |
+| `library.titleRefreshFailed` | 제목을 생성하지 못했습니다. |
+| `library.titleLabel` | 제목 |
+| `library.titlePlaceholder` | 제목을 입력하세요 |
+| `library.titleUpdated` | 제목을 저장했습니다. |
+| `library.titleUpdateFailed` | 제목을 저장하지 못했습니다. |
+| `library.deleteConfirm` | 이 저장된 대화를 삭제할까요? |
+| `library.deleteFailed` | 저장된 대화를 삭제하지 못했습니다. |
+| `library.modalTitle` | 저장된 대화 |
+| `library.prompt` | 프롬프트 |
+| `library.response` | 응답 |
+| `library.savedAt` | 저장 시각 |
+| `clipboard.copied` | 클립보드에 복사했습니다. |
+| `clipboard.copyFailed` | 복사하지 못했습니다. |
+| `setting.llmEndpoint.label` | LLM 엔드포인트 |
+| `setting.model.label` | 모델 이름 |
+| `setting.model.desc` | LLM서버에서 현재 로드되어 있는 모델 이름을 적어주세요. |
+| `setting.secondaryModel.label` | 보조 모델 |
+| `setting.secondaryModel.desc` | 저장된 대화 제목 생성 같은 가벼운 작업에 우선 사용할 보조 모델입니다. |
+| `setting.hideThink.label` | Hide <think> |
+| `setting.hideThink.desc` | LLM이 생각하는 과정을 채팅창에 보여주지 않습니다. |
+| `setting.systemPrompt.label` | 시스템 프롬프트 |
+| `setting.systemPrompt.desc` | LLM의 역할을 지정하세요. 예: "당신은 나의 영어 선생님입니다." System_prompt.json에서 수정할 수 있습니다. |
+| `setting.temperature.label` | Temperature |
+| `setting.temperature.desc` | Auto면 모델 기본값을 사용하고, 직접 지정하면 0.1 단위로 조절합니다. |
+| `setting.temperature.auto` | Auto |
+| `setting.temperature.modalDesc` | 0은 Auto이며, 이 경우 temperature 필드를 요청에 넣지 않습니다. |
+| `setting.history.label` | 대화 기억 횟수 |
+| `setting.history.desc` | (기본값: 10) 기억할 대화 상자의 개수입니다. |
+| `setting.apiToken.label` | API 토큰 |
+| `setting.apiToken.desc` | LM Studio API 토큰 (인증 활성화 시 필요) |
+| `setting.apiToken.placeholder` | 비워두면 기본값 사용 |
+| `setting.llmMode.label` | 연결 모드 |
+| `setting.llmMode.desc` | OpenAI 호환 모드와 LM Studio 모드 중 선택하세요. |
+| `setting.llmMode.option.standard` | OpenAI 호환 |
+| `setting.llmMode.option.stateful` | LM Studio |
+| `setting.contextStrategy.label` | 배경 / 문맥 메모리 |
+| `setting.contextStrategy.desc` | 현재 모드에서 대화 문맥을 유지하는 방식을 선택합니다. |
+| `setting.contextStrategy.option.retrieval` | FTS5 + Vector |
+| `setting.contextStrategy.option.stateful` | Stateful |
+| `setting.contextStrategy.option.none` | 비활성화 |
+| `setting.contextStrategy.option.history` | 단순 히스토리 |
+| `setting.enableMCP.label` | MCP 기능 활성화 |
+| `setting.enableMCP.desc` | Model Context Protocol 통합 기능을 사용합니다 (웹 검색, 브라우징 등) |
+| `setting.enableMemory.label` | 개인 메모리 활성화 |
+| `setting.enableMemory.desc` | LLM이 로컬 파일에 개인적인 세부 사항을 기억하도록 허용합니다. |
+| `setting.showReasoningControl.label` | Reasoning 컨트롤 표시 |
+| `setting.showReasoningControl.desc` | 선택한 모델이 Reasoning을 지원할 때 입력창 위에 컨트롤 바를 표시합니다. |
+| `setting.forceShowReasoningControl.label` | Reasoning 컨트롤 강제 표시 |
+| `setting.forceShowReasoningControl.desc` | 모델 메타데이터에 정보가 없어도 컨트롤 바를 강제로 표시합니다. |
+| `setting.statefulTurnLimit.label` | Stateful 턴 제한 |
+| `setting.statefulTurnLimit.desc` | (기본값: 8) 대화가 요약되어 정리되기 전까지 유지할 턴 수입니다. |
+| `setting.statefulCharBudget.label` | Stateful 글자수 예산 |
+| `setting.statefulCharBudget.desc` | (기본값: 32000) 활성 문맥이 이 글자수를 넘으면 자동으로 요약 및 정리가 수행됩니다. |
+| `setting.statefulTokenBudget.label` | Stateful 토큰 예산 |
+| `setting.statefulTokenBudget.desc` | (기본값: 30000) 자동 문맥 압축을 트리거하는 주요 토큰 임계값입니다. |
+| `setting.memory.warning` | 주의: 개인 데이터는 암호화되지 않은 상태로 로컬 디스크에 저장됩니다. |
+| `setting.memory.open` | 파일 열기 |
+| `setting.memory.reset` | 메모리 초기화 |
+| `setting.memory.reset.confirm` | 개인 메모리를 초기화하시겠습니까? 이 작업은 되돌릴 수 없습니다. |
+| `setting.memory.reset.success` | 메모리가 성공적으로 초기화되었습니다. |
+| `setting.userBubbleTheme.label` | 사용자 말풍선 스타일 |
+| `setting.userBubbleTheme.desc` | 사용자 메시지 말풍선의 그라데이션 프리셋을 선택합니다. |
+| `setting.streamingScrollMode.label` | 스크롤 방식 |
+| `setting.streamingScrollMode.desc` | 어시스턴트 응답이 스트리밍되는 동안 채팅 화면 스크롤 동작을 선택합니다. |
+| `setting.streamingScrollMode.option.auto` | 자동 스크롤 |
+| `setting.streamingScrollMode.option.labelTop` | 자동 스크롤 안 함 |
+| `setting.markdownRenderMode.label` | 마크다운 렌더링 모드 |
+| `setting.markdownRenderMode.desc` | 응답 스트리밍 중 마크다운 렌더링의 공격성을 선택합니다. |
+| `setting.markdownRenderMode.option.fast` | 빠른 렌더링 |
+| `setting.markdownRenderMode.option.balanced` | 약간 지연된 렌더링 |
+| `setting.markdownRenderMode.option.final` | 완료 후 렌더링 |
+| `setting.autoDismissMobileKeyboard.label` | 소프트웨어 키보드 자동 내림 |
+| `setting.autoDismissMobileKeyboard.desc` | 모바일 환경에서 메시지 전송 후 키보드를 자동으로 내립니다. |
+| `setting.hapticsEnabled.label` | 진동(햅틱) 활성화 |
+| `setting.hapticsEnabled.desc` | 지원되는 기기에서 버튼 클릭 시 진동 피드백을 줍니다. |
+| `setting.micLayout.label` | 마이크 배치 |
+| `setting.micLayout.desc` | 화면에 마이크 버튼을 배치하는 방식입니다. |
+| `setting.micLayout.option.none` | 표시 안 함 |
+| `setting.micLayout.option.left` | 왼쪽 사이드 |
+| `setting.micLayout.option.right` | 오른쪽 사이드 |
+| `setting.micLayout.option.bottom` | 하단 중앙 |
+| `setting.micLayout.option.inline` | 입력창 내부 |
+| `setting.voiceInputAutoPlay.label` | 음성 입력 시 자동 재생 |
+| `setting.voiceInputAutoPlay.desc` | 마이크로 보낸 메시지는 TTS 자동 재생 설정과 관계없이 이 옵션을 따릅니다. |
+| `status.thinking` | 생각 중... |
+| `status.live` | LIVE |
+| `status.running` | 실행 중 |
+| `status.done` | 완료 |
+| `status.failed` | 실패 |
+| `status.stopped` | 중단됨 |
+| `status.unexpectedStop` | 응답이 예기치 않게 중단되었습니다. |
+| `status.thoughtForSeconds` | {seconds}초 동안 생각함 |
+| `status.thoughtForMinutes` | {minutes}분 동안 생각함 |
+| `status.thoughtForMinutesSeconds` | {minutes}분 {seconds}초 동안 생각함 |
+| `tool.currentTimeChecked` | 현재 시간을 확인했습니다. |
+| `tool.currentLocationChecked` | 사용자 위치를 확인했습니다. |
+| `tool.fallbackName` | 도구 |
+| `tool.executeCommand` | 명령어 실행: {value} |
+| `tool.searchQuery` | 검색어: {value} |
+| `tool.openUrl` | 페이지 열기: {value} |
+| `tool.readBufferedSource` | 소스 읽기: {value} |
+| `tool.searchMemory` | 메모리 검색: {value} |
+| `tool.readMemory` | 메모리 읽기: ID {value} |
+| `tool.deleteMemory` | 메모리 삭제: ID {value} |
+| `tool.executionFinished` | 도구 실행이 완료되었습니다. |
+| `progress.processingPrompt` | 프롬프트 처리 중 |
+| `progress.loadingModel` | 모델 로드 중 |
+| `progress.modelLoaded` | 모델 로드 완료 |
+| `setting.enableTTS.label` | TTS 활성화 |
+| `setting.autoPlay.label` | 자동 재생 |
+| `setting.ttsEngine.label` | TTS 엔진 |
+| `setting.voiceStyle.label` | 목소리 스타일 |
+| `setting.speed.label` | 재생 속도 |
+| `setting.chunkSize.label` | 스마트 청킹 |
+| `setting.steps.label` | 추론 단계(Steps) |
+| `setting.threads.label` | CPU 스레드 |
+| `setting.format.label` | 오디오 형식 |
+| `setting.enableEmbeddings.label` | 임베딩 검색 활성화 |
+| `setting.embeddingModel.label` | 임베딩 모델 |
+| `modal.models.title` | 모델 관리자 |
+| `chat.welcome` | 반가워요! 대화할 준비가 되었습니다. |
+| `chat.startup.welcomeTitle` | 환영합니다. |
+| `chat.startup.restore` | 이전 대화 불러오기 |
+| `error.authFailed` | LM Studio 인증 실패 및 해결 방법 안내 |
+| `error.mcpFailed` | LM Studio MCP 연결 실패 및 해결 방법 안내 |
+| `error.contextExceeded` | 대화 문맥 길이 초과 안내 |
+| `error.visionNotSupported` | 이미지 인식 미지원 안내 |
+| `warning.loopDetected` | 반복적인 응답 감지 안내 |
+| `action.stopGeneration` | 답변 중단 |
+
+---
+
+**Created by DINKIssTyle on 2026. Copyright (C) 2026 DINKI'ssTyle. All rights reserved.**

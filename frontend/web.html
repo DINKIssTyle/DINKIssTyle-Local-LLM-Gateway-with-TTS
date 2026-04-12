@@ -55,7 +55,10 @@
 
                 <!-- LLM Settings Section -->
                 <div class="setting-section">
-                    <div class="setting-section-title" data-i18n="section.llm">LLM Settings</div>
+                    <div class="setting-section-title" style="display: flex; align-items: center; gap: 6px;">
+                        <span class="material-icons-round" style="font-size: 18px;">graph_6</span>
+                        <span data-i18n="section.llm">LLM Settings</span>
+                    </div>
 
                     <div class="setting-item">
                         <label data-i18n="setting.model.label">Model Name</label>
@@ -94,7 +97,10 @@
                     </div>
 
                     <div class="setting-section" id="container-embedding-section">
-                        <div class="setting-section-title" data-i18n="section.embedding">임베딩 검색</div>
+                        <div class="setting-section-title" style="display: flex; align-items: center; gap: 6px;">
+                            <span class="material-icons-round" style="font-size: 18px;">bolt</span>
+                            <span data-i18n="section.embedding">임베딩 검색</span>
+                        </div>
 
                         <div class="setting-item">
                             <div class="setting-toggle" onclick="toggleSwitch('cfg-enable-embeddings')">
@@ -224,7 +230,10 @@
 
                 <!-- Chat Appearance Section -->
                 <div class="setting-section">
-                    <div class="setting-section-title" data-i18n="section.appearance">Chat Appearance</div>
+                    <div class="setting-section-title" style="display: flex; align-items: center; gap: 6px;">
+                        <span class="material-icons-round" style="font-size: 18px;">bubble_chart</span>
+                        <span data-i18n="section.appearance">Chat Appearance</span>
+                    </div>
                     <div class="setting-item">
                         <label data-i18n="setting.userBubbleTheme.label">User Bubble Style</label>
                         <p class="setting-desc" data-i18n="setting.userBubbleTheme.desc">Choose the gradient preset for
@@ -276,7 +285,10 @@
 
                 <!-- Voice Input Section -->
                 <div class="setting-section">
-                    <div class="setting-section-title" data-i18n="section.voiceInput">Voice Input</div>
+                    <div class="setting-section-title" style="display: flex; align-items: center; gap: 6px;">
+                        <span class="material-icons-round" style="font-size: 18px;">mic</span>
+                        <span data-i18n="section.voiceInput">Voice Input</span>
+                    </div>
                     <div class="setting-item">
                         <label data-i18n="setting.micLayout.label">Mic Layout</label>
                         <p class="setting-desc" data-i18n="setting.micLayout.desc">화면에 마이크를 배치합니다.</p>
@@ -300,7 +312,10 @@
 
                 <!-- TTS Settings Section -->
                 <div class="setting-section">
-                    <div class="setting-section-title" data-i18n="section.tts">TTS Engine</div>
+                    <div class="setting-section-title" style="display: flex; align-items: center; gap: 6px;">
+                        <span class="material-icons-round" style="font-size: 18px;">text_to_speech</span>
+                        <span data-i18n="section.tts">TTS Engine</span>
+                    </div>
 
                     <div class="setting-item">
                         <div class="setting-toggle" onclick="toggleSwitch('cfg-auto-tts')">
@@ -418,7 +433,10 @@
 
                 <!-- Advanced Settings Section -->
                 <div class="setting-section">
-                    <div class="setting-section-title" data-i18n="section.advanced">Advanced Settings</div>
+                    <div class="setting-section-title" style="display: flex; align-items: center; gap: 6px;">
+                        <span class="material-icons-round" style="font-size: 18px;">shift</span>
+                        <span data-i18n="section.advanced">Advanced Settings</span>
+                    </div>
                     <div class="setting-item">
                         <label data-i18n="setting.cert.label">HTTPS Certificate</label>
                         <p class="setting-desc" data-i18n="setting.cert.desc">Download the certificate to trust this
