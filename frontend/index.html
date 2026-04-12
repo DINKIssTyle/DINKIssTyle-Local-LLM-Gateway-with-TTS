@@ -243,7 +243,7 @@
             margin-bottom: 0;
         }
 
-        .card > .card-title {
+        .card>.card-title {
             margin-bottom: 12px;
         }
 
@@ -817,16 +817,16 @@
             margin: 0 0 12px;
         }
 
-        .mcp-help-markdown p + hr,
-        .mcp-help-markdown ul + hr,
-        .mcp-help-markdown ol + hr,
-        .mcp-help-markdown blockquote + hr,
-        .mcp-help-markdown pre + hr,
-        .mcp-help-markdown hr + p,
-        .mcp-help-markdown hr + ul,
-        .mcp-help-markdown hr + ol,
-        .mcp-help-markdown hr + blockquote,
-        .mcp-help-markdown hr + pre {
+        .mcp-help-markdown p+hr,
+        .mcp-help-markdown ul+hr,
+        .mcp-help-markdown ol+hr,
+        .mcp-help-markdown blockquote+hr,
+        .mcp-help-markdown pre+hr,
+        .mcp-help-markdown hr+p,
+        .mcp-help-markdown hr+ul,
+        .mcp-help-markdown hr+ol,
+        .mcp-help-markdown hr+blockquote,
+        .mcp-help-markdown hr+pre {
             margin-top: 16px;
         }
 
@@ -955,16 +955,16 @@
             margin: 0 0 12px;
         }
 
-        .doc-help-markdown p + hr,
-        .doc-help-markdown ul + hr,
-        .doc-help-markdown ol + hr,
-        .doc-help-markdown blockquote + hr,
-        .doc-help-markdown pre + hr,
-        .doc-help-markdown hr + p,
-        .doc-help-markdown hr + ul,
-        .doc-help-markdown hr + ol,
-        .doc-help-markdown hr + blockquote,
-        .doc-help-markdown hr + pre {
+        .doc-help-markdown p+hr,
+        .doc-help-markdown ul+hr,
+        .doc-help-markdown ol+hr,
+        .doc-help-markdown blockquote+hr,
+        .doc-help-markdown pre+hr,
+        .doc-help-markdown hr+p,
+        .doc-help-markdown hr+ul,
+        .doc-help-markdown hr+ol,
+        .doc-help-markdown hr+blockquote,
+        .doc-help-markdown hr+pre {
             margin-top: 16px;
         }
 
@@ -1372,7 +1372,8 @@
                 <h1>DKST LLM Chat Server</h1>
             </div>
             <div class="header-spacer"></div>
-            <select id="server-language-select" class="header-language-select" onchange="setServerLanguage(this.value)" aria-label="Select language">
+            <select id="server-language-select" class="header-language-select" onchange="setServerLanguage(this.value)"
+                aria-label="Select language">
                 <option value="ko">한국어</option>
                 <option value="en">English</option>
             </select>
@@ -1385,11 +1386,14 @@
         <div id="restart-banner" class="restart-banner">
             <div style="display: flex; align-items: center; gap: 10px;">
                 <span class="material-icons-round" style="color: #eab308;">warning</span>
-                <span data-i18n="banner.restart.message">Server configuration has changed. Restart the server to apply changes.</span>
+                <span data-i18n="banner.restart.message">Server configuration has changed. Restart the server to apply
+                    changes.</span>
             </div>
             <div class="restart-banner-actions">
-                <button class="btn btn-save-only" onclick="dismissRestartBanner()" data-i18n="action.saveOnly">Save Only</button>
-                <button class="btn btn-restart-now" onclick="restartServer()" data-i18n="action.restartNow">Restart Now</button>
+                <button class="btn btn-save-only" onclick="dismissRestartBanner()" data-i18n="action.saveOnly">Save
+                    Only</button>
+                <button class="btn btn-restart-now" onclick="restartServer()" data-i18n="action.restartNow">Restart
+                    Now</button>
             </div>
         </div>
 
@@ -1400,7 +1404,8 @@
                 <div class="card">
                     <div class="card-header">
                         <div class="card-title" data-i18n="card.serverStatus">Server Status</div>
-                        <button class="icon-btn help-icon-btn" type="button" onclick="openMcpHelpModal()" data-i18n-title="help.mcp.title" data-i18n-aria-label="help.mcp.ariaLabel">
+                        <button class="icon-btn help-icon-btn" type="button" onclick="openMcpHelpModal()"
+                            data-i18n-title="help.mcp.title" data-i18n-aria-label="help.mcp.ariaLabel">
                             <span class="material-icons-round">help</span>
                         </button>
                     </div>
@@ -1447,10 +1452,11 @@
                             placeholder="http://127.0.0.1:1234" onchange="saveLLMEndpoint()">
                     </div>
                     <div class="form-group">
-                        <label data-i18n-html="label.apiKeyHelp">API Key <span style="color: var(--text-secondary); font-weight: normal;">(*Required if
+                        <label data-i18n-html="label.apiKeyHelp">API Key <span
+                                style="color: var(--text-secondary); font-weight: normal;">(*Required if
                                 “Require Auth” is enabled.)</span></label>
-                        <input type="password" id="llm-api-key" placeholder="lm-studio or custom key" data-i18n-placeholder="placeholder.apiKey"
-                            onchange="saveLLMApiKey()">
+                        <input type="password" id="llm-api-key" placeholder="lm-studio or custom key"
+                            data-i18n-placeholder="placeholder.apiKey" onchange="saveLLMApiKey()">
                     </div>
                 </div>
 
@@ -1460,19 +1466,22 @@
                     <div class="form-group">
                         <div class="setting-row"
                             style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding: 4px 0;">
-                            <label style="margin:0; font-weight: 500;" data-i18n="label.startOnBoot">Start on Boot</label>
+                            <label style="margin:0; font-weight: 500;" data-i18n="label.startOnBoot">Start on
+                                Boot</label>
                             <input type="checkbox" id="start-on-boot" style="width: auto;"
                                 onchange="toggleStartOnBoot()">
                         </div>
                         <div class="setting-row"
                             style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding: 4px 0;">
-                            <label style="margin:0; font-weight: 500;" data-i18n="label.minimizeToTray">Minimize to Tray</label>
+                            <label style="margin:0; font-weight: 500;" data-i18n="label.minimizeToTray">Minimize to
+                                Tray</label>
                             <input type="checkbox" id="minimize-to-tray" style="width: auto;"
                                 onchange="toggleMinimizeToTray()" checked>
                         </div>
                         <div class="setting-row"
                             style="display: flex; align-items: center; justify-content: space-between; padding: 4px 0;">
-                            <label style="margin:0; font-weight: 500;" data-i18n="label.autoStartServer">Auto Start Server</label>
+                            <label style="margin:0; font-weight: 500;" data-i18n="label.autoStartServer">Auto Start
+                                Server</label>
                             <input type="checkbox" id="auto-start-server" style="width: auto;"
                                 onchange="toggleAutoStartServer()">
                         </div>
@@ -1489,7 +1498,8 @@
                     <div class="form-group">
                         <div class="setting-row"
                             style="display: flex; align-items: center; justify-content: space-between; padding: 4px 0;">
-                            <label style="margin:0; font-weight: 500;" data-i18n="label.enableAssets">Enable TTS &amp; Vector DB</label>
+                            <label style="margin:0; font-weight: 500;" data-i18n="label.enableAssets">Enable TTS &amp;
+                                Vector DB</label>
                             <input type="checkbox" id="enable-tts" style="width: auto;" onchange="toggleEnableTTS()">
                         </div>
                     </div>
@@ -1502,7 +1512,7 @@
                             <label style="margin:0;" data-i18n="label.assetStatus">Asset Status</label>
                             <div style="display: flex; align-items: center; gap: 6px;">
                                 <span class="status-dot" id="asset-status-dot"></span>
-                                <span id="asset-status-text" style="font-size: 12px;" data-i18n="status.checking">Checking...</span>
+                                <span id="asset-status-text" style="font-size: 12px;">Checking...</span>
                             </div>
                         </div>
                     </div>
@@ -1530,7 +1540,8 @@
                         <input type="text" id="cert-domain" value="localhost" placeholder="localhost or domain.com"
                             autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false"
                             inputmode="url" oninput="saveCertDomain()" />
-                        <div style="margin-top: 8px; font-size: 12px; color: var(--text-secondary);" data-i18n-html="help.certificates.stored">
+                        <div style="margin-top: 8px; font-size: 12px; color: var(--text-secondary);"
+                            data-i18n-html="help.certificates.stored">
                             Certificates are stored in the <code>cert</code> folder.
                         </div>
                         <div class="inline-actions" style="margin-top: 10px;">
@@ -1548,7 +1559,8 @@
                         style="margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--border-color);">
                         <div class="setting-row"
                             style="display: flex; align-items: center; justify-content: space-between; padding: 4px 0;">
-                            <label style="margin:0; font-weight: 500;" data-i18n="label.enableDebugTrace">Enable Debug Trace</label>
+                            <label style="margin:0; font-weight: 500;" data-i18n="label.enableDebugTrace">Enable Debug
+                                Trace</label>
                             <input type="checkbox" id="enable-debug-trace" style="width: auto;"
                                 onchange="toggleDebugTrace()">
                         </div>
@@ -1586,7 +1598,8 @@
                         </div>
                     </div>
                     <div id="debug-trace-list" class="trace-list">
-                        <div class="trace-empty" data-i18n="debug.empty">Debug trace is disabled. Turn it on in Advanced Settings to inspect the
+                        <div class="trace-empty" data-i18n="debug.empty">Debug trace is disabled. Turn it on in Advanced
+                            Settings to inspect the
                             request pipeline.</div>
                     </div>
                     <div class="inline-actions" style="margin-top: 12px; flex-shrink: 0;">
@@ -1602,8 +1615,10 @@
                             <span class="material-icons-round">delete_sweep</span>
                             <span data-i18n="action.clearTrace">Clear Trace</span>
                         </button>
-                        <label style="margin-left: auto; display: inline-flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 12px; cursor: pointer;">
-                            <input type="checkbox" id="always-show-welcome" style="width: 16px; height: 16px;" onchange="toggleAlwaysShowWelcome()">
+                        <label
+                            style="margin-left: auto; display: inline-flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 12px; cursor: pointer;">
+                            <input type="checkbox" id="always-show-welcome" style="width: 16px; height: 16px;"
+                                onchange="toggleAlwaysShowWelcome()">
                             <span data-i18n="label.alwaysShowWelcome">Always show welcome</span>
                         </label>
                     </div>
@@ -1638,8 +1653,8 @@
                 <div class="user-list" id="user-list"></div>
             </div>
             <div class="modal-footer" style="display: flex; gap: 8px; justify-content: space-between;">
-                <button class="btn" style="background: var(--border-color);"
-                    onclick="closeAccountManagementModal()" data-i18n="action.close">Close</button>
+                <button class="btn" style="background: var(--border-color);" onclick="closeAccountManagementModal()"
+                    data-i18n="action.close">Close</button>
                 <button class="btn btn-primary" onclick="addUser()">
                     <span class="material-icons-round">person_add</span>
                     <span data-i18n="action.addAccount">Add Account</span>
@@ -1660,11 +1675,13 @@
             <div class="modal-body">
                 <div class="form-group">
                     <label data-i18n="label.username">Username</label>
-                    <input type="text" id="new-user-id" placeholder="Enter username" data-i18n-placeholder="placeholder.username">
+                    <input type="text" id="new-user-id" placeholder="Enter username"
+                        data-i18n-placeholder="placeholder.username">
                 </div>
                 <div class="form-group">
                     <label data-i18n="label.password">Password</label>
-                    <input type="password" id="new-user-password" placeholder="Enter password" data-i18n-placeholder="placeholder.password">
+                    <input type="password" id="new-user-password" placeholder="Enter password"
+                        data-i18n-placeholder="placeholder.password">
                 </div>
                 <div class="form-group" style="margin-top: 8px;">
                     <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
@@ -1674,9 +1691,10 @@
                 </div>
             </div>
             <div class="modal-footer" style="display: flex; gap: 8px; justify-content: flex-end;">
-                <button class="btn" style="background: var(--border-color);"
-                    onclick="closeAddUserModal()" data-i18n="action.cancel">Cancel</button>
-                <button class="btn btn-primary" onclick="submitAddUser()" data-i18n="action.addAccount">Add Account</button>
+                <button class="btn" style="background: var(--border-color);" onclick="closeAddUserModal()"
+                    data-i18n="action.cancel">Cancel</button>
+                <button class="btn btn-primary" onclick="submitAddUser()" data-i18n="action.addAccount">Add
+                    Account</button>
             </div>
         </div>
     </div>
@@ -1691,9 +1709,10 @@
                 <p id="confirm-message">Are you sure?</p>
             </div>
             <div class="modal-footer" style="display: flex; gap: 8px; justify-content: flex-end;">
-                <button class="btn" style="background: var(--border-color);"
-                    onclick="closeConfirmModal(false)" data-i18n="action.cancel">Cancel</button>
-                <button class="btn btn-danger" onclick="closeConfirmModal(true)" data-i18n="action.confirm">Confirm</button>
+                <button class="btn" style="background: var(--border-color);" onclick="closeConfirmModal(false)"
+                    data-i18n="action.cancel">Cancel</button>
+                <button class="btn btn-danger" onclick="closeConfirmModal(true)"
+                    data-i18n="action.confirm">Confirm</button>
             </div>
         </div>
     </div>
@@ -1716,7 +1735,8 @@
                     <span class="material-icons-round">content_copy</span>
                     <span data-i18n="action.copyPayload">Copy Payload</span>
                 </button>
-                <button class="btn btn-primary" onclick="closeTracePayloadModal()" data-i18n="action.close">Close</button>
+                <button class="btn btn-primary" onclick="closeTracePayloadModal()"
+                    data-i18n="action.close">Close</button>
             </div>
         </div>
     </div>
@@ -1730,7 +1750,8 @@
                 </button>
             </div>
             <div class="modal-body doc-help-body">
-                <div id="mcp-help-markdown" class="mcp-help-markdown is-loading" data-i18n="help.loading">Loading help document...</div>
+                <div id="mcp-help-markdown" class="mcp-help-markdown is-loading" data-i18n="help.loading">Loading help
+                    document...</div>
             </div>
             <div class="modal-footer" style="display: flex; justify-content: flex-end;">
                 <button class="btn btn-primary" onclick="closeMcpHelpModal()" data-i18n="action.close">Close</button>
@@ -1747,7 +1768,8 @@
                 </button>
             </div>
             <div class="modal-body doc-help-body">
-                <div id="doc-help-markdown" class="doc-help-markdown is-loading" data-i18n="help.loading">Loading help document...</div>
+                <div id="doc-help-markdown" class="doc-help-markdown is-loading" data-i18n="help.loading">Loading help
+                    document...</div>
             </div>
             <div class="modal-footer" style="display: flex; justify-content: flex-end;">
                 <button class="btn btn-primary" onclick="closeDocHelpModal()" data-i18n="action.close">Close</button>
@@ -1779,7 +1801,8 @@
                 <button class="btn btn-secondary btn-compact" id="welcome-skip-btn" onclick="dismissWelcomeModal()">
                     <span data-i18n="action.continueLater">Continue Later</span>
                 </button>
-                <button class="btn btn-primary" onclick="dismissWelcomeModal(true)" data-i18n="action.done">Done</button>
+                <button class="btn btn-primary" onclick="dismissWelcomeModal(true)"
+                    data-i18n="action.done">Done</button>
             </div>
         </div>
     </div>
@@ -1806,7 +1829,8 @@
                     <span class="material-icons-round">refresh</span>
                     <span data-i18n="action.refresh">Refresh</span>
                 </button>
-                <button class="btn btn-primary" onclick="closeModelManagerModal()" data-i18n="action.close">Close</button>
+                <button class="btn btn-primary" onclick="closeModelManagerModal()"
+                    data-i18n="action.close">Close</button>
             </div>
         </div>
     </div>
@@ -1824,7 +1848,9 @@
                 <div style="text-align: center; margin-bottom: 20px;">
                     <img src="public/icon-512.png" alt="App Icon"
                         style="width: 64px; height: 64px; margin-bottom: 12px;">
-                    <div id="about-app-name" style="font-size: 18px; font-weight: 600; color: var(--text-color); margin-bottom: 4px;">DKST LLM Chat Server</div>
+                    <div id="about-app-name"
+                        style="font-size: 18px; font-weight: 600; color: var(--text-color); margin-bottom: 4px;">DKST
+                        LLM Chat Server</div>
                     <div id="app-version-text" style="color: var(--accent-color);">Version -</div>
                     <div id="about-app-copyright" style="margin-top: 8px;">(C) 2026 DINKI'ssTyle</div>
                 </div>
@@ -1843,7 +1869,8 @@
     <div class="modal-overlay" id="edit-user-modal">
         <div class="modal" style="max-width: 400px;">
             <div class="modal-header">
-                <div class="modal-title"><span data-i18n="modal.editAccount.title">Edit Account</span>: <span id="edit-user-id-display"></span></div>
+                <div class="modal-title"><span data-i18n="modal.editAccount.title">Edit Account</span>: <span
+                        id="edit-user-id-display"></span></div>
                 <button class="icon-btn" onclick="closeEditUserModal()">
                     <span class="material-icons-round">close</span>
                 </button>
@@ -1853,14 +1880,17 @@
 
                 <!-- Change Password Section -->
                 <div style="margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border-color);">
-                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);" data-i18n="edit.section.changePassword">Change Password</div>
+                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);"
+                        data-i18n="edit.section.changePassword">Change Password</div>
                     <div class="form-group">
                         <label data-i18n="edit.label.newPassword">New Password</label>
-                        <input type="password" id="edit-new-password" placeholder="Enter new password" data-i18n-placeholder="edit.placeholder.newPassword">
+                        <input type="password" id="edit-new-password" placeholder="Enter new password"
+                            data-i18n-placeholder="edit.placeholder.newPassword">
                     </div>
                     <div class="form-group">
                         <label data-i18n="edit.label.confirmNewPassword">Confirm New Password</label>
-                        <input type="password" id="edit-confirm-password" placeholder="Confirm new password" data-i18n-placeholder="edit.placeholder.confirmNewPassword">
+                        <input type="password" id="edit-confirm-password" placeholder="Confirm new password"
+                            data-i18n-placeholder="edit.placeholder.confirmNewPassword">
                     </div>
                     <button class="btn btn-primary" style="width: 100%;" onclick="changeUserPassword()">
                         <span class="material-icons-round" style="font-size: 16px;">lock</span>
@@ -1870,7 +1900,8 @@
 
                 <!-- Admin Role Section -->
                 <div style="margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border-color);">
-                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);" data-i18n="edit.section.userRole">User Role</div>
+                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);"
+                        data-i18n="edit.section.userRole">User Role</div>
                     <div class="form-group" style="margin-bottom: 0;">
                         <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
                             <input type="checkbox" id="edit-user-admin" style="width: 18px; height: 18px;">
@@ -1881,20 +1912,25 @@
 
                 <!-- API Key Section -->
                 <div style="margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border-color);">
-                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);" data-i18n="edit.section.apiKey">API Key</div>
+                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);"
+                        data-i18n="edit.section.apiKey">API Key</div>
                     <div class="form-group">
                         <label data-i18n="edit.label.llmApiKey">LLM API Key</label>
-                        <input type="password" id="edit-user-api-key" placeholder="Enter API key for this user" data-i18n-placeholder="edit.placeholder.userApiKey">
+                        <input type="password" id="edit-user-api-key" placeholder="Enter API key for this user"
+                            data-i18n-placeholder="edit.placeholder.userApiKey">
                     </div>
-                    <div style="font-size: 11px; color: var(--text-secondary); margin-top: -8px;" data-i18n="edit.help.apiKey">
+                    <div style="font-size: 11px; color: var(--text-secondary); margin-top: -8px;"
+                        data-i18n="edit.help.apiKey">
                         This API key will be used when this user makes LLM requests.
                     </div>
                 </div>
 
                 <!-- Memory Retention Section -->
                 <div style="margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border-color);">
-                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);" data-i18n="edit.section.memoryRetention">Memory Retention</div>
-                    <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 12px;" data-i18n-html="edit.help.memoryRetention">
+                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);"
+                        data-i18n="edit.section.memoryRetention">Memory Retention</div>
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 12px;"
+                        data-i18n-html="edit.help.memoryRetention">
                         Account policy. Set days to keep each memory tier for this user. Use <code>0</code> to disable
                         automatic deletion.
                     </div>
@@ -1916,29 +1952,33 @@
 
                 <!-- Disallowed Commands/Directories Section -->
                 <div style="margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border-color);">
-                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);" data-i18n="edit.section.securityRestrictions">Security Restrictions
+                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);"
+                        data-i18n="edit.section.securityRestrictions">Security Restrictions
                     </div>
 
                     <div class="form-group">
                         <label data-i18n="edit.label.disallowedCommands">Disallowed Commands (comma separated)</label>
                         <textarea id="edit-disallowed-cmds" class="settings-input"
-                                style="width: 100%; height: 60px; resize: vertical;"
-                            placeholder="rm, shutdown, reboot" data-i18n-placeholder="edit.placeholder.disallowedCommands"></textarea>
+                            style="width: 100%; height: 60px; resize: vertical;" placeholder="rm, shutdown, reboot"
+                            data-i18n-placeholder="edit.placeholder.disallowedCommands"></textarea>
                     </div>
 
                     <div class="form-group">
-                        <label data-i18n="edit.label.disallowedDirectories">Disallowed Directories (comma separated)</label>
+                        <label data-i18n="edit.label.disallowedDirectories">Disallowed Directories (comma
+                            separated)</label>
                         <textarea id="edit-disallowed-dirs" class="settings-input"
-                                style="width: 100%; height: 60px; resize: vertical;"
-                            placeholder="/etc, /var, C:\Windows" data-i18n-placeholder="edit.placeholder.disallowedDirectories"></textarea>
+                            style="width: 100%; height: 60px; resize: vertical;" placeholder="/etc, /var, C:\Windows"
+                            data-i18n-placeholder="edit.placeholder.disallowedDirectories"></textarea>
                     </div>
                 </div>
 
                 <!-- MCP Tool Permissions Section -->
                 <div>
-                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);" data-i18n="edit.section.toolPermissions">MCP Tool Permissions
+                    <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);"
+                        data-i18n="edit.section.toolPermissions">MCP Tool Permissions
                     </div>
-                    <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 12px;" data-i18n="edit.help.toolPermissions">
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 12px;"
+                        data-i18n="edit.help.toolPermissions">
                         Uncheck to disable specific tools for this user.
                     </div>
                     <div id="edit-user-tools-list" style="display: flex; flex-direction: column; gap: 8px;">
@@ -1947,9 +1987,10 @@
                 </div>
             </div>
             <div class="modal-footer" style="display: flex; gap: 8px; justify-content: flex-end;">
-                <button class="btn" style="background: var(--border-color);"
-                    onclick="closeEditUserModal()" data-i18n="action.cancel">Cancel</button>
-                <button class="btn btn-primary" onclick="saveUserSettings()" data-i18n="edit.action.saveChanges">Save Changes</button>
+                <button class="btn" style="background: var(--border-color);" onclick="closeEditUserModal()"
+                    data-i18n="action.cancel">Cancel</button>
+                <button class="btn btn-primary" onclick="saveUserSettings()" data-i18n="edit.action.saveChanges">Save
+                    Changes</button>
             </div>
         </div>
     </div>
@@ -2218,7 +2259,8 @@
                 'models.downloadCompleted': '모델 다운로드가 완료되었습니다.',
                 'models.downloadFailed': '모델 다운로드 실패: {error}',
                 'trace.count': '{count}개 항목',
-                'about.version': '버전 {version}'
+                'about.version': '버전 {version}',
+                'status.pending': '대기 중'
             },
             en: {
                 'banner.restart.message': 'Server configuration has changed. Restart the server to apply changes.',
@@ -2262,7 +2304,7 @@
                 'action.generateCertificate': 'Generate Certificate',
                 'action.openCertificateFolder': 'Open Certificate Local',
                 'label.enableDebugTrace': 'Enable Debug Trace',
-                'label.alwaysShowWelcome': 'Always show welcome',
+                'label.alwaysShowWelcome': 'Show welcome',
                 'card.accountManagement': 'Account Management',
                 'action.manageAccounts': 'Manage Accounts',
                 'action.logoutAllSessions': 'Logout All Sessions',
@@ -2382,7 +2424,8 @@
                 'models.downloadCompleted': 'Model download completed.',
                 'models.downloadFailed': 'Model download failed: {error}',
                 'trace.count': '{count} entries',
-                'about.version': 'Version {version}'
+                'about.version': 'Version {version}',
+                'status.pending': 'Pending'
             }
         };
 
@@ -2453,6 +2496,7 @@
                 });
             }
             applyServerI18n(document);
+            checkAssetStatus();
             updateUI(isRunning, document.getElementById('port-input')?.value || '', llmActivityBusy);
             renderDebugTrace();
             updateLlmActivityIndicator(llmActivityBusy);
