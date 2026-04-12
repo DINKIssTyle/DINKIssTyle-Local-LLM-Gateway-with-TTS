@@ -7,19 +7,21 @@ To integrate **LM Studio** with these tools, you need to configure the settings 
 # 🛠️ LM Studio Integration Procedure
 
 ## 1. Access Developer Settings
-Navigate to the **Developer Tab** in LM Studio by pressing:
-* `Ctrl + 2` (Windows/Linux),
-* `Cmd + 2` (macOS)
+Navigate to the **Developer Tab** in LM Studio
+> `Ctrl + 2` (Windows/Linux)
+> `Cmd + 2` (macOS)
 
 ## 2. Configure Server Settings
 Click on **Server Settings** and enable the following toggle switches:
-* **Require Authentication**
-* **Allow calling servers from mcp.json**
+* **Require Authentication** <span class="number-square">ON</span>
+* **Allow calling servers from mcp.json** <span class="number-square">ON</span>
+<div><img src="./img/LMStudio_MCP_001.png"><br></div>  
 
 ## 3. Update Configuration File
-Click on **mcp.json** to open the editor, then:
-* Copy and paste the required JSON configuration into the **Edit mcp.json** field.
-* **Save** the file to apply the changes.
+Click on **mcp.json** <span class="number-square">1</span>to open the editor, then:
+* Copy and paste<span class="number-square">2</span> the required JSON configuration into the **Edit mcp.json** field.
+* **Save** <span class="number-square">3</span>the file to apply the changes.
+<div><img src="./img/LMStudio_MCP_002.png"><br></div>  
 <!--/lang-->
 
 <!--lang:ko-->
@@ -37,11 +39,13 @@ LM Studio에서 **Developer Tab**으로 이동하세요.
 
 ## 2. 서버 설정 변경
 **Server Settings**를 열고 아래 항목을 활성화하세요.
-* **Require Authentication**
-* **Allow calling servers from mcp.json**
+* **Require Authentication** <span class="number-square">ON</span>
+* **Allow calling servers from mcp.json** <span class="number-square">ON</span>
+<div><img src="./img/LMStudio_MCP_001.png"><br></div>  
 
 ## 3. 설정 파일 수정
-**mcp.json**을 열고:
-* 필요한 JSON 설정을 **Edit mcp.json** 영역에 붙여 넣은 뒤
-* **Save**를 눌러 적용하세요.
+**mcp.json** <span class="number-square">1</span> 을 열고:
+* 아래 JSON 을 복사해서 **Edit mcp.json** <span class="number-square">2</span> 영역에 붙여 넣은 뒤
+* **Save** <span class="number-square">3</span>를 눌러 적용하세요.
+<div><img src="./img/LMStudio_MCP_002.png"><br></div> 
 <!--/lang-->

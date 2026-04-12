@@ -5,13 +5,15 @@
 
 To establish a connection, follow these steps within the **LM Studio** application:
 
-* **Access Developer Tab** Navigate to the **Developer Tab** by pressing:
-    * `Ctrl + 2` (Windows/Linux)
-    * `Cmd + 2` (macOS)
+* **Access Developer Tab** Navigate to the **Developer Tab**
+> `Ctrl + 2` (Windows/Linux)
+> `Cmd + 2` (macOS)
 
-* **Start the Server** Toggle the switch next to **Status: Stopped** to start the local server.
-    Click the **Copy** button next to the **Reachable at** address, then return to the **DKST LLM Chat Server** and paste it into the **LLM Endpoint** field.
+---
 
+* **Start the Server** Toggle the switch <span class="number-square">1</span> next to **Status: Stopped** to start the local server.
+    Click the **Copy** <span class="number-square">2</span> button next to the **Reachable at** address, then return to the **DKST LLM Chat Server** and paste it into the **LLM Endpoint** <span class="number-square">3</span> field.
+<div><img src="./img/LMStdio_Endpoint_001.png"><br></div>  
 ---
 
 **Back in LM Studio:**
@@ -20,16 +22,28 @@ To establish a connection, follow these steps within the **LM Studio** applicati
     * **Server Port:** You may change the port number here if necessary.
     * **Authentication:** Toggle **Require Authentication** to **ON**.
 
-* **Generate API Token** 1. Click the **Manage Tokens** button.
-    2. Click **+ Create new token**.
-    3. Set **Allow calling servers from mcp.json** to **Allow**, then click **Create token**.
-    4. Click the **Copy** button next to the newly generated token.
+
+
+* **Generate API Token** 1. Click the **Manage Tokens** <span class="number-square">3</span> button.
+<div><img src="./img/LMStdio_Endpoint_002.png"><br></div>  
+
+    2. Click **+ Create new token** <span class="number-square">4</span>.
+<div><img src="./img/LMStdio_Endpoint_003.png"><br></div>
+
+    3. Set **Allow calling servers from mcp.json** <span class="number-square">5</span> to **Allow**, then click **Create token** <span class="number-square">6</span>.
+<div><img src="./img/LMStdio_Endpoint_004.png"><br></div>  
+
+    4. Click the **Copy** <span class="number-square">7</span> button next to the newly generated token.
+<div><img src="./img/LMStdio_Endpoint_005.png"><br></div>  
+
+
 
 ---
 
 **Back in DKST LLM Chat Server:**
 
-* **Finalize Setup** Paste the copied token into the **API Key** field.
+* **Finalize Setup** Paste the copied token into the **API Key** <span class="number-square">8</span> field.
+<div><img src="./img/LMStdio_Endpoint_006.png"><br></div>  
 
 ---
 
@@ -47,13 +61,14 @@ To establish a connection, follow these steps within the **LM Studio** applicati
 **LM Studio** 앱 안에서 아래 순서대로 진행하세요.
 
 * **Developer Tab 열기**
-    * Windows/Linux: `Ctrl + 2`
-    * macOS: `Cmd + 2`
+> `Ctrl + 2` (Windows/Linux)
+> `Cmd + 2` (macOS)
 
 * **서버 시작**
-    * **Status: Stopped** 옆 토글을 켜서 로컬 서버를 시작합니다.
-    * **Reachable at** 주소 옆의 **Copy** 버튼을 눌러 주소를 복사합니다.
-    * 다시 **DKST LLM Chat Server**로 돌아와 **LLM Endpoint** 칸에 붙여 넣습니다.
+    * **Status: Stopped** 옆 토글 <span class="number-square">1</span>을 켜서 로컬 서버를 시작합니다.
+    * **Reachable at** 주소 옆의 **Copy** <span class="number-square">2</span> 버튼을 눌러 주소를 복사합니다.
+    * 다시 **DKST LLM Chat Server**로 돌아와 **LLM Endpoint** <span class="number-square">3</span> 칸에 붙여 넣습니다.
+    <div><br><img src="./img/LMStdio_Endpoint_001.png"><br></div>  
 
 ---
 
@@ -62,19 +77,27 @@ To establish a connection, follow these steps within the **LM Studio** applicati
 * **Server Settings 설정**
     * 필요하면 **Server Port**를 바꿀 수 있습니다.
     * **Require Authentication**을 **ON**으로 설정합니다.
+    
 
 * **API 토큰 생성**
-    1. **Manage Tokens**를 클릭합니다.
-    2. **+ Create new token**을 클릭합니다.
-    3. **Allow calling servers from mcp.json**을 **Allow**로 설정한 뒤 **Create token**을 누릅니다.
-    4. 새로 만든 토큰 옆 **Copy** 버튼으로 복사합니다.
+    1. **Manage Tokens** <span class="number-square">3</span>를 클릭합니다.
+    <div><br><img src="./img/LMStdio_Endpoint_002.png"><br></div> 
+    2. **+ Create new token** <span class="number-square">4</span>을 클릭합니다.
+    <div><br><img src="./img/LMStdio_Endpoint_003.png"><br></div> 
+    3. **Allow calling servers from mcp.json**을 **Allow** <span class="number-square">5</span>로 설정한 뒤 **Create token** <span class="number-square">6</span> 을 누릅니다.
+
+    <div><br><img src="./img/LMStdio_Endpoint_004.png"><br></div> 
+    4. 새로 만든 토큰 옆 **Copy** <span class="number-square">7</span> 버튼으로 복사합니다.
+    <div><br><img src="./img/LMStdio_Endpoint_005.png"><br></div> 
+        
 
 ---
 
 **다시 DKST LLM Chat Server에서:**
 
 * **설정 마무리**
-    * 복사한 토큰을 **API Key** 칸에 붙여 넣습니다.
+    * 복사한 토큰을 **API Key** 칸 <span class="number-square">8</span>에 붙여 넣습니다.
+    <div><br><img src="./img/LMStdio_Endpoint_006.png"><br></div> 
 
 ---
 
