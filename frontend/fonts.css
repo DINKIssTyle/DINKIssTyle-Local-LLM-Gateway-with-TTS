@@ -1,25 +1,33 @@
 @font-face {
-  font-family: 'Inter';
+  font-family: 'Noto Sans KR';
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('./vendor/fonts/inter-400-latin.woff2') format('woff2');
+  src: url('./vendor/fonts/noto-sans-kr-400.ttf') format('truetype');
 }
 
 @font-face {
-  font-family: 'Inter';
+  font-family: 'Noto Sans KR';
   font-style: normal;
   font-weight: 500;
   font-display: swap;
-  src: url('./vendor/fonts/inter-500-latin.woff2') format('woff2');
+  src: url('./vendor/fonts/noto-sans-kr-500.ttf') format('truetype');
 }
 
 @font-face {
-  font-family: 'Inter';
+  font-family: 'Noto Sans KR';
   font-style: normal;
   font-weight: 600;
   font-display: swap;
-  src: url('./vendor/fonts/inter-600-latin.woff2') format('woff2');
+  src: url('./vendor/fonts/noto-sans-kr-600.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'Noto Sans KR';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./vendor/fonts/noto-sans-kr-700.ttf') format('truetype');
 }
 
 @font-face {

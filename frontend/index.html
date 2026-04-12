@@ -17,8 +17,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="public/favicon-32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="public/favicon-16.png">
     <link rel="manifest" href="site.webmanifest">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="fonts.css?v=2">
     <link rel="stylesheet" href="icons.css?v=1">
     <style>
         :root {
@@ -39,7 +38,7 @@
         }
 
         body {
-            font-family: 'Inter', sans-serif;
+            font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "맑은 고딕", sans-serif;
             background: var(--bg-color);
             color: var(--text-color);
             height: 100vh;
@@ -241,6 +240,7 @@
             text-transform: uppercase;
             letter-spacing: 1px;
             margin-bottom: 0;
+            font-weight: 700;
         }
 
         .card>.card-title {
@@ -1374,7 +1374,8 @@
 
             <div class="header-spacer"></div>
 
-            <span class="material-icons-round" style="font-size: 18px; color: var(--text-color);">language</span>
+            <span class="material-icons-round"
+                style="font-size: 24px; color: var(--text-color);">language_korean_latin</span>
 
             <select id="server-language-select" class="header-language-select" onchange="setServerLanguage(this.value)"
                 aria-label="Select language">
