@@ -645,7 +645,7 @@
 
             if (!config.enableTTS) {
                 if (!btn) return;
-                global.alert?.('TTS is disabled. Enable it in settings.');
+                global.alert?.('TTS is unavailable. Enable "Enable TTS & Vector DB" in Server Manager.');
                 return;
             }
 
