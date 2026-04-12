@@ -6908,7 +6908,7 @@ function showToast(message, isError = false) {
         document.body.appendChild(toast);
     }
 
-    const icon = isError ? 'error_outline' : 'check_circle';
+    const icon = isError ? 'warning' : 'info';
     const color = isError ? 'var(--danger-color)' : 'var(--success-color)';
 
     toast.innerHTML = `

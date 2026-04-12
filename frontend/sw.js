@@ -3,14 +3,14 @@
  * Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
  */
 
-const CACHE_NAME = 'dkst-chat-v22';
+const CACHE_NAME = 'dkst-chat-v24';
 const ASSETS = [
     '/',
     '/index.html',
     '/login.html',
     '/web.html',
     '/web.html?v=19',
-    '/fonts.css?v=1',
+    '/fonts.css?v=2',
     '/style.css?v=8',
     '/icons.css?v=2',
     '/app-utils.js?v=1',
@@ -43,15 +43,15 @@ const ASSETS = [
     '/vendor/esm/rehype-raw@7.0.0/es2022/rehype-raw.bundle.mjs',
     '/vendor/esm/rehype-katex@7.0.1/es2022/rehype-katex.bundle.mjs',
     '/vendor/esm/rehype-stringify@10.0.1/es2022/rehype-stringify.bundle.mjs',
-    '/vendor/fonts/inter-400-latin.woff2',
-    '/vendor/fonts/inter-500-latin.woff2',
-    '/vendor/fonts/inter-600-latin.woff2',
+    '/vendor/fonts/noto-sans-kr-400.ttf',
+    '/vendor/fonts/noto-sans-kr-500.ttf',
+    '/vendor/fonts/noto-sans-kr-600.ttf',
+    '/vendor/fonts/noto-sans-kr-700.ttf',
     '/vendor/fonts/jetbrains-mono-400-latin.woff2',
     '/vendor/fonts/material-icons-round.woff2',
     '/vendor/fonts/KaTeX_Main-Regular.woff2',
     '/vendor/fonts/KaTeX_Main-Regular.woff',
     '/vendor/fonts/KaTeX_Main-Regular.ttf',
-    '/fonts/MaterialIconsRound-Regular.otf',
     '/public/favicon-32.png',
     '/public/favicon-16.png',
     '/public/apple-touch-icon.png'

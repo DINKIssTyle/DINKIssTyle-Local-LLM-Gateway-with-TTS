@@ -18,12 +18,9 @@
     <link rel="manifest" href="site.webmanifest">
 
     <!-- Fonts -->
-    <link rel="preload" href="vendor/fonts/inter-400-latin.woff2" as="font" type="font/woff2" crossorigin>
-    <link rel="preload" href="vendor/fonts/inter-500-latin.woff2" as="font" type="font/woff2" crossorigin>
-    <link rel="preload" href="vendor/fonts/inter-600-latin.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="preload" href="vendor/fonts/jetbrains-mono-400-latin.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="preload" href="vendor/fonts/material-icons-round.woff2" as="font" type="font/woff2" crossorigin>
-    <link rel="stylesheet" href="fonts.css?v=1">
+    <link rel="stylesheet" href="fonts.css?v=2">
 
     <!-- Icons -->
     <link rel="stylesheet" href="icons.css?v=2">
@@ -215,7 +212,8 @@
 
                     <div class="setting-item">
                         <label data-i18n="setting.temperature.label">Temperature</label>
-                        <p class="setting-desc" data-i18n="setting.temperature.desc">Auto면 모델 기본값을 사용하고, 직접 지정하면 0.1 단위로 조절합니다.</p>
+                        <p class="setting-desc" data-i18n="setting.temperature.desc">Auto면 모델 기본값을 사용하고, 직접 지정하면 0.1 단위로
+                            조절합니다.</p>
                         <button type="button" id="cfg-temp-trigger" class="btn btn-secondary settings-action-btn"
                             onclick="openTemperatureModal()">
                             <span class="material-icons-round">tune</span>
@@ -263,7 +261,8 @@
                             <span data-i18n="setting.autoDismissMobileKeyboard.label">소프트웨어 키보드 자동 내림</span>
                             <input type="checkbox" id="cfg-auto-dismiss-mobile-keyboard">
                         </div>
-                        <p class="setting-desc" data-i18n="setting.autoDismissMobileKeyboard.desc">모바일 환경에서 메시지 전송 후 입력창 포커스를 해제해 키보드를 자동으로 내립니다.</p>
+                        <p class="setting-desc" data-i18n="setting.autoDismissMobileKeyboard.desc">모바일 환경에서 메시지 전송 후 입력창
+                            포커스를 해제해 키보드를 자동으로 내립니다.</p>
                     </div>
                     <div class="setting-item">
                         <div class="setting-toggle" onclick="toggleSwitch('cfg-enable-haptics')">
@@ -531,7 +530,8 @@
                         <span data-i18n="setting.temperature.auto">Auto</span>
                     </button>
                 </div>
-                <p class="setting-desc" data-i18n="setting.temperature.modalDesc">0은 Auto이며, 이 경우 temperature 필드를 요청에 넣지 않습니다.</p>
+                <p class="setting-desc" data-i18n="setting.temperature.modalDesc">0은 Auto이며, 이 경우 temperature 필드를 요청에 넣지
+                    않습니다.</p>
                 <input type="range" id="temperature-modal-slider" min="0" max="1" step="0.1" value="0">
                 <div class="temperature-modal-scale">
                     <span>Auto</span>
@@ -577,7 +577,7 @@
                         onclick="openModelPickerModal(event)" aria-haspopup="dialog" aria-expanded="false"
                         title="Select model">
                         <span id="header-model-name" class="header-model-name">Loading...</span>
-                        <span class="material-icons-round header-model-trigger-icon">arrow_drop_down</span>
+                        <span class="material-icons-round header-model-trigger-icon">keyboard_arrow_down</span>
                     </button>
                 </div>
             </div>

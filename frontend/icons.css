@@ -1,15 +1,13 @@
 @font-face {
-  font-family: 'Material Icons Round';
+  font-family: 'Material Symbols Rounded';
   font-style: normal;
-  font-weight: 400;
+  font-weight: 100 700;
   font-display: block;
-  src:
-    url('./vendor/fonts/material-icons-round.woff2') format('woff2'),
-    url('./fonts/MaterialIconsRound-Regular.otf') format('opentype');
+  src: url('./vendor/fonts/material-icons-round.woff2') format('woff2');
 }
 
 .material-icons-round {
-  font-family: 'Material Icons Round';
+  font-family: 'Material Symbols Rounded';
   font-weight: normal;
   font-style: normal;
   font-size: 24px;
