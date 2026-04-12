@@ -1744,15 +1744,11 @@ func (a *App) GetWelcomeState() WelcomeState {
 		RequiresMigration:   requiresMigration,
 		MigrationMessage:    migrationMessage,
 		RequiresTTSDownload: requiresTTSDownload,
-		TTSDownloadMessage:  "Voice runtime files are optional, but they are needed for Supertonic TTS and local embedding features.",
+		TTSDownloadMessage:  "",
 		CanSkipTTSDownload:  true,
 		RestartRecommended:  requiresMigration,
-		PrimaryMessage:      "Welcome to DKST LLM Chat Server.",
-		SecondaryMessage:    "A few one-time setup actions may be needed before everything is ready.",
-	}
-	if requiresMigration {
-		state.PrimaryMessage = "Welcome back."
-		state.SecondaryMessage = "We found an older storage layout that should be reorganized once."
+		PrimaryMessage:      "",
+		SecondaryMessage:    "",
 	}
 	if !requiresMigration && !requiresTTSDownload && a.welcomeDismissed && !a.alwaysShowWelcome {
 		state.ShowModal = false
