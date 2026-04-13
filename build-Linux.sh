@@ -146,13 +146,17 @@ $WAILS_CMD build -platform linux/amd64 $BUILD_TAGS
 
 # --- 6. Organize Output ---
 APP_CONTENT_DIR="build/bin"
-if [ -d "$APP_CONTENT_DIR" ]; then
-    echo "Organizing artifacts..."
-    if [ -d "bundle/assets" ]; then
-        cp -R bundle/assets "$APP_CONTENT_DIR"
-    else
-        echo "Warning: bundle/assets directory not found in project root."
+echo "Organizing artifacts..."
+
+if [ -f "$APP_CONTENT_DIR/DKST LLM Chat Server" ]; then
+    # Create required directory structure
+    mkdir -p "$APP_CONTENT_DIR/assets/runtime/onnxruntime"
+    
+    # Explicitly copy ONLY the Linux ONNX runtime library
+    if [ -f "bundle/assets/runtime/onnxruntime/libonnxruntime.so" ]; then
+        cp "bundle/assets/runtime/onnxruntime/libonnxruntime.so" "$APP_CONTENT_DIR/assets/runtime/onnxruntime/"
     fi
+
     if [ -d "bundle/dictionary" ]; then
         cp -R bundle/dictionary "$APP_CONTENT_DIR"
     fi
@@ -162,12 +166,8 @@ if [ -d "$APP_CONTENT_DIR" ]; then
     cp bundle/system_prompts.json "$APP_CONTENT_DIR" 2>/dev/null || true
     cp bundle/ThirdPartyNotices.md "$APP_CONTENT_DIR" 2>/dev/null || true
     
-    # Cleanup
-    rm -rf "$APP_CONTENT_DIR/assets/.git"
-
-
     echo "Build success! Output directory: $APP_CONTENT_DIR"
 else
-    echo "Build failed!"
+    echo "Build failed! Binary 'DKST LLM Chat Server' was not created."
     exit 1
 fi
