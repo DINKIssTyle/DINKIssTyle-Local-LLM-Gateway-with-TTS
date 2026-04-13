@@ -144,13 +144,28 @@ func GetResourcePath(relativePath string) string {
 		return relativePath
 	}
 
-	// 1. Check relative to executable (bootstrap/bundle source)
-	exePath, err := os.Executable()
-	if err == nil {
+	appDataDir := GetAppDataDir()
+	exePath, _ := os.Executable()
+	return resolveResourcePath(relativePath, appDataDir, exePath, runtime.GOOS)
+}
+
+func resolveResourcePath(relativePath, appDataDir, exePath, goos string) string {
+	if filepath.IsAbs(relativePath) {
+		return relativePath
+	}
+
+	// 1. Check AppDataDir first so user-managed files override bundled defaults.
+	fullPath := filepath.Join(appDataDir, relativePath)
+	if _, err := os.Stat(fullPath); err == nil {
+		return fullPath
+	}
+
+	// 2. Check relative to executable (bootstrap/bundle source)
+	if exePath != "" {
 		exeDir := filepath.Dir(exePath)
 
 		// MacOS Bundle: Check Contents/Resources
-		if runtime.GOOS == "darwin" {
+		if goos == "darwin" {
 			resPath := filepath.Join(filepath.Dir(exeDir), "Resources", relativePath)
 			if _, err := os.Stat(resPath); err == nil {
 				return resPath
@@ -162,13 +177,6 @@ func GetResourcePath(relativePath string) string {
 		if _, err := os.Stat(prodPath); err == nil {
 			return prodPath
 		}
-	}
-
-	// 2. Check AppDataDir (deployment/production priority)
-	appDataDir := GetAppDataDir()
-	fullPath := filepath.Join(appDataDir, relativePath)
-	if _, err := os.Stat(fullPath); err == nil {
-		return fullPath
 	}
 
 	// 3. Check current working directory (dev mode)
