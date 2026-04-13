@@ -38,7 +38,8 @@
         }
 
         body {
-            font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "맑은 고딕", sans-serif;
+            font-family: "Noto Sans KR", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "맑은 고딕", sans-serif;
+            font-weight: 500;
             background: var(--bg-color);
             color: var(--text-color);
             height: 100vh;
@@ -157,6 +158,7 @@
             border-radius: 8px;
             background: rgba(255, 255, 255, 0.04);
             color: var(--text-color);
+            font-family: inherit;
             font-size: 12px;
             font-weight: 600;
             padding: 7px 28px 7px 10px;
@@ -276,10 +278,11 @@
             align-items: center;
             justify-content: center;
             gap: 6px;
-            padding: 10px 16px;
+            padding: 6px 16px;
             border: none;
             border-radius: 8px;
             cursor: pointer;
+            font-family: inherit;
             font-size: 14px;
             font-weight: 500;
             transition: all 0.2s;
@@ -303,6 +306,16 @@
             background: #da3633;
         }
 
+        .btn-danger-critical {
+            background: rgba(248, 81, 73, 0.18);
+            color: #ffb4ad;
+        }
+
+        .btn-danger-critical:hover {
+            background: #da3633;
+            color: #fff;
+        }
+
         .btn-block {
             width: 100%;
         }
@@ -324,7 +337,7 @@
 
         .form-group input {
             width: 100%;
-            padding: 10px 12px;
+            padding: 6px 12px;
             border: 1px solid var(--border-color);
             border-radius: 8px;
             background: var(--bg-color);
@@ -384,6 +397,7 @@
 
         .btn-mini {
             padding: 4px 8px;
+            font-family: inherit;
             font-size: 10px;
             font-weight: 600;
             gap: 4px;
@@ -1486,14 +1500,14 @@
                     <div class="card-title" data-i18n="card.startupSettings">Startup Settings</div>
                     <div class="form-group">
                         <div class="setting-row"
-                            style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding: 4px 0;">
+                            style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; padding: 4px 0;">
                             <label style="margin:0; font-weight: 500;" data-i18n="label.startOnBoot">Start on
                                 Boot</label>
                             <input type="checkbox" id="start-on-boot" style="width: auto;"
                                 onchange="toggleStartOnBoot()">
                         </div>
                         <div class="setting-row"
-                            style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding: 4px 0;">
+                            style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; padding: 4px 0;">
                             <label style="margin:0; font-weight: 500;" data-i18n="label.minimizeToTray">Minimize to
                                 Tray</label>
                             <input type="checkbox" id="minimize-to-tray" style="width: auto;"
@@ -1591,14 +1605,11 @@
                 <!-- Account Management -->
                 <div class="card user-card">
                     <div class="card-title" data-i18n="card.accountManagement">Account Management</div>
-                    <button class="btn btn-block"
-                        style="background: var(--border-color); color: var(--text-color); margin-top: 12px; flex-shrink: 0;"
-                        onclick="openAccountManagementModal()">
+                    <button class="btn btn-secondary btn-block" onclick="openAccountManagementModal()">
                         <span class="material-icons-round">manage_accounts</span>
                         <span data-i18n="action.manageAccounts">Manage Accounts</span>
                     </button>
-                    <button class="btn btn-block"
-                        style="background: rgba(248,81,73,0.18); color: #ffb4ad; margin-top: 10px; flex-shrink: 0;"
+                    <button class="btn btn-block btn-danger-critical" style="margin-top: 10px; flex-shrink: 0;"
                         onclick="confirmLogoutAllSessions()">
                         <span class="material-icons-round">logout</span>
                         <span data-i18n="action.logoutAllSessions">Logout All Sessions</span>
