@@ -188,7 +188,9 @@ func getONNXRuntimeLibraryPath() string {
 	libName := getONNXRuntimeLibraryFileName()
 	candidates := []string{
 		filepath.Join(getONNXRuntimeDir(), libName),
+		GetResourcePath(filepath.Join(assetsDirName, runtimeDirName, onnxRuntimeDirName, libName)),
 		GetResourcePath(filepath.Join(onnxRuntimeDirName, libName)),
+		GetResourcePath(libName),
 	}
 
 	exePath, err := os.Executable()
@@ -255,6 +257,18 @@ func getONNXRuntimeLibraryCandidates() []string {
 			filepath.Join(exeDir, libName),
 			filepath.Join(exeDir, onnxRuntimeDirName, libName),
 			filepath.Join(exeDir, assetsDirName, runtimeDirName, onnxRuntimeDirName, libName),
+			filepath.Join(exeDir, "..", "Resources", assetsDirName, runtimeDirName, onnxRuntimeDirName, libName),
+		)
+	}
+
+	// Add CWD based candidates for development
+	cwd, err := os.Getwd()
+	if err == nil {
+		candidates = append(candidates,
+			filepath.Join(cwd, libName),
+			filepath.Join(cwd, onnxRuntimeDirName, libName),
+			filepath.Join(cwd, assetsDirName, runtimeDirName, onnxRuntimeDirName, libName),
+			filepath.Join(cwd, "bundle", assetsDirName, runtimeDirName, onnxRuntimeDirName, libName),
 		)
 	}
 
