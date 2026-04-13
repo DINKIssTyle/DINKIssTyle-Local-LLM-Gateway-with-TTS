@@ -96,8 +96,12 @@
             if (AppState.input.isSTTActive) return;
 
             triggerHaptic?.('light');
+            AppState.input.sttSuppressAutoSend = false;
             
             const recognition = new webkitSpeechRecognition();
+            let hasRecognitionError = false;
+            let autoSendTriggered = false;
+            let hasFinalTranscript = false;
             recognition.lang = config.ttsLang === 'ko' ? 'ko-KR' : 'en-US';
             recognition.continuous = false;
             recognition.interimResults = true;
@@ -121,20 +125,16 @@
 
                 if (messageInput) {
                     if (finalTranscript) {
+                        hasFinalTranscript = true;
                         const currentText = messageInput.value.trim();
                         messageInput.value = currentText ? `${currentText} ${finalTranscript}` : finalTranscript;
                         updateSendButtonState?.();
-                        
-                        // Auto-send if configured (logic simplified here, app.js will handle final send)
-                        if (!AppState.input.sttSuppressAutoSend) {
-                            // In original code, it auto-sends on final if short? 
-                            // Let's just update the input and let user send for now or trigger callback
-                        }
                     }
                 }
             };
 
             recognition.onerror = (event) => {
+                hasRecognitionError = true;
                 console.warn('[STT] Error:', event.error);
                 stop();
                 if (event.error === 'not-allowed') {
@@ -143,7 +143,18 @@
             };
 
             recognition.onend = () => {
+                const shouldAutoSend = !hasRecognitionError
+                    && hasFinalTranscript
+                    && !autoSendTriggered
+                    && !AppState.input.sttSuppressAutoSend
+                    && !!messageInput?.value?.trim();
                 stop();
+                if (shouldAutoSend) {
+                    autoSendTriggered = true;
+                    global.setTimeout(() => {
+                        sendMessage?.({ fromVoiceInput: true });
+                    }, 0);
+                }
             };
 
             try {
@@ -170,6 +181,10 @@
             }
             AppState.input.isSTTActive = false;
             updateUIState();
+
+            if (!suppressAutoSend) {
+                AppState.input.sttSuppressAutoSend = false;
+            }
         }
 
         function updateLayout() {
