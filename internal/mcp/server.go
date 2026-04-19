@@ -34,9 +34,27 @@ type JSONRPCError struct {
 
 // Global state for SSE clients
 var (
-	clients   = make(map[chan string]bool)
-	clientsMu sync.Mutex
+	clients                = make(map[chan string]bool)
+	clientsMu              sync.Mutex
+	requestContextResolver func(*http.Request) ToolContext
+	requestContextMu       sync.RWMutex
 )
+
+func SetRequestContextResolver(resolver func(*http.Request) ToolContext) {
+	requestContextMu.Lock()
+	defer requestContextMu.Unlock()
+	requestContextResolver = resolver
+}
+
+func ResolveRequestContext(r *http.Request) ToolContext {
+	requestContextMu.RLock()
+	resolver := requestContextResolver
+	requestContextMu.RUnlock()
+	if resolver == nil {
+		return ToolContext{}
+	}
+	return resolver(r).Clone()
+}
 
 func AddClient(ch chan string) {
 	clientsMu.Lock()
@@ -69,7 +87,7 @@ func Broadcast(msg string) int {
 }
 
 // buildResponse constructs a JSON-RPC response for a given request
-func buildResponse(req *JSONRPCRequest, userID string, enableMemory bool, disabledTools []string, disallowedCmds []string, disallowedDirs []string) *JSONRPCResponse {
+func buildResponse(req *JSONRPCRequest, toolCtx ToolContext) *JSONRPCResponse {
 	res := &JSONRPCResponse{
 		JSONRPC: "2.0",
 		ID:      req.ID,
@@ -96,7 +114,7 @@ func buildResponse(req *JSONRPCRequest, userID string, enableMemory bool, disabl
 		}
 
 	case "tools/call":
-		handleToolCall(req, res, userID, enableMemory, disabledTools, disallowedCmds, disallowedDirs)
+		handleToolCall(req, res, toolCtx)
 
 	case "notifications/initialized":
 		log.Println("[MCP] Client Initialized")
@@ -164,8 +182,8 @@ func HandleSSE(w http.ResponseWriter, r *http.Request) {
 
 	// If we captured an initial request, process it immediately in the stream
 	if initialReq != nil {
-		ctx := GetContext()
-		res := buildResponse(initialReq, ctx.UserID, ctx.EnableMemory, ctx.DisabledTools, ctx.DisallowedCmds, ctx.DisallowedDirs)
+		toolCtx := ResolveRequestContext(r)
+		res := buildResponse(initialReq, toolCtx)
 		if res != nil {
 			respBytes, _ := json.Marshal(res)
 			fmt.Fprintf(w, "event: message\ndata: %s\n\n", string(respBytes))
@@ -233,8 +251,8 @@ func HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		ctx := GetContext()
-		res := buildResponse(&req, ctx.UserID, ctx.EnableMemory, ctx.DisabledTools, ctx.DisallowedCmds, ctx.DisallowedDirs)
+		toolCtx := ResolveRequestContext(r)
+		res := buildResponse(&req, toolCtx)
 		if res != nil {
 			respBytes, _ := json.Marshal(res)
 			count := Broadcast(string(respBytes))
@@ -243,7 +261,7 @@ func HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, enableMemory bool, disabledTools []string, disallowedCmds []string, disallowedDirs []string) {
+func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, toolCtx ToolContext) {
 	var params struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
@@ -255,7 +273,7 @@ func handleToolCall(req *JSONRPCRequest, res *JSONRPCResponse, userID string, en
 
 	log.Printf("[MCP] Tool Call: %s", params.Name)
 
-	content, err := ExecuteToolByName(params.Name, params.Arguments, userID, enableMemory, disabledTools)
+	content, err := ExecuteToolByName(params.Name, params.Arguments, toolCtx)
 	if err != nil {
 		res.Result = map[string]interface{}{
 			"content": []map[string]interface{}{
