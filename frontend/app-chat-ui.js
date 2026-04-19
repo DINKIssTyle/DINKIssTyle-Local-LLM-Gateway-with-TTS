@@ -30,14 +30,7 @@
         let lockScrollToLatest = false;
         let suppressNextScrollEvent = false;
         let activeStreamingMessageId = null;
-        let activeStreamingMessagePinnedToTop = false;
-        let activeStreamingMessagePinPending = false;
         let pendingScrollToBottom = false;
-        const isSafariBrowser = (() => {
-            const ua = String(global.navigator?.userAgent || '');
-            const vendor = String(global.navigator?.vendor || '');
-            return /Safari/i.test(ua) && /Apple/i.test(vendor) && !/CriOS|Chrome|Chromium|EdgiOS|Edg|FxiOS/i.test(ua);
-        })();
         let chatScrollMetrics = {
             scrollTop: 0,
             scrollHeight: 0,
@@ -89,13 +82,6 @@
                 actionBar.classList.remove('is-pending');
                 delete actionBar.dataset.readyScheduled;
                 attachStreamingAudioButtonToMessage?.(msgEl);
-                if (getStreamingScrollMode?.() === 'label-top' && chatMessages) {
-                    const pinnedScrollTop = getMessagePinnedScrollTop(elementId);
-                    stabilizePinnedScrollTopValue(
-                        pinnedScrollTop,
-                        isSafariBrowser ? [0, 70, 160, 320] : [0]
-                    );
-                }
             };
 
             if (actionBar.dataset.readyScheduled === 'true') {
@@ -181,94 +167,6 @@
             }
         }
 
-        function getActiveMessagePinnedScrollTop() {
-            if (!chatMessages || !activeStreamingMessageId) return null;
-            const activeMessage = global.document.getElementById(activeStreamingMessageId);
-            if (!activeMessage) return null;
-            const topPadding = 12;
-            return Math.max(0, activeMessage.offsetTop - topPadding);
-        }
-
-        function getMessagePinnedScrollTop(elementId) {
-            if (!chatMessages || !elementId) return null;
-            const message = global.document.getElementById(elementId);
-            if (!message) return null;
-            const topPadding = 12;
-            return Math.max(0, message.offsetTop - topPadding);
-        }
-
-        function stabilizePinnedScrollTopValue(pinnedScrollTop, delays = [0]) {
-            if (getStreamingScrollMode?.() !== 'label-top' || !chatMessages || !Number.isFinite(pinnedScrollTop)) return;
-
-            delays.forEach((delayMs, index) => {
-                const apply = () => {
-                    suppressNextScrollEvent = true;
-                    chatMessages.scrollTop = pinnedScrollTop;
-                    chatScrollMetrics = syncChatScrollMetrics();
-                    updateScrollToBottomButton();
-                };
-
-                if (index === 0 && delayMs === 0) {
-                    global.requestAnimationFrame(apply);
-                    return;
-                }
-
-                global.setTimeout(() => {
-                    global.requestAnimationFrame(apply);
-                }, Math.max(0, delayMs));
-            });
-        }
-
-        function hasActiveStreamingResponseContent() {
-            if (!activeStreamingMessageId) return false;
-            const activeMessage = global.document.getElementById(activeStreamingMessageId);
-            if (!activeMessage) return false;
-
-            const responseCard = activeMessage.querySelector('.assistant-response-card');
-            if (!responseCard || responseCard.hidden) return false;
-
-            const markdownBody = responseCard.querySelector('.markdown-body');
-            const markdownText = String(markdownBody?.textContent || '').trim();
-            const markdownSource = String(markdownBody?.dataset?.markdownSource || '').trim();
-            const committedHost = responseCard.querySelector('.markdown-committed');
-            const committedSource = String(committedHost?.dataset?.markdownSource || '').trim();
-            const streamStateText = String(activeMessage._streamRenderState?.committedText || activeMessage._streamRenderState?.pendingText || '').trim();
-            const hasImage = !!responseCard.querySelector('.message-image');
-
-            return !!(markdownText || markdownSource || committedSource || streamStateText || hasImage);
-        }
-
-        function updateLabelTopStreamingState() {
-            if (getStreamingScrollMode?.() !== 'label-top' || !activeStreamingMessageId) return false;
-            if (!hasActiveStreamingResponseContent()) {
-                chatMessages?.classList.remove('is-label-top-streaming');
-                return false;
-            }
-
-            const pinnedScrollTop = getActiveMessagePinnedScrollTop();
-            if (pinnedScrollTop == null) return false;
-            const metrics = syncChatScrollMetrics();
-            const bottomScrollTop = Math.max(0, metrics.scrollHeight - metrics.clientHeight);
-            const pinReached = bottomScrollTop >= pinnedScrollTop - 1;
-
-            if (pinReached) {
-                chatMessages?.classList.add('is-label-top-streaming');
-                activeStreamingMessagePinnedToTop = true;
-                activeStreamingMessagePinPending = false;
-                shouldAutoScroll = false;
-                lockScrollToLatest = false;
-                chatScrollMetrics = syncChatScrollMetrics();
-                updateScrollToBottomButton();
-                return true;
-            }
-
-            chatMessages?.classList.remove('is-label-top-streaming');
-            activeStreamingMessagePinnedToTop = false;
-            activeStreamingMessagePinPending = true;
-            shouldAutoScroll = true;
-            return false;
-        }
-
         function scheduleChatScrollToBottom() {
             if (!chatMessages || pendingScrollToBottom) return;
             pendingScrollToBottom = true;
@@ -276,16 +174,7 @@
                 pendingScrollToBottom = false;
                 if (!chatMessages) return;
                 const metrics = syncChatScrollMetrics();
-                const isLabelTopMode = getStreamingScrollMode?.() === 'label-top';
-                const hasStreamingResponseContent = isLabelTopMode && hasActiveStreamingResponseContent();
-                let nextScrollTop = Math.max(0, metrics.scrollHeight - metrics.clientHeight);
-
-                if (hasStreamingResponseContent) {
-                    const pinnedScrollTop = getActiveMessagePinnedScrollTop();
-                    if (pinnedScrollTop != null) {
-                        nextScrollTop = Math.min(nextScrollTop, pinnedScrollTop);
-                    }
-                }
+                const nextScrollTop = Math.max(0, metrics.scrollHeight - metrics.clientHeight);
                 suppressNextScrollEvent = true;
                 chatMessages.scrollTop = nextScrollTop;
                 chatScrollMetrics = {
@@ -297,30 +186,25 @@
                     longScrollable: metrics.longScrollable
                 };
                 commitChatScrollMetrics?.(chatScrollMetrics);
-                if (!hasStreamingResponseContent) {
-                    scrollActiveMessageIntoView();
-                }
-                updateLabelTopStreamingState();
+                scrollActiveMessageIntoView();
                 updateScrollToBottomButton();
             });
         }
 
         function scrollToBottom(force = false) {
             if (!chatMessages) return;
-            if (!lockScrollToLatest && getStreamingScrollMode?.() === 'label-top' && activeStreamingMessagePinnedToTop) {
-                syncChatScrollMetrics();
-                return;
-            }
-
             if (!force && !shouldAutoScroll && !lockScrollToLatest) return;
+            // During label-top streaming, do not scroll to bottom or
+            // re-enable auto-scroll. The resize observer + pin handle it.
+            if (chatMessages.classList.contains('is-label-top-streaming')) return;
             scheduleChatScrollToBottom();
-            if (getStreamingScrollMode?.() !== 'label-top' || !activeStreamingMessagePinnedToTop) {
-                shouldAutoScroll = true;
-            }
+            shouldAutoScroll = true;
         }
 
         function holdAutoScrollAtBottom(durationMs = 700) {
             if (!chatMessages) return;
+            // During label-top streaming, never force-scroll to bottom.
+            if (chatMessages.classList.contains('is-label-top-streaming')) return;
             if (autoScrollHoldTimeout) {
                 global.clearTimeout(autoScrollHoldTimeout);
                 autoScrollHoldTimeout = null;
@@ -350,17 +234,16 @@
                 const previousMetrics = chatScrollMetrics;
                 const currentMetrics = refreshChatScrollMetrics?.() || previousMetrics;
                 const delta = currentMetrics.scrollHeight - previousMetrics.scrollHeight;
+                const isManualStreamingMode = getStreamingScrollMode?.() === 'label-top';
 
                 if (shouldAutoScroll || lockScrollToLatest) {
                     scheduleChatScrollToBottom();
+                } else if (isManualStreamingMode) {
+                    pinActiveMessageLabelToTop();
+                    chatScrollMetrics = refreshChatScrollMetrics?.() || currentMetrics;
+                    commitChatScrollMetrics?.(chatScrollMetrics);
+                    updateScrollToBottomButton();
                 } else if (Math.abs(delta) > 1) {
-                    if (getStreamingScrollMode?.() === 'label-top' && activeStreamingMessagePinnedToTop) {
-                        chatScrollMetrics = currentMetrics;
-                        commitChatScrollMetrics?.(currentMetrics);
-                        updateScrollToBottomButton();
-                        return;
-                    }
-
                     suppressNextScrollEvent = true;
                     chatMessages.scrollTop += delta;
                     chatScrollMetrics = {
@@ -395,14 +278,11 @@
         }
 
         function checkAndTriggerLabelPin() {
-            if (!activeStreamingMessagePinPending || getStreamingScrollMode?.() !== 'label-top' || !activeStreamingMessageId) {
+            if (getStreamingScrollMode?.() !== 'label-top' || !activeStreamingMessageId || shouldAutoScroll || lockScrollToLatest) {
                 return;
             }
-
             global.requestAnimationFrame(() => {
-                if (activeStreamingMessagePinPending) {
-                    updateLabelTopStreamingState();
-                }
+                pinActiveMessageLabelToTop();
             });
         }
 
@@ -426,44 +306,46 @@
 
         function startStreamingMessageAutoScroll(messageId) {
             activeStreamingMessageId = messageId;
-            activeStreamingMessagePinnedToTop = false;
-            activeStreamingMessagePinPending = false;
             const activeMessage = global.document.getElementById(messageId);
             if (!activeMessage || !chatMessages) return;
 
-            if (getStreamingScrollMode?.() === 'label-top') {
-                chatMessages.classList.remove('is-label-top-streaming');
-                activeStreamingMessagePinPending = true;
-                activeStreamingMessagePinnedToTop = false;
-                shouldAutoScroll = true;
-                lockScrollToLatest = true;
-            }
             const responseCard = activeMessage.querySelector('.assistant-response-card');
             const markdownBody = activeMessage.querySelector('.markdown-body');
             const codeBlocks = activeMessage.querySelectorAll('pre');
-            observeAutoScrollResizes([activeMessage, responseCard, markdownBody, ...codeBlocks]);
+
+            if (getStreamingScrollMode?.() === 'label-top') {
+                chatMessages.classList.add('is-label-top-streaming');
+                shouldAutoScroll = false;
+                lockScrollToLatest = false;
+                // Observe resizes first, then pin in the next frame so the
+                // observer is already aware that auto-scroll is disabled.
+                observeAutoScrollResizes([activeMessage, responseCard, markdownBody, ...codeBlocks]);
+                global.requestAnimationFrame(() => {
+                    // Re-enforce flags in case a scroll event fired in between
+                    shouldAutoScroll = false;
+                    lockScrollToLatest = false;
+                    pinActiveMessageLabelToTop();
+                });
+            } else {
+                observeAutoScrollResizes([activeMessage, responseCard, markdownBody, ...codeBlocks]);
+            }
         }
 
         function stopStreamingMessageAutoScroll() {
-            const shouldPreservePinnedPosition = getStreamingScrollMode?.() === 'label-top';
-            const pinnedScrollTop = shouldPreservePinnedPosition ? getActiveMessagePinnedScrollTop() : null;
-            activeStreamingMessagePinnedToTop = false;
-            activeStreamingMessagePinPending = false;
             activeStreamingMessageId = null;
-            shouldAutoScroll = true;
-            lockScrollToLatest = false;
+            if (getStreamingScrollMode?.() === 'label-top') {
+                shouldAutoScroll = false;
+                lockScrollToLatest = false;
+            } else {
+                shouldAutoScroll = true;
+                lockScrollToLatest = false;
+            }
             if (chatMessages) {
                 chatMessages.classList.remove('is-label-top-streaming');
             }
             if (autoScrollResizeObserver) {
                 autoScrollResizeObserver.disconnect();
                 autoScrollResizeObserver = null;
-            }
-            if (shouldPreservePinnedPosition && Number.isFinite(pinnedScrollTop) && chatMessages) {
-                stabilizePinnedScrollTopValue(
-                    pinnedScrollTop,
-                    isSafariBrowser ? [0, 70, 160, 320] : [0]
-                );
             }
         }
 

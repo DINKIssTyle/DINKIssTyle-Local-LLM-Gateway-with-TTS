@@ -210,7 +210,9 @@
                 pulseMessageRender(el.querySelector('.assistant-response-card'));
             }
 
-            scrollToBottom(wasNearBottom);
+            if (getStreamingScrollMode() !== 'label-top') {
+                scrollToBottom(wasNearBottom);
+            }
             if (hasVisibleContent) checkAndTriggerLabelPin();
             const codeBlocks = mdBody.querySelectorAll('pre code');
             if (wasNearBottom && codeBlocks.length > 0 && getStreamingScrollMode() !== 'label-top') {
@@ -355,7 +357,9 @@
                 pulseMessageRender(el.querySelector('.assistant-response-card'));
             }
 
-            scrollToBottom(wasNearBottom);
+            if (getStreamingScrollMode() !== 'label-top') {
+                scrollToBottom(wasNearBottom);
+            }
             if (hasVisibleContent) {
                 checkAndTriggerLabelPin();
             }

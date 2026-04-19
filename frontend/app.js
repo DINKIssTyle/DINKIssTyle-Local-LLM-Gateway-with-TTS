@@ -1743,7 +1743,8 @@ if (chatMessages) {
         }
 
         if (AppState.chat.isGenerating) {
-            if (AppState.ui.scroll.shouldAutoScroll) {
+            const isLabelTopStreaming = getStreamingScrollMode() === 'label-top';
+            if (AppState.ui.scroll.shouldAutoScroll && !isLabelTopStreaming) {
                 AppState.ui.scroll.lockToLatest = true;
             } else {
                 if (metrics.distanceFromBottom > AUTO_SCROLL_THRESHOLD_PX * 2) {
@@ -3734,11 +3735,18 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
         }
 
         if (item?.user_content) {
-            appendMessage({ role: 'user', content: item.user_content, turnId }, { parent: fragment, skipScroll: true });
+            const existingUser = document.querySelector(`.message.user[data-turn-id="${turnId}"]`);
+            if (!existingUser) {
+                appendMessage({ role: 'user', content: item.user_content, turnId }, { parent: fragment, skipScroll: true });
+            }
             AppState.chat.messages.push({ role: 'user', content: item.user_content, turnId });
         }
         if (hasAssistantContent) {
-            appendMessage({ role: 'assistant', content: '', id: assistantId, turnId }, { parent: fragment, skipScroll: true });
+            const existingAssistant = document.querySelector(`.message.assistant[data-turn-id="${turnId}"]`)
+                || document.getElementById(assistantId);
+            if (!existingAssistant) {
+                appendMessage({ role: 'assistant', content: '', id: assistantId, turnId }, { parent: fragment, skipScroll: true });
+            }
         }
     });
 
@@ -5697,7 +5705,9 @@ async function sendMessage(options = {}) {
     AppState.chat.isGenerating = true;
     syncWakeLock(); // Request wake lock for generation
     broadcastLLMActivityState(true, 'answering');
-    AppState.ui.scroll.lockToLatest = true;
+    if (!isLabelTop) {
+        AppState.ui.scroll.lockToLatest = true;
+    }
     updateSendButtonState();
 
     // Create new AbortController
@@ -5955,9 +5965,11 @@ async function streamResponse(payload, elementId, turnId = '', streamOptions = {
         }));
     } catch (error) {
         console.warn('[Chat] Primary /api/chat request failed before response. Retrying with minimal request options.', error);
+        // Preserve the same turn/session headers on retry so the server can continue
+        // the same logical turn instead of recording a second one after refresh.
         response = await fetch('/api/chat', buildSessionFetchOptions({
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { ...headers },
             body: JSON.stringify(payload)
         }));
     }
