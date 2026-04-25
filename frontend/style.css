@@ -360,11 +360,12 @@ body.keyboard-open #chat-header {
   overflow-anchor: auto;
   /* Force horizontal containment */
   padding: 20px;
+  padding-bottom: calc(20px + var(--turn-focus-spacer-height, 0px));
   min-width: 0;
 }
 
 #chat-messages.is-label-top-streaming {
-  overflow-anchor: none;
+  overflow-anchor: auto;
 }
 
 .chat-restore-overlay {

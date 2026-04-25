@@ -39,6 +39,12 @@
             nearBottom: true,
             longScrollable: false
         };
+        const TURN_FOCUS_TOP_PADDING_PX = 12;
+        const TURN_FOCUS_BOTTOM_EXTRA_PX = 160;
+        const TURN_FOCUS_MIN_SPACER_PX = 360;
+        let turnFocusApplied = false;
+        let turnFocusSpacerHeight = 0;
+        let pendingTurnFocusFrame = 0;
 
         function syncChatScrollMetrics() {
             const metrics = refreshChatScrollMetrics?.();
@@ -144,6 +150,108 @@
             updateReasoningControlVisibility?.();
         }
 
+        function setTurnFocusSpacerHeight(height, options = {}) {
+            if (!chatMessages) return;
+            const allowShrink = !!options.allowShrink;
+            const nextHeight = Math.max(0, Math.round(Number(height) || 0));
+            if (!allowShrink && nextHeight < turnFocusSpacerHeight) return;
+            if (nextHeight === turnFocusSpacerHeight) return;
+
+            turnFocusSpacerHeight = nextHeight;
+            if (turnFocusSpacerHeight > 0) {
+                chatMessages.style.setProperty('--turn-focus-spacer-height', `${turnFocusSpacerHeight}px`);
+            } else {
+                chatMessages.style.removeProperty('--turn-focus-spacer-height');
+            }
+            syncChatScrollMetrics();
+        }
+
+        function clearTurnFocusSpacer() {
+            setTurnFocusSpacerHeight(0, { allowShrink: true });
+        }
+
+        function ensureTurnFocusSpacer() {
+            if (!chatMessages) return;
+            const viewportHeight = chatMessages.clientHeight || global.innerHeight || 0;
+            const desiredHeight = Math.max(
+                TURN_FOCUS_MIN_SPACER_PX,
+                Math.round(viewportHeight + TURN_FOCUS_BOTTOM_EXTRA_PX)
+            );
+            setTurnFocusSpacerHeight(desiredHeight);
+        }
+
+        function findTurnMessage(role, turnId) {
+            if (!chatMessages || !turnId) return null;
+            const selector = `.message.${role}`;
+            return Array.from(chatMessages.querySelectorAll(selector))
+                .find((el) => el.dataset.turnId === turnId) || null;
+        }
+
+        function getActiveTurnFocusTarget() {
+            if (!chatMessages || !activeStreamingMessageId) return null;
+            const activeMessage = global.document.getElementById(activeStreamingMessageId);
+            if (!activeMessage) return null;
+            const turnId = String(activeMessage.dataset.turnId || '').trim();
+            return findTurnMessage('user', turnId)
+                || activeMessage.querySelector('.message-label')
+                || activeMessage;
+        }
+
+        function focusActiveTurnStart(force = false) {
+            if (!chatMessages || !activeStreamingMessageId) return;
+            if (turnFocusApplied && !force) return;
+            const target = getActiveTurnFocusTarget();
+            if (!target) return;
+
+            ensureTurnFocusSpacer();
+
+            const containerRect = chatMessages.getBoundingClientRect();
+            const targetRect = target.getBoundingClientRect();
+            const delta = targetRect.top - containerRect.top - TURN_FOCUS_TOP_PADDING_PX;
+            if (Math.abs(delta) > 1) {
+                suppressNextScrollEvent = true;
+                chatMessages.scrollTop += delta;
+            }
+            turnFocusApplied = true;
+            chatScrollMetrics = refreshChatScrollMetrics?.() || chatScrollMetrics;
+            updateScrollToBottomButton();
+        }
+
+        function scheduleActiveTurnFocus(force = false) {
+            if (pendingTurnFocusFrame) return;
+            pendingTurnFocusFrame = global.requestAnimationFrame(() => {
+                pendingTurnFocusFrame = 0;
+                focusActiveTurnStart(force);
+            });
+        }
+
+        function handleChatScroll() {
+            if (!chatMessages) return;
+            if (suppressNextScrollEvent) {
+                suppressNextScrollEvent = false;
+                syncChatScrollMetrics();
+                updateScrollToBottomButton();
+                return;
+            }
+
+            const metrics = syncChatScrollMetrics();
+            shouldAutoScroll = !!metrics.nearBottom;
+            if (!shouldAutoScroll) {
+                lockScrollToLatest = false;
+                if (autoScrollHoldTimeout) {
+                    global.clearTimeout(autoScrollHoldTimeout);
+                    autoScrollHoldTimeout = null;
+                }
+            } else if (turnFocusSpacerHeight > 0) {
+                clearTurnFocusSpacer();
+                if (chatMessages.classList.contains('is-label-top-streaming')) {
+                    chatMessages.classList.remove('is-label-top-streaming');
+                    lockScrollToLatest = true;
+                }
+            }
+            updateScrollToBottomButton();
+        }
+
         function scrollActiveMessageIntoView() {
             if (!chatMessages || !activeStreamingMessageId) return;
             const activeMessage = global.document.getElementById(activeStreamingMessageId);
@@ -194,17 +302,16 @@
         function scrollToBottom(force = false) {
             if (!chatMessages) return;
             if (!force && !shouldAutoScroll && !lockScrollToLatest) return;
-            // During label-top streaming, do not scroll to bottom or
-            // re-enable auto-scroll. The resize observer + pin handle it.
-            if (chatMessages.classList.contains('is-label-top-streaming')) return;
+            if (chatMessages.classList.contains('is-label-top-streaming') && !lockScrollToLatest) return;
+            clearTurnFocusSpacer();
             scheduleChatScrollToBottom();
             shouldAutoScroll = true;
         }
 
         function holdAutoScrollAtBottom(durationMs = 700) {
             if (!chatMessages) return;
-            // During label-top streaming, never force-scroll to bottom.
-            if (chatMessages.classList.contains('is-label-top-streaming')) return;
+            if (chatMessages.classList.contains('is-label-top-streaming') && !lockScrollToLatest) return;
+            clearTurnFocusSpacer();
             if (autoScrollHoldTimeout) {
                 global.clearTimeout(autoScrollHoldTimeout);
                 autoScrollHoldTimeout = null;
@@ -239,7 +346,8 @@
                 if (shouldAutoScroll || lockScrollToLatest) {
                     scheduleChatScrollToBottom();
                 } else if (isManualStreamingMode) {
-                    pinActiveMessageLabelToTop();
+                    ensureTurnFocusSpacer();
+                    if (!turnFocusApplied) scheduleActiveTurnFocus();
                     chatScrollMetrics = refreshChatScrollMetrics?.() || currentMetrics;
                     commitChatScrollMetrics?.(chatScrollMetrics);
                     updateScrollToBottomButton();
@@ -281,9 +389,7 @@
             if (getStreamingScrollMode?.() !== 'label-top' || !activeStreamingMessageId || shouldAutoScroll || lockScrollToLatest) {
                 return;
             }
-            global.requestAnimationFrame(() => {
-                pinActiveMessageLabelToTop();
-            });
+            scheduleActiveTurnFocus();
         }
 
         function pinTurnToTop(turnId) {
@@ -317,22 +423,28 @@
                 chatMessages.classList.add('is-label-top-streaming');
                 shouldAutoScroll = false;
                 lockScrollToLatest = false;
-                // Observe resizes first, then pin in the next frame so the
-                // observer is already aware that auto-scroll is disabled.
+                turnFocusApplied = false;
+                ensureTurnFocusSpacer();
                 observeAutoScrollResizes([activeMessage, responseCard, markdownBody, ...codeBlocks]);
+                scheduleActiveTurnFocus(true);
                 global.requestAnimationFrame(() => {
-                    // Re-enforce flags in case a scroll event fired in between
                     shouldAutoScroll = false;
                     lockScrollToLatest = false;
-                    pinActiveMessageLabelToTop();
                 });
             } else {
+                turnFocusApplied = false;
+                clearTurnFocusSpacer();
                 observeAutoScrollResizes([activeMessage, responseCard, markdownBody, ...codeBlocks]);
             }
         }
 
         function stopStreamingMessageAutoScroll() {
             activeStreamingMessageId = null;
+            turnFocusApplied = false;
+            if (pendingTurnFocusFrame) {
+                global.cancelAnimationFrame(pendingTurnFocusFrame);
+                pendingTurnFocusFrame = 0;
+            }
             if (getStreamingScrollMode?.() === 'label-top') {
                 shouldAutoScroll = false;
                 lockScrollToLatest = false;
@@ -351,10 +463,19 @@
 
         function jumpToLatestMessages() {
             triggerHaptic?.('success');
+            if (chatMessages) {
+                chatMessages.classList.remove('is-label-top-streaming');
+            }
+            clearTurnFocusSpacer();
+            shouldAutoScroll = true;
             lockScrollToLatest = true;
             holdAutoScrollAtBottom(900);
             scrollToBottom(true);
             updateScrollToBottomButton();
+        }
+
+        if (chatMessages) {
+            chatMessages.addEventListener('scroll', handleChatScroll, { passive: true });
         }
 
         return {
