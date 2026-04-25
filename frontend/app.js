@@ -622,6 +622,11 @@ function handleChatEndEvent(json, ctx) {
         showReasoningStatus(ctx.elementId, reasoningText, false, duration);
         finalizeReasoningStatus(ctx.elementId, 'done', '', duration);
     }
+
+    const finalText = extractFinalAssistantContentFromPayload(payload);
+    if (finalText.trim()) {
+        ctx.fullText = finalText;
+    }
 }
 
 /**
@@ -873,7 +878,7 @@ function finalizeStream(ctx) {
     const ownershipReserved = AppState.session.localStreamOwnershipReleased;
 
     if (historyContent && !ctx.streamDetached && !ctx.streamRestartRequested && !ownershipReserved) {
-        AppState.chat.messages.push({ role: 'assistant', content: historyContent, turnId: ctx.turnId });
+        upsertChatMessageState({ role: 'assistant', content: historyContent, turnId: ctx.turnId });
         if (config.llmMode === 'stateful') {
             AppState.chat.stateful.turnCount += 1;
             AppState.chat.stateful.estimatedChars += historyContent.length;
@@ -1612,7 +1617,7 @@ function getTurnDataFromAssistantButton(btn) {
         return null;
     }
 
-    const userEl = document.querySelector(`.message.user[data-turn-id="${turnId}"] .message-bubble`);
+    const userEl = findTurnMessageElement(turnId, 'user')?.querySelector('.message-bubble');
     const responseEl = messageEl.querySelector('.markdown-body');
     const committedResponseEl = responseEl?.querySelector('.markdown-committed');
     const pendingResponseEl = responseEl?.querySelector('.markdown-pending');
@@ -2381,19 +2386,19 @@ function syncSnapshotUserMessages(session = AppState.session.currentCache) {
         const turnId = String(turn?.turn_id || '').trim();
         const userContent = String(turn?.user_content || '').trim();
         if (!turnId || !userContent) return;
-        let userEl = document.querySelector(`.message.user[data-turn-id="${turnId}"]`);
+        let userEl = findTurnMessageElement(turnId, 'user');
         if (!userEl) {
             userEl = createMessageElement({ role: 'user', content: userContent, turnId });
         }
 
-        const assistantEl = document.querySelector(`.message.assistant[data-turn-id="${turnId}"]`);
+        const assistantEl = findTurnMessageElement(turnId, 'assistant');
         let anchor = assistantEl?.parentNode === chatMessages ? assistantEl : null;
         if (!anchor) {
             for (let nextIndex = index + 1; nextIndex < snapshotTurns.length; nextIndex += 1) {
                 const nextTurnId = String(snapshotTurns[nextIndex]?.turn_id || '').trim();
                 if (!nextTurnId) continue;
-                anchor = document.querySelector(`.message.user[data-turn-id="${nextTurnId}"]`)
-                    || document.querySelector(`.message.assistant[data-turn-id="${nextTurnId}"]`);
+                anchor = findTurnMessageElement(nextTurnId, 'user')
+                    || findTurnMessageElement(nextTurnId, 'assistant');
                 if (anchor?.parentNode === chatMessages) break;
                 anchor = null;
             }
@@ -2418,9 +2423,10 @@ function syncSnapshotUserMessages(session = AppState.session.currentCache) {
             chatMessages.insertBefore(userEl, anchor);
             updateScrollToBottomButton();
         }
-        if (!AppState.chat.messages.some((entry) => entry?.role === 'user' && entry?.turnId === turnId && entry?.content === userContent)) {
-            AppState.chat.messages.push({ role: 'user', content: userContent, turnId });
+        if (assistantEl?.parentNode === chatMessages) {
+            placeAssistantMessageForTurn(assistantEl, turnId);
         }
+        upsertChatMessageState({ role: 'user', content: userContent, turnId });
     });
 }
 
@@ -3735,14 +3741,14 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
         }
 
         if (item?.user_content) {
-            const existingUser = document.querySelector(`.message.user[data-turn-id="${turnId}"]`);
+            const existingUser = findTurnMessageElement(turnId, 'user');
             if (!existingUser) {
                 appendMessage({ role: 'user', content: item.user_content, turnId }, { parent: fragment, skipScroll: true });
             }
-            AppState.chat.messages.push({ role: 'user', content: item.user_content, turnId });
+            upsertChatMessageState({ role: 'user', content: item.user_content, turnId });
         }
         if (hasAssistantContent) {
-            const existingAssistant = document.querySelector(`.message.assistant[data-turn-id="${turnId}"]`)
+            const existingAssistant = findTurnMessageElement(turnId, 'assistant')
                 || document.getElementById(assistantId);
             if (!existingAssistant) {
                 appendMessage({ role: 'assistant', content: '', id: assistantId, turnId }, { parent: fragment, skipScroll: true });
@@ -3823,7 +3829,7 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
         finalizeMessageContent(assistantId, assistantText);
         finalizeAssistantStatusCards(assistantId, 'done');
         setAssistantActionBarReady(assistantId);
-        AppState.chat.messages.push({ role: 'assistant', content: assistantText, turnId });
+        upsertChatMessageState({ role: 'assistant', content: assistantText, turnId });
     });
 
     AppState.session.replay.currentTurnId = lastTurnId;
@@ -3859,6 +3865,119 @@ function buildServerAssistantMessageId(turnId = '', fallbackKey = '') {
     return `server-assistant-${key}`;
 }
 
+function getChatMessageElements() {
+    if (!chatMessages) return [];
+    return Array.from(chatMessages.children).filter((node) => (
+        node instanceof HTMLElement
+        && node.classList.contains('message')
+    ));
+}
+
+function findTurnMessageElement(turnId = '', role = '') {
+    const resolvedTurnId = String(turnId || '').trim();
+    if (!resolvedTurnId || !chatMessages) return null;
+    return getChatMessageElements().find((node) => {
+        if (String(node.dataset?.turnId || '').trim() !== resolvedTurnId) return false;
+        return !role || node.classList.contains(role);
+    }) || null;
+}
+
+function findAssistantInsertAnchorForTurn(turnId = '', movingEl = null) {
+    const resolvedTurnId = String(turnId || '').trim();
+    if (!resolvedTurnId || !chatMessages) return null;
+    const nodes = getChatMessageElements();
+    const userIndex = nodes.findIndex((node) => (
+        node.classList.contains('user')
+        && String(node.dataset?.turnId || '').trim() === resolvedTurnId
+    ));
+    if (userIndex < 0) return null;
+
+    for (let i = userIndex + 1; i < nodes.length; i += 1) {
+        const node = nodes[i];
+        if (node === movingEl) continue;
+        const nodeTurnId = String(node.dataset?.turnId || '').trim();
+        if (nodeTurnId && nodeTurnId !== resolvedTurnId) {
+            return node;
+        }
+    }
+    return null;
+}
+
+function placeAssistantMessageForTurn(assistantEl, turnId = '') {
+    const resolvedTurnId = String(turnId || assistantEl?.dataset?.turnId || '').trim();
+    if (!assistantEl || !chatMessages || !resolvedTurnId) return false;
+    const userEl = findTurnMessageElement(resolvedTurnId, 'user');
+    if (!userEl) return false;
+
+    const anchor = findAssistantInsertAnchorForTurn(resolvedTurnId, assistantEl);
+    if (anchor) {
+        if (assistantEl.nextSibling !== anchor) {
+            chatMessages.insertBefore(assistantEl, anchor);
+        }
+        return true;
+    }
+
+    const nodes = getChatMessageElements();
+    const userIndex = nodes.indexOf(userEl);
+    let lastSameTurnEl = userEl;
+    for (let i = userIndex + 1; i < nodes.length; i += 1) {
+        const node = nodes[i];
+        if (node === assistantEl) continue;
+        const nodeTurnId = String(node.dataset?.turnId || '').trim();
+        if (nodeTurnId && nodeTurnId !== resolvedTurnId) break;
+        if (nodeTurnId === resolvedTurnId) lastSameTurnEl = node;
+    }
+    if (lastSameTurnEl.nextSibling !== assistantEl) {
+        lastSameTurnEl.after(assistantEl);
+    }
+    return true;
+}
+
+function upsertChatMessageState(entry) {
+    if (!entry?.role) return;
+    if (!Array.isArray(AppState.chat.messages)) {
+        AppState.chat.messages = [];
+    }
+
+    const turnId = String(entry.turnId || '').trim();
+    let existingEntry = null;
+    if (turnId) {
+        const existingIndex = AppState.chat.messages.findIndex((item) => (
+            item?.role === entry.role
+            && String(item?.turnId || '').trim() === turnId
+        ));
+        if (existingIndex >= 0) {
+            existingEntry = AppState.chat.messages[existingIndex];
+            AppState.chat.messages.splice(existingIndex, 1);
+        }
+    }
+
+    const normalizedEntry = {
+        ...(existingEntry || {}),
+        ...entry,
+        turnId
+    };
+
+    let insertIndex = AppState.chat.messages.length;
+    if (turnId && normalizedEntry.role === 'user') {
+        const assistantIndex = AppState.chat.messages.findIndex((item) => (
+            item?.role === 'assistant'
+            && String(item?.turnId || '').trim() === turnId
+        ));
+        if (assistantIndex >= 0) insertIndex = assistantIndex;
+    } else if (turnId && normalizedEntry.role === 'assistant') {
+        const sameTurnIndexes = AppState.chat.messages
+            .map((item, index) => ({ item, index }))
+            .filter(({ item }) => String(item?.turnId || '').trim() === turnId)
+            .map(({ index }) => index);
+        if (sameTurnIndexes.length > 0) {
+            insertIndex = Math.max(...sameTurnIndexes) + 1;
+        }
+    }
+
+    AppState.chat.messages.splice(insertIndex, 0, normalizedEntry);
+}
+
 function hasAssistantSnapshotContent(assistantText = '', reasoningText = '', toolState = null) {
     if (String(assistantText || '').trim()) return true;
     if (String(reasoningText || '').trim() && !config.hideThink) return true;
@@ -3866,16 +3985,20 @@ function hasAssistantSnapshotContent(assistantText = '', reasoningText = '', too
 }
 
 function findAssistantMessageByTurnId(turnId = '') {
-    const resolvedTurnId = String(turnId || '').trim();
-    if (!resolvedTurnId) return null;
-    return document.querySelector(`.message.assistant[data-turn-id="${resolvedTurnId}"]`);
+    return findTurnMessageElement(turnId, 'assistant');
 }
 
 function cleanupAssistantMessagesForTurn(turnId = '', preferredId = '') {
     const resolvedTurnId = String(turnId || '').trim();
     if (!resolvedTurnId || !chatMessages) return;
-    const nodes = Array.from(chatMessages.querySelectorAll(`.message.assistant[data-turn-id="${resolvedTurnId}"]`));
-    if (nodes.length <= 1) return;
+    const nodes = getChatMessageElements().filter((node) => (
+        node.classList.contains('assistant')
+        && String(node.dataset?.turnId || '').trim() === resolvedTurnId
+    ));
+    if (nodes.length <= 1) {
+        if (nodes[0]) placeAssistantMessageForTurn(nodes[0], resolvedTurnId);
+        return;
+    }
 
     let keepNode = preferredId ? document.getElementById(preferredId) : null;
     if (!keepNode || !nodes.includes(keepNode)) {
@@ -3888,6 +4011,7 @@ function cleanupAssistantMessagesForTurn(turnId = '', preferredId = '') {
             node.remove();
         }
     });
+    placeAssistantMessageForTurn(keepNode, resolvedTurnId);
 }
 
 function ensureServerReplayAssistant(turnId, sessionId, seq) {
@@ -3899,6 +4023,7 @@ function ensureServerReplayAssistant(turnId, sessionId, seq) {
         if (!existingByTurn.id) {
             existingByTurn.id = messageId;
         }
+        placeAssistantMessageForTurn(existingByTurn, resolvedTurnId || fallbackKey);
         AppState.session.replay.currentAssistantId = existingByTurn.id || messageId;
         cleanupAssistantMessagesForTurn(resolvedTurnId || fallbackKey, AppState.session.replay.currentAssistantId);
         return AppState.session.replay.currentAssistantId;
@@ -3906,12 +4031,7 @@ function ensureServerReplayAssistant(turnId, sessionId, seq) {
     const stableMessageId = messageId;
     AppState.session.replay.currentAssistantId = stableMessageId;
     if (!document.getElementById(stableMessageId)) {
-        appendMessage({
-            role: 'assistant',
-            content: '',
-            id: stableMessageId,
-            turnId: resolvedTurnId || fallbackKey
-        });
+        ensureAssistantMessageElement(stableMessageId, resolvedTurnId || fallbackKey);
     }
     cleanupAssistantMessagesForTurn(resolvedTurnId || fallbackKey, stableMessageId);
     return stableMessageId;
@@ -4055,9 +4175,10 @@ function applyCurrentChatSessionEvent(entry) {
                 }
                 AppState.session.replay.currentTurnId = turnId;
                 AppState.session.replay.currentAssistantId = '';
-                if (!document.querySelector(`.message.user[data-turn-id="${turnId}"]`)) {
+                if (!findTurnMessageElement(turnId, 'user')) {
                     appendMessage({ role: 'user', content: userContent, turnId });
                 }
+                upsertChatMessageState({ role: 'user', content: userContent, turnId });
             }
             break;
         }
@@ -4298,6 +4419,13 @@ function applyCurrentChatSessionEvent(entry) {
                     finalizeMessageContent(AppState.chat.activeLocalAssistantId, finalText);
                     finalizeAssistantStatusCards(AppState.chat.activeLocalAssistantId, 'done');
                     setAssistantActionBarReady(AppState.chat.activeLocalAssistantId);
+                    if (finalText) {
+                        upsertChatMessageState({
+                            role: 'assistant',
+                            content: finalText,
+                            turnId: entryTurnId || AppState.chat.activeLocalTurnId
+                        });
+                    }
                 }
                 AppState.chat.activeLocalTurnId = '';
                 AppState.chat.activeLocalAssistantId = '';
@@ -4341,6 +4469,13 @@ function applyCurrentChatSessionEvent(entry) {
                 finalizeMessageContent(AppState.session.replay.currentAssistantId, finalText);
                 finalizeAssistantStatusCards(AppState.session.replay.currentAssistantId, 'done');
                 setAssistantActionBarReady(AppState.session.replay.currentAssistantId);
+                if (finalText) {
+                    upsertChatMessageState({
+                        role: 'assistant',
+                        content: finalText,
+                        turnId: AppState.session.replay.currentTurnId || entryTurnId
+                    });
+                }
                 cleanupAssistantMessagesForTurn(AppState.session.replay.currentTurnId || entryTurnId, AppState.session.replay.currentAssistantId);
                 if (getStreamingScrollMode() !== 'label-top') {
                     holdAutoScrollAtBottom(900);
@@ -4691,10 +4826,10 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
         ? String(users[users.length - 1]?.turnId || '').trim()
         : '';
     for (const user of users) {
-        if (!document.querySelector(`.message.user[data-turn-id="${user.turnId}"]`)) {
+        if (!findTurnMessageElement(user.turnId, 'user')) {
             appendMessage({ role: 'user', content: user.content, turnId: user.turnId }, { parent: fragment, skipScroll: true });
         }
-        AppState.chat.messages.push({ role: 'user', content: user.content, turnId: user.turnId });
+        upsertChatMessageState({ role: 'user', content: user.content, turnId: user.turnId });
         const assistantId = assistantByTurn.get(user.turnId);
         if (!assistantId) continue;
         const waitingForRemoteReply = passiveRunningSession && user.turnId === pendingTurnId;
@@ -4759,7 +4894,7 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
         finalizeMessageContent(assistantId, assistantText);
         finalizeAssistantStatusCards(assistantId, 'done');
         setAssistantActionBarReady(assistantId);
-        AppState.chat.messages.push({ role: 'assistant', content: assistantText, turnId: user.turnId });
+        upsertChatMessageState({ role: 'assistant', content: assistantText, turnId: user.turnId });
     }
 
     if (users.length > 0) {
@@ -4815,7 +4950,8 @@ async function restoreLastSession() {
 
     appendMessage(restoredUser);
     appendMessage(restoredAssistant);
-    AppState.chat.messages.push(restoredUser, restoredAssistant);
+    upsertChatMessageState(restoredUser);
+    upsertChatMessageState(restoredAssistant);
     holdAutoScrollAtBottom(1200);
     ensureChatRestoredToLatest();
 
@@ -5689,7 +5825,7 @@ async function sendMessage(options = {}) {
         AppState.ui.scroll.shouldAutoScroll = true;
         holdAutoScrollAtBottom(600);
     }
-    AppState.chat.messages.push(userMsg);
+    upsertChatMessageState(userMsg);
     if (usesStatefulConversationContext()) {
         AppState.chat.stateful.estimatedChars += text.length;
         updateStatefulBudgetIndicator();
@@ -6223,12 +6359,18 @@ function ensureAssistantMessageElement(id, turnId = '') {
         if (resolvedTurnId && !el.dataset.turnId) {
             el.dataset.turnId = resolvedTurnId;
         }
+        if (resolvedTurnId) {
+            placeAssistantMessageForTurn(el, resolvedTurnId);
+        }
         attachStreamingAudioButtonToMessage(el);
         syncAssistantMessageShellState(el);
         return el;
     }
-    appendMessage({ role: 'assistant', content: '', id, turnId: resolvedTurnId }, { skipScroll: true });
-    el = document.getElementById(id);
+    el = createMessageElement({ role: 'assistant', content: '', id, turnId: resolvedTurnId });
+    if (!placeAssistantMessageForTurn(el, resolvedTurnId)) {
+        chatMessages.appendChild(el);
+    }
+    updateScrollToBottomButton();
     if (el && AppState.ui.activeStreamingMessageId === id) {
         startStreamingMessageAutoScroll(id);
     }
@@ -7159,13 +7301,147 @@ function getMarkdownRenderMode() {
     return 'balanced';
 }
 
+const MERMAID_CODE_LANGUAGE_RE = /(?:^|\s)(?:language-)?(?:mermaid|mmd)(?:\s|$)/i;
+let mermaidRenderSequence = 0;
+
+function isMermaidCodeBlock(block) {
+    if (!block) return false;
+    const className = `${block.className || ''} ${block.parentElement?.className || ''}`;
+    return MERMAID_CODE_LANGUAGE_RE.test(className);
+}
+
 function highlightMarkdownBlocks(container) {
     if (!container) return;
     const hljs = window.hljs;
     if (!hljs?.highlightElement) return;
     container.querySelectorAll('pre code').forEach((block) => {
+        if (isMermaidCodeBlock(block)) return;
         hljs.highlightElement(block);
         block.dataset.highlighted = 'true';
+    });
+}
+
+function getMermaidRenderer() {
+    if (window.mermaid?.render) return Promise.resolve(window.mermaid);
+    if (window.mermaidReady?.then) return window.mermaidReady;
+    return Promise.resolve(null);
+}
+
+function getMermaidHostBatch(host) {
+    if (!host) return '';
+    const nextBatch = `${Date.now()}-${++mermaidRenderSequence}`;
+    host.dataset.mermaidRenderBatch = nextBatch;
+    return nextBatch;
+}
+
+function isMermaidRenderCurrent(wrapper, batchId) {
+    if (!wrapper?.isConnected) return false;
+    const host = wrapper.closest('.markdown-committed, .markdown-pending, #saved-turn-modal-response');
+    return !!host && host.dataset.mermaidRenderBatch === batchId;
+}
+
+function renderMermaidFallback(wrapper, source, error) {
+    if (!wrapper) return;
+    wrapper.classList.remove('is-loading', 'is-rendered');
+    wrapper.classList.add('is-error');
+    wrapper.innerHTML = '';
+
+    const status = document.createElement('div');
+    status.className = 'mermaid-diagram-status';
+    status.textContent = error?.message || 'Mermaid render failed.';
+
+    const pre = document.createElement('pre');
+    const code = document.createElement('code');
+    code.className = 'language-mermaid';
+    code.textContent = source || '';
+    pre.appendChild(code);
+    wrapper.append(status, pre);
+}
+
+function buildMermaidFrameHtml(svgHtml) {
+    const sanitizedSvg = sanitizeRenderedMarkdownHtml(svgHtml || '');
+    return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+html, body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  color: #d7deea;
+  overflow: hidden;
+}
+svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 100%;
+}
+</style>
+</head>
+<body>${sanitizedSvg}</body>
+</html>`;
+}
+
+function writeMermaidFrame(wrapper, svgHtml) {
+    wrapper.innerHTML = '';
+
+    const frame = document.createElement('iframe');
+    frame.className = 'mermaid-diagram-frame';
+    frame.setAttribute('title', 'Mermaid diagram');
+    frame.setAttribute('sandbox', '');
+    frame.setAttribute('loading', 'lazy');
+    frame.srcdoc = buildMermaidFrameHtml(svgHtml);
+    wrapper.appendChild(frame);
+}
+
+async function renderMermaidDiagram(wrapper, source, batchId, index) {
+    try {
+        const mermaid = await getMermaidRenderer();
+        if (!mermaid?.render) {
+            throw new Error('Mermaid renderer is unavailable.');
+        }
+        if (!isMermaidRenderCurrent(wrapper, batchId)) return;
+
+        const renderId = `dkst-mermaid-${Date.now()}-${++mermaidRenderSequence}-${index}`;
+        const rendered = await mermaid.render(renderId, source);
+        if (!isMermaidRenderCurrent(wrapper, batchId)) return;
+
+        writeMermaidFrame(wrapper, rendered?.svg || '');
+        wrapper.classList.remove('is-loading', 'is-error');
+        wrapper.classList.add('is-rendered');
+    } catch (error) {
+        console.warn('[Mermaid] Render failed.', error);
+        if (isMermaidRenderCurrent(wrapper, batchId)) {
+            renderMermaidFallback(wrapper, source, error);
+        }
+    }
+}
+
+function renderMermaidDiagramsInHost(host) {
+    if (!host) return;
+    const blocks = Array.from(host.querySelectorAll('pre code')).filter(isMermaidCodeBlock);
+    if (blocks.length === 0) return;
+
+    const batchId = getMermaidHostBatch(host);
+    blocks.forEach((block, index) => {
+        const source = String(block.textContent || '').trim();
+        const pre = block.closest('pre');
+        if (!source || !pre) return;
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'mermaid-diagram is-loading';
+        wrapper.dataset.mermaidSource = source;
+        wrapper.setAttribute('role', 'img');
+
+        const status = document.createElement('div');
+        status.className = 'mermaid-diagram-status';
+        status.textContent = 'Rendering diagram...';
+        wrapper.appendChild(status);
+
+        pre.replaceWith(wrapper);
+        renderMermaidDiagram(wrapper, source, batchId, index);
     });
 }
 
@@ -7212,11 +7488,48 @@ function renderMathWithKatex(host) {
 function buildRenderedMarkdownState(markdownText) {
     const normalized = normalizeMarkdownForRender(markdownText || '');
     const renderer = getMarkdownRenderer();
-    const html = normalized.trim()
+    const standaloneSvgHtml = renderStandaloneSvgMarkdown(normalized);
+    const html = standaloneSvgHtml || (normalized.trim()
         ? sanitizeRenderedMarkdownHtml(renderer.render(normalized))
-        : '';
+        : '');
 
     return { normalized, renderer, html };
+}
+
+function getStandaloneSvgMarkdown(markdownText) {
+    let source = String(markdownText || '').trim();
+    if (!source) return '';
+
+    source = source
+        .replace(/^\uFEFF/, '')
+        .replace(/^<\?xml[\s\S]*?\?>\s*/i, '');
+
+    if (!/^<svg(?:\s|>)/i.test(source) || !/<\/svg>\s*$/i.test(source)) {
+        return '';
+    }
+
+    const template = document.createElement('template');
+    template.innerHTML = source;
+    const significantNodes = Array.from(template.content.childNodes).filter((node) => {
+        if (node.nodeType === Node.TEXT_NODE) return !!String(node.textContent || '').trim();
+        if (node.nodeType === Node.COMMENT_NODE) return false;
+        return true;
+    });
+
+    if (significantNodes.length !== 1) return '';
+    const svg = significantNodes[0];
+    if (svg.nodeType !== Node.ELEMENT_NODE || svg.tagName.toLowerCase() !== 'svg') return '';
+    return source;
+}
+
+function renderStandaloneSvgMarkdown(markdownText) {
+    const rawSvg = getStandaloneSvgMarkdown(markdownText);
+    if (!rawSvg) return '';
+
+    const sanitized = sanitizeRenderedMarkdownHtml(rawSvg);
+    const template = document.createElement('template');
+    template.innerHTML = sanitized;
+    return template.content.querySelector('svg') ? sanitized : '';
 }
 
 function renderMarkdownIntoHost(host, markdownText, options = {}) {
@@ -7236,6 +7549,7 @@ function renderMarkdownIntoHost(host, markdownText, options = {}) {
         link.setAttribute('rel', 'noopener noreferrer');
     });
     highlightMarkdownBlocks(host);
+    renderMermaidDiagramsInHost(host);
 }
 
 function pulseMessageRender(el) {

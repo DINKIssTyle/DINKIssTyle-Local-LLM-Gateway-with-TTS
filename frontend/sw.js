@@ -3,15 +3,15 @@
  * Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
  */
 
-const CACHE_NAME = 'dkst-chat-v25';
+const CACHE_NAME = 'dkst-chat-v29';
 const ASSETS = [
     '/',
     '/index.html',
     '/login.html',
     '/web.html',
-    '/web.html?v=19',
+    '/web.html?v=22',
     '/fonts.css?v=2',
-    '/style.css?v=8',
+    '/style.css?v=9',
     '/icons.css?v=2',
     '/app-utils.js?v=1',
     '/app-i18n.js?v=1',
@@ -23,7 +23,7 @@ const ASSETS = [
     '/app-chat-ui.js?v=1',
     '/app-progress-ui.js?v=1',
     '/app-mic.js?v=2',
-    '/app.js?v=19',
+    '/app.js?v=22',
     '/icons.css',
     '/public/icon-512.png',
     '/site.webmanifest',
@@ -96,7 +96,7 @@ self.addEventListener('fetch', event => {
     event.respondWith(
         fetch(event.request).catch(() => {
             if (event.request.mode === 'navigate') {
-                return caches.match('/web.html?v=19')
+                return caches.match('/web.html?v=22')
                     .then(response => response || caches.match('/web.html'))
                     .then(response => response || caches.match('/index.html'))
                     .then(response => {

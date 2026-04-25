@@ -26,7 +26,7 @@
     <link rel="stylesheet" href="icons.css?v=2">
 
     <!-- Styles -->
-    <link rel="stylesheet" href="style.css?v=8">
+    <link rel="stylesheet" href="style.css?v=9">
 
     <!-- Highlight.js -->
     <link rel="stylesheet" href="vendor/github-dark.min.css">
@@ -766,6 +766,40 @@
             return null;
         });
     </script>
+    <script type="module">
+        window.mermaidReady = import('./vendor/mermaid/mermaid.esm.min.mjs')
+            .then(({ default: mermaid }) => {
+                mermaid.initialize({
+                    startOnLoad: false,
+                    securityLevel: 'strict',
+                    theme: 'dark',
+                    deterministicIds: false,
+                    htmlLabels: true,
+                    flowchart: {
+                        htmlLabels: true,
+                        curve: 'basis'
+                    },
+                    themeVariables: {
+                        background: 'transparent',
+                        mainBkg: '#141b24',
+                        primaryColor: '#141b24',
+                        primaryTextColor: '#d7deea',
+                        primaryBorderColor: '#5f8cff',
+                        lineColor: '#94a3bb',
+                        secondaryColor: '#10161f',
+                        tertiaryColor: '#0d1117',
+                        textColor: '#d7deea',
+                        fontFamily: '-apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", system-ui, sans-serif'
+                    }
+                });
+                window.mermaid = mermaid;
+                return mermaid;
+            })
+            .catch((error) => {
+                console.warn('[Mermaid] Failed to initialize renderer.', error);
+                return null;
+            });
+    </script>
     <script src="app-utils.js?v=1"></script>
     <script src="app-i18n.js?v=1"></script>
     <script src="app-saved-library.js?v=1"></script>
@@ -776,7 +810,7 @@
     <script src="app-chat-ui.js?v=1"></script>
     <script src="app-progress-ui.js?v=1"></script>
     <script src="app-mic.js?v=2"></script>
-    <script src="app.js?v=19"></script>
+    <script src="app.js?v=22"></script>
 
 </body>
 
