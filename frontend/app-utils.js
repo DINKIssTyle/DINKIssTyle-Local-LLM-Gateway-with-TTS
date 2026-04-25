@@ -379,7 +379,7 @@
         normalized = normalizeMarkdownOutsideCode(normalized, (segment) => {
             let result = segment
                 .replace(/([^\n#])([ \t]*#{1,6}\s)/g, '$1\n\n$2')
-                .replace(/(^|\n)([ \t]*#{1,6}[^\n]*?\S)(?=[ \t]*(?:-(?!-)\s|\+\s|\d+\.\s))/g, '$1$2\n\n');
+                .replace(/(^|\n)([ \t]*#{1,6}\s+\S[^\n]*?\S)(?=[ \t]+(?:-(?!-)\s|\+\s|\d+\.\s))/g, '$1$2\n\n');
 
             result = result.split('\n').map(line => {
                 if (/^\s*(?:#{1,6}\s|(?:[-*+]|\d+\.)\s)/.test(line)) return line;
