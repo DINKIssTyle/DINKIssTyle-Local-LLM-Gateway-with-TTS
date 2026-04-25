@@ -484,6 +484,21 @@ function detectRunawayRepetitionAsync(text = '', kind = 'message') {
         worker.postMessage({ id, kind, text: source });
     });
 }
+
+async function throwIfReasoningRunawayRepetition(ctx) {
+    if (!ctx || ctx.loopDetected || String(ctx.reasoningBuffer || '').length < 140) return;
+
+    const reasoningLoop = await detectRunawayRepetitionAsync(ctx.reasoningBuffer, 'reasoning');
+    if (!reasoningLoop) return;
+
+    ctx.loopDetected = true;
+    const repetitionError = new Error(config.llmMode === 'stateful' && !ctx.options.repeatRecoveryApplied ? t('warning.repeatRetrying') : t('warning.repeatStopped'));
+    repetitionError.code = 'LMSTUDIO_RUNAWAY_REPETITION';
+    repetitionError.phase = 'reasoning';
+    repetitionError.snippet = reasoningLoop.snippet;
+    ctx.streamRestartRequested = true;
+    throw repetitionError;
+}
 /**
  * SSEParser: raw bytes -> JSON events
  */
@@ -781,6 +796,7 @@ async function handleStreamEvent(json, ctx) {
             }
             if (ctx.reasoningSource !== 'sse') {
                 ctx.reasoningBuffer += delta.reasoning_content;
+                await throwIfReasoningRunawayRepetition(ctx);
                 showReasoningStatus(elementId, ctx.reasoningBuffer);
             }
         }
@@ -819,13 +835,7 @@ async function handleStreamEvent(json, ctx) {
     }
     else if (json.type === 'reasoning.delta' && json.content) {
         ctx.reasoningBuffer += json.content;
-        const reasoningLoop = await detectRunawayRepetitionAsync(ctx.reasoningBuffer, 'reasoning');
-        if (reasoningLoop) {
-            const repetitionError = new Error(config.llmMode === 'stateful' && !ctx.options.repeatRecoveryApplied ? t('warning.repeatRetrying') : t('warning.repeatStopped'));
-            repetitionError.code = 'LMSTUDIO_RUNAWAY_REPETITION';
-            ctx.streamRestartRequested = true;
-            throw repetitionError;
-        }
+        await throwIfReasoningRunawayRepetition(ctx);
         ctx.currentlyReasoning = true;
         ctx.reasoningSource = 'sse';
         const elapsedMs = Number.isFinite(Number(json.total_elapsed_ms || json.elapsed_ms)) ? Number(json.total_elapsed_ms || json.elapsed_ms) : null;
@@ -844,6 +854,9 @@ async function handleStreamEvent(json, ctx) {
         if (json.type === 'tool_call.start') {
             ctx.lastToolCallHtml = json.tool || 'Tool';
             setToolCardState(elementId, 'running', '', null, json.tool || 'Tool');
+        } else if (json.type === 'tool_call.name') {
+            ctx.lastToolCallHtml = json.tool_name || json.tool || ctx.lastToolCallHtml || 'Tool';
+            setToolCardState(elementId, 'running', '', null, ctx.lastToolCallHtml);
         } else if (json.type === 'tool_call.arguments') {
             setToolCardState(elementId, 'running', '', json.arguments, json.tool || 'Tool');
         } else if (json.type === 'tool_call.success') {
