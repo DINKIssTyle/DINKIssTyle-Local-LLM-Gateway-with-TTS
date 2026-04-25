@@ -9,6 +9,7 @@
     <meta charset="UTF-8">
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
+    <meta name="color-scheme" content="dark light">
     <title>DKST LLM Chat</title>
 
     <!-- Favicons -->
@@ -16,6 +17,88 @@
     <link rel="icon" type="image/png" sizes="32x32" href="public/favicon-32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="public/favicon-16.png">
     <link rel="manifest" href="site.webmanifest">
+    <script>
+        (function initWebTheme() {
+            function normalizeTheme(value) {
+                return ['auto', 'dark', 'light'].includes(value) ? value : 'auto';
+            }
+
+            function getSystemTheme() {
+                return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+            }
+
+            function resolveTheme(value) {
+                const theme = normalizeTheme(value);
+                return theme === 'auto' ? getSystemTheme() : theme;
+            }
+
+            function readInitialTheme() {
+                try {
+                    const saved = JSON.parse(localStorage.getItem('appConfig') || '{}');
+                    const savedTheme = saved.webTheme || saved.theme;
+                    return savedTheme ? normalizeTheme(savedTheme) : 'dark';
+                } catch (_) {
+                    return 'dark';
+                }
+            }
+
+            function applyTheme(value) {
+                const preferred = normalizeTheme(value);
+                const resolved = resolveTheme(preferred);
+                document.documentElement.dataset.themePreference = preferred;
+                document.documentElement.dataset.theme = resolved;
+                document.documentElement.style.colorScheme = resolved;
+                return resolved;
+            }
+
+            function getMermaidThemeConfig(value) {
+                const resolved = resolveTheme(value);
+                const isLight = resolved === 'light';
+                return {
+                    startOnLoad: false,
+                    securityLevel: 'strict',
+                    theme: isLight ? 'base' : 'dark',
+                    deterministicIds: false,
+                    htmlLabels: true,
+                    flowchart: {
+                        htmlLabels: true,
+                        curve: 'basis'
+                    },
+                    themeVariables: isLight ? {
+                        background: 'transparent',
+                        mainBkg: '#ffffff',
+                        primaryColor: '#ffffff',
+                        primaryTextColor: '#1f2937',
+                        primaryBorderColor: '#2563eb',
+                        lineColor: '#667085',
+                        secondaryColor: '#f1f5f9',
+                        tertiaryColor: '#f7f9fc',
+                        textColor: '#1f2937',
+                        fontFamily: '-apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", system-ui, sans-serif'
+                    } : {
+                        background: 'transparent',
+                        mainBkg: '#141b24',
+                        primaryColor: '#141b24',
+                        primaryTextColor: '#d7deea',
+                        primaryBorderColor: '#5f8cff',
+                        lineColor: '#94a3bb',
+                        secondaryColor: '#10161f',
+                        tertiaryColor: '#0d1117',
+                        textColor: '#d7deea',
+                        fontFamily: '-apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", system-ui, sans-serif'
+                    }
+                };
+            }
+
+            window.DKSTWebTheme = {
+                apply: applyTheme,
+                normalize: normalizeTheme,
+                resolve: resolveTheme
+            };
+            window.DKSTGetMermaidThemeConfig = getMermaidThemeConfig;
+            applyTheme(readInitialTheme());
+        })();
+    </script>
 
     <!-- Fonts -->
     <link rel="preload" href="vendor/fonts/jetbrains-mono-400-latin.woff2" as="font" type="font/woff2" crossorigin>
@@ -26,7 +109,7 @@
     <link rel="stylesheet" href="icons.css?v=2">
 
     <!-- Styles -->
-    <link rel="stylesheet" href="style.css?v=10">
+    <link rel="stylesheet" href="style.css?v=11">
 
     <!-- Highlight.js -->
     <link rel="stylesheet" href="vendor/github-dark.min.css">
@@ -235,6 +318,15 @@
                     <div class="setting-section-title" style="display: flex; align-items: center; gap: 6px;">
                         <span class="material-icons-round" style="font-size: 18px;">bubble_chart</span>
                         <span data-i18n="section.appearance">Chat Appearance</span>
+                    </div>
+                    <div class="setting-item">
+                        <label data-i18n="setting.webTheme.label">Theme</label>
+                        <p class="setting-desc" data-i18n="setting.webTheme.desc">Use your system theme or choose a fixed chat theme.</p>
+                        <select id="cfg-web-theme">
+                            <option value="auto" data-i18n="setting.webTheme.option.auto">Auto</option>
+                            <option value="dark" data-i18n="setting.webTheme.option.dark">Dark</option>
+                            <option value="light" data-i18n="setting.webTheme.option.light">Light</option>
+                        </select>
                     </div>
                     <div class="setting-item">
                         <label data-i18n="setting.userBubbleTheme.label">User Bubble Style</label>
@@ -769,29 +861,10 @@
     <script type="module">
         window.mermaidReady = import('./vendor/mermaid/mermaid.esm.min.mjs')
             .then(({ default: mermaid }) => {
-                mermaid.initialize({
-                    startOnLoad: false,
-                    securityLevel: 'strict',
-                    theme: 'dark',
-                    deterministicIds: false,
-                    htmlLabels: true,
-                    flowchart: {
-                        htmlLabels: true,
-                        curve: 'basis'
-                    },
-                    themeVariables: {
-                        background: 'transparent',
-                        mainBkg: '#141b24',
-                        primaryColor: '#141b24',
-                        primaryTextColor: '#d7deea',
-                        primaryBorderColor: '#5f8cff',
-                        lineColor: '#94a3bb',
-                        secondaryColor: '#10161f',
-                        tertiaryColor: '#0d1117',
-                        textColor: '#d7deea',
-                        fontFamily: '-apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", system-ui, sans-serif'
-                    }
-                });
+                const theme = document.documentElement.dataset.theme || 'dark';
+                mermaid.initialize(window.DKSTGetMermaidThemeConfig
+                    ? window.DKSTGetMermaidThemeConfig(theme)
+                    : { startOnLoad: false, securityLevel: 'strict', theme: 'dark' });
                 window.mermaid = mermaid;
                 return mermaid;
             })
@@ -801,7 +874,7 @@
             });
     </script>
     <script src="app-utils.js?v=2"></script>
-    <script src="app-i18n.js?v=1"></script>
+    <script src="app-i18n.js?v=2"></script>
     <script src="app-saved-library.js?v=1"></script>
     <script src="app-models.js?v=1"></script>
     <script src="app-tts.js?v=3"></script>
@@ -810,7 +883,7 @@
     <script src="app-chat-ui.js?v=1"></script>
     <script src="app-progress-ui.js?v=1"></script>
     <script src="app-mic.js?v=2"></script>
-    <script src="app.js?v=22"></script>
+    <script src="app.js?v=23"></script>
 
 </body>
 
