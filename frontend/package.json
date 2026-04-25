@@ -5,5 +5,8 @@
     "scripts": {
         "dev": "echo 'No dev build needed'",
         "build": "echo 'Static frontend - no build step'"
+    },
+    "dependencies": {
+        "mermaid": "^11.14.0"
     }
 }

@@ -409,8 +409,34 @@
         const rawHtml = String(html || '');
         if (!rawHtml.trim()) return '';
 
+        const svgTags = [
+            'svg', 'g', 'path', 'rect', 'circle', 'ellipse', 'line', 'polyline',
+            'polygon', 'text', 'tspan', 'defs', 'marker', 'pattern',
+            'lineargradient', 'radialgradient', 'stop', 'clippath', 'mask',
+            'title', 'desc', 'style', 'use', 'foreignobject'
+        ];
+        const svgAttrs = [
+            'id', 'role', 'aria-hidden', 'aria-label', 'aria-labelledby',
+            'aria-describedby', 'aria-roledescription', 'focusable', 'tabindex', 'xmlns', 'xmlns:xlink',
+            'viewbox', 'preserveaspectratio', 'width', 'height', 'x', 'y', 'x1',
+            'y1', 'x2', 'y2', 'cx', 'cy', 'r', 'rx', 'ry', 'd', 'points',
+            'transform', 'fill', 'stroke', 'stroke-width', 'stroke-linecap',
+            'stroke-linejoin', 'stroke-dasharray', 'stroke-dashoffset',
+            'opacity', 'fill-opacity', 'stroke-opacity', 'marker-start',
+            'marker-mid', 'marker-end', 'orient', 'refx', 'refy', 'markerwidth',
+            'markerheight', 'text-anchor', 'dominant-baseline', 'font-family',
+            'font-size', 'font-weight', 'font-style', 'dy', 'dx', 'offset',
+            'stop-color', 'stop-opacity', 'clip-path', 'clip-rule', 'fill-rule',
+            'mask', 'patternunits', 'patterncontentunits', 'href', 'xlink:href',
+            'style', 'alignment-baseline', 'baseline-shift', 'color', 'cursor',
+            'display', 'paint-order', 'version', 'xml:space'
+        ];
+
         if (global.DOMPurify?.sanitize) {
-            return global.DOMPurify.sanitize(rawHtml);
+            return global.DOMPurify.sanitize(rawHtml, {
+                ADD_TAGS: svgTags,
+                ADD_ATTR: svgAttrs
+            });
         }
 
         const template = global.document.createElement('template');
@@ -421,18 +447,25 @@
             'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'i', 'img', 'kbd', 'li', 'mark',
             'ol', 'p', 'pre', 'q', 'rp', 'rt', 'ruby', 's', 'samp', 'small', 'span',
             'strong', 'sub', 'summary', 'sup', 'table', 'tbody', 'td', 'th', 'thead',
-            'tr', 'ul'
+            'tr', 'ul',
+            ...svgTags
         ]);
-        const globalAllowedAttrs = new Set(['class', 'title', 'aria-hidden']);
+        const globalAllowedAttrs = new Set([
+            'class', 'title', 'aria-hidden', 'aria-label', 'aria-labelledby',
+            'aria-describedby', 'aria-roledescription', 'id', 'role'
+        ]);
         const tagAllowedAttrs = {
             a: new Set(['href', 'target', 'rel']),
             img: new Set(['src', 'alt', 'title']),
             code: new Set(['class']),
-            span: new Set(['class']),
-            div: new Set(['class']),
+            span: new Set(['class', 'style', 'xmlns']),
+            div: new Set(['class', 'style', 'xmlns']),
             th: new Set(['colspan', 'rowspan']),
             td: new Set(['colspan', 'rowspan'])
         };
+        svgTags.forEach((tag) => {
+            tagAllowedAttrs[tag] = new Set(svgAttrs);
+        });
 
         const sanitizeUrl = (value) => {
             const normalized = String(value || '').trim();
@@ -452,6 +485,26 @@
             return '';
         };
 
+        const sanitizeSvgReference = (value) => {
+            const normalized = String(value || '').trim();
+            if (!normalized) return '';
+            if (/^url\(\s*#[A-Za-z][\w:.-]*\s*\)$/.test(normalized)) return normalized;
+            if (/^#[A-Za-z][\w:.-]*$/.test(normalized)) return normalized;
+            return sanitizeUrl(normalized);
+        };
+
+        const sanitizeStyleValue = (value) => {
+            const css = String(value || '').trim();
+            if (!css) return '';
+            if (/(?:javascript\s*:|expression\s*\(|@import|<\s*\/?\s*script)/i.test(css)) {
+                return '';
+            }
+            if (/url\s*\(\s*(['"]?)(?!#)/i.test(css)) {
+                return '';
+            }
+            return css;
+        };
+
         const walker = global.document.createTreeWalker(template.content, NodeFilter.SHOW_ELEMENT);
         const nodes = [];
         while (walker.nextNode()) {
@@ -465,17 +518,50 @@
                 return;
             }
 
+            const isInsideSvg = tagName === 'svg' || !!node.closest('svg');
+            if (tagName === 'style' && !isInsideSvg) {
+                node.remove();
+                return;
+            }
+
             Array.from(node.attributes).forEach((attr) => {
                 const attrName = attr.name.toLowerCase();
                 const allowedForTag = tagAllowedAttrs[tagName];
-                const isAllowed = globalAllowedAttrs.has(attrName) || allowedForTag?.has(attrName);
+                const isAllowed = attrName.startsWith('data-')
+                    || globalAllowedAttrs.has(attrName)
+                    || allowedForTag?.has(attrName);
                 if (!isAllowed || attrName.startsWith('on')) {
                     node.removeAttribute(attr.name);
                     return;
                 }
 
-                if (attrName === 'href' || attrName === 'src') {
-                    const sanitized = sanitizeUrl(attr.value);
+                if (attrName === 'href' || attrName === 'src' || attrName === 'xlink:href') {
+                    const sanitized = tagName === 'use' || attrName === 'xlink:href'
+                        ? sanitizeSvgReference(attr.value)
+                        : sanitizeUrl(attr.value);
+                    if (!sanitized) {
+                        node.removeAttribute(attr.name);
+                        return;
+                    }
+                    node.setAttribute(attr.name, sanitized);
+                }
+
+                if (attrName === 'style') {
+                    if (!isInsideSvg) {
+                        node.removeAttribute(attr.name);
+                        return;
+                    }
+                    const sanitized = sanitizeStyleValue(attr.value);
+                    if (!sanitized) {
+                        node.removeAttribute(attr.name);
+                        return;
+                    }
+                    node.setAttribute(attr.name, sanitized);
+                }
+
+                if (attrName === 'marker-start' || attrName === 'marker-mid' || attrName === 'marker-end'
+                    || attrName === 'clip-path' || attrName === 'mask' || attrName === 'filter') {
+                    const sanitized = sanitizeSvgReference(attr.value);
                     if (!sanitized) {
                         node.removeAttribute(attr.name);
                         return;
@@ -487,6 +573,15 @@
             if (tagName === 'a') {
                 node.setAttribute('target', '_blank');
                 node.setAttribute('rel', 'noopener noreferrer');
+            }
+
+            if (tagName === 'style') {
+                const sanitized = sanitizeStyleValue(node.textContent || '');
+                if (!sanitized) {
+                    node.remove();
+                    return;
+                }
+                node.textContent = sanitized;
             }
         });
 

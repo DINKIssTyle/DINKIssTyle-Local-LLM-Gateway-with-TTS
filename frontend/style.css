@@ -1458,6 +1458,49 @@ body.keyboard-open #chat-header {
   height: auto;
 }
 
+.markdown-body svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.mermaid-diagram {
+  width: 100%;
+  max-width: 100%;
+  margin: 0 0 12px;
+  padding: 12px;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow-x: hidden;
+  overflow-y: hidden;
+  border: 1px solid rgba(95, 140, 255, 0.16);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.035);
+  overflow-anchor: none;
+}
+
+.mermaid-diagram-frame {
+  display: block;
+  width: 100%;
+  height: min(420px, 62vh);
+  border: 0;
+  background: transparent;
+}
+
+.mermaid-diagram-status {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.mermaid-diagram.is-error {
+  border-color: rgba(218, 54, 51, 0.28);
+}
+
+.mermaid-diagram.is-error pre {
+  margin-top: 8px;
+  margin-bottom: 0;
+}
+
 .markdown-body p {
   margin-top: 0;
   margin-bottom: 10px;
