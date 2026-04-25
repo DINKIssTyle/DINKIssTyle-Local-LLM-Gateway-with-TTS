@@ -56,6 +56,7 @@ let config = {
     statefulTokenBudget: DEFAULT_STATEFUL_TOKEN_BUDGET,
     micLayout: 'inline', // 'none', 'left', 'right', 'bottom', 'inline'
     chatFontSize: 16,
+    webTheme: 'dark', // 'auto', 'dark', 'light'
     userBubbleTheme: 'ocean', // Options: 'ocean', 'lime', 'sunset', 'amber', 'magenta'
     streamingScrollMode: 'label-top', // Options: 'auto', 'label-top'
     markdownRenderMode: 'fast', // Options: 'fast', 'balanced', 'final'
@@ -344,6 +345,105 @@ function usesRetrievalConversationContext() {
 
 function enforceMCPPolicyForMode(mode) {
     return mode === 'stateful' ? !!config.enableMCP : false;
+}
+
+const WEB_THEME_OPTIONS = ['auto', 'dark', 'light'];
+const webThemeMediaQuery = typeof window.matchMedia === 'function'
+    ? window.matchMedia('(prefers-color-scheme: light)')
+    : null;
+let webThemeMediaListenerRegistered = false;
+
+function normalizeWebTheme(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'system') return 'auto';
+    return WEB_THEME_OPTIONS.includes(normalized) ? normalized : 'auto';
+}
+
+function getSystemWebTheme() {
+    return webThemeMediaQuery?.matches ? 'light' : 'dark';
+}
+
+function resolveWebTheme(value) {
+    const normalized = normalizeWebTheme(value);
+    if (window.DKSTWebTheme?.resolve) {
+        return window.DKSTWebTheme.resolve(normalized);
+    }
+    return normalized === 'auto' ? getSystemWebTheme() : normalized;
+}
+
+function getMermaidThemeConfigForWebTheme(resolvedTheme) {
+    if (window.DKSTGetMermaidThemeConfig) {
+        return window.DKSTGetMermaidThemeConfig(resolvedTheme);
+    }
+    return {
+        startOnLoad: false,
+        securityLevel: 'strict',
+        theme: resolvedTheme === 'light' ? 'base' : 'dark'
+    };
+}
+
+function syncMermaidThemeForWebTheme(resolvedTheme, options = {}) {
+    const applyToRenderer = (mermaid) => {
+        if (!mermaid?.initialize) return;
+        try {
+            mermaid.initialize(getMermaidThemeConfigForWebTheme(resolvedTheme));
+            if (options.rerender === true) {
+                rerenderAllMarkdownHosts();
+            }
+        } catch (error) {
+            console.warn('[Theme] Failed to update Mermaid theme:', error);
+        }
+    };
+
+    if (window.mermaid?.initialize) {
+        applyToRenderer(window.mermaid);
+        return;
+    }
+
+    if (window.mermaidReady?.then) {
+        window.mermaidReady.then(applyToRenderer).catch((error) => {
+            console.warn('[Theme] Mermaid renderer unavailable:', error);
+        });
+    }
+}
+
+function applyWebTheme(options = {}) {
+    const previousTheme = document.documentElement.dataset.theme || '';
+    config.webTheme = normalizeWebTheme(config.webTheme || config.theme);
+
+    const resolvedTheme = window.DKSTWebTheme?.apply
+        ? window.DKSTWebTheme.apply(config.webTheme)
+        : resolveWebTheme(config.webTheme);
+
+    if (!window.DKSTWebTheme?.apply) {
+        document.documentElement.dataset.themePreference = config.webTheme;
+        document.documentElement.dataset.theme = resolvedTheme;
+        document.documentElement.style.colorScheme = resolvedTheme;
+    }
+
+    const themeSelect = document.getElementById('cfg-web-theme');
+    if (themeSelect) {
+        themeSelect.value = config.webTheme;
+    }
+
+    if (options.forceMermaid === true || previousTheme !== resolvedTheme) {
+        syncMermaidThemeForWebTheme(resolvedTheme, { rerender: options.rerenderMermaid === true });
+    }
+}
+
+function setupWebThemeMediaListener() {
+    if (webThemeMediaListenerRegistered || !webThemeMediaQuery) return;
+    webThemeMediaListenerRegistered = true;
+    const handleChange = () => {
+        if (normalizeWebTheme(config.webTheme) === 'auto') {
+            applyWebTheme({ rerenderMermaid: true });
+        }
+    };
+    if (webThemeMediaQuery.addEventListener) {
+        webThemeMediaQuery.addEventListener('change', handleChange);
+    } else if (webThemeMediaQuery.addListener) {
+        webThemeMediaQuery.addListener(handleChange);
+    }
 }
 
 const USER_BUBBLE_THEMES = {
@@ -2282,6 +2382,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (e) {
         console.error("Config load failed, using defaults:", e);
     }
+    setupWebThemeMediaListener();
 
     fetchModels().catch(console.warn); // Fetch models in background
 
@@ -3000,13 +3101,19 @@ function loadConfig() {
         try {
             // Keep the original config object reference so controllers created
             // before loadConfig() continue observing the latest settings.
-            Object.assign(config, JSON.parse(saved));
+            const savedConfig = JSON.parse(saved);
+            if (savedConfig && typeof savedConfig === 'object' && !Object.prototype.hasOwnProperty.call(savedConfig, 'webTheme') && savedConfig.theme) {
+                savedConfig.webTheme = savedConfig.theme;
+            }
+            Object.assign(config, savedConfig);
         } catch (e) {
             console.error('Failed to parse saved config:', e);
             // Optional: localStorage.removeItem('appConfig');
         }
     }
 
+    config.webTheme = normalizeWebTheme(config.webTheme);
+    applyWebTheme({ forceMermaid: true });
     config.ttsEngine = config.ttsEngine === 'os' ? 'os' : 'supertonic';
     config.temperature = normalizeTemperatureValue(config.temperature, null);
     delete config.maxTokens;
@@ -3202,7 +3309,7 @@ function setupSettingsListeners() {
     });
 
     // Selects & Inputs: save on change
-    const autoSaveIds = ['cfg-api', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-os-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-context-strategy', 'cfg-show-reasoning-control', 'cfg-force-show-reasoning-control', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model', 'cfg-tts-engine', 'cfg-streaming-scroll-mode', 'cfg-markdown-render-mode', 'cfg-auto-dismiss-mobile-keyboard', 'cfg-enable-haptics', 'cfg-embedding-model', 'cfg-mic-layout'];
+    const autoSaveIds = ['cfg-api', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-os-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-context-strategy', 'cfg-show-reasoning-control', 'cfg-force-show-reasoning-control', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model', 'cfg-tts-engine', 'cfg-web-theme', 'cfg-streaming-scroll-mode', 'cfg-markdown-render-mode', 'cfg-auto-dismiss-mobile-keyboard', 'cfg-enable-haptics', 'cfg-embedding-model', 'cfg-mic-layout'];
     autoSaveIds.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.onchange = () => saveConfig(false);
@@ -3456,6 +3563,7 @@ function saveConfig(closeModal = true) {
     config.statefulCharBudget = Math.max(1000, parseInt(document.getElementById('cfg-stateful-char-budget')?.value, 10) || DEFAULT_STATEFUL_CHAR_BUDGET);
     config.statefulTokenBudget = Math.max(1000, parseInt(document.getElementById('cfg-stateful-token-budget')?.value, 10) || DEFAULT_STATEFUL_TOKEN_BUDGET);
     config.micLayout = document.getElementById('cfg-mic-layout').value;
+    config.webTheme = normalizeWebTheme(document.getElementById('cfg-web-theme')?.value || config.webTheme);
     config.userBubbleTheme = USER_BUBBLE_THEMES[config.userBubbleTheme] ? config.userBubbleTheme : 'ocean';
     config.streamingScrollMode = document.getElementById('cfg-streaming-scroll-mode')?.value === 'label-top' ? 'label-top' : 'auto';
     config.markdownRenderMode = document.getElementById('cfg-markdown-render-mode')?.value || 'fast';
@@ -3482,6 +3590,7 @@ function saveConfig(closeModal = true) {
     }
     
     AppState.ui.micLayout = config.micLayout;
+    applyWebTheme({ rerenderMermaid: true });
     applyUserBubbleTheme();
     applyChatFontSize();
     syncHapticsPreference();
@@ -7569,6 +7678,7 @@ function renderMermaidFallback(wrapper, source, error) {
 
 function buildMermaidFrameHtml(svgHtml) {
     const sanitizedSvg = sanitizeRenderedMarkdownHtml(svgHtml || '');
+    const frameTextColor = document.documentElement.dataset.theme === 'light' ? '#1f2937' : '#d7deea';
     return `<!doctype html>
 <html>
 <head>
@@ -7578,7 +7688,7 @@ html, body {
   margin: 0;
   padding: 0;
   background: transparent;
-  color: #d7deea;
+  color: ${frameTextColor};
   overflow: hidden;
 }
 svg {
