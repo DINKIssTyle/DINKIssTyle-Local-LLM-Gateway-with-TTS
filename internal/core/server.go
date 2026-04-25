@@ -168,6 +168,65 @@ func lastRunes(input string, limit int) string {
 	return strings.TrimSpace(string(runes[len(runes)-limit:]))
 }
 
+func detectReasoningRunawayRepetition(text string) (string, string, bool) {
+	normalized := strings.Join(strings.Fields(text), " ")
+	runes := []rune(normalized)
+	if len(runes) < 140 {
+		return "", "", false
+	}
+	if len(runes) > 1200 {
+		runes = runes[len(runes)-1200:]
+		normalized = string(runes)
+	}
+
+	if snippet, ok := detectRepeatedSuffixRunes(runes, 6, 180, 9); ok {
+		return compactText(snippet, 80), "chunk-loop", true
+	}
+	if snippet, ok := detectRepeatedSuffixRunes(runes, 50, 260, 6); ok {
+		return compactText(snippet, 120), "long-chunk-loop", true
+	}
+
+	words := strings.Fields(normalized)
+	if len(words) >= 12 {
+		lastWord := strings.ToLower(words[len(words)-1])
+		if len([]rune(lastWord)) >= 2 && len([]rune(lastWord)) <= 30 {
+			count := 1
+			for i := len(words) - 2; i >= 0; i-- {
+				if strings.ToLower(words[i]) != lastWord {
+					break
+				}
+				count++
+			}
+			if count >= 12 {
+				return lastWord, "word-loop", true
+			}
+		}
+	}
+
+	return "", "", false
+}
+
+func detectRepeatedSuffixRunes(runes []rune, minUnit, maxUnit, minRepeats int) (string, bool) {
+	if minUnit <= 0 || maxUnit < minUnit || minRepeats < 2 {
+		return "", false
+	}
+	for unitLen := minUnit; unitLen <= maxUnit && unitLen*minRepeats <= len(runes); unitLen++ {
+		unitStart := len(runes) - unitLen
+		unit := string(runes[unitStart:])
+		repeats := 1
+		for start := unitStart - unitLen; start >= 0; start -= unitLen {
+			if string(runes[start:start+unitLen]) != unit {
+				break
+			}
+			repeats++
+		}
+		if repeats >= minRepeats {
+			return unit, true
+		}
+	}
+	return "", false
+}
+
 func normalizeRelaxedToolArgsJSON(raw string) (string, bool) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -4386,6 +4445,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	reasoningActive := false
 	reasoningStartedAt := time.Time{}
 	reasoningAccumulatedMs := int64(0)
+	reasoningResponse := ""
+	reasoningRunawayDetected := false
+	reasoningRunawayMessage := ""
 	toolUsageCounts := make(map[string]int)
 	toolSignatureCounts := make(map[string]int)
 	executeCommandFamilyCounts := make(map[string]int)
@@ -4426,6 +4488,39 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		}
 	}
 
+	recordReasoningDeltaAndCheckLoop := func(content string) bool {
+		if content == "" {
+			return false
+		}
+		reasoningResponse += content
+		if snippet, source, ok := detectReasoningRunawayRepetition(reasoningResponse); ok {
+			reasoningRunawayDetected = true
+			reasoningRunawayMessage = fmt.Sprintf("LMSTUDIO_RUNAWAY_REPETITION: repetitive reasoning detected (%s)", source)
+			appendChatEvent("assistant", "error", map[string]interface{}{
+				"type":             "error",
+				"error":            reasoningRunawayMessage,
+				"code":             "LMSTUDIO_RUNAWAY_REPETITION",
+				"phase":            "reasoning",
+				"snippet":          snippet,
+				"total_elapsed_ms": requestElapsedMs(),
+			})
+			if jsonBytes, err := json.Marshal(map[string]interface{}{
+				"error":   reasoningRunawayMessage,
+				"code":    "LMSTUDIO_RUNAWAY_REPETITION",
+				"phase":   "reasoning",
+				"snippet": snippet,
+			}); err == nil {
+				emitStreamChunk(fmt.Sprintf("data: %s", string(jsonBytes)))
+			}
+			AddDebugTrace("chat", "reasoning.loop", "Stopped stream due to repetitive reasoning", map[string]interface{}{
+				"snippet": compactText(snippet, 160),
+				"source":  source,
+			})
+			return true
+		}
+		return false
+	}
+
 	// --- TURN LOOP START ---
 	// We allow up to 10 turns (tool call cycles) per request
 	for turn := 0; turn < 10; turn++ {
@@ -4433,6 +4528,10 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		toolExecutedThisTurn := false
 		nativeToolLoopDetected := false
 		nativeToolLoopMessage := ""
+		reasoningResponse = ""
+		reasoningRunawayDetected = false
+		reasoningRunawayMessage = ""
+		pendingNativeToolName := ""
 		nativeExecuteCommandCount := 0
 		nativeExecuteCommandFamilyCounts := make(map[string]int)
 		nativeToolSignatureCounts := make(map[string]int)
@@ -4604,6 +4703,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 		reader := bufio.NewReader(resp.Body)
 		log.Println("[handleChat-DEBUG] Starting response scanner loop")
+	streamScanLoop:
 		for {
 			block, readErr := readUpstreamSSEBlock(reader)
 			if readErr != nil {
@@ -4740,6 +4840,16 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 								}
 								eventPayload["elapsed_ms"] = time.Since(reasoningStartedAt).Milliseconds()
 								eventPayload["total_elapsed_ms"] = requestElapsedMs()
+								reasoningDeltaText, _ := eventPayload["content"].(string)
+								if reasoningDeltaText == "" {
+									reasoningDeltaText, _ = eventPayload["reasoning_content"].(string)
+								}
+								if reasoningDeltaText == "" {
+									reasoningDeltaText, _ = eventPayload["text"].(string)
+								}
+								if recordReasoningDeltaAndCheckLoop(reasoningDeltaText) {
+									break streamScanLoop
+								}
 							case "reasoning.end":
 								if !reasoningActive {
 									reasoningActive = true
@@ -4817,6 +4927,13 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 							if !enableMCP {
 								continue
 							}
+							if msgType == "tool_call.name" {
+								if nativeToolName, _ := chunk["tool_name"].(string); strings.TrimSpace(nativeToolName) != "" {
+									pendingNativeToolName = strings.TrimSpace(nativeToolName)
+								} else if nativeToolName, _ := chunk["tool"].(string); strings.TrimSpace(nativeToolName) != "" {
+									pendingNativeToolName = strings.TrimSpace(nativeToolName)
+								}
+							}
 							appendChatEvent("assistant", msgType, chunk)
 							emitStreamChunk(line)
 							continue
@@ -4854,25 +4971,54 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 							continue
 						} else if msgType == "error" {
 							appendChatEvent("system", msgType, chunk)
+							handledToolFormatError := false
 							if errPayload, ok := chunk["error"].(map[string]interface{}); ok {
 								errType, _ := errPayload["type"].(string)
 								errMessage, _ := errPayload["message"].(string)
 								if errType == "tool_format_generation_error" {
+									handledToolFormatError = true
 									discardStatefulResponseIDForTurn = true
 									lastResponseID = ""
 									sessionLastResponseID = ""
-									appendChatEvent("assistant", "tool_call.failure", map[string]interface{}{
-										"type":   "tool_call.failure",
-										"tool":   "Tool",
-										"reason": errMessage,
-									})
-									AddDebugTrace("chat", "tool.error", "Tool format generation error invalidated current stateful response chain", map[string]interface{}{
-										"turn":  turn,
-										"error": compactText(errMessage, 180),
-									})
+									if pendingNativeToolName != "" {
+										toolExecutedThisTurn = true
+										lastToolName = pendingNativeToolName
+										lastToolArgsStr = "{}"
+										lastSavedBufferForTurn = fullResponse
+										argsEvt := map[string]interface{}{
+											"type":      "tool_call.arguments",
+											"tool":      pendingNativeToolName,
+											"arguments": map[string]interface{}{},
+										}
+										argsBytes, _ := json.Marshal(argsEvt)
+										appendChatEvent("assistant", "tool_call.arguments", argsEvt)
+										emitStreamChunk(fmt.Sprintf("data: %s", string(argsBytes)))
+										AddDebugTrace("chat", "tool.error", "Recovered native tool format error by executing named tool with empty arguments", map[string]interface{}{
+											"turn":  turn,
+											"tool":  pendingNativeToolName,
+											"error": compactText(errMessage, 180),
+										})
+									} else {
+										needsCorrection = true
+										badContentCapture = fmt.Sprintf("Native tool call parse error: %s", errMessage)
+										failureEvt := map[string]interface{}{
+											"type":   "tool_call.failure",
+											"tool":   "Tool",
+											"reason": errMessage,
+										}
+										failureBytes, _ := json.Marshal(failureEvt)
+										appendChatEvent("assistant", "tool_call.failure", failureEvt)
+										emitStreamChunk(fmt.Sprintf("data: %s", string(failureBytes)))
+										AddDebugTrace("chat", "tool.error", "Tool format generation error queued for self-correction", map[string]interface{}{
+											"turn":  turn,
+											"error": compactText(errMessage, 180),
+										})
+									}
 								}
 							}
-							emitStreamChunk(line)
+							if !handledToolFormatError {
+								emitStreamChunk(line)
+							}
 							continue
 						} else {
 							appendChatEvent("system", msgType, chunk)
@@ -5111,6 +5257,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 											"total_elapsed_ms": requestElapsedMs(),
 										})
 									}
+									if recordReasoningDeltaAndCheckLoop(reasoningText) {
+										break streamScanLoop
+									}
 									appendChatEvent("assistant", "reasoning.delta", map[string]interface{}{
 										"type":             "reasoning.delta",
 										"content":          reasoningText,
@@ -5286,6 +5435,16 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				"turn":           turn,
 				"elapsed_ms":     time.Since(turnStart).Milliseconds(),
 				"reason":         compactText(nativeToolLoopMessage, 200),
+				"response_chars": len(fullResponse),
+			})
+			break
+		}
+
+		if reasoningRunawayDetected {
+			AddDebugTrace("chat", "turn.complete", "Turn stopped due to repetitive reasoning", map[string]interface{}{
+				"turn":           turn,
+				"elapsed_ms":     time.Since(turnStart).Milliseconds(),
+				"reason":         compactText(reasoningRunawayMessage, 200),
 				"response_chars": len(fullResponse),
 			})
 			break
