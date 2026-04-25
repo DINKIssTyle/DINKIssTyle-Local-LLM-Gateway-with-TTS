@@ -29,6 +29,46 @@ function detectMessageLoop(text) {
     };
 }
 
+function countRunes(value = '') {
+    return Array.from(String(value || '')).length;
+}
+
+function normalizeReasoningSegment(value = '') {
+    return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function detectRepeatedReasoningSection(text) {
+    const seen = new Map();
+    const addCandidate = (candidate) => {
+        const segment = normalizeReasoningSegment(candidate);
+        if (countRunes(segment) < 36) return null;
+        const key = segment.toLocaleLowerCase();
+        const nextCount = (seen.get(key) || 0) + 1;
+        seen.set(key, nextCount);
+        if (nextCount >= 4) {
+            return {
+                snippet: segment.slice(0, 160),
+                source: 'repeated-section'
+            };
+        }
+        return null;
+    };
+
+    for (const line of String(text || '').split(/\n+/)) {
+        const match = addCandidate(line);
+        if (match) return match;
+    }
+
+    const normalized = normalizeReasoningSegment(text);
+    const sentences = normalized.match(/[^.!?。！？]+[.!?。！？]+/g) || [];
+    for (const sentence of sentences) {
+        const match = addCandidate(sentence);
+        if (match) return match;
+    }
+
+    return null;
+}
+
 function detectReasoningLoop(text) {
     const normalized = getTail(text, 140).replace(/\s+/g, ' ').trim();
     if (normalized.length < 140) return null;
@@ -48,6 +88,17 @@ function detectReasoningLoop(text) {
             source: 'sentence-loop'
         };
     }
+
+    const sectionLoopMatch = normalized.match(/([\s\S]{240,}?)\1{2,}/);
+    if (sectionLoopMatch && sectionLoopMatch[1]) {
+        return {
+            snippet: sectionLoopMatch[1].slice(0, 160),
+            source: 'section-loop'
+        };
+    }
+
+    const repeatedSectionMatch = detectRepeatedReasoningSection(String(text || '').slice(-6000));
+    if (repeatedSectionMatch) return repeatedSectionMatch;
 
     const wordLoopMatch = normalized.match(/\b([^\s]{2,30})\b(?:\s+\1){11,}/i);
     if (wordLoopMatch && wordLoopMatch[1]) {
