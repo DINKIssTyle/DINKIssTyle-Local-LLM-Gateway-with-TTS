@@ -13,6 +13,7 @@ const LM_STUDIO_REPEAT_RECOVERY_PENALTY = 1.15;
 const LM_STUDIO_REPEAT_RECOVERY_TEMPERATURE_DELTA = 0.15;
 const DEFAULT_REASONING_OPTIONS = ['off', 'low', 'medium', 'high', 'on'];
 const STREAM_LOOP_DETECTION_TAIL_CHARS = 1200;
+const MAX_EMPTY_FINAL_ANSWER_RECOVERY_ATTEMPTS = 3;
 
 let config = {
     apiEndpoint: 'http://127.0.0.1:1234',
@@ -540,7 +541,11 @@ class SSEParser {
             }
 
             const dataStr = dataLines.join('\n').trim();
-            if (!dataStr || dataStr === '[DONE]') continue;
+            if (!dataStr) continue;
+            if (dataStr === '[DONE]') {
+                events.push({ type: 'stream.done' });
+                continue;
+            }
 
             try {
                 const parsed = JSON.parse(dataStr);
@@ -558,6 +563,13 @@ class SSEParser {
                     });
                 } else {
                     console.warn('[SSE] JSON Parse Error', e, dataStr);
+                    events.push({
+                        type: 'stream.parse_error',
+                        error: {
+                            message: t('status.unexpectedStop'),
+                            detail: dataStr.slice(0, 240)
+                        }
+                    });
                 }
             }
         }
@@ -584,6 +596,14 @@ class StreamState {
         this.streamRestartRequested = false;
         this.streamAborted = false;
         this.streamDetached = false;
+        this.sawDone = false;
+        this.serverCompleted = false;
+        this.hadReasoning = false;
+        this.hadToolActivity = false;
+        this.hadAssistantContent = false;
+        this.finalizeError = null;
+        this.lastServerCompletion = null;
+        this.toolEvents = [];
 
         this.useStreamingTTS = shouldAutoPlayTTSForRequest({
             fromVoiceInput: options.fromVoiceInput === true || AppState.input.pendingVoiceInputAutoTTS
@@ -601,6 +621,7 @@ class StreamState {
  */
 function handleChatEndEvent(json, ctx) {
     if (AppState.ui.progress.active) hideProgressDock();
+    ctx.serverCompleted = true;
     
     if (json.result.response_id) {
         AppState.chat.stateful.lastResponseId = json.result.response_id;
@@ -644,6 +665,27 @@ function handleChatEndEvent(json, ctx) {
     }
 }
 
+function buildStreamRecoveryContext(ctx) {
+    const reasoningText = String(ctx?.reasoningBuffer || '')
+        .replace(/<\/?think>/g, '')
+        .trim();
+    const toolEvents = Array.isArray(ctx?.toolEvents) ? ctx.toolEvents : [];
+    const completion = ctx?.lastServerCompletion && typeof ctx.lastServerCompletion === 'object'
+        ? ctx.lastServerCompletion
+        : null;
+    return {
+        partialAnswer: sanitizeAssistantRenderText(ctx?.fullText || '').trim(),
+        reasoning: reasoningText,
+        toolEvents,
+        completion: completion ? {
+            responseChars: Number(completion.response_chars || completion.final_assistant_chars || 0),
+            responseId: String(completion.response_id || ''),
+            elapsedMs: Number(completion.elapsed_ms || completion.total_elapsed_ms || 0),
+            tool: completion.tool || null
+        } : null
+    };
+}
+
 /**
  * handleModelLoadEvent: Process model loading progress
  */
@@ -682,6 +724,9 @@ function handleErrorEvent(json, ctx) {
 async function handleContentAddition(contentToAdd, speechToAdd, ctx) {
     hideProgressDock();
     ctx.fullText += contentToAdd;
+    if (stripHiddenAssistantProtocolText(ctx.fullText).trim()) {
+        ctx.hadAssistantContent = true;
+    }
 
     // Loop detection
     if (!ctx.loopDetected && ctx.fullText.length >= 100) {
@@ -772,6 +817,19 @@ function handleSpeechAddition(speechToAdd, ctx) {
 
 async function handleStreamEvent(json, ctx) {
     const elementId = ctx.elementId;
+    const eventType = typeof json.type === 'string' ? json.type : '';
+
+    if (eventType === 'stream.done') {
+        ctx.sawDone = true;
+        return;
+    }
+
+    if (eventType === 'stream.parse_error') {
+        const errorMsg = extractRuntimeErrorMessage(json.error) || t('status.unexpectedStop');
+        const parseError = new Error(errorMsg);
+        parseError.code = 'STREAM_PARSE_ERROR';
+        throw parseError;
+    }
 
     if (json.response_id) { AppState.chat.stateful.lastResponseId = json.response_id; }
 
@@ -788,6 +846,7 @@ async function handleStreamEvent(json, ctx) {
         const message = json.choices[0].message || {};
 
         if (delta.reasoning_content) {
+            ctx.hadReasoning = true;
             if (!ctx.currentlyReasoning) {
                 ctx.reasoningBuffer += '<think>';
                 ctx.currentlyReasoning = true;
@@ -823,17 +882,19 @@ async function handleStreamEvent(json, ctx) {
             }
         }
     }
-    else if (json.type === 'message.delta' && json.content) {
+    else if (eventType === 'message.delta' && json.content) {
         contentToAdd = json.content;
         if (!ctx.currentlyReasoning) speechToAdd = json.content;
     }
-    else if (json.type === 'reasoning.start') {
+    else if (eventType === 'reasoning.start') {
+        ctx.hadReasoning = true;
         if (!ctx.currentlyReasoning) { ctx.reasoningBuffer += '<think>'; ctx.currentlyReasoning = true; }
         ctx.reasoningSource = 'sse';
         const startElapsed = Number.isFinite(Number(json.total_elapsed_ms || json.elapsed_ms)) ? Number(json.total_elapsed_ms || json.elapsed_ms) : null;
         showReasoningStatus(elementId, '...', false, startElapsed);
     }
-    else if (json.type === 'reasoning.delta' && json.content) {
+    else if (eventType === 'reasoning.delta' && json.content) {
+        ctx.hadReasoning = true;
         ctx.reasoningBuffer += json.content;
         await throwIfReasoningRunawayRepetition(ctx);
         ctx.currentlyReasoning = true;
@@ -842,7 +903,8 @@ async function handleStreamEvent(json, ctx) {
         AppState.session.replay.reasoningBuffers.set(elementId, ctx.reasoningBuffer);
         showReasoningStatus(elementId, ctx.reasoningBuffer, false, elapsedMs);
     }
-    else if (json.type === 'reasoning.end') {
+    else if (eventType === 'reasoning.end') {
+        ctx.hadReasoning = true;
         ctx.reasoningBuffer += '</think>\n';
         ctx.currentlyReasoning = false;
         const elapsedMs = Number.isFinite(Number(json.total_elapsed_ms || json.elapsed_ms)) ? Number(json.total_elapsed_ms || json.elapsed_ms) : null;
@@ -850,47 +912,85 @@ async function handleStreamEvent(json, ctx) {
         AppState.session.replay.reasoningBuffers.set(elementId, ctx.reasoningBuffer);
         finalizeReasoningStatus(elementId, 'done', ctx.reasoningBuffer, elapsedMs);
     }
-    else if (json.type.startsWith('tool_call.')) {
-        if (json.type === 'tool_call.start') {
+    else if (eventType.startsWith('tool_call.')) {
+        ctx.hadToolActivity = true;
+        ctx.toolEvents.push({
+            type: eventType,
+            tool: json.tool || json.tool_name || ctx.lastToolCallHtml || '',
+            arguments: json.arguments || null,
+            reason: json.reason || ''
+        });
+        if (eventType === 'tool_call.start') {
             ctx.lastToolCallHtml = json.tool || 'Tool';
             setToolCardState(elementId, 'running', '', null, json.tool || 'Tool');
-        } else if (json.type === 'tool_call.name') {
+        } else if (eventType === 'tool_call.name') {
             ctx.lastToolCallHtml = json.tool_name || json.tool || ctx.lastToolCallHtml || 'Tool';
             setToolCardState(elementId, 'running', '', null, ctx.lastToolCallHtml);
-        } else if (json.type === 'tool_call.arguments') {
+        } else if (eventType === 'tool_call.arguments') {
             setToolCardState(elementId, 'running', '', json.arguments, json.tool || 'Tool');
-        } else if (json.type === 'tool_call.success') {
+        } else if (eventType === 'tool_call.success') {
             setToolCardState(elementId, 'success', t('tool.executionFinished'));
-        } else if (json.type === 'tool_call.failure') {
+        } else if (eventType === 'tool_call.failure') {
             setToolCardState(elementId, 'failure', json.reason || t('tool.unknownError'));
         }
     }
-    else if (json.type === 'chat.end') { handleChatEndEvent(json, ctx); }
-    else if (json.type === 'prompt_processing.progress') { renderProgressDock(t('progress.processingPrompt'), json.progress * 100, 'prompt-processing', false); }
-    else if (json.type.startsWith('model_load.')) { handleModelLoadEvent(json, ctx); }
-    else if (json.type === 'error') { handleErrorEvent(json, ctx); }
+    else if (eventType === 'chat.end') { handleChatEndEvent(json, ctx); }
+    else if (eventType === 'request.complete') {
+        ctx.serverCompleted = true;
+        ctx.lastServerCompletion = json;
+        if (typeof json.final_assistant_content === 'string' && json.final_assistant_content.trim()) {
+            ctx.fullText = json.final_assistant_content;
+            ctx.hadAssistantContent = true;
+        }
+    }
+    else if (eventType === 'prompt_processing.progress') { renderProgressDock(t('progress.processingPrompt'), json.progress * 100, 'prompt-processing', false); }
+    else if (eventType.startsWith('model_load.')) { handleModelLoadEvent(json, ctx); }
+    else if (eventType === 'error') { handleErrorEvent(json, ctx); }
 
     if (contentToAdd) {
         await handleContentAddition(contentToAdd, speechToAdd, ctx);
     }
 }
 
-function finalizeStream(ctx) {
+function finalizeStream(ctx, upstreamError = null) {
     if (AppState.ui.progress.active) hideProgressDock();
 
     if (!ctx.streamAborted && !ctx.streamDetached && !ctx.streamRestartRequested) {
-        if (ctx.currentlyReasoning) {
+        const historyContent = sanitizeAssistantRenderText(ctx.fullText).trim();
+        const missingTerminalSignal = !upstreamError && !ctx.sawDone && !ctx.serverCompleted;
+        const noFinalAnswer = !upstreamError && !historyContent && (ctx.hadReasoning || ctx.hadToolActivity || ctx.serverCompleted);
+        const finalizationMessage = missingTerminalSignal
+            ? t('status.unexpectedStop')
+            : noFinalAnswer
+                ? t('status.noFinalAnswer')
+                : '';
+
+        if (upstreamError || finalizationMessage) {
+            ctx.finalizeError = upstreamError || new Error(finalizationMessage);
+            if (!ctx.finalizeError.code) {
+                ctx.finalizeError.code = noFinalAnswer ? 'NO_FINAL_ANSWER' : 'STREAM_INCOMPLETE';
+            }
+            ctx.finalizeError.recoveryContext = buildStreamRecoveryContext(ctx);
+            const suppressRecoveryUI = ctx.options?.suppressRecoverableFinalAnswerUI
+                && ['NO_FINAL_ANSWER', 'STREAM_INCOMPLETE', 'STREAM_PARSE_ERROR'].includes(ctx.finalizeError.code);
+            if (!suppressRecoveryUI) {
+                finalizeAssistantStatusCards(ctx.elementId, 'failed', finalizationMessage || upstreamError?.message || t('status.failed'));
+                if (!historyContent) {
+                    updateMessageContent(ctx.elementId, `**Error:** ${finalizationMessage || upstreamError?.message || t('status.failed')}`);
+                }
+            }
+        } else if (ctx.currentlyReasoning) {
             finalizeReasoningStatus(ctx.elementId, 'failed', t('status.unexpectedStop'));
-        }
-        if (getRunningToolCards(ctx.elementId).length > 0) {
+        } else if (getRunningToolCards(ctx.elementId).length > 0) {
             finalizeAssistantStatusCards(ctx.elementId, 'failed', t('status.failed'));
         }
     }
 
     const historyContent = sanitizeAssistantRenderText(ctx.fullText).trim();
     const ownershipReserved = AppState.session.localStreamOwnershipReleased;
+    const hasFinalizationFailure = !!ctx.finalizeError;
 
-    if (historyContent && !ctx.streamDetached && !ctx.streamRestartRequested && !ownershipReserved) {
+    if (historyContent && !hasFinalizationFailure && !ctx.streamDetached && !ctx.streamRestartRequested && !ownershipReserved) {
         upsertChatMessageState({ role: 'assistant', content: historyContent, turnId: ctx.turnId });
         if (config.llmMode === 'stateful') {
             AppState.chat.stateful.turnCount += 1;
@@ -902,7 +1002,7 @@ function finalizeStream(ctx) {
         finalizeStreamingTTS(ctx.speechBuffer);
     }
 
-    if (historyContent && !ctx.streamRestartRequested && !ownershipReserved) {
+    if (historyContent && !hasFinalizationFailure && !ctx.streamRestartRequested && !ownershipReserved) {
         finalizeMessageContent(ctx.elementId, historyContent);
         setAssistantActionBarReady(ctx.elementId);
     }
@@ -5666,6 +5766,51 @@ function buildRepeatRecoveryOverrides() {
     return overrides;
 }
 
+function compactRecoveryText(value, limit = 1800) {
+    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    if (text.length <= limit) return text;
+    return `${text.slice(0, Math.floor(limit * 0.35))}\n...\n${text.slice(-Math.floor(limit * 0.65))}`;
+}
+
+function buildFinalAnswerRecoveryPrompt(originalText, recoveryHistory = []) {
+    const attempts = Array.isArray(recoveryHistory) ? recoveryHistory : [];
+    const sections = [
+        String(originalText || '').trim(),
+        '',
+        'Previous generation attempts did not produce a visible final answer. Use the notes below only as recovery context, then answer the original user request directly in the final response. Do not continue tool use or hidden reasoning unless it is strictly necessary.'
+    ];
+
+    attempts.forEach((entry, index) => {
+        const context = entry?.context || {};
+        sections.push('', `Recovery context from failed attempt ${index + 1}:`);
+        if (context.partialAnswer) {
+            sections.push(`Partial answer: ${compactRecoveryText(context.partialAnswer, 1200)}`);
+        }
+        if (context.reasoning) {
+            sections.push(`Interrupted reasoning: ${compactRecoveryText(context.reasoning, 2000)}`);
+        }
+        if (Array.isArray(context.toolEvents) && context.toolEvents.length > 0) {
+            const summarizedTools = context.toolEvents.slice(-8).map((toolEvent) => ({
+                type: toolEvent.type || '',
+                tool: toolEvent.tool || '',
+                arguments: toolEvent.arguments || null,
+                reason: toolEvent.reason || ''
+            }));
+            sections.push(`Tool activity: ${compactRecoveryText(JSON.stringify(summarizedTools), 1400)}`);
+        }
+        if (context.completion?.tool) {
+            sections.push(`Last tool summary: ${compactRecoveryText(JSON.stringify(context.completion.tool), 1000)}`);
+        }
+    });
+
+    sections.push('', 'Now provide the final answer to the original request.');
+    return sections.filter((part) => part !== null && part !== undefined).join('\n');
+}
+
+function isRecoverableEmptyFinalAnswerError(error) {
+    return ['NO_FINAL_ANSWER', 'STREAM_INCOMPLETE', 'STREAM_PARSE_ERROR'].includes(String(error?.code || ''));
+}
+
 function buildChatPayload({ text, currentImage, temperatureOverride = null, repeatPenaltyOverride = null } = {}) {
     const systemMsg = { role: 'system', content: getBaseSystemPrompt() };
     const configuredTemperature = getConfiguredTemperature();
@@ -5744,6 +5889,20 @@ function buildChatPayload({ text, currentImage, temperatureOverride = null, repe
         }
         return { role: m.role, content };
     });
+    const overrideUserText = String(text || '').trim();
+    if (overrideUserText) {
+        for (let i = payloadHistory.length - 1; i >= 0; i -= 1) {
+            if (payloadHistory[i]?.role !== 'user') continue;
+            if (Array.isArray(payloadHistory[i].content)) {
+                const textPart = payloadHistory[i].content.find((part) => part?.type === 'text');
+                if (textPart) textPart.text = overrideUserText;
+                else payloadHistory[i].content.unshift({ type: 'text', text: overrideUserText });
+            } else {
+                payloadHistory[i].content = overrideUserText;
+            }
+            break;
+        }
+    }
 
     payload = {
         model: config.model,
@@ -5879,9 +6038,14 @@ async function sendMessage(options = {}) {
     let assistantContent = '';
     try {
         let retryOverrides = null;
-        for (let attempt = 0; attempt < 2; attempt++) {
+        let repeatRecoveryApplied = false;
+        const finalAnswerRecoveryHistory = [];
+        for (let attempt = 0; attempt < MAX_EMPTY_FINAL_ANSWER_RECOVERY_ATTEMPTS + 2; attempt++) {
+            const effectiveText = finalAnswerRecoveryHistory.length > 0
+                ? buildFinalAnswerRecoveryPrompt(text, finalAnswerRecoveryHistory)
+                : text;
             const payload = buildChatPayload({
-                text,
+                text: effectiveText,
                 currentImage,
                 temperatureOverride: retryOverrides?.temperature ?? null,
                 repeatPenaltyOverride: retryOverrides?.repeatPenalty ?? null
@@ -5889,6 +6053,9 @@ async function sendMessage(options = {}) {
 
             console.log('=== LLM Request Payload ===');
             console.log('Attempt:', attempt + 1);
+            if (finalAnswerRecoveryHistory.length > 0) {
+                console.log('Final answer recovery attempt:', finalAnswerRecoveryHistory.length);
+            }
             if (Object.prototype.hasOwnProperty.call(payload, 'temperature')) {
                 console.log('Temperature:', payload.temperature);
             } else {
@@ -5900,21 +6067,46 @@ async function sendMessage(options = {}) {
 
             try {
                 assistantContent = await streamResponse(payload, assistantId, turnId, {
-                    repeatRecoveryApplied: attempt > 0,
-                    fromVoiceInput: !!options.fromVoiceInput
+                    repeatRecoveryApplied,
+                    fromVoiceInput: !!options.fromVoiceInput,
+                    suppressRecoverableFinalAnswerUI: finalAnswerRecoveryHistory.length < MAX_EMPTY_FINAL_ANSWER_RECOVERY_ATTEMPTS
                 });
                 break;
             } catch (e) {
                 if (e?.code === 'LMSTUDIO_RUNAWAY_REPETITION'
                     && config.llmMode === 'stateful'
-                    && attempt === 0) {
+                    && !repeatRecoveryApplied) {
                     retryOverrides = buildRepeatRecoveryOverrides();
+                    repeatRecoveryApplied = true;
                     AppState.session.retryRecoveryInProgress = true;
                     await stopGeneration({ preserveAssistantUI: true });
                     updateMessageContent(assistantId, '');
                     finalizeReasoningStatus(assistantId, 'failed', t('warning.repeatRetrying'));
                     hideProgressDock();
                     continue;
+                }
+                if (isRecoverableEmptyFinalAnswerError(e)
+                    && finalAnswerRecoveryHistory.length < MAX_EMPTY_FINAL_ANSWER_RECOVERY_ATTEMPTS) {
+                    finalAnswerRecoveryHistory.push({
+                        message: e.message || t('status.unexpectedStop'),
+                        code: e.code,
+                        context: e.recoveryContext || {}
+                    });
+                    AppState.session.retryRecoveryInProgress = true;
+                    updateMessageContent(assistantId, '');
+                    hideProgressDock();
+                    AppState.ui.activeStreamingMessageId = assistantId;
+                    AppState.chat.activeLocalTurnId = turnId;
+                    AppState.chat.activeLocalAssistantId = assistantId;
+                    if (usesStatefulConversationContext()) {
+                        AppState.chat.stateful.lastResponseId = null;
+                        AppState.chat.stateful.pendingResetReason = 'empty_final_answer_retry';
+                    }
+                    continue;
+                }
+                if (isRecoverableEmptyFinalAnswerError(e)
+                    && finalAnswerRecoveryHistory.length >= MAX_EMPTY_FINAL_ANSWER_RECOVERY_ATTEMPTS) {
+                    e.message = t('status.finalAnswerRecoveryFailed');
                 }
                 throw e;
             }
@@ -6162,6 +6354,7 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
     const reader = response.body.getReader();
     const parser = new SSEParser();
     const ctx = new StreamState(elementId, turnId, streamOptions);
+    let streamError = null;
 
     try {
         while (true) {
@@ -6181,14 +6374,17 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
             ctx.streamDetached = true;
             err.streamDetached = true;
             console.warn('Stream detached while server may still be running:', err);
-            throw err;
+            streamError = err;
         } else {
             console.error('Stream Error:', err);
-            throw err;
+            streamError = err;
         }
-    } finally {
-        return finalizeStream(ctx);
     }
+
+    const finalizedContent = finalizeStream(ctx, streamError);
+    if (streamError) throw streamError;
+    if (ctx.finalizeError) throw ctx.finalizeError;
+    return finalizedContent;
 }
 
 function createMessageElement(msg) {

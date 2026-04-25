@@ -5742,6 +5742,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		"turn_id":    clientTurnID,
 	})
 	requestCompletePayload := map[string]interface{}{
+		"type":                    "request.complete",
 		"response_chars":          len(fullResponse),
 		"response_id":             sessionLastResponseID,
 		"mode":                    llmMode,
@@ -5759,6 +5760,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		requestCompletePayload["tool"] = finalToolPayload
 	}
 	appendChatEvent("assistant", "request.complete", requestCompletePayload)
+	if requestCompleteBytes, err := json.Marshal(requestCompletePayload); err == nil {
+		emitStreamChunk(fmt.Sprintf("data: %s", string(requestCompleteBytes)))
+	}
 	AddDebugTrace("chat", "request.complete", "Chat request finished", map[string]interface{}{
 		"user":           userID,
 		"elapsed_ms":     requestElapsedMs(),
