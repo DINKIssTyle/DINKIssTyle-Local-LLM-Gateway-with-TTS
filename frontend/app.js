@@ -753,6 +753,16 @@ function handleChatEndEvent(json, ctx) {
     // Reasoning extraction
     const reasoningText = extractReasoningContentFromPayload(payload);
     if (reasoningText) {
+        const reasoningLoop = detectRunawayRepetition(reasoningText);
+        if (reasoningLoop) {
+            ctx.loopDetected = true;
+            ctx.streamRestartRequested = true;
+            const repetitionError = new Error(config.llmMode === 'stateful' && !ctx.options.repeatRecoveryApplied ? t('warning.repeatRetrying') : t('warning.repeatStopped'));
+            repetitionError.code = 'LMSTUDIO_RUNAWAY_REPETITION';
+            repetitionError.phase = 'reasoning';
+            repetitionError.snippet = reasoningLoop.snippet;
+            throw repetitionError;
+        }
         AppState.session.replay.reasoningBuffers.set(ctx.elementId, reasoningText);
         const duration = Number.isFinite(Number(payload.total_elapsed_ms || payload.elapsed_ms)) ? Number(payload.total_elapsed_ms || payload.elapsed_ms) : null;
         showReasoningStatus(ctx.elementId, reasoningText, false, duration);
@@ -935,7 +945,15 @@ async function handleStreamEvent(json, ctx) {
 
     if (json.error) {
         const errorMsg = getLocalizedRuntimeErrorMessage(json.error) || extractRuntimeErrorMessage(json.error) || t('tool.unknownError');
-        throw new Error(errorMsg);
+        const runtimeError = new Error(errorMsg);
+        if (json.code) runtimeError.code = String(json.code);
+        if (json.phase) runtimeError.phase = String(json.phase);
+        if (json.snippet) runtimeError.snippet = String(json.snippet);
+        if (runtimeError.code === 'LMSTUDIO_RUNAWAY_REPETITION') {
+            ctx.loopDetected = true;
+            ctx.streamRestartRequested = true;
+        }
+        throw runtimeError;
     }
 
     let contentToAdd = '';
@@ -6287,6 +6305,46 @@ async function stopGeneration({ preserveAssistantUI = false } = {}) {
     stopAllAudio();
 }
 
+function countReasoningRunes(value = '') {
+    return Array.from(String(value || '')).length;
+}
+
+function normalizeReasoningLoopSegment(value = '') {
+    return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function detectRepeatedReasoningSection(text = '') {
+    const seen = new Map();
+    const addCandidate = (candidate) => {
+        const segment = normalizeReasoningLoopSegment(candidate);
+        if (countReasoningRunes(segment) < 36) return null;
+        const key = segment.toLocaleLowerCase();
+        const nextCount = (seen.get(key) || 0) + 1;
+        seen.set(key, nextCount);
+        if (nextCount >= 4) {
+            return {
+                snippet: segment.slice(0, 160),
+                source: 'repeated-section'
+            };
+        }
+        return null;
+    };
+
+    for (const line of String(text || '').split(/\n+/)) {
+        const match = addCandidate(line);
+        if (match) return match;
+    }
+
+    const normalized = normalizeReasoningLoopSegment(text);
+    const sentences = normalized.match(/[^.!?。！？]+[.!?。！？]+/g) || [];
+    for (const sentence of sentences) {
+        const match = addCandidate(sentence);
+        if (match) return match;
+    }
+
+    return null;
+}
+
 function detectRunawayRepetition(text = '') {
     const normalized = getLoopDetectionTail(text, 140).replace(/\s+/g, ' ').trim();
     if (normalized.length < 140) return null;
@@ -6306,6 +6364,17 @@ function detectRunawayRepetition(text = '') {
             source: 'sentence-loop'
         };
     }
+
+    const sectionLoopMatch = normalized.match(/([\s\S]{240,}?)\1{2,}/);
+    if (sectionLoopMatch && sectionLoopMatch[1]) {
+        return {
+            snippet: sectionLoopMatch[1].slice(0, 160),
+            source: 'section-loop'
+        };
+    }
+
+    const repeatedSectionMatch = detectRepeatedReasoningSection(String(text || '').slice(-6000));
+    if (repeatedSectionMatch) return repeatedSectionMatch;
 
     const wordLoopMatch = normalized.match(/\b([^\s]{2,30})\b(?:\s+\1){11,}/i);
     if (wordLoopMatch && wordLoopMatch[1]) {

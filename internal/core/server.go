@@ -168,14 +168,22 @@ func lastRunes(input string, limit int) string {
 	return strings.TrimSpace(string(runes[len(runes)-limit:]))
 }
 
+var reasoningLoopSentencePattern = regexp.MustCompile(`[^.!?。！？]+[.!?。！？]+`)
+
 func detectReasoningRunawayRepetition(text string) (string, string, bool) {
+	sectionText := text
+	sectionRunes := []rune(sectionText)
+	if len(sectionRunes) > 8000 {
+		sectionText = string(sectionRunes[len(sectionRunes)-8000:])
+	}
+
 	normalized := strings.Join(strings.Fields(text), " ")
 	runes := []rune(normalized)
 	if len(runes) < 140 {
 		return "", "", false
 	}
-	if len(runes) > 1200 {
-		runes = runes[len(runes)-1200:]
+	if len(runes) > 6000 {
+		runes = runes[len(runes)-6000:]
 		normalized = string(runes)
 	}
 
@@ -184,6 +192,12 @@ func detectReasoningRunawayRepetition(text string) (string, string, bool) {
 	}
 	if snippet, ok := detectRepeatedSuffixRunes(runes, 50, 260, 6); ok {
 		return compactText(snippet, 120), "long-chunk-loop", true
+	}
+	if snippet, ok := detectRepeatedSuffixRunes(runes, 240, 1200, 3); ok {
+		return compactText(snippet, 160), "section-loop", true
+	}
+	if snippet, ok := detectRepeatedReasoningSection(sectionText); ok {
+		return compactText(snippet, 160), "repeated-section", true
 	}
 
 	words := strings.Fields(normalized)
@@ -206,6 +220,36 @@ func detectReasoningRunawayRepetition(text string) (string, string, bool) {
 	return "", "", false
 }
 
+func detectRepeatedReasoningSection(text string) (string, bool) {
+	seen := make(map[string]int)
+	addCandidate := func(candidate string) (string, bool) {
+		segment := strings.Join(strings.Fields(candidate), " ")
+		if len([]rune(segment)) < 36 {
+			return "", false
+		}
+		key := strings.ToLower(segment)
+		seen[key]++
+		if seen[key] >= 4 {
+			return segment, true
+		}
+		return "", false
+	}
+
+	for _, line := range strings.Split(text, "\n") {
+		if snippet, ok := addCandidate(line); ok {
+			return snippet, true
+		}
+	}
+
+	for _, sentence := range reasoningLoopSentencePattern.FindAllString(strings.Join(strings.Fields(text), " "), -1) {
+		if snippet, ok := addCandidate(sentence); ok {
+			return snippet, true
+		}
+	}
+
+	return "", false
+}
+
 func detectRepeatedSuffixRunes(runes []rune, minUnit, maxUnit, minRepeats int) (string, bool) {
 	if minUnit <= 0 || maxUnit < minUnit || minRepeats < 2 {
 		return "", false
@@ -225,6 +269,14 @@ func detectRepeatedSuffixRunes(runes []rune, minUnit, maxUnit, minRepeats int) (
 		}
 	}
 	return "", false
+}
+
+func detectReasoningPayloadRunawayRepetition(payloadMap map[string]interface{}) (string, string, bool) {
+	reasoningContent := extractReasoningContent(payloadMap)
+	if strings.TrimSpace(reasoningContent) == "" {
+		return "", "", false
+	}
+	return detectReasoningRunawayRepetition(reasoningContent)
 }
 
 func normalizeRelaxedToolArgsJSON(raw string) (string, bool) {
@@ -4488,35 +4540,42 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		}
 	}
 
+	emitReasoningRunaway := func(snippet, source string) bool {
+		if strings.TrimSpace(snippet) == "" {
+			return false
+		}
+		reasoningRunawayDetected = true
+		reasoningRunawayMessage = fmt.Sprintf("LMSTUDIO_RUNAWAY_REPETITION: repetitive reasoning detected (%s)", source)
+		appendChatEvent("assistant", "error", map[string]interface{}{
+			"type":             "error",
+			"error":            reasoningRunawayMessage,
+			"code":             "LMSTUDIO_RUNAWAY_REPETITION",
+			"phase":            "reasoning",
+			"snippet":          snippet,
+			"total_elapsed_ms": requestElapsedMs(),
+		})
+		if jsonBytes, err := json.Marshal(map[string]interface{}{
+			"error":   reasoningRunawayMessage,
+			"code":    "LMSTUDIO_RUNAWAY_REPETITION",
+			"phase":   "reasoning",
+			"snippet": snippet,
+		}); err == nil {
+			emitStreamChunk(fmt.Sprintf("data: %s", string(jsonBytes)))
+		}
+		AddDebugTrace("chat", "reasoning.loop", "Stopped stream due to repetitive reasoning", map[string]interface{}{
+			"snippet": compactText(snippet, 160),
+			"source":  source,
+		})
+		return true
+	}
+
 	recordReasoningDeltaAndCheckLoop := func(content string) bool {
 		if content == "" {
 			return false
 		}
 		reasoningResponse += content
 		if snippet, source, ok := detectReasoningRunawayRepetition(reasoningResponse); ok {
-			reasoningRunawayDetected = true
-			reasoningRunawayMessage = fmt.Sprintf("LMSTUDIO_RUNAWAY_REPETITION: repetitive reasoning detected (%s)", source)
-			appendChatEvent("assistant", "error", map[string]interface{}{
-				"type":             "error",
-				"error":            reasoningRunawayMessage,
-				"code":             "LMSTUDIO_RUNAWAY_REPETITION",
-				"phase":            "reasoning",
-				"snippet":          snippet,
-				"total_elapsed_ms": requestElapsedMs(),
-			})
-			if jsonBytes, err := json.Marshal(map[string]interface{}{
-				"error":   reasoningRunawayMessage,
-				"code":    "LMSTUDIO_RUNAWAY_REPETITION",
-				"phase":   "reasoning",
-				"snippet": snippet,
-			}); err == nil {
-				emitStreamChunk(fmt.Sprintf("data: %s", string(jsonBytes)))
-			}
-			AddDebugTrace("chat", "reasoning.loop", "Stopped stream due to repetitive reasoning", map[string]interface{}{
-				"snippet": compactText(snippet, 160),
-				"source":  source,
-			})
-			return true
+			return emitReasoningRunaway(snippet, source)
 		}
 		return false
 	}
@@ -4939,6 +4998,10 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 							continue
 						} else if msgType == "chat.end" || msgType == "message.end" {
 							log.Printf("[handleChat-DEBUG] Custom End Signal Received: %s", msgType)
+							if snippet, source, ok := detectReasoningPayloadRunawayRepetition(chunk); ok {
+								emitReasoningRunaway(snippet, source)
+								break streamScanLoop
+							}
 
 							// Capture response_id for chaining in stateful mode.
 							if strings.TrimSpace(dataStr) != "" {

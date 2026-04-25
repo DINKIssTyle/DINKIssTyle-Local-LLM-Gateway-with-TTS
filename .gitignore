@@ -8,3 +8,4 @@ dinkisstyle-chat-test
 dinkisstyle-chat-test-context
 note/
 all_funcs.txt
+internal/core/repetition_detection_test.go
