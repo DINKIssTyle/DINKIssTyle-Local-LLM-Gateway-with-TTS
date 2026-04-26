@@ -445,6 +445,7 @@
                 global.cancelAnimationFrame(pendingTurnFocusFrame);
                 pendingTurnFocusFrame = 0;
             }
+            clearTurnFocusSpacer();
             if (getStreamingScrollMode?.() === 'label-top') {
                 shouldAutoScroll = false;
                 lockScrollToLatest = false;
@@ -459,6 +460,8 @@
                 autoScrollResizeObserver.disconnect();
                 autoScrollResizeObserver = null;
             }
+            syncChatScrollMetrics();
+            updateScrollToBottomButton();
         }
 
         function jumpToLatestMessages() {
