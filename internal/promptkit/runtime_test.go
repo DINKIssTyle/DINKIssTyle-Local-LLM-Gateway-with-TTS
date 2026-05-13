@@ -128,6 +128,21 @@ func TestBuildRuntimeInstructionsIncludesMemoryAndEnvironment(t *testing.T) {
 	if !strings.Contains(got, "Mention only the minimum profile details needed for the answer. Do not list or volunteer unrelated profile facts.") {
 		t.Fatalf("expected minimal user profile disclosure guardrail in runtime instructions")
 	}
+	if !strings.Contains(got, "subjectless, pronoun-only, or elliptical user messages as follow-ups") {
+		t.Fatalf("expected subjectless follow-up continuity guardrail in runtime instructions")
+	}
+	if !strings.Contains(got, "especially in Korean where omitted subjects are normal") {
+		t.Fatalf("expected Korean omitted-subject continuity guidance in runtime instructions")
+	}
+	if !strings.Contains(got, "Do not ask what the subject is merely because the user omitted it") {
+		t.Fatalf("expected anti-clarification guardrail for omitted subjects")
+	}
+	if !strings.Contains(got, "Web evidence budget: usually make 1 web/search tool call; make at most 3 total web evidence calls") {
+		t.Fatalf("expected web evidence budget guidance in runtime instructions")
+	}
+	if !strings.Contains(got, "Never present weak, conflicting, or off-topic web evidence as fact") {
+		t.Fatalf("expected low-quality web evidence guardrail in runtime instructions")
+	}
 }
 
 func TestBuildRuntimeInstructionsAddsGemmaSpecificRules(t *testing.T) {
@@ -166,5 +181,31 @@ func TestBuildRuntimeInstructionsOmitsToolGuidanceWhenNativeIntegrationsDisabled
 	}
 	if !strings.Contains(got, "Mention only the minimum profile details needed for the answer. Do not list or volunteer unrelated profile facts.") {
 		t.Fatalf("expected passive minimal user profile disclosure guardrail in runtime instructions")
+	}
+	if !strings.Contains(got, "subjectless, pronoun-only, or elliptical user messages as follow-ups") {
+		t.Fatalf("expected passive subjectless follow-up continuity guardrail")
+	}
+	if !strings.Contains(got, "Do not ask what the subject is merely because the user omitted it") {
+		t.Fatalf("expected passive anti-clarification guardrail for omitted subjects")
+	}
+	if strings.Contains(got, "Web evidence budget") {
+		t.Fatalf("expected passive memory-only instructions to omit tool budget guidance")
+	}
+}
+
+func TestBuildRuntimeInstructionsIncludesContinuityRulesWithActiveContext(t *testing.T) {
+	got := BuildRuntimeInstructions(RuntimeInstructionsInput{
+		ModelID:               "test-model",
+		UseNativeIntegrations: true,
+		RecentContext:         "Turn -1\nUser: 이 파일 고쳤어?\nAssistant: app.js를 수정했습니다.",
+		ActiveContext:         "app.js 관련 메모리",
+		RetrievalInjected:     true,
+	})
+
+	if !strings.Contains(got, "subjectless, pronoun-only, or elliptical user messages as follow-ups") {
+		t.Fatalf("expected active-context branch to keep subjectless follow-up guidance")
+	}
+	if !strings.Contains(got, "Ask a clarifying question only when RECENT CONTEXT contains multiple plausible referents") {
+		t.Fatalf("expected active-context branch to limit clarification questions")
 	}
 }

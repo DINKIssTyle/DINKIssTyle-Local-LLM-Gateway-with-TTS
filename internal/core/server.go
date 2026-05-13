@@ -78,6 +78,12 @@ const (
 	recentContextOlderUserBudget    = 220
 	recentContextOlderAssistBudget  = 300
 	recentContextStatefulBudget     = 900
+	webEvidenceToolBudget           = 3
+	webSearchProviderBudget         = 2
+	bufferedSourceReadBudget        = 2
+	deepWebEvidenceToolBudget       = 8
+	deepWebSearchProviderBudget     = 4
+	deepBufferedSourceReadBudget    = 4
 )
 
 type savedTurnTitleTask struct {
@@ -1433,6 +1439,71 @@ func compactToolSnapshotDetail(toolName string, args interface{}, summary string
 		}
 	}
 	return compactText(strings.TrimSpace(summary), 220)
+}
+
+func isWebEvidenceTool(toolName string) bool {
+	switch strings.TrimSpace(toolName) {
+	case "search_web", "naver_search", "namu_wiki", "read_web_page", "read_buffered_source":
+		return true
+	default:
+		return false
+	}
+}
+
+func isWebSearchProviderTool(toolName string) bool {
+	switch strings.TrimSpace(toolName) {
+	case "search_web", "naver_search", "namu_wiki":
+		return true
+	default:
+		return false
+	}
+}
+
+func totalToolUsageFor(tools map[string]int, predicate func(string) bool) int {
+	total := 0
+	for toolName, count := range tools {
+		if predicate(toolName) {
+			total += count
+		}
+	}
+	return total
+}
+
+func webEvidenceBudgetMessage(total int) string {
+	if total <= 0 {
+		total = webEvidenceToolBudget
+	}
+	return fmt.Sprintf("Web evidence budget reached after %d tool calls. Stop searching or reading more sources in this answer. If the evidence already returned is strong enough, answer from it. If it is weak, conflicting, or off-topic, say that you could not verify the answer well enough and ask whether to continue with deeper research.", total)
+}
+
+func isDeepWebResearchRequest(text string) bool {
+	normalized := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(text)), " "))
+	if normalized == "" {
+		return false
+	}
+	deepSignals := []string{
+		"deep research",
+		"source comparison",
+		"compare sources",
+		"multiple sources",
+		"thorough research",
+		"dig deeper",
+		"깊게 조사",
+		"자세히 조사",
+		"철저히 조사",
+		"여러 출처",
+		"출처 비교",
+		"교차검증",
+		"교차 검증",
+		"검증해서",
+		"근거를 비교",
+	}
+	for _, signal := range deepSignals {
+		if strings.Contains(normalized, signal) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasMeaningfulChatSessionToolSnapshot(card chatSessionToolCardSnapshot) bool {
@@ -4503,6 +4574,14 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	toolUsageCounts := make(map[string]int)
 	toolSignatureCounts := make(map[string]int)
 	executeCommandFamilyCounts := make(map[string]int)
+	webEvidenceBudget := webEvidenceToolBudget
+	webSearchProviderLimit := webSearchProviderBudget
+	bufferedSourceReadLimit := bufferedSourceReadBudget
+	if isDeepWebResearchRequest(initialUserInputText) {
+		webEvidenceBudget = deepWebEvidenceToolBudget
+		webSearchProviderLimit = deepWebSearchProviderBudget
+		bufferedSourceReadLimit = deepBufferedSourceReadBudget
+	}
 	previousResponseRetryUsed := false
 	discardStatefulResponseIDForTurn := false
 	generationFirstTokenEmitted := false
@@ -5621,15 +5700,38 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 			var result string
 			var err error
-			if (lastToolName == "search_web" || lastToolName == "naver_search") && toolUsageCounts[lastToolName] > 3 {
-				result = fmt.Sprintf("Tool budget reached for %s. Do not search again in this answer. Use the evidence already buffered and answer the user directly.", lastToolName)
+			webEvidenceToolCalls := totalToolUsageFor(toolUsageCounts, isWebEvidenceTool)
+			webSearchProviderCalls := totalToolUsageFor(toolUsageCounts, isWebSearchProviderTool)
+			if isWebEvidenceTool(lastToolName) && webEvidenceToolCalls > webEvidenceBudget {
+				result = webEvidenceBudgetMessage(webEvidenceToolCalls - 1)
+				AddDebugTrace("chat", "tool.skipped", "Skipped web evidence tool due to combined per-request budget", map[string]interface{}{
+					"turn":  turn,
+					"tool":  lastToolName,
+					"count": webEvidenceToolCalls,
+				})
+			} else if isWebSearchProviderTool(lastToolName) && webSearchProviderCalls > webSearchProviderLimit {
+				result = fmt.Sprintf("Web search provider budget reached after %d searches. Do not search another provider in this answer. If the evidence already buffered is strong enough, answer from it. If it is weak, conflicting, or off-topic, say you could not verify the answer well enough and ask whether to continue with deeper research.", webSearchProviderCalls-1)
+				AddDebugTrace("chat", "tool.skipped", "Skipped web search provider due to combined per-request budget", map[string]interface{}{
+					"turn":  turn,
+					"tool":  lastToolName,
+					"count": webSearchProviderCalls,
+				})
+			} else if lastToolName == "read_buffered_source" && toolUsageCounts[lastToolName] > bufferedSourceReadLimit {
+				result = "read_buffered_source already ran multiple times in this answer. Stop reading more buffered excerpts. If the evidence already returned is strong enough, answer from it; otherwise say the evidence is insufficient and ask whether to continue with deeper research."
+				AddDebugTrace("chat", "tool.skipped", "Skipped repeated buffered source read due to per-request budget", map[string]interface{}{
+					"turn":  turn,
+					"tool":  lastToolName,
+					"count": toolUsageCounts[lastToolName],
+				})
+			} else if (lastToolName == "search_web" || lastToolName == "naver_search") && toolUsageCounts[lastToolName] > webSearchProviderLimit {
+				result = fmt.Sprintf("Tool budget reached for %s. Do not search again in this answer. If the evidence already buffered is strong enough, answer from it; otherwise say the evidence is insufficient and ask whether to continue with deeper research.", lastToolName)
 				AddDebugTrace("chat", "tool.skipped", "Skipped repeated web search due to per-request budget", map[string]interface{}{
 					"turn":  turn,
 					"tool":  lastToolName,
 					"count": toolUsageCounts[lastToolName],
 				})
 			} else if lastToolName == "read_web_page" && toolUsageCounts[lastToolName] > 2 {
-				result = "read_web_page already ran multiple times in this answer. Avoid more page reads unless the user explicitly asks to retry. Answer from buffered search evidence or use read_buffered_source."
+				result = "read_web_page already ran multiple times in this answer. Avoid more page reads unless the user explicitly asks to retry. If buffered evidence is strong enough, answer from it; otherwise say the evidence is insufficient and ask whether to continue with deeper research."
 				AddDebugTrace("chat", "tool.skipped", "Skipped repeated page read due to per-request budget", map[string]interface{}{
 					"turn":  turn,
 					"tool":  lastToolName,

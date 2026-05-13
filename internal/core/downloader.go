@@ -34,7 +34,7 @@ type DownloadProgress struct {
 
 func NewDownloader() *Downloader {
 	return &Downloader{
-		BaseURL: "https://huggingface.co/Supertone/supertonic-2/resolve/main",
+		BaseURL: "https://huggingface.co/Supertone/supertonic-3/resolve/main",
 	}
 }
 

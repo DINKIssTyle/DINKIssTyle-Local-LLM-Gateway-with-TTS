@@ -157,15 +157,18 @@ func buildToolUsage(envInfo string, modelID string, useNativeIntegrations bool) 
 			"4. Call at most one tool at a time. After each tool result, either answer the user directly or make one clearly necessary next tool call.",
 			"5. Avoid search_web or read_web_page for person identification or image description unless explicitly asked.",
 			"6. For app usage, setup, certificates, endpoints, LM Studio, or MCP configuration questions, prefer read_help before searching the web.",
-			"7. Web-reading tools may return a buffered source handle instead of the full text to save context.",
-			"8. After search_web, read_web_page, read_help, naver_search, or namu_wiki, call read_buffered_source with source_id and the user's actual question when you need detailed evidence.",
-			"9. If read_buffered_source omits source_id, it will use the most recent buffered source for this user.",
-			"10. Avoid repeating the same search_web or read_web_page call with near-identical inputs in one answer, but one refined follow-up search is acceptable if it materially improves evidence quality.",
-			"11. If read_web_page fails or times out, do not retry the exact same page immediately. Prefer answering from the buffered search evidence, or read a different relevant source if that would clearly improve quality.",
-			"12. For execute_command, use the provided ENVIRONMENT INFO to choose OS-appropriate commands. Do not call execute_command only to discover the OS or shell when ENVIRONMENT INFO already tells you.",
-			"13. Never use execute_command to imitate built-in tools such as search_memory, search_web, read_memory, read_memory_context, read_web_page, read_help, or read_buffered_source. Call the real tool directly.",
-			"14. After execute_command returns enough information, answer the user directly. Do not repeat the same or near-identical command in the same answer unless the user explicitly asked to re-run or refresh it.",
-			"15. MEMORY-THEN-WEB RULE: If the user asks about prior chats, personal facts, preferences, or earlier reasons, search memory first. If memory is insufficient and the question is still a factual/public information question, then search the web.",
+			"7. Web tools return compact buffered evidence handles to save context; use the smallest useful number of calls.",
+			"8. Web evidence budget: usually make 1 web/search tool call; make at most 3 total web evidence calls unless the user explicitly asks for deep research or source comparison.",
+			"9. Never present weak, conflicting, or off-topic web evidence as fact. If evidence quality is poor after the budget, say it is not well verified and ask whether to continue with deeper research.",
+			"10. After search_web, answer directly from search evidence when it is sufficient. Call read_web_page only for a specific high-value URL, and call read_buffered_source only when you need focused excerpts from buffered long content.",
+			"11. If read_buffered_source omits source_id, it can search the recent buffered sources for this user; use a focused query.",
+			"12. Avoid search_web -> read_buffered_source -> read_web_page -> read_buffered_source chains for simple factual/profile questions. Prefer search_web once, then either answer or read one authoritative page.",
+			"13. Avoid repeating the same search_web or read_web_page call with near-identical inputs in one answer, but one refined follow-up search is acceptable if it materially improves evidence quality.",
+			"14. If read_web_page fails or times out, do not retry the exact same page immediately. Prefer answering from the buffered search evidence, or read a different relevant source if that would clearly improve quality.",
+			"15. For execute_command, use the provided ENVIRONMENT INFO to choose OS-appropriate commands. Do not call execute_command only to discover the OS or shell when ENVIRONMENT INFO already tells you.",
+			"16. Never use execute_command to imitate built-in tools such as search_memory, search_web, read_memory, read_memory_context, read_web_page, read_help, or read_buffered_source. Call the real tool directly.",
+			"17. After execute_command returns enough information, answer the user directly. Do not repeat the same or near-identical command in the same answer unless the user explicitly asked to re-run or refresh it.",
+			"18. MEMORY-THEN-WEB RULE: If the user asks about prior chats, personal facts, preferences, or earlier reasons, search memory first. If memory is insufficient and the question is still a factual/public information question, then search the web.",
 		)
 	} else {
 		lines = append(lines,
@@ -173,15 +176,18 @@ func buildToolUsage(envInfo string, modelID string, useNativeIntegrations bool) 
 			"2. If no tool is needed, answer normally.",
 			"3. Avoid search_web or read_web_page for person identification or image description unless explicitly asked.",
 			"4. For app usage, setup, certificates, endpoints, LM Studio, or MCP configuration questions, prefer read_help before searching the web.",
-			"5. Web-reading tools may return a buffered source handle instead of the full text to save context.",
-			"6. After search_web, read_web_page, read_help, naver_search, or namu_wiki, call read_buffered_source with source_id and the user's actual question when you need detailed evidence.",
-			"7. If read_buffered_source omits source_id, it will use the most recent buffered source for this user.",
-			"8. Avoid repeating the same search_web or read_web_page call with near-identical inputs in one answer, but one refined follow-up search is acceptable if it materially improves evidence quality.",
-			"9. If read_web_page fails or times out, do not retry the exact same page immediately. Prefer answering from the buffered search evidence, or read a different relevant source if that would clearly improve quality.",
-			"10. For execute_command, use the provided ENVIRONMENT INFO to choose OS-appropriate commands. Do not call execute_command only to discover the OS or shell when ENVIRONMENT INFO already tells you.",
-			"11. Never use execute_command to imitate built-in tools such as search_memory, search_web, read_memory, read_memory_context, read_web_page, read_help, or read_buffered_source. Call the real tool directly.",
-			"12. After execute_command returns enough information, answer the user directly. Do not repeat the same or near-identical command in the same answer unless the user explicitly asked to re-run or refresh it.",
-			"13. MEMORY-THEN-WEB RULE: If the user asks about prior chats, personal facts, preferences, or earlier reasons, search memory first. If memory is insufficient and the question is still a factual/public information question, then search the web.",
+			"5. Web tools return compact buffered evidence handles to save context; use the smallest useful number of calls.",
+			"6. Web evidence budget: usually make 1 web/search tool call; make at most 3 total web evidence calls unless the user explicitly asks for deep research or source comparison.",
+			"7. Never present weak, conflicting, or off-topic web evidence as fact. If evidence quality is poor after the budget, say it is not well verified and ask whether to continue with deeper research.",
+			"8. After search_web, answer directly from search evidence when it is sufficient. Call read_web_page only for a specific high-value URL, and call read_buffered_source only when you need focused excerpts from buffered long content.",
+			"9. If read_buffered_source omits source_id, it can search the recent buffered sources for this user; use a focused query.",
+			"10. Avoid search_web -> read_buffered_source -> read_web_page -> read_buffered_source chains for simple factual/profile questions. Prefer search_web once, then either answer or read one authoritative page.",
+			"11. Avoid repeating the same search_web or read_web_page call with near-identical inputs in one answer, but one refined follow-up search is acceptable if it materially improves evidence quality.",
+			"12. If read_web_page fails or times out, do not retry the exact same page immediately. Prefer answering from the buffered search evidence, or read a different relevant source if that would clearly improve quality.",
+			"13. For execute_command, use the provided ENVIRONMENT INFO to choose OS-appropriate commands. Do not call execute_command only to discover the OS or shell when ENVIRONMENT INFO already tells you.",
+			"14. Never use execute_command to imitate built-in tools such as search_memory, search_web, read_memory, read_memory_context, read_web_page, read_help, or read_buffered_source. Call the real tool directly.",
+			"15. After execute_command returns enough information, answer the user directly. Do not repeat the same or near-identical command in the same answer unless the user explicitly asked to re-run or refresh it.",
+			"16. MEMORY-THEN-WEB RULE: If the user asks about prior chats, personal facts, preferences, or earlier reasons, search memory first. If memory is insufficient and the question is still a factual/public information question, then search the web.",
 		)
 	}
 
@@ -193,10 +199,10 @@ func buildToolUsage(envInfo string, modelID string, useNativeIntegrations bool) 
 		)
 	}
 
-	lines = append(lines, fmt.Sprintf("16. CURRENT_TIME: %s", time.Now().Format("2006-01-02 15:04:05 Monday")))
+	lines = append(lines, fmt.Sprintf("CURRENT_TIME: %s", time.Now().Format("2006-01-02 15:04:05 Monday")))
 
 	if envInfo != "" {
-		lines = append(lines, "17. ENVIRONMENT INFO:", strings.TrimRight(envInfo, "\n"))
+		lines = append(lines, "ENVIRONMENT INFO:", strings.TrimRight(envInfo, "\n"))
 	}
 
 	return strings.Join(lines, "\n")
@@ -216,34 +222,40 @@ func buildMemoryTemplate(staticMemory string, recentContext string, userProfile 
 
 	rules := []string{
 		"1. Treat RECENT CONTEXT as the primary source for continuity about the latest few turns.",
-		"2. Treat USER PROFILE Known Facts as ground truth for personal details about the user. These never require search_memory.",
-		"3. Use USER PROFILE only when it is directly relevant to the user's current request.",
-		"4. Mention only the minimum profile details needed for the answer. Do not list or volunteer unrelated profile facts.",
-		"5. If the user explicitly asks you to search memory, recall prior chats, or find what was said before, you MUST use 'search_memory' before answering.",
-		"6. If past details are missing or uncertain, use 'search_memory' instead of saying you do not know.",
-		"7. After 'search_memory', prefer 'read_memory_context' for the best candidate before relying on it. Use 'read_memory' only when you need the full original text.",
-		"8. 'read_memory' and 'read_memory_context' require 'memory_id'. Never use 'source_id', 'query', or 'question' with memory tools.",
-		"9. If memory search still does not answer the question and the remaining question is about factual/public knowledge, use web search next instead of stopping at 'I do not know'.",
-		"10. Only 'read_buffered_source' uses 'source_id' for web evidence.",
-		"11. Try alternative names, relationships, or synonyms if the first search fails.",
-		"12. Do not guess past details.",
-		"13. When the user tells you personal facts (name, birthday, preferences, etc.), proactively use 'save_user_fact' to save them to their permanent profile.",
+		"2. Treat subjectless, pronoun-only, or elliptical user messages as follow-ups to the latest salient topic in RECENT CONTEXT whenever that reading is plausible, especially in Korean where omitted subjects are normal.",
+		"3. Do not ask what the subject is merely because the user omitted it. Infer the referent from the latest turn and briefly state your assumption only when it helps.",
+		"4. Ask a clarifying question only when RECENT CONTEXT contains multiple plausible referents that would lead to materially different answers or actions.",
+		"5. Treat USER PROFILE Known Facts as ground truth for personal details about the user. These never require search_memory.",
+		"6. Use USER PROFILE only when it is directly relevant to the user's current request.",
+		"7. Mention only the minimum profile details needed for the answer. Do not list or volunteer unrelated profile facts.",
+		"8. If the user explicitly asks you to search memory, recall prior chats, or find what was said before, you MUST use 'search_memory' before answering.",
+		"9. If past details are missing or uncertain, use 'search_memory' instead of saying you do not know.",
+		"10. After 'search_memory', prefer 'read_memory_context' for the best candidate before relying on it. Use 'read_memory' only when you need the full original text.",
+		"11. 'read_memory' and 'read_memory_context' require 'memory_id'. Never use 'source_id', 'query', or 'question' with memory tools.",
+		"12. If memory search still does not answer the question and the remaining question is about factual/public knowledge, use web search next instead of stopping at 'I do not know'.",
+		"13. Only 'read_buffered_source' uses 'source_id' for web evidence.",
+		"14. Try alternative names, relationships, or synonyms if the first search fails.",
+		"15. Do not guess past details.",
+		"16. When the user tells you personal facts (name, birthday, preferences, etc.), proactively use 'save_user_fact' to save them to their permanent profile.",
 	}
 	if retrievalInjected && strings.TrimSpace(activeContext) != "" {
 		rules = []string{
 			"1. Treat RECENT CONTEXT as the primary source for continuity about the latest few turns.",
-			"2. ACTIVE CONTEXT was already retrieved for this turn. Prefer answering from RECENT CONTEXT plus ACTIVE CONTEXT when they are sufficient.",
-			"3. Treat USER PROFILE Known Facts as ground truth for personal details about the user. These never require search_memory.",
-			"4. Use USER PROFILE only when it is directly relevant to the user's current request.",
-			"5. Mention only the minimum profile details needed for the answer. Do not list or volunteer unrelated profile facts.",
-			"6. If the user explicitly asks you to search memory, recall prior chats, or find what was said before, you MUST use 'search_memory' before answering.",
-			"7. Use 'search_memory' whenever RECENT CONTEXT and ACTIVE CONTEXT are clearly insufficient or contradictory. Do not simply say you do not know without trying memory search first.",
-			"8. If you must inspect memory further, prefer 'read_memory_context' after 'search_memory'. Use 'read_memory' only for the full original text.",
-			"9. 'read_memory' and 'read_memory_context' require 'memory_id'. Never use 'source_id', 'query', or 'question' with memory tools.",
-			"10. If memory search still does not answer the question and the remaining question is about factual/public knowledge, use web search next instead of stopping at 'I do not know'.",
-			"11. Only 'read_buffered_source' uses 'source_id' for web evidence.",
-			"12. Do not guess past details.",
-			"13. When the user tells you personal facts (name, birthday, preferences, etc.), proactively use 'save_user_fact' to save them to their permanent profile.",
+			"2. Treat subjectless, pronoun-only, or elliptical user messages as follow-ups to the latest salient topic in RECENT CONTEXT whenever that reading is plausible, especially in Korean where omitted subjects are normal.",
+			"3. Do not ask what the subject is merely because the user omitted it. Infer the referent from the latest turn and briefly state your assumption only when it helps.",
+			"4. Ask a clarifying question only when RECENT CONTEXT contains multiple plausible referents that would lead to materially different answers or actions.",
+			"5. ACTIVE CONTEXT was already retrieved for this turn. Prefer answering from RECENT CONTEXT plus ACTIVE CONTEXT when they are sufficient.",
+			"6. Treat USER PROFILE Known Facts as ground truth for personal details about the user. These never require search_memory.",
+			"7. Use USER PROFILE only when it is directly relevant to the user's current request.",
+			"8. Mention only the minimum profile details needed for the answer. Do not list or volunteer unrelated profile facts.",
+			"9. If the user explicitly asks you to search memory, recall prior chats, or find what was said before, you MUST use 'search_memory' before answering.",
+			"10. Use 'search_memory' whenever RECENT CONTEXT and ACTIVE CONTEXT are clearly insufficient or contradictory. Do not simply say you do not know without trying memory search first.",
+			"11. If you must inspect memory further, prefer 'read_memory_context' after 'search_memory'. Use 'read_memory' only for the full original text.",
+			"12. 'read_memory' and 'read_memory_context' require 'memory_id'. Never use 'source_id', 'query', or 'question' with memory tools.",
+			"13. If memory search still does not answer the question and the remaining question is about factual/public knowledge, use web search next instead of stopping at 'I do not know'.",
+			"14. Only 'read_buffered_source' uses 'source_id' for web evidence.",
+			"15. Do not guess past details.",
+			"16. When the user tells you personal facts (name, birthday, preferences, etc.), proactively use 'save_user_fact' to save them to their permanent profile.",
 		}
 	}
 	return fmt.Sprintf(`
@@ -291,10 +303,13 @@ func buildPassiveMemoryTemplate(recentContext string, userProfile string, active
 
 MEMORY USAGE RULES:
 1. Use RECENT CONTEXT, USER PROFILE, and ACTIVE CONTEXT only as provided reference context for this answer.
-2. Use USER PROFILE only when it is directly relevant to the user's current request.
-3. Mention only the minimum profile details needed for the answer. Do not list or volunteer unrelated profile facts.
-4. Do not mention tools, integrations, MCP, or hidden retrieval steps.
-5. If the provided memory context is insufficient, answer normally from the visible conversation and your model knowledge.
-6. Do not invent or claim to have searched additional memory when no tool access is available.
+2. Treat subjectless, pronoun-only, or elliptical user messages as follow-ups to the latest salient topic in RECENT CONTEXT whenever that reading is plausible, especially in Korean where omitted subjects are normal.
+3. Do not ask what the subject is merely because the user omitted it. Infer the referent from the latest turn and briefly state your assumption only when it helps.
+4. Ask a clarifying question only when RECENT CONTEXT contains multiple plausible referents that would lead to materially different answers or actions.
+5. Use USER PROFILE only when it is directly relevant to the user's current request.
+6. Mention only the minimum profile details needed for the answer. Do not list or volunteer unrelated profile facts.
+7. Do not mention tools, integrations, MCP, or hidden retrieval steps.
+8. If the provided memory context is insufficient, answer normally from the visible conversation and your model knowledge.
+9. Do not invent or claim to have searched additional memory when no tool access is available.
 `, recentContext, combinedProfile, activeContext)
 }

@@ -122,3 +122,56 @@ func TestBufferedWebSourceVectorFallbackWorksWithoutFTSHit(t *testing.T) {
 		t.Fatalf("expected vector-aware retrieval mode in result, got %q", result)
 	}
 }
+
+func TestReadBufferedSourceSearchesRecentSourcesWhenSourceIDIsOmitted(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "web_buffer_recent_*.db")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	dbPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(dbPath)
+
+	if err := InitDB(dbPath); err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer CloseDB()
+
+	userID := "recent_user"
+	saveBufferedWebSource(userID, "search_web", "fruit", "", "Fruit Search", strings.Repeat("Banana market notes and generic fruit context. ", 20))
+	saveBufferedWebSource(userID, "read_web_page", "singer profile", "https://example.com/profile", "Singer Profile", strings.Repeat("Singer profile context includes debut year and discography. ", 20))
+
+	result, err := readBufferedSource(userID, "", "debut year discography", 4)
+	if err != nil {
+		t.Fatalf("readBufferedSource without source_id failed: %v", err)
+	}
+	if !strings.Contains(result, "Buffered Web Sources") {
+		t.Fatalf("expected multi-source response, got %q", result)
+	}
+	if !strings.Contains(result, "Singer Profile") {
+		t.Fatalf("expected recent relevant source in result, got %q", result)
+	}
+}
+
+func TestExtractReadableTextFromHTML(t *testing.T) {
+	html := `
+		<html>
+			<head><title>Readable Title</title><style>.x{display:none}</style></head>
+			<body>
+				<nav>Navigation noise</nav>
+				<main>
+					<h1>Readable Title</h1>
+					<p>The useful paragraph contains enough searchable text for the fast path.</p>
+					<p>Another useful paragraph keeps the content meaningful and extractable.</p>
+				</main>
+				<script>window.noise = true;</script>
+			</body>
+		</html>`
+	result := extractReadableTextFromHTML(html)
+	if !strings.Contains(result, "useful paragraph") {
+		t.Fatalf("expected useful paragraph, got %q", result)
+	}
+	if strings.Contains(result, "Navigation noise") || strings.Contains(result, "window.noise") {
+		t.Fatalf("expected noisy sections to be removed, got %q", result)
+	}
+}

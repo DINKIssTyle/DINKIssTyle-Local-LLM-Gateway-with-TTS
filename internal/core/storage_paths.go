@@ -15,6 +15,7 @@ const (
 	assetsDirName             = "assets"
 	ttsDirName                = "tts"
 	supertonic2DirName        = "supertonic2"
+	supertonic3DirName        = "supertonic3"
 	embeddingsDirName         = "embeddings"
 	runtimeDirName            = "runtime"
 	onnxRuntimeDirName        = "onnxruntime"
@@ -64,6 +65,10 @@ func getManagedAssetsRootDir() string {
 }
 
 func getWritableTTSAssetsDir() string {
+	return joinAppDataPath(assetsDirName, ttsDirName, supertonic3DirName)
+}
+
+func getLegacyWritableTTSAssetsDir() string {
 	return joinAppDataPath(assetsDirName, ttsDirName, supertonic2DirName)
 }
 
@@ -141,9 +146,19 @@ func getTTSAssetsDir() string {
 		return writable
 	}
 
-	primary := GetResourcePath(filepath.Join(assetsDirName, ttsDirName, supertonic2DirName))
+	primary := GetResourcePath(filepath.Join(assetsDirName, ttsDirName, supertonic3DirName))
 	if fileExists(filepath.Join(primary, legacyTTSOnnxDirName, "vocoder.onnx")) {
 		return primary
+	}
+
+	legacyWritable := getLegacyWritableTTSAssetsDir()
+	if fileExists(filepath.Join(legacyWritable, legacyTTSOnnxDirName, "vocoder.onnx")) {
+		return legacyWritable
+	}
+
+	legacyPrimary := GetResourcePath(filepath.Join(assetsDirName, ttsDirName, supertonic2DirName))
+	if fileExists(filepath.Join(legacyPrimary, legacyTTSOnnxDirName, "vocoder.onnx")) {
+		return legacyPrimary
 	}
 
 	legacy := GetResourcePath(assetsDirName)

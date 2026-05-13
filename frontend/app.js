@@ -183,6 +183,10 @@ let AppState = {
         eventStreamConnected: false,
         eventStreamRetryTimer: null,
         eventStreamLastErrorAt: 0,
+        serverReconnectTimer: null,
+        lastServerReachable: null,
+        serverReconnectRecoveryPromise: null,
+        serverReconnectProbeIntervalMs: 2500,
         reconnectCardVisible: false,
         localStreamOwnershipReleased: false,
         retryRecoveryInProgress: false,
@@ -2446,6 +2450,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (e) {
         console.warn('Initial chat bootstrap failed:', e);
     }
+    startServerReconnectWatcher({ immediate: true });
 
     // Start Location Tracking
     updateUserLocation();
@@ -2454,7 +2459,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Register Service Worker for PWA
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-            navigator.serviceWorker.register('/sw.js?v=6')
+            navigator.serviceWorker.register('/sw.js?v=7')
                 .then(reg => console.log('[PWA] Service Worker registered:', reg.scope))
                 .catch(err => console.warn('[PWA] Service Worker failed:', err));
         });
@@ -2472,6 +2477,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             savedLibraryController.scheduleSavedTitleRefresh(800);
             restartChatSessionEventStream();
             scheduleForegroundSessionRefresh('visibility-visible');
+            startServerReconnectWatcher({ immediate: true });
         }
     });
 
@@ -2479,11 +2485,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         stopSTT({ suppressAutoSend: true, forceAbort: true });
         relinquishLocalStreamOwnership('pagehide');
         stopChatSessionEventStream();
+        clearServerReconnectWatcher();
     });
 
     window.addEventListener('pageshow', () => {
         restartChatSessionEventStream();
         scheduleForegroundSessionRefresh('pageshow');
+        startServerReconnectWatcher({ immediate: true });
     });
 
     window.addEventListener('focus', () => {
@@ -2498,6 +2506,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             restartChatSessionEventStream();
         }
         scheduleForegroundSessionRefresh('online');
+        startServerReconnectWatcher({ immediate: true });
     });
 });
 
@@ -2695,6 +2704,89 @@ function clearForegroundSyncTimers() {
     if (!AppState.session.foregroundSyncTimers.length) return;
     AppState.session.foregroundSyncTimers.forEach((timerId) => clearTimeout(timerId));
     AppState.session.foregroundSyncTimers = [];
+}
+
+function clearServerReconnectWatcher() {
+    if (!AppState.session.serverReconnectTimer) return;
+    clearTimeout(AppState.session.serverReconnectTimer);
+    AppState.session.serverReconnectTimer = null;
+}
+
+async function probeServerReachability() {
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timeoutId = controller
+        ? window.setTimeout(() => controller.abort(), 3500)
+        : null;
+
+    try {
+        const response = await fetch('/api/health', {
+            method: 'GET',
+            credentials: 'include',
+            cache: 'no-store',
+            signal: controller?.signal
+        });
+        return response.ok;
+    } catch (_) {
+        return false;
+    } finally {
+        if (timeoutId) clearTimeout(timeoutId);
+    }
+}
+
+function hasUserMessagesWithoutAssistantMessages() {
+    if (!chatMessages) return false;
+    return !!chatMessages.querySelector('.message.user')
+        && !chatMessages.querySelector('.message.assistant:not(.has-startup-card)');
+}
+
+async function recoverAfterServerReconnect() {
+    if (AppState.session.serverReconnectRecoveryPromise) {
+        return AppState.session.serverReconnectRecoveryPromise;
+    }
+
+    AppState.session.serverReconnectRecoveryPromise = (async () => {
+        try {
+            await checkAuth();
+            if (!AppState.session.currentUser) return;
+
+            await syncServerConfig({ forceDictionaryReload: true });
+            restartChatSessionEventStream();
+
+            if (hasUserMessagesWithoutAssistantMessages()) {
+                resetServerChatReplayState();
+            }
+            await refreshSessionStateFromServer();
+            dismissReconnectNoticeCard();
+        } catch (error) {
+            console.warn('[Reconnect] Server recovery failed:', error);
+            showReconnectNoticeCard();
+        } finally {
+            AppState.session.serverReconnectRecoveryPromise = null;
+        }
+    })();
+
+    return AppState.session.serverReconnectRecoveryPromise;
+}
+
+function startServerReconnectWatcher({ immediate = false } = {}) {
+    clearServerReconnectWatcher();
+
+    const tick = async () => {
+        const wasReachable = AppState.session.lastServerReachable === true;
+        const reachable = await probeServerReachability();
+        AppState.session.lastServerReachable = reachable;
+
+        if (reachable && !wasReachable) {
+            await recoverAfterServerReconnect();
+        }
+
+        const delay = reachable
+            ? Math.max(8000, AppState.session.serverReconnectProbeIntervalMs * 3)
+            : AppState.session.serverReconnectProbeIntervalMs;
+        AppState.session.serverReconnectTimer = window.setTimeout(tick, delay);
+    };
+
+    AppState.session.serverReconnectTimer = window.setTimeout(tick, immediate ? 0 : AppState.session.serverReconnectProbeIntervalMs);
 }
 
 function scheduleForegroundSessionRefresh(reason = 'foreground') {
