@@ -77,8 +77,13 @@ func (m *memoryWriteSeeker) Bytes() []byte {
 	return bytes.Clone(m.buf)
 }
 
-// Available languages for multilingual TTS
-var AvailableLangs = []string{"en", "ko", "es", "pt", "fr"}
+// Available languages for Supertonic 3 multilingual TTS.
+var AvailableLangs = []string{
+	"en", "ko", "ja", "ar", "bg", "cs", "da", "de",
+	"el", "es", "et", "fi", "fr", "hi", "hr", "hu",
+	"id", "it", "lt", "lv", "nl", "pl", "pt", "ro",
+	"ru", "sk", "sl", "sv", "tr", "uk", "vi",
+}
 
 // Config structures for TTS
 type SpecProcessorConfig struct {

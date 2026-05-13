@@ -102,7 +102,40 @@
             let hasRecognitionError = false;
             let autoSendTriggered = false;
             let hasFinalTranscript = false;
-            recognition.lang = config.ttsLang === 'ko' ? 'ko-KR' : 'en-US';
+            const recognitionLangs = {
+                ar: 'ar-SA',
+                bg: 'bg-BG',
+                cs: 'cs-CZ',
+                da: 'da-DK',
+                de: 'de-DE',
+                el: 'el-GR',
+                en: 'en-US',
+                es: 'es-ES',
+                et: 'et-EE',
+                fi: 'fi-FI',
+                fr: 'fr-FR',
+                hi: 'hi-IN',
+                hr: 'hr-HR',
+                hu: 'hu-HU',
+                id: 'id-ID',
+                it: 'it-IT',
+                ja: 'ja-JP',
+                ko: 'ko-KR',
+                lt: 'lt-LT',
+                lv: 'lv-LV',
+                nl: 'nl-NL',
+                pl: 'pl-PL',
+                pt: 'pt-PT',
+                ro: 'ro-RO',
+                ru: 'ru-RU',
+                sk: 'sk-SK',
+                sl: 'sl-SI',
+                sv: 'sv-SE',
+                tr: 'tr-TR',
+                uk: 'uk-UA',
+                vi: 'vi-VN',
+            };
+            recognition.lang = recognitionLangs[config.ttsLang] || 'en-US';
             recognition.continuous = false;
             recognition.interimResults = true;
 

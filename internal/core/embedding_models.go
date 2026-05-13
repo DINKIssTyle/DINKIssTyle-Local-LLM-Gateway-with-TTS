@@ -122,7 +122,7 @@ func getEmbeddingModelStatus(cfg EmbeddingModelConfig) ManagedModelStatus {
 
 func getTTSModelStatus() ManagedModelStatus {
 	assetsDir := getWritableTTSAssetsDir()
-	installed := globalApp != nil && globalApp.CheckAssets()
+	installed := hasRequiredTTSAssets(assetsDir)
 	status := "missing"
 	message := "TTS assets are not installed yet."
 	if installed {
@@ -132,15 +132,15 @@ func getTTSModelStatus() ManagedModelStatus {
 	return ManagedModelStatus{
 		Key:         "tts:supertonic",
 		Kind:        "tts",
-		DisplayName: "Supertonic 2",
+		DisplayName: "Supertonic 3",
 		Provider:    "local",
-		ModelID:     "supertonic-2",
+		ModelID:     "supertonic-3",
 		Installed:   installed,
 		Active:      installed,
 		Status:      status,
 		Message:     message,
 		InstallDir:  assetsDir,
-		DownloadURL: "https://huggingface.co/Supertone/supertonic-2",
+		DownloadURL: "https://huggingface.co/Supertone/supertonic-3",
 		CanDownload: true,
 	}
 }

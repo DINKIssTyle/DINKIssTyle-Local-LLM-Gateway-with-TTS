@@ -61,7 +61,7 @@ DKST LLM Chat Server는 강력한 지능형 기능을 결합한 차세대 로컬
     *   인증서는 `cert/`
     *   SQLite 메모리 데이터베이스는 `memory/memory.db`
     *   발음 사전과 편집기는 `dictionary/`
-    *   Supertonic 2 자산은 `assets/tts/supertonic2/`
+    *   Supertonic 3 자산은 `assets/tts/supertonic3/`
     *   임베딩 모델은 `assets/embeddings/multilingual-e5-small/`
     *   ONNX Runtime은 `assets/runtime/onnxruntime/`
 4.  채팅창에서 질문하거나, 이미지를 붙여넣어 비전 기능을 테스트하고, "내 생일은 1월 1일이야" 같이 말해 AI의 기억력을 확인해 보세요.

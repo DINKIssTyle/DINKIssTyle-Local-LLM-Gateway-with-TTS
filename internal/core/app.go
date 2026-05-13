@@ -1395,7 +1395,10 @@ func (a *App) SetTTSThreads(threads int) {
 
 // CheckAssets checks if required assets exist
 func (a *App) CheckAssets() bool {
-	assetsDir := getTTSAssetsDir()
+	return hasRequiredTTSAssets(getTTSAssetsDir())
+}
+
+func hasRequiredTTSAssets(assetsDir string) bool {
 	requiredFiles := []string{
 		"onnx/duration_predictor.onnx",
 		"onnx/text_encoder.onnx",

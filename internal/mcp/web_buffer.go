@@ -375,7 +375,12 @@ func readBufferedSource(userID, sourceID, query string, maxChunks int) (string, 
 		}
 	}
 
-	source, err := getBufferedWebSource(userID, sourceID)
+	sourceIDs := parseBufferedSourceIDs(sourceID)
+	if len(sourceIDs) != 1 {
+		return readRecentBufferedSourcesMemory(userID, sourceIDs, query, maxChunks)
+	}
+
+	source, err := getBufferedWebSource(userID, sourceIDs[0])
 	if err != nil {
 		return "", err
 	}
@@ -440,6 +445,87 @@ func readBufferedSource(userID, sourceID, query string, maxChunks int) (string, 
 		fmt.Fprintf(&b, "\n[Chunk %d]\n%s\n", chunk.Index+1, chunk.Text)
 	}
 	return strings.TrimSpace(b.String()), nil
+}
+
+func parseBufferedSourceIDs(sourceID string) []string {
+	var ids []string
+	for _, part := range strings.Split(sourceID, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			ids = append(ids, part)
+		}
+	}
+	return ids
+}
+
+func readRecentBufferedSourcesMemory(userID string, sourceIDs []string, query string, maxChunks int) (string, error) {
+	userID = normalizeBufferedUserID(userID)
+	if maxChunks <= 0 {
+		maxChunks = 4
+	}
+	if maxChunks > 8 {
+		maxChunks = 8
+	}
+
+	webBufferMu.RLock()
+	buffer := webBuffers[userID]
+	if buffer == nil || len(buffer.Order) == 0 {
+		webBufferMu.RUnlock()
+		return "", fmt.Errorf("no buffered web sources available")
+	}
+
+	wanted := map[string]bool{}
+	for _, id := range sourceIDs {
+		wanted[id] = true
+	}
+	var sources []*BufferedWebSource
+	for i := len(buffer.Order) - 1; i >= 0 && len(sources) < 5; i-- {
+		id := buffer.Order[i]
+		if len(wanted) > 0 && !wanted[id] {
+			continue
+		}
+		if source := buffer.Sources[id]; source != nil {
+			copied := *source
+			sources = append(sources, &copied)
+		}
+	}
+	webBufferMu.RUnlock()
+
+	if len(sources) == 0 {
+		return "", fmt.Errorf("buffered source not found")
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Buffered Web Sources\n")
+	fmt.Fprintf(&b, "Focus Query: %s\n", query)
+	perSource := max(1, maxChunks/len(sources))
+	written := 0
+	for _, source := range sources {
+		if written >= maxChunks {
+			break
+		}
+		selected := selectRelevantBufferedChunks(source, query, perSource)
+		if len(selected) == 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "\nSource ID: %s\n", source.SourceID)
+		fmt.Fprintf(&b, "Title: %s\n", source.Title)
+		if source.URL != "" {
+			fmt.Fprintf(&b, "URL: %s\n", source.URL)
+		}
+		fmt.Fprintf(&b, "Summary: %s\n", source.Summary)
+		for _, chunk := range selected {
+			if written >= maxChunks {
+				break
+			}
+			fmt.Fprintf(&b, "\nExcerpt %d.%d:\n%s\n", written+1, chunk.Index+1, chunk.Text)
+			written++
+		}
+	}
+	if written == 0 {
+		return "", fmt.Errorf("no buffered passages available")
+	}
+	return b.String(), nil
 }
 
 func selectRelevantBufferedChunks(source *BufferedWebSource, query string, maxChunks int) []BufferedWebChunk {
@@ -628,7 +714,12 @@ func getBufferedWebSourceDB(userID, sourceID string) (*BufferedWebSource, error)
 }
 
 func readBufferedSourceDB(userID, sourceID, query string, maxChunks int) (string, error) {
-	source, err := getBufferedWebSourceDB(userID, sourceID)
+	sourceIDs := parseBufferedSourceIDs(sourceID)
+	if len(sourceIDs) != 1 {
+		return readRecentBufferedSourcesDB(userID, sourceIDs, query, maxChunks)
+	}
+
+	source, err := getBufferedWebSourceDB(userID, sourceIDs[0])
 	if err != nil {
 		return "", err
 	}
@@ -696,6 +787,142 @@ func readBufferedSourceDB(userID, sourceID, query string, maxChunks int) (string
 		fmt.Fprintf(&b, "\n[Chunk %d | scores: %s]\n%s\n", chunk.Index+1, formatRetrievalScoreLine(chunk.FTSScore, chunk.VectorScore, chunk.HybridScore), chunk.Text)
 	}
 	return strings.TrimSpace(b.String()), nil
+}
+
+func readRecentBufferedSourcesDB(userID string, sourceIDs []string, query string, maxChunks int) (string, error) {
+	userID = normalizeBufferedUserID(userID)
+	if maxChunks <= 0 {
+		maxChunks = 4
+	}
+	if maxChunks > 8 {
+		maxChunks = 8
+	}
+
+	sources, err := loadBufferedSourceHeadersDB(userID, sourceIDs, 5)
+	if err != nil {
+		return "", err
+	}
+	if len(sources) == 0 {
+		return "", fmt.Errorf("buffered source not found")
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Buffered Web Sources\n")
+	if query != "" {
+		fmt.Fprintf(&b, "Focus Query: %s\n", query)
+	}
+
+	perSource := max(1, maxChunks/len(sources))
+	written := 0
+	selectedPayload := make([]map[string]interface{}, 0, maxChunks)
+	for _, source := range sources {
+		if written >= maxChunks {
+			break
+		}
+		selected, retrievalMode, err := selectRelevantBufferedChunksDB(source.UserID, source.SourceID, query, perSource)
+		if err != nil || len(selected) == 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "\nSource ID: %s\n", source.SourceID)
+		fmt.Fprintf(&b, "Title: %s\n", source.Title)
+		if source.URL != "" {
+			fmt.Fprintf(&b, "URL: %s\n", source.URL)
+		}
+		fmt.Fprintf(&b, "Summary: %s\n", source.Summary)
+		fmt.Fprintf(&b, "Retrieval: %s\n", retrievalMode)
+		for _, chunk := range selected {
+			if written >= maxChunks {
+				break
+			}
+			fmt.Fprintf(&b, "\nExcerpt %d.%d:\n%s\n", written+1, chunk.Index+1, chunk.Text)
+			selectedPayload = append(selectedPayload, map[string]interface{}{
+				"source_id": source.SourceID,
+				"title":     source.Title,
+				"url":       source.URL,
+				"index":     chunk.Index + 1,
+				"text":      chunk.Text,
+			})
+			written++
+		}
+	}
+	if written == 0 {
+		return "", fmt.Errorf("no buffered passages available")
+	}
+
+	EmitTrace("mcp", "buffer.read", "Buffered web source excerpts selected across recent sources", traceDetails(
+		"tool", "read_buffered_source",
+		"user", userID,
+		"query", query,
+		"selected_chunks", written,
+		"source_count", len(sources),
+		"storage", "sqlite_fts5",
+		"retrieval_mode", "multi_source",
+		"__payload", map[string]interface{}{
+			"kind":            "buffered_web_excerpt",
+			"tool":            "read_buffered_source",
+			"user":            userID,
+			"query":           query,
+			"selected_chunks": selectedPayload,
+			"storage":         "sqlite_fts5",
+			"retrieval_mode":  "multi_source",
+		},
+	))
+	return strings.TrimSpace(b.String()), nil
+}
+
+func loadBufferedSourceHeadersDB(userID string, sourceIDs []string, limit int) ([]*BufferedWebSource, error) {
+	if db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+
+	args := []interface{}{userID}
+	query := `
+		SELECT source_id, user_id, tool_name, query_text, url, title, summary, fetched_at, last_used_at
+		FROM web_sources
+		WHERE user_id = ?
+	`
+	if len(sourceIDs) > 0 {
+		placeholders := make([]string, 0, len(sourceIDs))
+		for _, sourceID := range sourceIDs {
+			placeholders = append(placeholders, "?")
+			args = append(args, sourceID)
+		}
+		query += ` AND source_id IN (` + strings.Join(placeholders, ",") + `)`
+	}
+	query += ` ORDER BY last_used_at DESC, fetched_at DESC, id DESC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load buffered source headers: %w", err)
+	}
+	defer rows.Close()
+
+	var sources []*BufferedWebSource
+	for rows.Next() {
+		source := &BufferedWebSource{}
+		if err := rows.Scan(
+			&source.SourceID,
+			&source.UserID,
+			&source.ToolName,
+			&source.Query,
+			&source.URL,
+			&source.Title,
+			&source.Summary,
+			&source.FetchedAt,
+			&source.LastUsedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan buffered source header: %w", err)
+		}
+		sources = append(sources, source)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate buffered source headers: %w", err)
+	}
+	return sources, nil
 }
 
 func formatRetrievalScoreLine(ftsScore, vectorScore, hybridScore float64) string {

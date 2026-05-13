@@ -53,6 +53,23 @@ type ToolHostFuncs struct {
 	ReadTerminalTailFunc func(lines int, maxWaitMs int, idleMs int) (string, error)
 }
 
+type timedToolCacheEntry struct {
+	Value    string
+	StoredAt time.Time
+}
+
+var (
+	searchCacheMu sync.Mutex
+	searchCache   = make(map[string]timedToolCacheEntry)
+	pageCacheMu   sync.Mutex
+	pageCache     = make(map[string]timedToolCacheEntry)
+)
+
+const (
+	searchCacheTTL = 10 * time.Minute
+	pageCacheTTL   = 30 * time.Minute
+)
+
 type ToolHooks struct {
 	Trace                   func(source, stage, message string, details map[string]interface{})
 	SearchMemory            func(userID, query string) (string, error)
@@ -187,7 +204,7 @@ func GetToolList() []Tool {
 		},
 		{
 			Name:        "read_web_page",
-			Description: "Fetch and buffer the text content of a specific URL for the current user. This returns a source handle plus summary, not the full page. After this tool, use read_buffered_source with the source_id and the user's question to inspect relevant excerpts.",
+			Description: "Fetch and buffer the text content of a specific high-value URL for the current user. Use this only when search snippets are not enough or the user needs source-specific detail. This returns a source handle plus summary, not the full page; answer from that summary unless focused excerpts are clearly needed.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -198,11 +215,12 @@ func GetToolList() []Tool {
 		},
 		{
 			Name:        "read_buffered_source",
-			Description: "Read relevant excerpts from a previously buffered web source for the current user. Prefer this after read_web_page, naver_search, namu_wiki, or a buffered search result. If source_id is omitted, the most recent buffered source for this user is used.",
+			Description: "Read focused excerpts from buffered web sources for the current user. Use this for long pages or multi-source evidence, not as a mandatory step after every search. If source_id is omitted, recent buffered sources are searched.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
-					"source_id":  map[string]interface{}{"type": "string", "description": "Buffered source ID returned by another web tool. Optional if you want the latest source."},
+					"source_id":  map[string]interface{}{"type": "string", "description": "Buffered source ID returned by another web tool. Optional; omit to search recent buffered sources."},
+					"source_ids": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Optional list of buffered source IDs to search together."},
 					"query":      map[string]interface{}{"type": "string", "description": "Focused question or keywords to retrieve the most relevant excerpts."},
 					"max_chunks": map[string]interface{}{"type": "integer", "description": "Maximum number of excerpts to return. Optional."},
 				},
@@ -1025,12 +1043,16 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 
 	case "read_buffered_source":
 		var args struct {
-			SourceID  string `json:"source_id"`
-			Query     string `json:"query"`
-			MaxChunks int    `json:"max_chunks"`
+			SourceID  string   `json:"source_id"`
+			SourceIDs []string `json:"source_ids"`
+			Query     string   `json:"query"`
+			MaxChunks int      `json:"max_chunks"`
 		}
 		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
 			return "", fmt.Errorf("invalid arguments for read_buffered_source: %v", err)
+		}
+		if strings.TrimSpace(args.SourceID) == "" && len(args.SourceIDs) > 0 {
+			args.SourceID = strings.Join(args.SourceIDs, ",")
 		}
 		result, err := readBufferedToolSource(userID, args.SourceID, args.Query, args.MaxChunks)
 		emitToolResultTrace(toolName, start, result, err)
@@ -1269,6 +1291,12 @@ func GetCurrentTime() (string, error) {
 	return fmt.Sprintf("Current Local Time: %s", now.Format("2006-01-02 15:04:05 Monday MST")), nil
 }
 
+type webSearchResult struct {
+	Title   string
+	Link    string
+	Snippet string
+}
+
 // SearchWeb performs a web search using DuckDuckGo Lite.
 func SearchWeb(query string) (string, error) {
 	originalQuery := query
@@ -1279,6 +1307,13 @@ func SearchWeb(query string) (string, error) {
 	if query != originalQuery {
 		traceArgs = append(traceArgs, "original_query", originalQuery)
 	}
+
+	cacheKey := strings.ToLower(strings.Join(strings.Fields(query), " "))
+	if cached, ok := getTimedToolCache(searchCache, &searchCacheMu, cacheKey, searchCacheTTL); ok {
+		emitTraceEvent("mcp", "search_web.cache_hit", "Using cached web search result", traceDetailsMap("query", query, "elapsed_ms", toolDurationMs(start), "provider", "duckduckgo"))
+		return cached, nil
+	}
+
 	emitTraceEvent("mcp", "search_web.start", "Starting web search", traceDetailsMap(traceArgs...))
 
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -1293,10 +1328,12 @@ func SearchWeb(query string) (string, error) {
 	}
 
 	emitTraceEvent("mcp", "search_web.complete", "DuckDuckGo search completed", traceDetailsMap("query", query, "elapsed_ms", toolDurationMs(start), "results", len(results), "provider", "duckduckgo"))
-	return strings.Join(results, "\n---\n"), nil
+	formatted := formatSearchResultsWithGuidance(query, results)
+	setTimedToolCache(searchCache, &searchCacheMu, cacheKey, formatted)
+	return formatted, nil
 }
 
-func searchDuckDuckGo(query string, client *http.Client) ([]string, error) {
+func searchDuckDuckGo(query string, client *http.Client) ([]webSearchResult, error) {
 	searchURL := fmt.Sprintf("https://lite.duckduckgo.com/lite/?q=%s", url.QueryEscape(query))
 	htmlContent, err := fetchSearchPage(client, searchURL)
 	if err != nil {
@@ -1314,7 +1351,7 @@ func searchDuckDuckGo(query string, client *http.Client) ([]string, error) {
 		count = len(snippets)
 	}
 
-	var results []string
+	var results []webSearchResult
 	for i := 0; i < count; i++ {
 		link := cleanSearchText(matches[i][1])
 		title := cleanSearchText(matches[i][2])
@@ -1322,10 +1359,106 @@ func searchDuckDuckGo(query string, client *http.Client) ([]string, error) {
 		if title == "" || link == "" {
 			continue
 		}
-		results = append(results, fmt.Sprintf("Title: %s\nLink: %s\nSnippet: %s\n", title, link, snippet))
+		results = append(results, webSearchResult{Title: title, Link: link, Snippet: snippet})
 	}
 
 	return results, nil
+}
+
+func formatSearchResultsWithGuidance(query string, results []webSearchResult) string {
+	var b strings.Builder
+	quality := "mixed"
+	if len(results) > 0 {
+		quality = classifySearchResultQuality(results[0].Link)
+	}
+	nextAction := "answer_from_search_if_sufficient"
+	if len(results) > 0 && shouldReadTopSearchResult(query, results[0]) {
+		nextAction = "read_top_result_if_more_detail_is_needed"
+	}
+
+	fmt.Fprintf(&b, "Search Guidance\n")
+	fmt.Fprintf(&b, "Query: %s\n", query)
+	fmt.Fprintf(&b, "Recommended Next Action: %s\n", nextAction)
+	fmt.Fprintf(&b, "Top Result Quality: %s\n", quality)
+	if len(results) > 0 {
+		fmt.Fprintf(&b, "Top Result URL: %s\n", results[0].Link)
+	}
+	fmt.Fprintf(&b, "Note: For simple factual or profile questions, answer from these search results when the snippets are sufficient. Read at most one authoritative page only if needed.\n")
+	fmt.Fprintf(&b, "---\n")
+	for _, result := range results {
+		fmt.Fprintf(&b, "Title: %s\n", result.Title)
+		fmt.Fprintf(&b, "Link: %s\n", result.Link)
+		fmt.Fprintf(&b, "Source Quality: %s\n", classifySearchResultQuality(result.Link))
+		fmt.Fprintf(&b, "Snippet: %s\n", result.Snippet)
+		fmt.Fprintf(&b, "---\n")
+	}
+	return strings.TrimSuffix(b.String(), "\n---\n")
+}
+
+func classifySearchResultQuality(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "unknown"
+	}
+	host := strings.ToLower(parsed.Hostname())
+	switch {
+	case strings.Contains(host, "wikipedia.org"), strings.Contains(host, "wikimedia.org"):
+		return "encyclopedic"
+	case strings.Contains(host, "namu.wiki"):
+		return "wiki"
+	case strings.Contains(host, ".go.kr"), strings.Contains(host, ".gov"), strings.Contains(host, ".edu"), strings.Contains(host, "docs."), strings.Contains(host, "developer."):
+		return "authoritative"
+	case strings.Contains(host, "naver.com"), strings.Contains(host, "blog."), strings.Contains(host, "tistory.com"):
+		return "blog_or_portal"
+	case strings.Contains(host, "instagram.com"), strings.Contains(host, "facebook.com"), strings.Contains(host, "x.com"), strings.Contains(host, "twitter.com"), strings.Contains(host, "tiktok.com"):
+		return "social"
+	default:
+		return "general"
+	}
+}
+
+func shouldReadTopSearchResult(query string, result webSearchResult) bool {
+	lowerQuery := strings.ToLower(query)
+	if strings.Contains(lowerQuery, "공식") || strings.Contains(lowerQuery, "latest") || strings.Contains(lowerQuery, "최근") || strings.Contains(lowerQuery, "today") {
+		return true
+	}
+	quality := classifySearchResultQuality(result.Link)
+	return quality == "authoritative" && len([]rune(result.Snippet)) < 80
+}
+
+func getTimedToolCache(cache map[string]timedToolCacheEntry, mu *sync.Mutex, key string, ttl time.Duration) (string, bool) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return "", false
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	entry, ok := cache[key]
+	if !ok {
+		return "", false
+	}
+	if time.Since(entry.StoredAt) > ttl {
+		delete(cache, key)
+		return "", false
+	}
+	return entry.Value, true
+}
+
+func setTimedToolCache(cache map[string]timedToolCacheEntry, mu *sync.Mutex, key, value string) {
+	key = strings.TrimSpace(key)
+	if key == "" || strings.TrimSpace(value) == "" {
+		return
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(cache) > 64 {
+		for existingKey, entry := range cache {
+			if time.Since(entry.StoredAt) > searchCacheTTL {
+				delete(cache, existingKey)
+			}
+		}
+	}
+	cache[key] = timedToolCacheEntry{Value: value, StoredAt: time.Now()}
 }
 
 func fetchSearchPage(client *http.Client, searchURL string) (string, error) {
@@ -1408,6 +1541,21 @@ func ReadPage(pageURL string) (string, error) {
 	log.Printf("[MCP] Reading Page (Advanced + Anti-Detection): %s", pageURL)
 	start := time.Now()
 	emitTraceEvent("mcp", "read_web_page.start", "Starting page read", traceDetailsMap("url", pageURL))
+
+	cacheKey := strings.TrimSpace(pageURL)
+	if cached, ok := getTimedToolCache(pageCache, &pageCacheMu, cacheKey, pageCacheTTL); ok {
+		emitTraceEvent("mcp", "read_web_page.cache_hit", "Using cached page read result", traceDetailsMap("url", pageURL, "elapsed_ms", toolDurationMs(start), "chars", len(cached)))
+		return cached, nil
+	}
+
+	if fastResult, err := readPageFastHTTP(pageURL); err == nil && isUsefulFastPageResult(fastResult) {
+		if len(fastResult) > 30000 {
+			fastResult = fastResult[:30000] + "... (truncated)"
+		}
+		setTimedToolCache(pageCache, &pageCacheMu, cacheKey, fastResult)
+		emitTraceEvent("mcp", "read_web_page.complete", "Page read completed via fast HTTP path", traceDetailsMap("url", pageURL, "elapsed_ms", toolDurationMs(start), "chars", len(fastResult), "mode", "http_fast_path"))
+		return fastResult, nil
+	}
 
 	// 1. Anti-Detection: Configure browser with stealth flags
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
@@ -1564,9 +1712,141 @@ func ReadPage(pageURL string) (string, error) {
 	if len(res) > 30000 {
 		res = res[:30000] + "... (truncated)"
 	}
+	setTimedToolCache(pageCache, &pageCacheMu, cacheKey, res)
 
 	emitTraceEvent("mcp", "read_web_page.complete", "Page read completed", traceDetailsMap("url", pageURL, "elapsed_ms", toolDurationMs(start), "chars", len(res)))
 	return res, nil
+}
+
+func readPageFastHTTP(pageURL string) (string, error) {
+	parsed, err := url.Parse(pageURL)
+	if err != nil {
+		return "", err
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "" || requiresBrowserPageRead(host) {
+		return "", fmt.Errorf("browser path preferred for host %q", host)
+	}
+
+	client := &http.Client{Timeout: 8 * time.Second}
+	req, err := http.NewRequest("GET", pageURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5")
+	req.Header.Set("Accept-Language", "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("page returned status %d", resp.StatusCode)
+	}
+	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+	if contentType != "" && !strings.Contains(contentType, "text/html") && !strings.Contains(contentType, "text/plain") && !strings.Contains(contentType, "xml") {
+		return "", fmt.Errorf("unsupported content type %q", contentType)
+	}
+
+	limited := io.LimitReader(resp.Body, 1_200_000)
+	body, err := io.ReadAll(limited)
+	if err != nil {
+		return "", err
+	}
+	text := string(body)
+	if strings.Contains(contentType, "text/plain") {
+		return compactExtractedPageText(text), nil
+	}
+	return extractReadableTextFromHTML(text), nil
+}
+
+func requiresBrowserPageRead(host string) bool {
+	switch {
+	case strings.Contains(host, "instagram.com"),
+		strings.Contains(host, "facebook.com"),
+		strings.Contains(host, "x.com"),
+		strings.Contains(host, "twitter.com"),
+		strings.Contains(host, "tiktok.com"),
+		strings.Contains(host, "naver.com"),
+		strings.Contains(host, "youtube.com"):
+		return true
+	default:
+		return false
+	}
+}
+
+func extractReadableTextFromHTML(input string) string {
+	title := ""
+	if match := regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`).FindStringSubmatch(input); len(match) > 1 {
+		title = cleanSearchText(match[1])
+	}
+
+	body := input
+	if match := regexp.MustCompile(`(?is)<body[^>]*>(.*?)</body>`).FindStringSubmatch(input); len(match) > 1 {
+		body = match[1]
+	}
+
+	cleaners := []*regexp.Regexp{
+		regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`),
+		regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`),
+		regexp.MustCompile(`(?is)<noscript[^>]*>.*?</noscript>`),
+		regexp.MustCompile(`(?is)<svg[^>]*>.*?</svg>`),
+		regexp.MustCompile(`(?is)<nav[^>]*>.*?</nav>`),
+		regexp.MustCompile(`(?is)<footer[^>]*>.*?</footer>`),
+		regexp.MustCompile(`(?is)<aside[^>]*>.*?</aside>`),
+		regexp.MustCompile(`(?is)<!--.*?-->`),
+	}
+	for _, cleaner := range cleaners {
+		body = cleaner.ReplaceAllString(body, " ")
+	}
+	blockTags := regexp.MustCompile(`(?i)</?(h[1-6]|p|div|section|article|main|li|br|tr|td|th|blockquote)[^>]*>`)
+	body = blockTags.ReplaceAllString(body, "\n")
+	body = regexp.MustCompile(`(?is)<[^>]+>`).ReplaceAllString(body, " ")
+	body = html.UnescapeString(body)
+	body = compactExtractedPageText(body)
+	if title != "" && !strings.Contains(body, title) {
+		return strings.TrimSpace("# " + title + "\n\n" + body)
+	}
+	return body
+}
+
+func compactExtractedPageText(input string) string {
+	input = strings.ReplaceAll(input, "\u00a0", " ")
+	lines := strings.FieldsFunc(input, func(r rune) bool {
+		return r == '\n' || r == '\r'
+	})
+	var cleaned []string
+	for _, line := range lines {
+		line = strings.Join(strings.Fields(strings.TrimSpace(line)), " ")
+		if line == "" {
+			continue
+		}
+		cleaned = append(cleaned, line)
+	}
+	return strings.TrimSpace(strings.Join(cleaned, "\n"))
+}
+
+func isUsefulFastPageResult(text string) bool {
+	text = strings.TrimSpace(text)
+	if len([]rune(text)) < 300 {
+		return false
+	}
+	lower := strings.ToLower(text)
+	blockedSignals := []string{
+		"enable javascript",
+		"checking your browser",
+		"just a moment",
+		"access denied",
+		"captcha",
+	}
+	for _, signal := range blockedSignals {
+		if strings.Contains(lower, signal) {
+			return false
+		}
+	}
+	return true
 }
 
 func readPageTimeoutForToolURL(pageURL string) time.Duration {
