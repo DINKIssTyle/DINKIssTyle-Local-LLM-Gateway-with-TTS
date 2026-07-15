@@ -18,7 +18,6 @@ import (
 )
 
 const (
-	legacyMacMemoryRootName       = "DKST LLM Chat"
 	macMemoryRootName             = "DKST LLM Chat Server"
 	savedTurnMemoryOffset         = int64(1_000_000_000)
 	memorySynthesisMaxTokens      = 384
@@ -690,7 +689,7 @@ func DeleteMemoryDB(userID string, memoryID int64) (string, error) {
 }
 
 // GetUserMemoryDir returns the memory directory path for a user based on OS.
-// macOS: ~/Documents/DKST LLM Chat Server/memory/{userID}/
+// macOS: ~/Library/Application Support/DKST LLM Chat Server/memory/{userID}/
 // Windows/Linux: {executable_dir}/memory/{userID}/
 func GetUserMemoryDir(userID string) (string, error) {
 	if userID == "" {
@@ -699,11 +698,11 @@ func GetUserMemoryDir(userID string) (string, error) {
 
 	var baseDir string
 	if runtime.GOOS == "darwin" {
-		home, err := os.UserHomeDir()
+		configDir, err := os.UserConfigDir()
 		if err != nil {
 			return "", err
 		}
-		baseDir = filepath.Join(home, "Documents", macMemoryRootName, "memory")
+		baseDir = filepath.Join(configDir, macMemoryRootName, "memory")
 	} else {
 		// Windows/Linux: Executable directory
 		ex, err := os.Executable()

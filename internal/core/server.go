@@ -697,6 +697,7 @@ func cleanSavedTurnTitleContext(input string, limit int) string {
 	input = strings.ReplaceAll(input, "\r\n", "\n")
 	input = strings.ReplaceAll(input, "\r", "\n")
 	input = regexp.MustCompile("```[\\s\\S]*?```").ReplaceAllString(input, " ")
+	input = regexp.MustCompile(`(?i)<\|channel(?:\||>)?\s*thought[\s\S]*?(?:<channel\|>|<\/channel\|>|<\|channel(?:\||>)?\s*(?:message|final|instruction|response)|$)`).ReplaceAllString(input, " ")
 	input = regexp.MustCompile("<think>[\\s\\S]*?</think>").ReplaceAllString(input, " ")
 	input = regexp.MustCompile(`!\[([^\]]*)\]\([^)]+\)`).ReplaceAllString(input, "$1")
 	input = regexp.MustCompile(`\[([^\]]+)\]\([^)]+\)`).ReplaceAllString(input, "$1")
@@ -956,9 +957,11 @@ func cleanContentForStatefulSummaryServer(text string) string {
 	if strings.TrimSpace(text) == "" {
 		return ""
 	}
+	cleaned := regexp.MustCompile(`(?i)<\|channel(?:\||>)?\s*thought[\s\S]*?(?:<channel\|>|<\/channel\|>|<\|channel(?:\||>)?\s*(?:message|final|instruction|response)|$)`).ReplaceAllString(text, "")
+	cleaned = regexp.MustCompile(`<think>[\s\S]*?</think>`).ReplaceAllString(cleaned, "")
 	return strings.TrimSpace(
 		regexp.MustCompile(`\s+`).ReplaceAllString(
-			regexp.MustCompile(`<think>[\s\S]*?</think>`).ReplaceAllString(text, ""),
+			cleaned,
 			" ",
 		),
 	)
@@ -973,7 +976,8 @@ func cleanRecentContextText(text string) string {
 	if strings.TrimSpace(text) == "" {
 		return ""
 	}
-	cleaned := regexp.MustCompile(`<think>[\s\S]*?</think>`).ReplaceAllString(text, "")
+	cleaned := regexp.MustCompile(`(?i)<\|channel(?:\||>)?\s*thought[\s\S]*?(?:<channel\|>|<\/channel\|>|<\|channel(?:\||>)?\s*(?:message|final|instruction|response)|$)`).ReplaceAllString(text, "")
+	cleaned = regexp.MustCompile(`<think>[\s\S]*?</think>`).ReplaceAllString(cleaned, "")
 	cleaned = strings.ReplaceAll(cleaned, "\r\n", "\n")
 	cleaned = strings.ReplaceAll(cleaned, "\r", "\n")
 	lines := strings.Split(cleaned, "\n")

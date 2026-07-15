@@ -110,9 +110,9 @@ type HealthCheckResult struct {
 
 var configFile = "config.json"
 
-// GetAppDataDir returns the application data directory
-// Windows: Executable directory
-// Others: ~/Documents/DKST LLM Chat Server
+// GetAppDataDir returns the application data directory.
+// Windows/Linux: executable directory.
+// macOS: ~/Library/Application Support/DKST LLM Chat Server.
 func GetAppDataDir() string {
 	exePath, err := os.Executable()
 	if err != nil {
@@ -124,17 +124,16 @@ func GetAppDataDir() string {
 		return exeDir
 	}
 
-	// Mac -> ~/Documents/DKST LLM Chat Server
-	homeDir, err := os.UserHomeDir()
+	configDir, err := os.UserConfigDir()
 	if err != nil {
 		return exeDir // Fallback
 	}
 
-	docDir := filepath.Join(homeDir, "Documents", macAppDataDirName)
-	if err := os.MkdirAll(docDir, 0755); err != nil {
+	appDataDir := filepath.Join(configDir, macAppDataDirName)
+	if err := os.MkdirAll(appDataDir, 0755); err != nil {
 		return exeDir // Fallback
 	}
-	return docDir
+	return appDataDir
 }
 
 // GetResourcePath returns the absolute path for a resource
@@ -562,7 +561,9 @@ func (a *App) Shutdown(ctx context.Context) {
 // Quit initiates the application shutdown
 func (a *App) Quit() {
 	a.IsQuitting = true
-	wruntime.Quit(a.ctx)
+	if a.ctx != nil {
+		wruntime.Quit(a.ctx)
+	}
 }
 
 // GetServerStatus returns the current server status
@@ -775,11 +776,31 @@ func (a *App) OpenCertFolder() error {
 }
 
 func CreateAppMenu(app *App) *menu.Menu {
+	return createAppMenu(app, runtime.GOOS)
+}
+
+func createAppMenu(app *App, goos string) *menu.Menu {
 	men := menu.NewMenu()
 
-	if runtime.GOOS == "darwin" {
-		// macOS: AppMenu handles all standard roles (About, Hide, Services, Quit)
-		men.Append(menu.AppMenu())
+	if goos == "darwin" {
+		// The built-in AppMenu invokes Wails' quit path directly. That makes
+		// OnBeforeClose mistake Cmd+Q for a window close and hide the window when
+		// minimize-to-tray is enabled. Route explicit quit actions through App.Quit
+		// so they can never be intercepted by the close-to-tray behaviour.
+		appMenu := men.AddSubmenu("DKST LLM Chat Server")
+		appMenu.AddText("About DKST LLM Chat Server", nil, func(_ *menu.CallbackData) {
+			app.ShowAbout()
+		})
+		appMenu.AddSeparator()
+		appMenu.AddText("Hide DKST LLM Chat Server", keys.CmdOrCtrl("h"), func(_ *menu.CallbackData) {
+			if app.ctx != nil {
+				wruntime.Hide(app.ctx)
+			}
+		})
+		appMenu.AddSeparator()
+		appMenu.AddText("Quit DKST LLM Chat Server", keys.CmdOrCtrl("q"), func(_ *menu.CallbackData) {
+			app.Quit()
+		})
 	} else {
 		appMenu := men.AddSubmenu("App")
 		appMenu.AddText("About DKST LLM Chat Server", keys.CmdOrCtrl("i"), func(_ *menu.CallbackData) {

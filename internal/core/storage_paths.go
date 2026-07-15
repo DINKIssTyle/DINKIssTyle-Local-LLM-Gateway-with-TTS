@@ -44,12 +44,15 @@ func joinAppDataPath(parts ...string) string {
 	return filepath.Join(all...)
 }
 
-func getLegacyMacAppDataDir() string {
+func getLegacyMacAppDataDirs() []string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return ""
+		return nil
 	}
-	return filepath.Join(homeDir, "Documents", legacyMacAppDataDirName)
+	return []string{
+		filepath.Join(homeDir, "Documents", legacyMacAppDataDirName),
+		filepath.Join(homeDir, "Documents", macAppDataDirName),
+	}
 }
 
 func getWritableCertDir() string {

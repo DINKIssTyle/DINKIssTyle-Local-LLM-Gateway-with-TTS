@@ -275,6 +275,34 @@
 
             cleaned = cleaned.replace(/<span class="tool-status"[\s\S]*?<\/span>/g, '');
             cleaned = cleaned.replace(/Tool Call:.*?(?:[.!?\n]|$)+/gi, '');
+            // Strip think blocks
+            if (cleaned.includes('</think>')) {
+                cleaned = cleaned.split('</think>').pop();
+            }
+            if (cleaned.includes('<think>')) {
+                cleaned = cleaned.split('<think>')[0];
+            }
+
+            // Strip Gemma 4 reasoning channels
+            const gemmaStartRegex = /<\|channel(?:\||>)?\s*thought/i;
+            const gemmaEndRegex = /<channel\|>|<\/channel\|>|<\|channel(?:\||>)?\s*(?:message|final|instruction|response)/i;
+
+            if (gemmaStartRegex.test(cleaned)) {
+                const startMatch = cleaned.match(gemmaStartRegex);
+                const startIndex = startMatch.index;
+                const remaining = cleaned.slice(startIndex + startMatch[0].length);
+                const endMatch = remaining.match(gemmaEndRegex);
+                if (endMatch) {
+                    const endIndex = startIndex + startMatch[0].length + endMatch.index + endMatch[0].length;
+                    cleaned = cleaned.slice(0, startIndex) + cleaned.slice(endIndex);
+                } else {
+                    cleaned = cleaned.slice(0, startIndex);
+                }
+            }
+
+            cleaned = cleaned.replace(/<\|channel(?:\||>)?\s*thought/gi, '');
+            cleaned = cleaned.replace(/<channel\|>/gi, '');
+            cleaned = cleaned.replace(/<\/channel\|>/gi, '');
             cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/g, '');
             cleaned = cleaned.replace(/<[^>]*>/g, '');
 

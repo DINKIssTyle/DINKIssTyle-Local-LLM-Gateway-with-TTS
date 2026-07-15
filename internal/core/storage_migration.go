@@ -211,9 +211,10 @@ func migrateStorageRoot(root string, report *storageMigrationReport) error {
 
 func detectLegacyStorageNeedsMigration(root string) (bool, string) {
 	if runtime.GOOS == "darwin" {
-		legacyRoot := getLegacyMacAppDataDir()
-		if legacyRoot != "" && legacyRoot != root && pathExists(legacyRoot) {
-			return true, "A previous macOS app data folder was found and should be moved into the current storage location."
+		for _, legacyRoot := range getLegacyMacAppDataDirs() {
+			if legacyRoot != root && pathExists(legacyRoot) {
+				return true, "A previous macOS app data folder was found in Documents and should be moved into Application Support."
+			}
 		}
 	}
 
@@ -287,11 +288,23 @@ func (a *App) RunStorageMigration() (string, error) {
 	report := &storageMigrationReport{}
 	currentRoot := GetAppDataDir()
 
+	// The desktop harness opens the destination database before Startup. Close it
+	// before replacing database, WAL, or SHM files so SQLite cannot keep using the
+	// unlinked empty database while the legacy files are moved into place.
+	mcp.CloseDB()
+	databaseReady := false
+	defer func() {
+		if !databaseReady {
+			_ = mcp.InitDB(GetMemoryDatabasePath())
+		}
+	}()
+
 	if runtime.GOOS == "darwin" {
-		legacyRoot := getLegacyMacAppDataDir()
-		if legacyRoot != "" && legacyRoot != currentRoot && pathExists(legacyRoot) {
-			if err := movePathIfNeeded(legacyRoot, currentRoot, report); err != nil {
-				return "", err
+		for _, legacyRoot := range getLegacyMacAppDataDirs() {
+			if legacyRoot != currentRoot && pathExists(legacyRoot) {
+				if err := movePathIfNeeded(legacyRoot, currentRoot, report); err != nil {
+					return "", err
+				}
 			}
 		}
 	}
@@ -306,10 +319,10 @@ func (a *App) RunStorageMigration() (string, error) {
 			return report.summary(), err
 		}
 	}
-	mcp.CloseDB()
 	if err := mcp.InitDB(GetMemoryDatabasePath()); err != nil {
 		return report.summary(), err
 	}
+	databaseReady = true
 
 	a.loadConfig()
 	applyEmbeddingRuntimeConfig()

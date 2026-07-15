@@ -782,6 +782,9 @@ function handleChatEndEvent(json, ctx) {
 function buildStreamRecoveryContext(ctx) {
     const reasoningText = String(ctx?.reasoningBuffer || '')
         .replace(/<\/?think>/g, '')
+        .replace(/<\|channel(?:\||>)?\s*thought/gi, '')
+        .replace(/<channel\|>/gi, '')
+        .replace(/<\/channel\|>/gi, '')
         .trim();
     const toolEvents = Array.isArray(ctx?.toolEvents) ? ctx.toolEvents : [];
     const completion = ctx?.lastServerCompletion && typeof ctx.lastServerCompletion === 'object'
@@ -879,8 +882,12 @@ function processTextBasedReasoning(rawText, elementId) {
     const hasFinal = rawText.includes('<|channel|>final');
     const hasThink = rawText.includes('<think>');
     const hasThinkEnd = rawText.includes('</think>');
+    const gemmaStartRegex = /<\|channel(?:\||>)?\s*thought/i;
+    const gemmaEndRegex = /<channel\|>|<\/channel\|>|<\|channel(?:\||>)?\s*(?:message|final|instruction|response)/i;
+    const hasGemmaStart = gemmaStartRegex.test(rawText);
+    const hasGemmaEnd = gemmaEndRegex.test(rawText);
 
-    if ((hasAnalysis && !hasFinal) || (hasThink && !hasThinkEnd)) {
+    if ((hasAnalysis && !hasFinal) || (hasThink && !hasThinkEnd) || (hasGemmaStart && !hasGemmaEnd)) {
         let fullReasoningText = "";
         if (hasAnalysis) {
             const parts = rawText.split('<|channel|>analysis');
@@ -888,12 +895,18 @@ function processTextBasedReasoning(rawText, elementId) {
         } else if (hasThink) {
             const parts = rawText.split('<think>');
             fullReasoningText = parts[parts.length - 1].split('</think>')[0].trim();
+        } else if (hasGemmaStart) {
+            const startMatch = rawText.match(gemmaStartRegex);
+            const startIndex = startMatch.index + startMatch[0].length;
+            const remainingText = rawText.slice(startIndex);
+            const endMatch = remainingText.match(gemmaEndRegex);
+            fullReasoningText = endMatch ? remainingText.slice(0, endMatch.index).trim() : remainingText.trim();
         }
         AppState.session.replay.reasoningBuffers.set(elementId, fullReasoningText);
         let statusText = fullReasoningText;
         if (statusText.length > 150) statusText = "..." + statusText.slice(-147);
         showReasoningStatus(elementId, statusText, false);
-    } else if (hasFinal || hasThinkEnd) {
+    } else if (hasFinal || hasThinkEnd || (hasGemmaStart && hasGemmaEnd)) {
         let fullReasoningText = "";
         if (hasFinal) {
             const parts = rawText.split('<|channel|>analysis');
@@ -901,6 +914,14 @@ function processTextBasedReasoning(rawText, elementId) {
         } else if (hasThinkEnd) {
             const parts = rawText.split('<think>');
             if (parts.length > 1) fullReasoningText = parts[parts.length - 1].split('</think>')[0].trim();
+        } else if (hasGemmaStart && hasGemmaEnd) {
+            const startMatch = rawText.match(gemmaStartRegex);
+            const startIndex = startMatch.index + startMatch[0].length;
+            const remainingText = rawText.slice(startIndex);
+            const endMatch = remainingText.match(gemmaEndRegex);
+            if (endMatch) {
+                fullReasoningText = remainingText.slice(0, endMatch.index).trim();
+            }
         }
         if (fullReasoningText) {
             AppState.session.replay.reasoningBuffers.set(elementId, fullReasoningText);
@@ -4076,6 +4097,21 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
             }
         }
 
+        // Fallback: If no reasoning_content is explicitly defined but Gemma 4 reasoning channel exists
+        const gemmaStartRegex = /<\|channel(?:\||>)?\s*thought/i;
+        if (!reasoningText && gemmaStartRegex.test(assistantText)) {
+            const startMatch = assistantText.match(gemmaStartRegex);
+            const startIndex = startMatch.index + startMatch[0].length;
+            const remainingText = assistantText.slice(startIndex);
+            const gemmaEndRegex = /<channel\|>|<\/channel\|>|<\|channel(?:\||>)?\s*(?:message|final|instruction|response)/i;
+            const endMatch = remainingText.match(gemmaEndRegex);
+            if (endMatch) {
+                reasoningText = remainingText.slice(0, endMatch.index).trim();
+            } else {
+                reasoningText = remainingText.trim();
+            }
+        }
+
         if (!waitingForRemoteReply && !hasAssistantSnapshotContent(assistantText, reasoningText, snapshotToolState)) {
             return;
         }
@@ -4530,8 +4566,12 @@ function applyCurrentChatSessionEvent(entry) {
                 const hasFinal = next.includes('<|channel|>final');
                 const hasThink = next.includes('<think>');
                 const hasThinkEnd = next.includes('</think>');
+                const gemmaStartRegex = /<\|channel(?:\||>)?\s*thought/i;
+                const gemmaEndRegex = /<channel\|>|<\/channel\|>|<\|channel(?:\||>)?\s*(?:message|final|instruction|response)/i;
+                const hasGemmaStart = gemmaStartRegex.test(next);
+                const hasGemmaEnd = gemmaEndRegex.test(next);
 
-                if ((hasAnalysis && !hasFinal) || (hasThink && !hasThinkEnd)) {
+                if ((hasAnalysis && !hasFinal) || (hasThink && !hasThinkEnd) || (hasGemmaStart && !hasGemmaEnd)) {
                     let statusText = "Thinking...";
                     if (hasAnalysis) {
                         const parts = next.split('<|channel|>analysis');
@@ -4539,10 +4579,16 @@ function applyCurrentChatSessionEvent(entry) {
                     } else if (hasThink) {
                         const parts = next.split('<think>');
                         statusText = parts[parts.length - 1].split('</think>')[0].trim();
+                    } else if (hasGemmaStart) {
+                        const startMatch = next.match(gemmaStartRegex);
+                        const startIndex = startMatch.index + startMatch[0].length;
+                        const remainingText = next.slice(startIndex);
+                        const endMatch = remainingText.match(gemmaEndRegex);
+                        statusText = endMatch ? remainingText.slice(0, endMatch.index).trim() : remainingText.trim();
                     }
                     if (statusText.length > 150) statusText = "..." + statusText.slice(-147);
                     showReasoningStatus(assistantId, statusText, false);
-                } else if (hasFinal || hasThinkEnd) {
+                } else if (hasFinal || hasThinkEnd || (hasGemmaStart && hasGemmaEnd)) {
                     showReasoningStatus(assistantId, null, true);
                 }
             }
@@ -8042,6 +8088,27 @@ function stripHiddenAssistantProtocolText(text) {
     cleanText = cleanText.replace(/\{"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*\{[^}]*\}\}/g, '');
     cleanText = cleanText.replace(/\{"name"\s*:\s*"[^"]+"[^}]*\}/g, '');
     cleanText = cleanText.replace(/<\|[\s\S]*?\|>/g, '');
+
+    // Strip Gemma 4 reasoning channels
+    const gemmaStartRegex = /<\|channel(?:\||>)?\s*thought/i;
+    const gemmaEndRegex = /<channel\|>|<\/channel\|>|<\|channel(?:\||>)?\s*(?:message|final|instruction|response)/i;
+
+    if (gemmaStartRegex.test(cleanText)) {
+        const startMatch = cleanText.match(gemmaStartRegex);
+        const startIndex = startMatch.index;
+        const remaining = cleanText.slice(startIndex + startMatch[0].length);
+        const endMatch = remaining.match(gemmaEndRegex);
+        if (endMatch) {
+            const endIndex = startIndex + startMatch[0].length + endMatch.index + endMatch[0].length;
+            cleanText = cleanText.slice(0, startIndex) + cleanText.slice(endIndex);
+        } else {
+            cleanText = cleanText.slice(0, startIndex);
+        }
+    }
+
+    cleanText = cleanText.replace(/<\|channel(?:\||>)?\s*thought/gi, '');
+    cleanText = cleanText.replace(/<channel\|>/gi, '');
+    cleanText = cleanText.replace(/<\/channel\|>/gi, '');
 
     if (cleanText.includes('</think>')) {
         cleanText = cleanText.split('</think>').pop().trim();
