@@ -33,6 +33,20 @@
         let osTTSVoicesReady = false;
         let audioContextUnlocked = false;
         let audioCtx = null;
+        let synthesisTail = Promise.resolve();
+
+        function buildTTSAudioCacheKey(text) {
+            return [
+                config.ttsEngine,
+                config.ttsVoice,
+                config.ttsLang,
+                config.ttsSpeed,
+                config.ttsSteps,
+                config.chunkSize,
+                config.ttsFormat,
+                text
+            ].join(':');
+        }
 
         function updateMediaSessionMetadata(text) {
             if (!('mediaSession' in navigator)) return;
@@ -179,7 +193,7 @@
             const consumedTexts = [];
             try {
                 for (const text of queuedTexts.slice(0, 2)) {
-                    const cachedPromise = getCachedAudioPromise?.(text);
+                    const cachedPromise = getCachedAudioPromise?.(buildTTSAudioCacheKey(text));
                     if (!cachedPromise) break;
 
                     const nextUrl = await promiseWithTimeout(cachedPromise, 120);
@@ -204,6 +218,8 @@
 
                 if (consumedTexts.length > 0) {
                     onCombinedQueueConsumed?.(consumedTexts);
+                    const cache = getAudioCache?.();
+                    consumedTexts.forEach((text) => cache?.delete(buildTTSAudioCacheKey(text)));
                 }
 
                 return {
@@ -564,14 +580,13 @@
             if (!text) return null;
             const cache = getAudioCache?.();
             if (!cache) return null;
-            const cacheKey = `${config.ttsEngine}:${config.ttsVoice}:${config.ttsSpeed}:${text}`;
+            const cacheKey = buildTTSAudioCacheKey(text);
             if (cache.has(cacheKey)) return cache.get(cacheKey);
+            const sessionAtSchedule = (getPlaybackState?.() || {}).ttsSessionId;
 
-            const promise = (async () => {
-                const state = getPlaybackState?.() || {};
-                const sessionAtStart = state.ttsSessionId;
-
+            const runSynthesis = async () => {
                 try {
+                    if (sessionAtSchedule !== (getPlaybackState?.() || {}).ttsSessionId) return null;
                     const payload = {
                         text,
                         lang: config.ttsLang,
@@ -586,11 +601,12 @@
                     const response = await global.fetch('/api/tts', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
                         body: JSON.stringify(payload)
                     });
 
                     const latestState = getPlaybackState?.() || {};
-                    if (sessionAtStart !== latestState.ttsSessionId) {
+                    if (sessionAtSchedule !== latestState.ttsSessionId) {
                         console.log('[TTS] Session changed, discarding prefetch');
                         return null;
                     }
@@ -602,13 +618,19 @@
 
                     const blob = await response.blob();
                     const url = global.URL.createObjectURL(blob);
-                    console.log(`[TTS] Prefetch complete: "${text.substring(0, 25)}..."`);
+                    const timing = response.headers.get('Server-Timing');
+                    console.log(`[TTS] Prefetch complete: "${text.substring(0, 25)}..."${timing ? ` (${timing})` : ''}`);
                     return url;
                 } catch (e) {
                     console.error('[TTS] Chunk error:', e);
                     return null;
                 }
-            })();
+            };
+
+            // One ONNX inference at a time avoids oversubscribing the CPU with
+            // multiple requests that each use their own intra-op thread pool.
+            const promise = synthesisTail.catch(() => null).then(runSynthesis);
+            synthesisTail = promise.then(() => undefined, () => undefined);
 
             cache.set(cacheKey, promise);
             return promise;
@@ -821,7 +843,7 @@
 
             const seededState = getPlaybackState?.() || {};
             const seededQueue = Array.isArray(seededState.ttsQueue) ? seededState.ttsQueue : [];
-            for (let i = 0; i < Math.min(3, seededQueue.length); i += 1) {
+            for (let i = 0; i < Math.min(2, seededQueue.length); i += 1) {
                 prefetchTTSAudio(seededQueue[i]);
             }
 
@@ -854,7 +876,7 @@
                     console.error('Prefetch failed', e);
                 }
 
-                const cacheKey = `${config.ttsEngine}:${config.ttsVoice}:${config.ttsSpeed}:${text}`;
+                const cacheKey = buildTTSAudioCacheKey(text);
                 getAudioCache?.()?.delete(cacheKey);
 
                 if (!audioUrl) {
@@ -880,12 +902,14 @@
                         setPlaybackState?.({ currentAudio });
                     }
 
-                    playbackBundle = await combinePlayableChunks(audioUrl, [...(latestState.ttsQueue || [])]);
+                    playbackBundle = firstChunkPlayed
+                        ? await combinePlayableChunks(audioUrl, [...(latestState.ttsQueue || [])])
+                        : { url: audioUrl, revokeInputs: null };
                     const playbackUrl = playbackBundle?.url || audioUrl;
 
-                    if (!firstChunkPlayed && btn) {
+                    if (!firstChunkPlayed) {
                         firstChunkPlayed = true;
-                        onSyncCurrentAudioButtonUI?.();
+                        if (btn) onSyncCurrentAudioButtonUI?.();
                     }
 
                     await new Promise((resolve, reject) => {

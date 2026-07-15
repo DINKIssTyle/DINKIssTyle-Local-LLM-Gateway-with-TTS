@@ -58,6 +58,8 @@ var (
 	styleMutex sync.Mutex
 	// Global TTS Mutex
 	globalTTSMutex sync.RWMutex
+	// A shared ONNX runtime performs best without competing CPU-bound calls.
+	ttsSynthesisSlot = make(chan struct{}, 1)
 
 	// Global App Instance (for handlers to access app methods)
 	globalApp *App
@@ -5943,6 +5945,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 // handleTTS converts text to speech using Supertonic
 func handleTTS(w http.ResponseWriter, r *http.Request) {
+	requestStarted := time.Now()
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -5970,6 +5973,22 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if TTS is initialized
+	queueStarted := time.Now()
+	slotHeld := false
+	select {
+	case ttsSynthesisSlot <- struct{}{}:
+		slotHeld = true
+		defer func() {
+			if slotHeld {
+				<-ttsSynthesisSlot
+			}
+		}()
+	case <-r.Context().Done():
+		http.Error(w, "TTS request cancelled", http.StatusRequestTimeout)
+		return
+	}
+	queueWait := time.Since(queueStarted)
+
 	globalTTSMutex.RLock()
 	ttsInstance := globalTTS
 	globalTTSMutex.RUnlock()
@@ -6043,9 +6062,13 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Use globalTTS directly while holding the lock to prevent destruction
+	inferenceStarted := time.Now()
 	wavData, _, err := globalTTS.Call(r.Context(), req.Text, req.Lang, style, steps, speed, req.ChunkSize)
+	inferenceElapsed := time.Since(inferenceStarted)
 	sampleRate := globalTTS.SampleRate
 	globalTTSMutex.RUnlock()
+	<-ttsSynthesisSlot
+	slotHeld = false
 
 	if err != nil {
 		log.Printf("TTS failed: %v", err)
@@ -6054,7 +6077,9 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate audio bytes in requested format
+	encodeStarted := time.Now()
 	audioBytes, contentType, err := GenerateAudio(wavData, sampleRate, req.Format)
+	encodeElapsed := time.Since(encodeStarted)
 	if err != nil {
 		log.Printf("Audio generation failed: %v", err)
 		http.Error(w, "Audio generation failed", http.StatusInternalServerError)
@@ -6064,6 +6089,13 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 	// Return audio
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(audioBytes)))
+	w.Header().Set("Server-Timing", fmt.Sprintf(
+		"tts_queue;dur=%.2f, tts_infer;dur=%.2f, tts_encode;dur=%.2f, tts_total;dur=%.2f",
+		float64(queueWait.Microseconds())/1000,
+		float64(inferenceElapsed.Microseconds())/1000,
+		float64(encodeElapsed.Microseconds())/1000,
+		float64(time.Since(requestStarted).Microseconds())/1000,
+	))
 
 	startTransfer := time.Now()
 	n, err := w.Write(audioBytes)

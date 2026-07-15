@@ -1362,10 +1362,15 @@ func (a *App) SetServerTTSConfig(cfg ServerTTSConfig) {
 		cfg.OSPitch = 1.0
 	}
 
+	previous := ttsConfig
 	ttsConfig = cfg
 	a.saveConfig()
 
-	if a.enableTTS && cfg.Engine == "supertonic" {
+	globalTTSMutex.RLock()
+	ttsUnavailable := globalTTS == nil
+	globalTTSMutex.RUnlock()
+	shouldReload := a.enableTTS && cfg.Engine == "supertonic" && (previous.Engine != "supertonic" || previous.Threads != cfg.Threads || ttsUnavailable)
+	if shouldReload {
 		fmt.Printf("Reloading TTS engine with %d threads...\n", cfg.Threads)
 		go func() {
 			if err := InitTTS(getTTSAssetsDir(), cfg.Threads); err != nil {
@@ -1379,6 +1384,9 @@ func (a *App) SetServerTTSConfig(cfg ServerTTSConfig) {
 func (a *App) SetTTSThreads(threads int) {
 	if threads <= 0 {
 		threads = 4
+	}
+	if ttsConfig.Threads == threads {
+		return
 	}
 	ttsConfig.Threads = threads
 	a.saveConfig()

@@ -1963,38 +1963,7 @@ function refreshChatScrollMetrics() {
     return commitChatScrollMetrics(readChatScrollMetrics());
 }
 
-if (chatMessages) {
-    refreshChatScrollMetrics();
-    chatMessages.addEventListener('scroll', () => {
-        if (AppState.ui.scroll.suppressNextEvent) {
-            AppState.ui.scroll.suppressNextEvent = false;
-            updateScrollToBottomButton();
-            return;
-        }
-
-        const metrics = refreshChatScrollMetrics();
-        AppState.ui.scroll.shouldAutoScroll = metrics.nearBottom;
-        if (!AppState.ui.scroll.shouldAutoScroll) {
-            if (AppState.ui.scroll.holdAutoScrollTimeout) {
-                clearTimeout(AppState.ui.scroll.holdAutoScrollTimeout);
-                AppState.ui.scroll.holdAutoScrollTimeout = null;
-            }
-            AppState.ui.scroll.lockToLatest = false;
-        }
-
-        if (AppState.chat.isGenerating) {
-            const isLabelTopStreaming = getStreamingScrollMode() === 'label-top';
-            if (AppState.ui.scroll.shouldAutoScroll && !isLabelTopStreaming) {
-                AppState.ui.scroll.lockToLatest = true;
-            } else {
-                if (metrics.distanceFromBottom > AUTO_SCROLL_THRESHOLD_PX * 2) {
-                    AppState.ui.scroll.lockToLatest = false;
-                }
-            }
-        }
-        updateScrollToBottomButton();
-    }, { passive: true });
-}
+if (chatMessages) refreshChatScrollMetrics();
 const messageInput = document.getElementById('message-input');
 const sendBtn = document.getElementById('send-btn');
 const imagePreviewVal = document.getElementById('image-preview');
@@ -2073,7 +2042,6 @@ const ttsController = appTTS.createTTSController({
                     const idx = AppState.audio.ttsQueue.indexOf(text);
                     if (idx >= 0) AppState.audio.ttsQueue.splice(idx, 1);
                 }
-                ttsAudioCache.delete(text);
             });
         },
         onDetachCurrentAudioPlaybackListeners: () => detachCurrentAudioPlaybackListeners(),
@@ -2244,7 +2212,6 @@ function restoreChatScrollPosition(scrollTop) {
     const nextTop = Math.max(0, scrollTop);
 
     const apply = () => {
-        AppState.ui.scroll.suppressNextEvent = true;
         chatMessages.scrollTop = nextTop;
         updateScrollToBottomButton();
     };
@@ -3743,10 +3710,6 @@ function saveConfig(closeModal = true) {
             enabled: config.enableEmbeddings
         }).catch(console.error);
 
-        // This is separate from saveConfig in app.go, but SetTTSThreads triggers reload
-        if (config.ttsThreads && config.ttsEngine === 'supertonic') {
-            window.go.core.App.SetTTSThreads(config.ttsThreads);
-        }
     }
 
     // Also try fetch for web mode or as backup
@@ -4471,6 +4434,23 @@ function applyCurrentChatSessionEvent(entry) {
         }
     }
 
+    const assistantScopedEvents = new Set([
+        'message.delta',
+        'reasoning.start',
+        'reasoning.delta',
+        'reasoning.end',
+        'tool_call.start',
+        'tool_call.arguments',
+        'tool_call.success',
+        'tool_call.failure',
+        'chat.end',
+        'request.complete'
+    ]);
+    if (!isLocalActiveTurn && entryTurnId && assistantScopedEvents.has(entry.EventType)) {
+        AppState.session.replay.currentTurnId = entryTurnId;
+        AppState.session.replay.currentAssistantId = ensureServerReplayAssistant(entryTurnId, sessionId, entry.EventSeq);
+    }
+
     switch (entry.EventType) {
         case 'generation.started':
             if (isPassiveRunning) {
@@ -4510,6 +4490,10 @@ function applyCurrentChatSessionEvent(entry) {
                 if (!findTurnMessageElement(turnId, 'user')) {
                     appendMessage({ role: 'user', content: userContent, turnId });
                 }
+                const existingAssistant = findTurnMessageElement(turnId, 'assistant');
+                if (existingAssistant) {
+                    placeAssistantMessageForTurn(existingAssistant, turnId);
+                }
                 upsertChatMessageState({ role: 'user', content: userContent, turnId });
             }
             break;
@@ -4521,10 +4505,11 @@ function applyCurrentChatSessionEvent(entry) {
                 AppState.session.replay.currentAssistantId = AppState.chat.activeLocalAssistantId || '';
                 assistantId = AppState.chat.activeLocalAssistantId || '';
             } else {
-                if (!AppState.session.replay.currentTurnId) {
-                    AppState.session.replay.currentTurnId = entryTurnId || `server-turn-${sessionId}-${entry.EventSeq}`;
-                }
-                assistantId = ensureServerReplayAssistant(AppState.session.replay.currentTurnId, sessionId, entry.EventSeq);
+                const eventTurnId = entryTurnId
+                    || AppState.session.replay.currentTurnId
+                    || `server-turn-${sessionId}-${entry.EventSeq}`;
+                AppState.session.replay.currentTurnId = eventTurnId;
+                assistantId = ensureServerReplayAssistant(eventTurnId, sessionId, entry.EventSeq);
             }
             if (!assistantId) break;
             hideProgressDock();
@@ -4811,7 +4796,7 @@ function applyCurrentChatSessionEvent(entry) {
                 cleanupAssistantMessagesForTurn(AppState.session.replay.currentTurnId || entryTurnId, AppState.session.replay.currentAssistantId);
                 if (getStreamingScrollMode() !== 'label-top') {
                     holdAutoScrollAtBottom(900);
-                    scrollToBottom(true);
+                    scrollToBottom(isChatNearBottom());
                 } else {
                     updateScrollToBottomButton();
                 }
@@ -5233,7 +5218,7 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
         AppState.session.replay.currentTurnId = users[users.length - 1].turnId;
         AppState.session.replay.currentAssistantId = assistantByTurn.get(AppState.session.replay.currentTurnId) || '';
     }
-    scrollToBottom(true);
+    scrollToBottom(isChatNearBottom());
     ensureChatRestoredToLatest();
     requestAnimationFrame(() => {
         reconcileVisibleAssistantActionBars();
@@ -6210,10 +6195,9 @@ async function sendMessage(options = {}) {
     };
 
     const isLabelTop = getStreamingScrollMode() === 'label-top';
-    appendMessage(userMsg);
+    appendMessage(userMsg, { forceScroll: true });
     if (!isLabelTop) {
-        AppState.ui.scroll.lockToLatest = true;
-        AppState.ui.scroll.shouldAutoScroll = true;
+        chatUIController.setFollowLatest(true);
         holdAutoScrollAtBottom(600);
     }
     upsertChatMessageState(userMsg);
@@ -6232,9 +6216,6 @@ async function sendMessage(options = {}) {
     AppState.chat.isGenerating = true;
     syncWakeLock(); // Request wake lock for generation
     broadcastLLMActivityState(true, 'answering');
-    if (!isLabelTop) {
-        AppState.ui.scroll.lockToLatest = true;
-    }
     updateSendButtonState();
 
     // Create new AbortController
@@ -6351,7 +6332,6 @@ async function sendMessage(options = {}) {
         AppState.chat.isGenerating = false;
         syncWakeLock(); // Release wake lock if nothing else is active
         broadcastLLMActivityState(false, 'finished');
-        AppState.ui.scroll.lockToLatest = false;
         stopStreamingMessageAutoScroll();
         AppState.ui.activeStreamingMessageId = null;
         AppState.chat.abortController = null;
@@ -6778,7 +6758,7 @@ function appendMessage(msg, options = {}) {
     const target = options.parent || chatMessages;
     target.appendChild(div);
     if (!options.skipScroll) {
-        scrollToBottom(wasNearBottom || msg.role === 'user');
+        scrollToBottom(wasNearBottom || options.forceScroll === true);
     } else {
         updateScrollToBottomButton();
     }

@@ -252,6 +252,16 @@
             updateScrollToBottomButton();
         }
 
+        function setFollowLatest(enabled, options = {}) {
+            const followLatest = !!enabled;
+            shouldAutoScroll = followLatest;
+            lockScrollToLatest = followLatest && options.lock !== false;
+            if (!followLatest && autoScrollHoldTimeout) {
+                global.clearTimeout(autoScrollHoldTimeout);
+                autoScrollHoldTimeout = null;
+            }
+        }
+
         function scrollActiveMessageIntoView() {
             if (!chatMessages || !activeStreamingMessageId) return;
             const activeMessage = global.document.getElementById(activeStreamingMessageId);
@@ -308,8 +318,9 @@
             shouldAutoScroll = true;
         }
 
-        function holdAutoScrollAtBottom(durationMs = 700) {
+        function holdAutoScrollAtBottom(durationMs = 700, force = false) {
             if (!chatMessages) return;
+            if (!force && !shouldAutoScroll && !lockScrollToLatest) return;
             if (chatMessages.classList.contains('is-label-top-streaming') && !lockScrollToLatest) return;
             clearTurnFocusSpacer();
             if (autoScrollHoldTimeout) {
@@ -338,9 +349,7 @@
 
             autoScrollResizeObserver = new global.ResizeObserver(() => {
                 if (!chatMessages) return;
-                const previousMetrics = chatScrollMetrics;
-                const currentMetrics = refreshChatScrollMetrics?.() || previousMetrics;
-                const delta = currentMetrics.scrollHeight - previousMetrics.scrollHeight;
+                const currentMetrics = refreshChatScrollMetrics?.() || chatScrollMetrics;
                 const isManualStreamingMode = getStreamingScrollMode?.() === 'label-top';
 
                 if (shouldAutoScroll || lockScrollToLatest) {
@@ -351,14 +360,11 @@
                     chatScrollMetrics = refreshChatScrollMetrics?.() || currentMetrics;
                     commitChatScrollMetrics?.(chatScrollMetrics);
                     updateScrollToBottomButton();
-                } else if (Math.abs(delta) > 1) {
-                    suppressNextScrollEvent = true;
-                    chatMessages.scrollTop += delta;
-                    chatScrollMetrics = {
-                        ...currentMetrics,
-                        scrollTop: currentMetrics.scrollTop + delta,
-                        distanceFromBottom: Math.max(0, currentMetrics.distanceFromBottom - delta)
-                    };
+                } else {
+                    // The user left the live edge. Content normally grows below the
+                    // viewport, so changing scrollTop here steals their reading
+                    // position. Native scroll anchoring handles changes above it.
+                    chatScrollMetrics = currentMetrics;
                     commitChatScrollMetrics?.(chatScrollMetrics);
                     updateScrollToBottomButton();
                 }
@@ -450,7 +456,6 @@
                 shouldAutoScroll = false;
                 lockScrollToLatest = false;
             } else {
-                shouldAutoScroll = true;
                 lockScrollToLatest = false;
             }
             if (chatMessages) {
@@ -499,7 +504,8 @@
             checkAndTriggerLabelPin,
             pinTurnToTop,
             startStreamingMessageAutoScroll,
-            stopStreamingMessageAutoScroll
+            stopStreamingMessageAutoScroll,
+            setFollowLatest
         };
     }
 
