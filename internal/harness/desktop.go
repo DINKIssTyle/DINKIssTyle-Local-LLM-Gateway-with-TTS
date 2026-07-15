@@ -66,6 +66,7 @@ func (d *Desktop) options() *options.App {
 		OnStartup: func(ctx context.Context) {
 			d.initMemoryDB()
 			d.app.Startup(ctx)
+			core.InstallDockReopenHandler()
 		},
 		OnShutdown: func(ctx context.Context) {
 			mcp.CloseDB()
