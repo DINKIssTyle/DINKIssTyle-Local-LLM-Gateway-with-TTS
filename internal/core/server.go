@@ -5963,6 +5963,7 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 		Speed      float32 `json:"speed"`
 		Format     string  `json:"format"` // "wav" or "mp3"
 		Steps      int     `json:"steps"`
+		Prechunked bool    `json:"prechunked"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
@@ -6067,7 +6068,15 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 	}
 	// Use globalTTS directly while holding the lock to prevent destruction
 	inferenceStarted := time.Now()
-	wavData, _, err := globalTTS.Call(r.Context(), req.Text, req.Lang, style, steps, speed, req.ChunkSize)
+	var wavData []float32
+	var err error
+	if req.Prechunked && len([]rune(req.Text)) <= ttsSafetyChunkLimit(req.Lang) {
+		wavData, _, err = globalTTS.CallPrechunked(r.Context(), req.Text, req.Lang, style, steps, speed)
+	} else {
+		// Direct API clients still receive the official SDK-compatible safety
+		// chunking: 120 characters for Korean/Japanese, 300 for other languages.
+		wavData, _, err = globalTTS.Call(r.Context(), req.Text, req.Lang, style, steps, speed, 0)
+	}
 	inferenceElapsed := time.Since(inferenceStarted)
 	sampleRate := globalTTS.SampleRate
 	globalTTSMutex.RUnlock()
@@ -6113,6 +6122,13 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 	} else {
 		log.Printf("[TTS] Network transfer complete: %d bytes sent in %v", n, elapsedTransfer)
 	}
+}
+
+func ttsSafetyChunkLimit(lang string) int {
+	if lang == "ko" || lang == "ja" {
+		return 120
+	}
+	return 300
 }
 
 // handleTTSStyles returns list of available voice styles

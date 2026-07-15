@@ -1,5 +1,5 @@
 export namespace core {
-
+	
 	export class BrowserAssetStatus {
 	    supported: boolean;
 	    installed: boolean;
@@ -8,7 +8,7 @@ export namespace core {
 	    executablePath: string;
 	    installDir: string;
 	    message: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new BrowserAssetStatus(source);
 	    }
@@ -266,3 +266,4 @@ export namespace promptkit {
 	}
 
 }
+

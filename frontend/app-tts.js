@@ -35,6 +35,17 @@
         let audioCtx = null;
         let synthesisTail = Promise.resolve();
 
+        function getTTSChunkLimits() {
+            const lang = String(config.ttsLang || '').toLowerCase();
+            const safetyLimit = lang === 'ko' || lang === 'ja' ? 120 : 300;
+            const configured = Math.max(parseInt(config.chunkSize) || 100, 32);
+            return {
+                first: Math.min(48, safetyLimit),
+                subsequent: Math.min(configured, safetyLimit),
+                safety: safetyLimit
+            };
+        }
+
         function buildTTSAudioCacheKey(text) {
             return [
                 config.ttsEngine,
@@ -354,13 +365,14 @@
         }
 
         function getStreamingChunkTargets() {
-            const baseTarget = Math.max(parseInt(config.chunkSize) || 200, 80);
-            const firstChunkTarget = Math.min(baseTarget, 48);
+            const limits = getTTSChunkLimits();
+            const baseTarget = Math.max(limits.subsequent, 80);
+            const firstChunkTarget = limits.first;
             return {
                 firstChunkTarget,
                 weakBoundaryTarget: Math.max(Math.floor(baseTarget * 0.45), 36),
                 strongBoundaryTarget: Math.max(Math.floor(baseTarget * 0.72), 64),
-                hardCeiling: Math.max(Math.floor(baseTarget * 1.2), 120)
+                hardCeiling: Math.min(Math.max(Math.floor(baseTarget * 1.2), 120), limits.safety)
             };
         }
 
@@ -622,7 +634,8 @@
                         voiceStyle: config.ttsVoice,
                         speed: parseFloat(config.ttsSpeed) || 1.0,
                         steps: parseInt(config.ttsSteps) || 5,
-                        format: config.ttsFormat || 'wav'
+                        format: config.ttsFormat || 'wav',
+                        prechunked: true
                     };
 
                     console.log(`[TTS] Prefetching (${config.ttsVoice}): "${text.substring(0, 25)}..."`);
@@ -718,38 +731,13 @@
                 ttsQueue: []
             });
 
-            const MIN_CHUNK_LENGTH = 50;
-            const paragraphs = cleanText.split(/\n\s*\n+/);
-            const nextQueue = [];
-            let currentChunk = '';
-
-            for (const paragraph of paragraphs) {
-                if (!paragraph.trim()) continue;
-
-                const sentencePattern = /(?<=[.!?])(?=\s+(?:[A-Z가-힣]|$))/g;
-                const rawChunks = paragraph.split(sentencePattern).filter((value) => value.trim());
-                const sentences = rawChunks.length > 0 ? rawChunks : [paragraph];
-
-                for (const part of sentences) {
-                    const trimmedPart = part.trim();
-                    if (!trimmedPart) continue;
-
-                    if ((currentChunk + ' ' + trimmedPart).length > config.chunkSize && currentChunk.length >= MIN_CHUNK_LENGTH) {
-                        nextQueue.push(currentChunk.trim());
-                        currentChunk = '';
-                    }
-
-                    currentChunk = currentChunk ? `${currentChunk} ${trimmedPart}` : trimmedPart;
-                }
-
-                if (currentChunk.length >= MIN_CHUNK_LENGTH) {
-                    nextQueue.push(currentChunk.trim());
-                    currentChunk = '';
-                }
-            }
-
-            if (currentChunk.trim()) {
-                nextQueue.push(currentChunk.trim());
+            const limits = getTTSChunkLimits();
+            const firstPass = splitTTSParagraphByPriority(cleanText, limits.first, 1, true);
+            const firstChunk = firstPass.shift() || '';
+            const remaining = firstPass.join(' ').trim();
+            const nextQueue = firstChunk ? [firstChunk] : [];
+            if (remaining) {
+                nextQueue.push(...splitTTSParagraphByPriority(remaining, limits.subsequent, 18, true));
             }
 
             setPlaybackState?.({
@@ -871,6 +859,7 @@
 
             const seededState = getPlaybackState?.() || {};
             const seededQueue = Array.isArray(seededState.ttsQueue) ? seededState.ttsQueue : [];
+            // Keep only the current chunk and one look-ahead synthesis in flight.
             for (let i = 0; i < Math.min(2, seededQueue.length); i += 1) {
                 prefetchTTSAudio(seededQueue[i]);
             }
@@ -892,7 +881,7 @@
                 }
 
                 const nextQueue = Array.isArray(getPlaybackState?.().ttsQueue) ? getPlaybackState().ttsQueue : [];
-                for (let i = 0; i < Math.min(2, nextQueue.length); i += 1) {
+                for (let i = 0; i < Math.min(1, nextQueue.length); i += 1) {
                     prefetchTTSAudio(nextQueue[i]);
                 }
 
@@ -1035,26 +1024,18 @@
             const queue = Array.isArray(state.ttsQueue) ? [...state.ttsQueue] : [];
             const hasQueuedAudio = queue.length > 0 || !!state.isPlayingQueue;
             const minChunkLength = hasQueuedAudio ? 40 : 18;
-            const maxChunkSize = Math.max(parseInt(config.chunkSize) || 200, 80);
+            const maxChunkSize = getTTSChunkLimits().subsequent;
             const paragraphs = text.split(/\n+/);
-            const newChunks = [];
 
             for (const para of paragraphs) {
                 if (!para.trim()) continue;
                 const chunks = splitTTSParagraphByPriority(para, maxChunkSize, minChunkLength, force);
                 for (const chunk of chunks) {
                     queue.push(chunk);
-                    newChunks.push(chunk);
                 }
             }
 
             setPlaybackState?.({ ttsQueue: queue });
-
-            if (getCurrentTTSEngine() === 'supertonic') {
-                for (const chunk of newChunks) {
-                    prefetchTTSAudio(chunk);
-                }
-            }
 
             if (!state.isPlayingQueue && queue.length > 0) {
                 onProcessQueue?.();

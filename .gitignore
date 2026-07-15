@@ -9,3 +9,4 @@ dinkisstyle-chat-test-context
 note/
 all_funcs.txt
 *_test.go
+!internal/core/tts_chunk_test.go

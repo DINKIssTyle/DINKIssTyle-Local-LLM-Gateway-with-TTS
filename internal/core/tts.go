@@ -369,7 +369,7 @@ func LoadVoiceStyle(voiceStylePath string) (*Style, error) {
 func (tts *TextToSpeech) Call(ctx context.Context, text string, lang string, style *Style, totalStep int, speed float32, maxLen int) ([]float32, float32, error) {
 	if maxLen == 0 {
 		maxLen = 300
-		if lang == "ko" {
+		if lang == "ko" || lang == "ja" {
 			maxLen = 120
 		}
 	}
@@ -416,6 +416,23 @@ func (tts *TextToSpeech) Call(ctx context.Context, text string, lang string, sty
 	}
 
 	return combinedWav, totalDuration, nil
+}
+
+// CallPrechunked synthesizes one client-prepared playback chunk without
+// applying the SDK's semantic chunker a second time. The HTTP handler checks
+// the language-specific safety limit before calling this method.
+func (tts *TextToSpeech) CallPrechunked(ctx context.Context, text string, lang string, style *Style, totalStep int, speed float32) ([]float32, float32, error) {
+	wav, duration, err := tts.infer(ctx, []string{text}, []string{lang}, style, totalStep, speed)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	dur := duration[0]
+	wavLen := int(float32(tts.SampleRate) * dur)
+	if wavLen > len(wav) {
+		wavLen = len(wav)
+	}
+	return wav[:wavLen], dur, nil
 }
 
 func (tts *TextToSpeech) infer(ctx context.Context, textList []string, langList []string, style *Style, totalStep int, speed float32) ([]float32, []float32, error) {
@@ -865,6 +882,25 @@ func chunkText(text string, maxLen int) []string {
 				wordLen := 0
 				for _, w := range words {
 					wRunes := []rune(w)
+					// Languages such as Japanese and Korean may contain a long
+					// segment without spaces. Split that segment by rune so the
+					// safety limit is always enforced.
+					if len(wRunes) > maxLen {
+						if wordLen > 0 {
+							finalChunks = append(finalChunks, wordChunk.String())
+							wordChunk.Reset()
+							wordLen = 0
+						}
+						for len(wRunes) > maxLen {
+							finalChunks = append(finalChunks, string(wRunes[:maxLen]))
+							wRunes = wRunes[maxLen:]
+						}
+						if len(wRunes) > 0 {
+							wordChunk.WriteString(string(wRunes))
+							wordLen = len(wRunes)
+						}
+						continue
+					}
 					if wordLen+len(wRunes)+1 > maxLen && wordLen > 0 {
 						finalChunks = append(finalChunks, wordChunk.String())
 						wordChunk.Reset()
