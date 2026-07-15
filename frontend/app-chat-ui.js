@@ -30,7 +30,8 @@
         let lockScrollToLatest = false;
         let suppressNextScrollEvent = false;
         let activeStreamingMessageId = null;
-        let pendingScrollToBottom = false;
+        let pendingScrollToBottomFrame = 0;
+        let latestScrollTarget = 0;
         let chatScrollMetrics = {
             scrollTop: 0,
             scrollHeight: 0,
@@ -285,28 +286,52 @@
             }
         }
 
+        function cancelLatestScrollAnimation(stopFollowing = false) {
+            if (pendingScrollToBottomFrame) {
+                global.cancelAnimationFrame(pendingScrollToBottomFrame);
+                pendingScrollToBottomFrame = 0;
+            }
+            suppressNextScrollEvent = false;
+            if (stopFollowing) {
+                shouldAutoScroll = false;
+                lockScrollToLatest = false;
+            }
+        }
+
         function scheduleChatScrollToBottom() {
-            if (!chatMessages || pendingScrollToBottom) return;
-            pendingScrollToBottom = true;
-            global.requestAnimationFrame(() => {
-                pendingScrollToBottom = false;
-                if (!chatMessages) return;
-                const metrics = syncChatScrollMetrics();
-                const nextScrollTop = Math.max(0, metrics.scrollHeight - metrics.clientHeight);
+            if (!chatMessages) return;
+            const metrics = syncChatScrollMetrics();
+            latestScrollTarget = Math.max(0, metrics.scrollHeight - metrics.clientHeight);
+            if (pendingScrollToBottomFrame) return;
+
+            const animate = () => {
+                pendingScrollToBottomFrame = 0;
+                if (!chatMessages || (!shouldAutoScroll && !lockScrollToLatest)) return;
+
+                const currentMetrics = syncChatScrollMetrics();
+                latestScrollTarget = Math.max(0, currentMetrics.scrollHeight - currentMetrics.clientHeight);
+                const currentTop = Math.max(0, chatMessages.scrollTop);
+                const remaining = latestScrollTarget - currentTop;
+                const reducedMotion = global.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+                const nextScrollTop = reducedMotion || Math.abs(remaining) <= 1
+                    ? latestScrollTarget
+                    : currentTop + (Math.sign(remaining) * Math.max(1, Math.abs(remaining) * 0.34));
+
                 suppressNextScrollEvent = true;
                 chatMessages.scrollTop = nextScrollTop;
-                chatScrollMetrics = {
-                    scrollTop: Math.max(0, nextScrollTop),
-                    scrollHeight: metrics.scrollHeight,
-                    clientHeight: metrics.clientHeight,
-                    distanceFromBottom: Math.max(0, metrics.scrollHeight - metrics.clientHeight - nextScrollTop),
-                    nearBottom: Math.max(0, metrics.scrollHeight - metrics.clientHeight - nextScrollTop) <= 1,
-                    longScrollable: metrics.longScrollable
-                };
+                chatScrollMetrics = refreshChatScrollMetrics?.() || currentMetrics;
                 commitChatScrollMetrics?.(chatScrollMetrics);
+
+                if (Math.abs(latestScrollTarget - chatMessages.scrollTop) > 1) {
+                    pendingScrollToBottomFrame = global.requestAnimationFrame(animate);
+                    return;
+                }
+
                 scrollActiveMessageIntoView();
                 updateScrollToBottomButton();
-            });
+            };
+
+            pendingScrollToBottomFrame = global.requestAnimationFrame(animate);
         }
 
         function scrollToBottom(force = false) {
@@ -484,6 +509,11 @@
 
         if (chatMessages) {
             chatMessages.addEventListener('scroll', handleChatScroll, { passive: true });
+            chatMessages.addEventListener('wheel', () => cancelLatestScrollAnimation(true), { passive: true });
+            chatMessages.addEventListener('touchstart', () => cancelLatestScrollAnimation(true), { passive: true });
+            chatMessages.addEventListener('pointerdown', (event) => {
+                if (event.pointerType === 'mouse') cancelLatestScrollAnimation(true);
+            }, { passive: true });
         }
 
         return {

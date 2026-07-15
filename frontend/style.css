@@ -729,7 +729,7 @@ body.keyboard-open #chat-header {
 
 .assistant-response-card.is-stream-updated,
 .assistant-response-card .markdown-body.is-stream-updated {
-  animation: responseChunkFade 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+  animation: responseChunkFade 0.2s ease-out;
 }
 
 .startup-response-card .message-bubble {
@@ -929,15 +929,11 @@ body.keyboard-open #chat-header {
 
 @keyframes responseChunkFade {
   0% {
-    opacity: 0.35;
-    transform: translateY(10px);
-    filter: blur(2px);
+    opacity: 0.72;
   }
 
   100% {
     opacity: 1;
-    transform: translateY(0);
-    filter: blur(0);
   }
 }
 
@@ -1918,6 +1914,12 @@ body.keyboard-open #chat-header {
 
 @media (prefers-reduced-motion: reduce) {
 
+  .message,
+  .assistant-response-card.is-stream-updated,
+  .assistant-response-card .markdown-body.is-stream-updated,
+  .message-actions,
+  .message-actions .icon-btn,
+  .scroll-to-bottom-btn,
   .reasoning-title.is-live,
   .tool-header-group.is-live,
   .tool-history-item,

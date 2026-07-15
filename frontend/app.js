@@ -8041,19 +8041,21 @@ function renderStandaloneSvgMarkdown(markdownText) {
 function renderMarkdownIntoHost(host, markdownText, options = {}) {
     if (!host) return;
     const allowLooseFallback = options.allowLooseFallback !== false;
+    const deferEnhancements = options.deferEnhancements === true;
     const rendered = buildRenderedMarkdownState(markdownText || '');
     host.dataset.markdownSource = rendered.normalized;
     host.innerHTML = rendered.html;
     if (allowLooseFallback && shouldFallbackToLooseMarkdown(host, rendered.normalized)) {
         host.innerHTML = sanitizeRenderedMarkdownHtml(renderLooseMarkdownToHtml(rendered.normalized));
     }
-    if (rendered.renderer.name !== 'remark') {
-        renderMathInHost(host);
-    }
     host.querySelectorAll('a').forEach((link) => {
         link.setAttribute('target', '_blank');
         link.setAttribute('rel', 'noopener noreferrer');
     });
+    if (deferEnhancements) return;
+    if (rendered.renderer.name !== 'remark') {
+        renderMathInHost(host);
+    }
     highlightMarkdownBlocks(host);
     renderMermaidDiagramsInHost(host);
 }

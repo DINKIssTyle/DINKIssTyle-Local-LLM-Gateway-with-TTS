@@ -183,7 +183,13 @@
             if (renderMode === 'fast') {
                 committedText = cleanText;
                 if (committedText !== previousCommittedText) {
-                    renderMarkdownIntoHost(committedHost, committedText, { allowLooseFallback: false });
+                    // Keep live output responsive. Expensive, layout-changing work
+                    // (syntax highlighting, math and Mermaid) is applied once when
+                    // the message is finalized.
+                    renderMarkdownIntoHost(committedHost, committedText, {
+                        allowLooseFallback: false,
+                        deferEnhancements: true
+                    });
                 }
                 renderStreamingPreviewIntoHost(pendingHost, '');
             } else {
@@ -330,7 +336,9 @@
             if (renderMode === 'fast') {
                 committedText = cleanText;
                 if (committedText !== previousCommittedText) {
-                    renderMarkdownIntoHost(committedHost, committedText);
+                    renderMarkdownIntoHost(committedHost, committedText, {
+                        deferEnhancements: true
+                    });
                 }
                 renderStreamingPreviewIntoHost(pendingHost, '');
             } else {
