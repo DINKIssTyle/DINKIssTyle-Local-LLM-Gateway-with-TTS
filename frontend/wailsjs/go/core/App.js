@@ -38,6 +38,10 @@ export function DownloadAssets() {
   return window['go']['core']['App']['DownloadAssets']();
 }
 
+export function DownloadBrowserAsset() {
+  return window['go']['core']['App']['DownloadBrowserAsset']();
+}
+
 export function EnsureModelsRootDir() {
   return window['go']['core']['App']['EnsureModelsRootDir']();
 }
@@ -72,6 +76,10 @@ export function GetAppVersion() {
 
 export function GetAutoStartServer() {
   return window['go']['core']['App']['GetAutoStartServer']();
+}
+
+export function GetBrowserAssetStatus() {
+  return window['go']['core']['App']['GetBrowserAssetStatus']();
 }
 
 export function GetCachedModels() {

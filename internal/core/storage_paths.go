@@ -19,6 +19,8 @@ const (
 	embeddingsDirName         = "embeddings"
 	runtimeDirName            = "runtime"
 	onnxRuntimeDirName        = "onnxruntime"
+	browserDirName            = "browser"
+	chromeForTestingDirName   = "chrome-for-testing"
 	legacyModelsDirName       = "models"
 	legacyTTSOnnxDirName      = "onnx"
 	legacyTTSVoiceStylesDir   = "voice_styles"
@@ -81,6 +83,10 @@ func getWritableEmbeddingRootDir() string {
 
 func getWritableONNXRuntimeDir() string {
 	return joinAppDataPath(assetsDirName, runtimeDirName, onnxRuntimeDirName)
+}
+
+func getChromeForTestingInstallDir() string {
+	return joinAppDataPath(assetsDirName, browserDirName, chromeForTestingDirName)
 }
 
 func GetMemoryDatabasePath() string {

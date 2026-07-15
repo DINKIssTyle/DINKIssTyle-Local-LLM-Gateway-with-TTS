@@ -23,6 +23,8 @@ export function DismissWelcome():Promise<void>;
 
 export function DownloadAssets():Promise<void>;
 
+export function DownloadBrowserAsset():Promise<void>;
+
 export function EnsureModelsRootDir():Promise<string>;
 
 export function ExportEmbeddingModelManifest():Promise<string>;
@@ -40,6 +42,8 @@ export function GetAlwaysShowWelcome():Promise<boolean>;
 export function GetAppVersion():Promise<string>;
 
 export function GetAutoStartServer():Promise<boolean>;
+
+export function GetBrowserAssetStatus():Promise<core.BrowserAssetStatus>;
 
 export function GetCachedModels():Promise<Array<number>>;
 

@@ -339,6 +339,7 @@ func NewApp(assets embed.FS) *App {
 	}
 	globalApp = a
 	mcp.SetHelpDocsFS(assets, "frontend/public/help")
+	mcp.SetBrowserExecutablePath(findChromeForTestingExecutable())
 	mcp.SetUserMemoryRetentionProvider(func(userID string) (mcp.MemoryRetentionConfig, bool) {
 		if strings.TrimSpace(userID) == "" {
 			return mcp.DefaultMemoryRetentionConfig(), false
@@ -491,6 +492,7 @@ func (a *App) Startup(ctx context.Context) {
 
 	// Setup paths for non-Windows
 	a.CheckAndSetupPaths()
+	mcp.SetBrowserExecutablePath(findChromeForTestingExecutable())
 	if err := a.reloadUsersFromCurrentStorage(); err != nil {
 		fmt.Printf("Failed to reload users after path setup: %v\n", err)
 	}

@@ -1565,8 +1565,14 @@ func ReadPage(pageURL string) (string, error) {
 		chromedp.Flag("disable-extensions", true),
 		chromedp.Flag("no-first-run", true),
 		chromedp.Flag("disable-default-apps", true),
+		chromedp.Flag("disable-background-networking", true),
+		chromedp.Flag("disable-component-update", true),
+		chromedp.Flag("disable-breakpad", true),
 		chromedp.UserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"),
 	)
+	if browserPath := getBrowserExecutablePath(); browserPath != "" {
+		opts = append(opts, chromedp.ExecPath(browserPath))
+	}
 
 	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
 	defer allocCancel()

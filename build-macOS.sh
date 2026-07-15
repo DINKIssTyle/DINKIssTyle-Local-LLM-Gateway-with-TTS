@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -euo pipefail
+
 # Created by DINKIssTyle on 2026.
 # Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
 
@@ -11,6 +13,10 @@ rm -rf frontend/dist
 export PATH="$HOME/go/bin:$PATH"
 export PATH="/usr/local/go/bin:$PATH"
 export PATH="/opt/homebrew/bin:$PATH"
+
+# Wails references UTType on recent macOS SDKs. Some Wails versions omit this
+# framework from the x86_64 link step, which breaks universal builds.
+export CGO_LDFLAGS="${CGO_LDFLAGS:-} -framework UniformTypeIdentifiers"
 
 # Verify wails is available
 if ! command -v wails &> /dev/null; then
@@ -52,9 +58,19 @@ resolve_signing_identity() {
     fi
 
     local detected_identity
+    local local_identity_name="${MACOS_LOCAL_SIGN_IDENTITY:-DINKIssTyle Local Code Signing}"
     detected_identity=$(
         security find-identity -v -p codesigning 2>/dev/null \
-            | sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' \
+            | awk -v name="$local_identity_name" 'index($0, "\"" name "\"") { print $2; exit }'
+    )
+    if [ -n "$detected_identity" ]; then
+        echo "$detected_identity"
+        return 0
+    fi
+
+    detected_identity=$(
+        security find-identity -v -p codesigning 2>/dev/null \
+            | sed -n '/"Developer ID Application:/s/^[[:space:]]*[0-9][0-9]*) \([A-Fa-f0-9]*\) .*/\1/p' \
             | head -n 1
     )
     if [ -n "$detected_identity" ]; then
@@ -64,7 +80,7 @@ resolve_signing_identity() {
 
     detected_identity=$(
         security find-identity -v -p codesigning 2>/dev/null \
-            | sed -n 's/.*"\(Apple Development:[^"]*\)".*/\1/p' \
+            | sed -n '/"Apple Development:/s/^[[:space:]]*[0-9][0-9]*) \([A-Fa-f0-9]*\) .*/\1/p' \
             | head -n 1
     )
     if [ -n "$detected_identity" ]; then
@@ -72,22 +88,52 @@ resolve_signing_identity() {
         return 0
     fi
 
-    echo "-"
+    # Also support a stable, user-created Code Signing certificate. The first
+    # valid identity is safe here because Developer ID and Apple Development
+    # identities were already preferred above.
+    detected_identity=$(
+        security find-identity -v -p codesigning 2>/dev/null \
+            | sed -n 's/^[[:space:]]*[0-9][0-9]*) \([A-Fa-f0-9]*\) ".*/\1/p' \
+            | head -n 1
+    )
+    if [ -n "$detected_identity" ]; then
+        echo "$detected_identity"
+        return 0
+    fi
+
+    return 1
 }
 
 echo "Clean complete. Building for macOS..."
 echo "Using wails at: $(which wails)"
-SIGN_IDENTITY="$(resolve_signing_identity)"
+if ! SIGN_IDENTITY="$(resolve_signing_identity)"; then
+    if [ "${MACOS_ALLOW_ADHOC:-0}" = "1" ]; then
+        SIGN_IDENTITY="-"
+        echo "Warning: MACOS_ALLOW_ADHOC=1; this build will not retain macOS privacy permissions across rebuilds."
+    else
+        echo "Error: no stable Code Signing identity was found."
+        echo "Create a Code Signing certificate or set MACOS_SIGN_IDENTITY explicitly."
+        echo "For a temporary development-only build, set MACOS_ALLOW_ADHOC=1."
+        exit 1
+    fi
+fi
+echo "Using signing identity: $SIGN_IDENTITY"
 if [ "$SIGN_IDENTITY" = "-" ]; then
-    echo "Warning: no fixed macOS signing identity found. Falling back to ad-hoc signing; permission prompts may still reset between builds."
-else
-    echo "Using signing identity: $SIGN_IDENTITY"
+    echo "Warning: ad-hoc signing does not preserve macOS privacy permissions across rebuilds."
+fi
+
+SIGN_IDENTITY_LABEL="$SIGN_IDENTITY"
+if [[ "$SIGN_IDENTITY" =~ ^[A-Fa-f0-9]{40}$ ]]; then
+    SIGN_IDENTITY_LABEL=$(
+        security find-identity -v -p codesigning 2>/dev/null \
+			| awk -v identity="$SIGN_IDENTITY" '$2 == identity && match($0, /"[^"]+"$/) { print substr($0, RSTART + 1, RLENGTH - 2); exit }'
+    )
 fi
 
 # You can change darwin/universal to darwin/amd64 or darwin/arm64 if needed
-wails build -platform darwin/universal -skipbindings
+wails build -platform darwin/universal
 
-if [ $? -eq 0 ]; then
+if [ -d "build/bin/DKST LLM Chat Server.app" ]; then
     APP_CONTENT_DIR="build/bin/DKST LLM Chat Server.app/Contents/MacOS/"
     APP_RESOURCE_DIR="build/bin/DKST LLM Chat Server.app/Contents/Resources/"
     mkdir -p "$APP_RESOURCE_DIR"
@@ -115,12 +161,50 @@ if [ $? -eq 0 ]; then
     EXE_PATH="$APP_CONTENT_DIR/DKST LLM Chat Server"
     DYLIB_PATH="$APP_RESOURCE_DIR/assets/runtime/onnxruntime/libonnxruntime.dylib"
 
-    codesign --force --sign "$SIGN_IDENTITY" --timestamp=none --identifier "$BUNDLE_ID" --options runtime "$DYLIB_PATH"
-    codesign --force --sign "$SIGN_IDENTITY" --timestamp=none --identifier "$BUNDLE_ID" --options runtime --entitlements "$ENTITLEMENTS" "$EXE_PATH"
-    codesign --force --sign "$SIGN_IDENTITY" --timestamp=none --identifier "$BUNDLE_ID" --options runtime --entitlements "$ENTITLEMENTS" --deep "$APP_BUNDLE_PATH"
+    PLIST_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_BUNDLE_PATH/Contents/Info.plist")"
+    if [ "$PLIST_BUNDLE_ID" != "$BUNDLE_ID" ]; then
+        echo "Error: bundle identifier is '$PLIST_BUNDLE_ID', expected '$BUNDLE_ID'."
+        exit 1
+    fi
 
-    echo "Build success!"
+    TIMESTAMP_ARGS=(--timestamp=none)
+    if [[ "$SIGN_IDENTITY_LABEL" == Developer\ ID\ Application:* ]]; then
+        TIMESTAMP_ARGS=(--timestamp)
+    fi
+
+    # Sign nested code first, then seal the outer app bundle. Do not use
+    # --deep for signing: it can hide incorrectly signed nested code.
+    codesign --force --sign "$SIGN_IDENTITY" "${TIMESTAMP_ARGS[@]}" --options runtime "$DYLIB_PATH"
+    codesign --force --sign "$SIGN_IDENTITY" "${TIMESTAMP_ARGS[@]}" --identifier "$BUNDLE_ID" --options runtime --entitlements "$ENTITLEMENTS" "$APP_BUNDLE_PATH"
+
+    echo "Verifying code signature..."
+    codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE_PATH"
+
+    SIGNED_IDENTIFIER="$(codesign -dv --verbose=4 "$APP_BUNDLE_PATH" 2>&1 | sed -n 's/^Identifier=//p')"
+    if [ "$SIGNED_IDENTIFIER" != "$BUNDLE_ID" ]; then
+        echo "Error: signed identifier is '$SIGNED_IDENTIFIER', expected '$BUNDLE_ID'."
+        exit 1
+    fi
+    if [ "$SIGN_IDENTITY" != "-" ] && codesign -dv --verbose=4 "$APP_BUNDLE_PATH" 2>&1 | grep -q '^Signature=adhoc$'; then
+        echo "Error: expected a certificate signature but produced an ad-hoc signature."
+        exit 1
+    fi
+
+    # codesign verifies the cryptographic seal but does not necessarily perform
+    # Apple's online revocation check. A revoked Apple certificate otherwise
+    # produces an app that builds successfully and is moved to Trash at launch.
+    if [[ "$SIGN_IDENTITY_LABEL" == Apple\ Development:* || "$SIGN_IDENTITY_LABEL" == Developer\ ID\ Application:* ]]; then
+        POLICY_RESULT="$(spctl --assess --type execute --verbose=4 "$APP_BUNDLE_PATH" 2>&1 || true)"
+        if [[ "$POLICY_RESULT" == *CSSMERR_TP_CERT_REVOKED* ]]; then
+            echo "Error: Apple has revoked the selected signing certificate: $SIGN_IDENTITY_LABEL"
+            echo "Delete the revoked certificate and create a new Apple Development or Developer ID identity."
+            exit 1
+        fi
+        echo "Gatekeeper assessment: $POLICY_RESULT"
+    fi
+
+    echo "Build and signature verification succeeded."
 else
-    echo "Build failed!"
+    echo "Build failed: app bundle was not created."
     exit 1
 fi

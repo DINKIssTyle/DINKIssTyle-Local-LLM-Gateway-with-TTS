@@ -1,5 +1,29 @@
 export namespace core {
+
+	export class BrowserAssetStatus {
+	    supported: boolean;
+	    installed: boolean;
+	    downloading: boolean;
+	    version: string;
+	    executablePath: string;
+	    installDir: string;
+	    message: string;
+
+	    static createFrom(source: any = {}) {
+	        return new BrowserAssetStatus(source);
+	    }
 	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.supported = source["supported"];
+	        this.installed = source["installed"];
+	        this.downloading = source["downloading"];
+	        this.version = source["version"];
+	        this.executablePath = source["executablePath"];
+	        this.installDir = source["installDir"];
+	        this.message = source["message"];
+	    }
+	}
 	export class DebugTraceEntry {
 	    id: number;
 	    timestamp: string;
@@ -242,4 +266,3 @@ export namespace promptkit {
 	}
 
 }
-

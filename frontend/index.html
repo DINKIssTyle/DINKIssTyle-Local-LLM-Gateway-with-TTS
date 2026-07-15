@@ -1077,6 +1077,44 @@
             gap: 12px;
         }
 
+        .asset-summary-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .asset-summary-item {
+            min-width: 0;
+            padding: 10px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.025);
+        }
+
+        .asset-summary-label {
+            display: block;
+            margin-bottom: 6px;
+            color: var(--text-secondary);
+            font-size: 11px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .asset-summary-status {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            min-width: 0;
+        }
+
+        .asset-summary-status span:last-child {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 12px;
+        }
+
         .managed-model-card {
             border: 1px solid var(--border-color);
             border-radius: 14px;
@@ -1539,15 +1577,23 @@
                         </div>
                     </div>
 
-                    <!-- Asset Status Section -->
+                    <!-- Compact Asset Status Summary -->
                     <div class="form-group"
                         style="margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--border-color);">
-                        <div
-                            style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                            <label style="margin:0;" data-i18n="label.assetStatus">Asset Status</label>
-                            <div style="display: flex; align-items: center; gap: 6px;">
-                                <span class="status-dot" id="asset-status-dot"></span>
-                                <span id="asset-status-text" style="font-size: 12px;">Checking...</span>
+                        <div class="asset-summary-grid">
+                            <div class="asset-summary-item">
+                                <span class="asset-summary-label" data-i18n="label.modelAssets">Models</span>
+                                <div class="asset-summary-status">
+                                    <span class="status-dot" id="asset-status-dot"></span>
+                                    <span id="asset-status-text">Checking...</span>
+                                </div>
+                            </div>
+                            <div class="asset-summary-item">
+                                <span class="asset-summary-label" data-i18n="label.dedicatedBrowser">MCP Dedicated Chromium</span>
+                                <div class="asset-summary-status">
+                                    <span class="status-dot" id="browser-asset-status-dot"></span>
+                                    <span id="browser-asset-status-text">Checking...</span>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -1555,7 +1601,7 @@
                     <div class="inline-actions">
                         <button class="btn btn-secondary btn-block" onclick="openModelManagerModal()">
                             <span class="material-icons-round">inventory_2</span>
-                            <span data-i18n="modal.modelManager.title">Model Manager</span>
+                            <span data-i18n="modal.modelManager.title">Asset Manager</span>
                         </button>
                     </div>
                 </div>
@@ -1844,14 +1890,14 @@
     <div class="modal-overlay" id="model-manager-modal">
         <div class="modal" style="max-width: 720px;">
             <div class="modal-header">
-                <div class="modal-title" data-i18n="modal.modelManager.title">Model Manager</div>
+                <div class="modal-title" data-i18n="modal.modelManager.title">Asset Manager</div>
                 <button class="icon-btn" onclick="closeModelManagerModal()">
                     <span class="material-icons-round">close</span>
                 </button>
             </div>
             <div class="modal-body">
                 <div class="form-group">
-                    <label data-i18n="label.modelStorageFolder">Model Storage Folder</label>
+                    <label data-i18n="label.modelStorageFolder">Asset Storage Folder</label>
                     <div id="models-root-dir"
                         style="font-size: 12px; color: var(--text-secondary); word-break: break-all;">...</div>
                 </div>
@@ -2156,13 +2202,24 @@
                 'card.startupSettings': '시작 설정',
                 'label.enableAssets': 'TTS 및 벡터 DB 활성화',
                 'label.assetStatus': '자산 상태',
+				'label.modelAssets': '모델 자산',
+				'label.dedicatedBrowser': 'MCP 전용 Chromium',
+				'action.prepareBrowser': '전용 Chromium 준비',
+				'action.updateBrowser': '전용 Chromium 업데이트',
+				'message.browserReady': '준비됨',
+				'message.browserMissing': '설치 필요',
+				'message.browserDownloading': '설치 중...',
+				'message.browserInstalled': 'MCP 웹 접근은 시스템 Chrome 대신 이 전용 브라우저를 사용합니다.',
+				'browser.meta.provider': '제공자',
+				'browser.meta.version': '버전',
+				'browser.meta.installDir': '설치 위치',
                 'label.llmEndpoint': 'LLM 엔드포인트',
                 'label.apiKeyHelp': 'API Key <span style="color: var(--text-secondary); font-weight: normal;">(*"Require Auth"가 활성화된 경우 필수)</span>',
                 'placeholder.apiKey': 'lm-studio 또는 커스텀 키',
                 'label.startOnBoot': '부팅 시 시작',
                 'label.minimizeToTray': '트레이로 최소화',
                 'label.autoStartServer': '서버 자동 시작',
-                'modal.modelManager.title': '모델 관리자',
+                'modal.modelManager.title': '자산 관리자',
                 'card.advancedSettings': '고급 설정',
                 'help.certificate.title': '인증서 도움말',
                 'help.certificate.ariaLabel': '인증서 도움말 열기',
@@ -2201,7 +2258,7 @@
                 'label.adminRole': '관리자 권한',
                 'placeholder.username': '사용자 이름 입력',
                 'placeholder.password': '비밀번호 입력',
-                'label.modelStorageFolder': '모델 저장 폴더',
+                'label.modelStorageFolder': '자산 저장 폴더',
                 'help.loading': '도움말 문서를 불러오는 중...',
                 'help.loadFailed': '도움말 문서를 불러오지 못했습니다.',
                 'help.modalTitle.default': '도움말',
@@ -2322,13 +2379,24 @@
                 'card.startupSettings': 'Startup Settings',
                 'label.enableAssets': 'Enable TTS & Vector DB',
                 'label.assetStatus': 'Asset Status',
+				'label.modelAssets': 'Model Assets',
+				'label.dedicatedBrowser': 'MCP Dedicated Chromium',
+				'action.prepareBrowser': 'Prepare Dedicated Chromium',
+				'action.updateBrowser': 'Update Dedicated Chromium',
+				'message.browserReady': 'Ready',
+				'message.browserMissing': 'Installation required',
+				'message.browserDownloading': 'Installing...',
+				'message.browserInstalled': 'MCP web access uses this dedicated browser instead of system Chrome.',
+				'browser.meta.provider': 'Provider',
+				'browser.meta.version': 'Version',
+				'browser.meta.installDir': 'Install location',
                 'label.llmEndpoint': 'LLM Endpoint',
                 'label.apiKeyHelp': 'API Key <span style="color: var(--text-secondary); font-weight: normal;">(*Required if "Require Auth" is enabled.)</span>',
                 'placeholder.apiKey': 'lm-studio or custom key',
                 'label.startOnBoot': 'Start on Boot',
                 'label.minimizeToTray': 'Minimize to Tray',
                 'label.autoStartServer': 'Auto Start Server',
-                'modal.modelManager.title': 'Model Manager',
+                'modal.modelManager.title': 'Asset Manager',
                 'card.advancedSettings': 'Advanced Settings',
                 'help.certificate.title': 'Certificate Help',
                 'help.certificate.ariaLabel': 'Open Certificate help',
@@ -2367,7 +2435,7 @@
                 'label.adminRole': 'Admin Role',
                 'placeholder.username': 'Enter username',
                 'placeholder.password': 'Enter password',
-                'label.modelStorageFolder': 'Model Storage Folder',
+                'label.modelStorageFolder': 'Asset Storage Folder',
                 'help.loading': 'Loading help document...',
                 'help.loadFailed': 'Failed to load help document.',
                 'help.modalTitle.default': 'Help',
@@ -3469,10 +3537,95 @@
             try {
                 const ready = await window.go.core.App.CheckAssets();
                 updateAssetUI(ready);
+				await checkBrowserAssetStatus();
             } catch (e) {
                 console.error('Asset Check Failed:', e);
             }
         }
+
+		async function checkBrowserAssetStatus() {
+			if (typeof window.go === 'undefined') return;
+			const dot = document.getElementById('browser-asset-status-dot');
+			const text = document.getElementById('browser-asset-status-text');
+			if (!dot || !text) return;
+			try {
+				const status = await window.go.core.App.GetBrowserAssetStatus();
+				if (status.downloading) {
+					dot.className = 'status-dot';
+					text.textContent = t('message.browserDownloading');
+					text.style.color = 'var(--text-secondary)';
+					return status;
+				}
+				if (status.installed) {
+					dot.className = 'status-dot running';
+					text.textContent = t('message.browserReady');
+					text.style.color = 'var(--success-color)';
+				} else {
+					dot.className = 'status-dot';
+					text.textContent = t('message.browserMissing');
+					text.style.color = 'var(--danger-color)';
+				}
+				return status;
+			} catch (e) {
+				console.error('Browser Asset Check Failed:', e);
+				text.textContent = t('status.failed');
+				text.style.color = 'var(--danger-color)';
+				return null;
+			}
+		}
+
+		async function downloadBrowserAsset() {
+			const button = document.getElementById('browser-asset-download-btn');
+			try {
+				if (button) {
+					button.disabled = true;
+					button.querySelector('span:last-child').textContent = t('message.browserDownloading');
+				}
+				await window.go.core.App.DownloadBrowserAsset();
+				await Promise.all([checkBrowserAssetStatus(), refreshManagedModels()]);
+			} catch (e) {
+				console.error('Browser Asset Download Failed:', e);
+				showAlert(e?.message || String(e));
+				await Promise.all([checkBrowserAssetStatus(), refreshManagedModels()]);
+			} finally {
+				if (button) button.disabled = false;
+			}
+		}
+
+		function renderBrowserAssetCard(status) {
+			const installed = !!status?.installed;
+			const downloading = !!status?.downloading;
+			const supported = status?.supported !== false;
+			const chipStatus = downloading ? 'downloading' : (installed ? 'ready' : 'missing');
+			const chipLabel = downloading
+				? t('message.browserDownloading')
+				: (installed ? t('message.browserReady') : t('message.browserMissing'));
+			const buttonLabel = installed ? t('action.updateBrowser') : t('action.prepareBrowser');
+			const version = escapeHtml(String(status?.version || '—'));
+			const installDir = escapeHtml(String(status?.installDir || '—'));
+			const message = escapeHtml(String(status?.message || ''));
+			return `
+				<div class="managed-model-card" id="browser-asset-manager-card">
+					<div class="managed-model-header">
+						<div class="managed-model-title">Chrome Headless Shell</div>
+						<span class="managed-model-chip ${chipStatus}">${escapeHtml(chipLabel)}</span>
+					</div>
+					<div class="managed-model-meta">
+						<div><strong>${escapeHtml(t('browser.meta.provider'))}:</strong> Google Chrome for Testing</div>
+						<div><strong>${escapeHtml(t('browser.meta.version'))}:</strong> ${version}</div>
+						<div><strong>${escapeHtml(t('browser.meta.installDir'))}:</strong> ${installDir}</div>
+						<div>${message || escapeHtml(t('message.browserInstalled'))}</div>
+					</div>
+					<div class="managed-model-actions">
+						<button class="btn btn-primary btn-compact" id="browser-asset-download-btn"
+							onclick="downloadBrowserAsset()" ${!supported || downloading ? 'disabled' : ''}>
+							<span class="material-icons-round">${downloading ? 'downloading' : 'download'}</span>
+							<span>${escapeHtml(buttonLabel)}</span>
+						</button>
+					</div>
+				</div>
+			`;
+		}
 
         function updateAssetUI(ready) {
             const dot = document.getElementById('asset-status-dot');
@@ -3663,9 +3816,10 @@
             }
 
             try {
-                const [modelsRoot, managedModels] = await Promise.all([
+                const [modelsRoot, managedModels, browserStatus] = await Promise.all([
                     window.go?.core?.App?.GetModelsRootDir?.() ?? '',
-                    window.go?.core?.App?.GetManagedModels?.() ?? []
+					window.go?.core?.App?.GetManagedModels?.() ?? [],
+					window.go?.core?.App?.GetBrowserAssetStatus?.() ?? null
                 ]);
 
                 if (rootEl) {
@@ -3674,12 +3828,8 @@
 
                 if (!listEl) return;
                 const items = Array.isArray(managedModels) ? managedModels : [];
-                if (!items.length) {
-                    listEl.innerHTML = `<div style="color: var(--text-secondary); font-size: 13px;">${escapeHtml(currentServerLanguage === 'ko' ? '관리 가능한 모델이 없습니다.' : 'No managed models available.')}</div>`;
-                    return;
-                }
-
-                listEl.innerHTML = items.map((item) => renderManagedModelCard(item, { scope: 'manager' })).join('');
+				const modelCards = items.map((item) => renderManagedModelCard(item, { scope: 'manager' })).join('');
+				listEl.innerHTML = modelCards + renderBrowserAssetCard(browserStatus);
             } catch (e) {
                 if (listEl) {
                     listEl.innerHTML = `<div style="color: var(--danger-color); font-size: 13px;">${escapeHtml(currentServerLanguage === 'ko' ? '모델 상태를 불러오지 못했습니다.' : 'Failed to load model status.')}</div>`;
