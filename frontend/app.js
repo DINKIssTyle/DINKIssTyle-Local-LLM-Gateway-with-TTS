@@ -6958,6 +6958,7 @@ chatUIController = appChatUI.createChatUIController({
         isAssistantMessageVisiblyEmpty,
         pulseMessageRender,
         refreshChatScrollMetrics,
+        runAfterViewportStabilizes,
         savedLibraryIsOpen: () => savedLibraryController.isOpen(),
         triggerHaptic,
         updateReasoningControlVisibility

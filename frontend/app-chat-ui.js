@@ -19,6 +19,7 @@
             isAssistantMessageVisiblyEmpty,
             pulseMessageRender,
             refreshChatScrollMetrics,
+            runAfterViewportStabilizes,
             savedLibraryIsOpen,
             triggerHaptic,
             updateReasoningControlVisibility
@@ -46,6 +47,7 @@
         let turnFocusApplied = false;
         let turnFocusSpacerHeight = 0;
         let pendingTurnFocusFrame = 0;
+        let cancelTurnFocusStabilization = null;
 
         function syncChatScrollMetrics() {
             const metrics = refreshChatScrollMetrics?.();
@@ -224,6 +226,21 @@
                 pendingTurnFocusFrame = 0;
                 focusActiveTurnStart(force);
             });
+        }
+
+        function stabilizeActiveTurnFocus() {
+            cancelTurnFocusStabilization?.();
+            cancelTurnFocusStabilization = null;
+
+            if (typeof runAfterViewportStabilizes !== 'function') return;
+            cancelTurnFocusStabilization = runAfterViewportStabilizes(() => {
+                focusActiveTurnStart(true);
+            });
+        }
+
+        function cancelActiveTurnFocusStabilization() {
+            cancelTurnFocusStabilization?.();
+            cancelTurnFocusStabilization = null;
         }
 
         function handleChatScroll() {
@@ -458,6 +475,7 @@
                 ensureTurnFocusSpacer();
                 observeAutoScrollResizes([activeMessage, responseCard, markdownBody, ...codeBlocks]);
                 scheduleActiveTurnFocus(true);
+                stabilizeActiveTurnFocus();
                 global.requestAnimationFrame(() => {
                     shouldAutoScroll = false;
                     lockScrollToLatest = false;
@@ -470,6 +488,7 @@
         }
 
         function stopStreamingMessageAutoScroll() {
+            cancelActiveTurnFocusStabilization();
             activeStreamingMessageId = null;
             turnFocusApplied = false;
             if (pendingTurnFocusFrame) {
@@ -510,7 +529,10 @@
         if (chatMessages) {
             chatMessages.addEventListener('scroll', handleChatScroll, { passive: true });
             chatMessages.addEventListener('wheel', () => cancelLatestScrollAnimation(true), { passive: true });
-            chatMessages.addEventListener('touchstart', () => cancelLatestScrollAnimation(true), { passive: true });
+            chatMessages.addEventListener('touchstart', () => {
+                cancelActiveTurnFocusStabilization();
+                cancelLatestScrollAnimation(true);
+            }, { passive: true });
             chatMessages.addEventListener('pointerdown', (event) => {
                 if (event.pointerType === 'mouse') cancelLatestScrollAnimation(true);
             }, { passive: true });
