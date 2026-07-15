@@ -35,7 +35,7 @@ let config = {
     voiceInputAutoTTS: true, // Default: True (Override auto-play for STT messages)
     ttsFormat: 'wav',      // Default: wav
     ttsSteps: 5,           // Default: 5
-    ttsThreads: 1,         // Default: 1
+    ttsThreads: 4,         // Default: 4
     enableEmbeddings: true,
     embeddingProvider: 'local',
     embeddingModelId: 'multilingual-e5-small',
@@ -3285,8 +3285,8 @@ function loadConfig() {
     document.getElementById('speed-val').textContent = config.ttsSpeed || 1.0;
     document.getElementById('cfg-tts-steps').value = config.ttsSteps || 5;
     document.getElementById('steps-val').textContent = config.ttsSteps || 5;
-    document.getElementById('cfg-tts-threads').value = config.ttsThreads || 1;
-    document.getElementById('threads-val').textContent = config.ttsThreads || 1;
+    document.getElementById('cfg-tts-threads').value = config.ttsThreads || 4;
+    document.getElementById('threads-val').textContent = config.ttsThreads || 4;
     document.getElementById('cfg-os-tts-rate').value = config.osTtsRate || 1.0;
     document.getElementById('os-rate-val').textContent = config.osTtsRate || 1.0;
     document.getElementById('cfg-os-tts-pitch').value = config.osTtsPitch || 1.0;

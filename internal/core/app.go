@@ -374,7 +374,7 @@ func (a *App) loadConfig() {
 		Engine:     "supertonic",
 		VoiceStyle: "F1.json",
 		Speed:      1.0,
-		Threads:    1,
+		Threads:    4,
 		OSRate:     1.0,
 		OSPitch:    1.0,
 	}

@@ -8,7 +8,7 @@
     "engine": "supertonic",
     "voiceStyle": "F1.json",
     "speed": 1.0,
-    "threads": 1,
+    "threads": 4,
     "osRate": 1.0,
     "osPitch": 1.0
   },

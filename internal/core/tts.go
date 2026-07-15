@@ -267,6 +267,7 @@ func LoadTextToSpeech(onnxDir string, cfg TTSConfig, threads int) (*TextToSpeech
 	}
 	so, _ := ort.NewSessionOptions()
 	defer so.Destroy()
+	so.SetGraphOptimizationLevel(ort.GraphOptimizationLevelEnableAll)
 	so.SetIntraOpNumThreads(threads) // Use configured threads
 	so.SetInterOpNumThreads(1)
 
