@@ -7,6 +7,7 @@ import (
 
 const toolConfigText = `
 search_web = enable
+search_web_multi = enable
 read_web_page = enable
 read_buffered_source = enable
 read_help = enable

@@ -1,7 +1,10 @@
 package mcp
 
 import (
+	"errors"
+	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -65,6 +68,60 @@ func TestSearchCacheTTLReflectsFreshness(t *testing.T) {
 	}
 	if got := searchCacheTTLForQuery("Go 공식 문서"); got != 30*time.Minute {
 		t.Fatalf("stable query TTL = %s", got)
+	}
+}
+
+func TestSearchWebMultiRunsBothQueriesConcurrentlyAndKeepsOrder(t *testing.T) {
+	var active int32
+	var peak int32
+	search := func(query string) (string, error) {
+		current := atomic.AddInt32(&active, 1)
+		for {
+			observed := atomic.LoadInt32(&peak)
+			if current <= observed || atomic.CompareAndSwapInt32(&peak, observed, current) {
+				break
+			}
+		}
+		time.Sleep(40 * time.Millisecond)
+		atomic.AddInt32(&active, -1)
+		return "result for " + query, nil
+	}
+
+	result, err := searchWebMultiWith([]string{"first angle", "second angle"}, search)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if atomic.LoadInt32(&peak) != 2 {
+		t.Fatalf("expected two concurrent searches, peak concurrency was %d", peak)
+	}
+	firstIndex := strings.Index(result, "Query 1: first angle")
+	secondIndex := strings.Index(result, "Query 2: second angle")
+	if firstIndex < 0 || secondIndex < 0 || firstIndex >= secondIndex {
+		t.Fatalf("results did not preserve input order:\n%s", result)
+	}
+}
+
+func TestSearchWebMultiReturnsPartialEvidence(t *testing.T) {
+	result, err := searchWebMultiWith([]string{"working", "failing"}, func(query string) (string, error) {
+		if query == "failing" {
+			return "", errors.New("provider unavailable")
+		}
+		return fmt.Sprintf("evidence for %s", query), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, "evidence for working") || !strings.Contains(result, "1 of 2 searches failed") {
+		t.Fatalf("partial evidence or disclosure missing:\n%s", result)
+	}
+}
+
+func TestSearchWebMultiRejectsDuplicateOrWrongQueryCount(t *testing.T) {
+	search := func(query string) (string, error) { return query, nil }
+	for _, queries := range [][]string{{"one"}, {"same", " SAME "}, {"one", "two", "three"}} {
+		if _, err := searchWebMultiWith(queries, search); err == nil {
+			t.Fatalf("expected invalid query set to fail: %#v", queries)
+		}
 	}
 }
 

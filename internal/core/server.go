@@ -434,7 +434,7 @@ func buildImplicitToolArgs(toolName string, explicitText string, userText string
 		queryText = trimmedUser
 	}
 	switch strings.TrimSpace(toolName) {
-	case "search_memory", "search_web", "naver_search", "namu_wiki", "read_help":
+	case "search_memory", "search_web", "search_web_multi", "naver_search", "namu_wiki", "read_help":
 		if queryText == "" {
 			return "", nil, false
 		}
@@ -1388,7 +1388,20 @@ func compactToolSnapshotDetail(toolName string, args interface{}, summary string
 		memoryID := extractStringValue(argsMap, []string{"memory_id"})
 
 		switch normalizedTool {
-		case "search_web", "namu_wiki", "naver_search":
+		case "search_web", "search_web_multi", "namu_wiki", "naver_search":
+			if normalizedTool == "search_web_multi" {
+				if queries, ok := argsMap["queries"].([]interface{}); ok && len(queries) > 0 {
+					parts := make([]string, 0, len(queries))
+					for _, query := range queries {
+						if text, ok := query.(string); ok && strings.TrimSpace(text) != "" {
+							parts = append(parts, strings.TrimSpace(text))
+						}
+					}
+					if len(parts) > 0 {
+						return compactText("병렬 검색어: "+strings.Join(parts, " | "), 220)
+					}
+				}
+			}
 			if queryLike != "" {
 				return compactText("검색어: "+queryLike, 220)
 			}
@@ -1449,7 +1462,7 @@ func compactToolSnapshotDetail(toolName string, args interface{}, summary string
 
 func isWebEvidenceTool(toolName string) bool {
 	switch strings.TrimSpace(toolName) {
-	case "search_web", "naver_search", "namu_wiki", "read_web_page", "read_buffered_source":
+	case "search_web", "search_web_multi", "naver_search", "namu_wiki", "read_web_page", "read_buffered_source":
 		return true
 	default:
 		return false
@@ -1458,7 +1471,7 @@ func isWebEvidenceTool(toolName string) bool {
 
 func isWebSearchProviderTool(toolName string) bool {
 	switch strings.TrimSpace(toolName) {
-	case "search_web", "naver_search", "namu_wiki":
+	case "search_web", "search_web_multi", "naver_search", "namu_wiki":
 		return true
 	default:
 		return false
@@ -5702,7 +5715,14 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 			// 1. Execute Tool
 			toolStart := time.Now()
-			toolUsageCounts[lastToolName]++
+			toolUsageWeight := 1
+			if lastToolName == "search_web_multi" {
+				// A batch contains exactly two provider requests. Charge both against
+				// the existing evidence/provider budgets so parallelism cannot bypass
+				// the safeguards used by sequential search_web calls.
+				toolUsageWeight = 2
+			}
+			toolUsageCounts[lastToolName] += toolUsageWeight
 			toolSig := lastToolName + ":" + compactText(strings.TrimSpace(lastToolArgsStr), 240)
 			toolSignatureCounts[toolSig]++
 			executeCommandText := ""

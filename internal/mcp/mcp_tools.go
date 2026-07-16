@@ -204,6 +204,23 @@ func GetToolList() []Tool {
 			},
 		},
 		{
+			Name:        "search_web_multi",
+			Description: "Run exactly two independent DuckDuckGo searches concurrently and return both result sets in deterministic query order. Use only when the user's comparison or research question clearly needs two distinct search angles; use search_web for a single query.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"queries": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"minItems":    2,
+						"maxItems":    2,
+						"description": "Two distinct, focused search queries to run concurrently.",
+					},
+				},
+				"required": []string{"queries"},
+			},
+		},
+		{
 			Name:        "read_web_page",
 			Description: "Fetch and buffer the text content of a specific high-value URL for the current user. Use this only when search snippets are not enough or the user needs source-specific detail. This returns a source handle plus summary, not the full page; answer from that summary unless focused excerpts are clearly needed.",
 			InputSchema: map[string]interface{}{
@@ -1017,6 +1034,20 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 		emitToolResultTrace(toolName, start, result, err)
 		return result, err
 
+	case "search_web_multi":
+		var args struct {
+			Queries []string `json:"queries"`
+		}
+		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
+			return "", fmt.Errorf("invalid arguments for search_web_multi: %v", err)
+		}
+		result, err := SearchWebMulti(args.Queries)
+		if err == nil {
+			result, err = bufferToolResult(userID, toolName, strings.Join(args.Queries, " | "), "", "Parallel web search", result)
+		}
+		emitToolResultTrace(toolName, start, result, err)
+		return result, err
+
 	case "read_web_page":
 		var args struct {
 			URL string `json:"url"`
@@ -1335,6 +1366,79 @@ func SearchWeb(query string) (string, error) {
 	formatted := formatSearchResultsWithGuidance(query, results)
 	setTimedToolCache(searchCache, &searchCacheMu, cacheKey, formatted, cacheTTL)
 	return formatted, nil
+}
+
+type parallelSearchOutcome struct {
+	Query  string
+	Result string
+	Err    error
+}
+
+func SearchWebMulti(queries []string) (string, error) {
+	return searchWebMultiWith(queries, SearchWeb)
+}
+
+func searchWebMultiWith(queries []string, search func(string) (string, error)) (string, error) {
+	if len(queries) != 2 {
+		return "", fmt.Errorf("search_web_multi requires exactly two distinct non-empty queries")
+	}
+	queries = normalizeParallelSearchQueries(queries)
+	if len(queries) != 2 {
+		return "", fmt.Errorf("search_web_multi requires exactly two distinct non-empty queries")
+	}
+	start := time.Now()
+	emitTraceEvent("mcp", "search_web_multi.start", "Starting parallel web searches", traceDetailsMap("queries", queries, "count", len(queries)))
+
+	outcomes := make([]parallelSearchOutcome, len(queries))
+	var wg sync.WaitGroup
+	for index, query := range queries {
+		wg.Add(1)
+		go func(index int, query string) {
+			defer wg.Done()
+			result, err := search(query)
+			outcomes[index] = parallelSearchOutcome{Query: query, Result: result, Err: err}
+		}(index, query)
+	}
+	wg.Wait()
+
+	successes := 0
+	var b strings.Builder
+	fmt.Fprintf(&b, "Parallel Web Search Results\n")
+	for index, outcome := range outcomes {
+		fmt.Fprintf(&b, "\n=== Query %d: %s ===\n", index+1, outcome.Query)
+		if outcome.Err != nil {
+			fmt.Fprintf(&b, "Search failed: %s\n", compactMemoryText(outcome.Err.Error(), 240))
+			continue
+		}
+		successes++
+		fmt.Fprintf(&b, "%s\n", strings.TrimSpace(outcome.Result))
+	}
+	emitTraceEvent("mcp", "search_web_multi.complete", "Parallel web searches completed", traceDetailsMap("queries", queries, "count", len(queries), "successes", successes, "failures", len(queries)-successes, "elapsed_ms", toolDurationMs(start)))
+	if successes == 0 {
+		return "", fmt.Errorf("all parallel web searches failed")
+	}
+	if successes < len(queries) {
+		fmt.Fprintf(&b, "\nNote: %d of %d searches failed; answer only from the successful evidence and disclose the gap if material.\n", len(queries)-successes, len(queries))
+	}
+	return strings.TrimSpace(b.String()), nil
+}
+
+func normalizeParallelSearchQueries(queries []string) []string {
+	result := make([]string, 0, 2)
+	seen := make(map[string]bool)
+	for _, query := range queries {
+		query = normalizeToolSearchQuery(query)
+		key := strings.ToLower(strings.Join(strings.Fields(query), " "))
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		result = append(result, query)
+		if len(result) == 2 {
+			break
+		}
+	}
+	return result
 }
 
 func searchDuckDuckGo(query string, client *http.Client) ([]webSearchResult, error) {
