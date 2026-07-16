@@ -206,6 +206,7 @@
                 onOpen = null,
                 onSession = null,
                 onEvent = null,
+                onHeartbeat = null,
                 onError = null
             } = options;
 
@@ -244,6 +245,10 @@
                 if (payload) {
                     onEvent?.(payload);
                 }
+            });
+
+            source.addEventListener('heartbeat', (event) => {
+                onHeartbeat?.(event);
             });
 
             source.addEventListener('error', (event) => {

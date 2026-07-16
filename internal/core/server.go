@@ -3350,7 +3350,7 @@ func handleChatSessionEventsStream() http.HandlerFunc {
 			case <-r.Context().Done():
 				return
 			case <-heartbeat.C:
-				if err := writeSSEComment(w, "keepalive"); err != nil {
+				if err := writeSSEEvent(w, "heartbeat", map[string]int64{"unix_ms": time.Now().UnixMilli()}); err != nil {
 					return
 				}
 				flusher.Flush()

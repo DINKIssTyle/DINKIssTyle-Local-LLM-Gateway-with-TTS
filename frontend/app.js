@@ -183,6 +183,8 @@ let AppState = {
         eventStreamConnected: false,
         eventStreamRetryTimer: null,
         eventStreamLastErrorAt: 0,
+        eventStreamLastActivityAt: 0,
+        sessionReconcileTimer: null,
         serverReconnectTimer: null,
         lastServerReachable: null,
         serverReconnectRecoveryPromise: null,
@@ -2439,6 +2441,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         console.warn('Initial chat bootstrap failed:', e);
     }
     startServerReconnectWatcher({ immediate: true });
+    startSessionReconcileWatcher();
 
     // Start Location Tracking
     updateUserLocation();
@@ -2447,7 +2450,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Register Service Worker for PWA
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-            navigator.serviceWorker.register('/sw.js?v=7')
+            navigator.serviceWorker.register('/sw.js?v=8')
                 .then(reg => console.log('[PWA] Service Worker registered:', reg.scope))
                 .catch(err => console.warn('[PWA] Service Worker failed:', err));
         });
@@ -2460,12 +2463,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             cancelComposerBackgroundTasks('document-hidden');
             clearReconnectWatchdog();
             clearForegroundSyncTimers();
+            clearSessionReconcileTimer();
             stopChatSessionEventStream();
         } else {
             savedLibraryController.scheduleSavedTitleRefresh(800);
             restartChatSessionEventStream();
             scheduleForegroundSessionRefresh('visibility-visible');
             startServerReconnectWatcher({ immediate: true });
+            startSessionReconcileWatcher({ immediate: true });
         }
     });
 
@@ -2474,12 +2479,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         relinquishLocalStreamOwnership('pagehide');
         stopChatSessionEventStream();
         clearServerReconnectWatcher();
+        clearSessionReconcileTimer();
     });
 
     window.addEventListener('pageshow', () => {
         restartChatSessionEventStream();
         scheduleForegroundSessionRefresh('pageshow');
         startServerReconnectWatcher({ immediate: true });
+        startSessionReconcileWatcher({ immediate: true });
     });
 
     window.addEventListener('focus', () => {
@@ -2698,6 +2705,43 @@ function clearServerReconnectWatcher() {
     if (!AppState.session.serverReconnectTimer) return;
     clearTimeout(AppState.session.serverReconnectTimer);
     AppState.session.serverReconnectTimer = null;
+}
+
+function clearSessionReconcileTimer() {
+    if (!AppState.session.sessionReconcileTimer) return;
+    clearTimeout(AppState.session.sessionReconcileTimer);
+    AppState.session.sessionReconcileTimer = null;
+}
+
+function startSessionReconcileWatcher({ immediate = false } = {}) {
+    clearSessionReconcileTimer();
+
+    const tick = async () => {
+        if (document.hidden || !AppState.session.currentUser) {
+            clearSessionReconcileTimer();
+            return;
+        }
+
+        const lastActivityAt = Number(AppState.session.eventStreamLastActivityAt || 0);
+        if (AppState.session.eventStreamConnected && lastActivityAt > 0 && Date.now() - lastActivityAt > 25000) {
+            console.warn('[ChatSession] SSE heartbeat timed out; reconnecting stream.');
+            restartChatSessionEventStream();
+        }
+
+        try {
+            // Mobile browsers can retain a half-open SSE connection across a fast
+            // server restart. Always reconcile persisted events as a safety net.
+            await refreshSessionStateFromServer();
+        } catch (error) {
+            console.warn('[ChatSession] Periodic reconciliation failed:', error);
+        } finally {
+            if (!document.hidden && AppState.session.currentUser) {
+                AppState.session.sessionReconcileTimer = window.setTimeout(tick, 12000);
+            }
+        }
+    };
+
+    AppState.session.sessionReconcileTimer = window.setTimeout(tick, immediate ? 0 : 12000);
 }
 
 async function probeServerReachability() {
@@ -3922,11 +3966,13 @@ function startChatSessionEventStream() {
         onOpen: () => {
             AppState.session.eventStreamConnected = true;
             AppState.session.eventStreamLastErrorAt = 0;
+            AppState.session.eventStreamLastActivityAt = Date.now();
             clearChatSessionEventStreamRetry();
             markChatSessionRealtimeHealthy();
         },
         onSession: (payload) => {
             AppState.session.eventStreamConnected = true;
+            AppState.session.eventStreamLastActivityAt = Date.now();
             markChatSessionRealtimeHealthy();
             if (payload?.has_session) {
                 applyCurrentChatSessionSnapshot(payload.session || null);
@@ -3943,10 +3989,16 @@ function startChatSessionEventStream() {
                 return;
             }
             AppState.session.eventStreamConnected = true;
+            AppState.session.eventStreamLastActivityAt = Date.now();
             markChatSessionRealtimeHealthy();
             dismissStartupCards();
             applyCurrentChatSessionEvent(entry);
             AppState.session.eventSeq = Math.max(AppState.session.eventSeq, Number(entry.EventSeq || 0));
+        },
+        onHeartbeat: () => {
+            AppState.session.eventStreamConnected = true;
+            AppState.session.eventStreamLastActivityAt = Date.now();
+            markChatSessionRealtimeHealthy();
         },
         onError: (_event, payload) => {
             const now = Date.now();
