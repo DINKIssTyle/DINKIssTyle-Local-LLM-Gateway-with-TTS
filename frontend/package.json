@@ -7,6 +7,7 @@
         "build": "echo 'Static frontend - no build step'"
     },
     "dependencies": {
-        "mermaid": "^11.14.0"
+        "mermaid": "^11.14.0",
+        "onnxruntime-web": "^1.24.2"
     }
 }

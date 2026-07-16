@@ -28,7 +28,7 @@ let config = {
     ttsLang: 'ko',
     chunkSize: 100,        // Default: 100 (Smart Chunking)
     systemPrompt: 'You are a helpful AI assistant.',
-    ttsEngine: 'supertonic', // 'supertonic' or 'os'
+    ttsEngine: 'supertonic', // 'supertonic', 'supertonic-ondevice', or 'os'
     ttsVoice: 'F1',        // Default: F1
     ttsSpeed: 1.1,         // Default: 1.1
     autoTTS: false,        // Default: False (Auto-play)
@@ -3256,7 +3256,9 @@ function loadConfig() {
 
     config.webTheme = normalizeWebTheme(config.webTheme);
     applyWebTheme({ forceMermaid: true });
-    config.ttsEngine = config.ttsEngine === 'os' ? 'os' : 'supertonic';
+    config.ttsEngine = ['supertonic', 'supertonic-ondevice', 'os'].includes(config.ttsEngine)
+        ? config.ttsEngine
+        : 'supertonic';
     config.temperature = normalizeTemperatureValue(config.temperature, null);
     delete config.maxTokens;
     config.reasoning = normalizeReasoningValue(config.reasoning);

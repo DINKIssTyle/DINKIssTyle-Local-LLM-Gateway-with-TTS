@@ -34,6 +34,26 @@
         let audioContextUnlocked = false;
         let audioCtx = null;
         let synthesisTail = Promise.resolve();
+        let onDeviceModulePromise = null;
+        let lastOnDeviceProgressAt = 0;
+
+        function reportOnDeviceProgress(message) {
+            console.log(`[On-device TTS] ${message}`);
+            const now = Date.now();
+            if (now - lastOnDeviceProgressAt < 1200) return;
+            lastOnDeviceProgressAt = now;
+            global.showToast?.(message);
+        }
+
+        function getOnDeviceModule() {
+            if (!onDeviceModulePromise) {
+                onDeviceModulePromise = import('./app-tts-ondevice.mjs?v=1').catch((error) => {
+                    onDeviceModulePromise = null;
+                    throw error;
+                });
+            }
+            return onDeviceModulePromise;
+        }
 
         function getTTSChunkLimits() {
             const lang = String(config.ttsLang || '').toLowerCase();
@@ -639,6 +659,19 @@
                     };
 
                     console.log(`[TTS] Prefetching (${config.ttsVoice}): "${text.substring(0, 25)}..."`);
+                    if (getCurrentTTSEngine() === 'supertonic-ondevice') {
+                        const module = await getOnDeviceModule();
+                        const blob = await module.synthesize({
+                            text,
+                            lang: payload.lang,
+                            voice: payload.voiceStyle,
+                            speed: payload.speed,
+                            steps: payload.steps,
+                            onProgress: reportOnDeviceProgress
+                        });
+                        if (sessionAtSchedule !== (getPlaybackState?.() || {}).ttsSessionId) return null;
+                        return global.URL.createObjectURL(blob);
+                    }
                     const response = await global.fetch('/api/tts', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -1164,7 +1197,8 @@
         }
 
         function getCurrentTTSEngine() {
-            return config.ttsEngine === 'os' ? 'os' : 'supertonic';
+            if (config.ttsEngine === 'os') return 'os';
+            return config.ttsEngine === 'supertonic-ondevice' ? 'supertonic-ondevice' : 'supertonic';
         }
 
         function getSelectedOSTTSVoice() {
@@ -1260,12 +1294,18 @@
 
             supertonicIds.forEach((id) => {
                 const el = global.document.getElementById(id);
-                if (el) el.style.display = engine === 'supertonic' ? 'block' : 'none';
+                if (el) el.style.display = engine !== 'os' ? 'block' : 'none';
             });
 
             osIds.forEach((id) => {
                 const el = global.document.getElementById(id);
                 if (el) el.style.display = engine === 'os' ? 'block' : 'none';
+            });
+
+            const serverOnlyIds = ['container-tts-supertonic-threads', 'container-tts-supertonic-format'];
+            serverOnlyIds.forEach((id) => {
+                const el = global.document.getElementById(id);
+                if (el && engine === 'supertonic-ondevice') el.style.display = 'none';
             });
         }
 

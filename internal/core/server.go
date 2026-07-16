@@ -2563,6 +2563,8 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	mux.HandleFunc("/api/chat-session/stop", AuthMiddleware(authMgr, handleStopCurrentChat()))
 	mux.HandleFunc("/api/chat-session/clear", AuthMiddleware(authMgr, handleClearCurrentChat()))
 	mux.HandleFunc("/api/tts", AuthMiddleware(authMgr, handleTTS))
+	mux.HandleFunc("/api/tts/on-device/status", AuthMiddleware(authMgr, handleOnDeviceTTSStatus(app)))
+	mux.HandleFunc("/api/tts/on-device/assets/", AuthMiddleware(authMgr, handleOnDeviceTTSAsset()))
 	mux.HandleFunc("/api/last-session", AuthMiddleware(authMgr, handleLastSession()))
 	mux.HandleFunc("/api/saved-turns", AuthMiddleware(authMgr, handleSavedTurns()))
 	mux.HandleFunc("/api/saved-turns/title-refresh", AuthMiddleware(authMgr, handleSavedTurnTitleRefresh()))
@@ -6179,6 +6181,97 @@ func handleTTSStyles(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(styles)
+}
+
+var onDeviceTTSFiles = map[string]string{
+	"onnx/duration_predictor.onnx": "onnx/duration_predictor.onnx",
+	"onnx/text_encoder.onnx":       "onnx/text_encoder.onnx",
+	"onnx/vector_estimator.onnx":   "onnx/vector_estimator.onnx",
+	"onnx/vocoder.onnx":            "onnx/vocoder.onnx",
+	"onnx/tts.json":                "onnx/tts.json",
+	"onnx/unicode_indexer.json":    "onnx/unicode_indexer.json",
+	"voice_styles/M1.json":         "voice_styles/M1.json",
+	"voice_styles/M2.json":         "voice_styles/M2.json",
+	"voice_styles/M3.json":         "voice_styles/M3.json",
+	"voice_styles/M4.json":         "voice_styles/M4.json",
+	"voice_styles/M5.json":         "voice_styles/M5.json",
+	"voice_styles/F1.json":         "voice_styles/F1.json",
+	"voice_styles/F2.json":         "voice_styles/F2.json",
+	"voice_styles/F3.json":         "voice_styles/F3.json",
+	"voice_styles/F4.json":         "voice_styles/F4.json",
+	"voice_styles/F5.json":         "voice_styles/F5.json",
+}
+
+func handleOnDeviceTTSStatus(app *App) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		model := getTTSModelStatus()
+		response := map[string]interface{}{
+			"ready":   model.Installed,
+			"failed":  false,
+			"status":  model.Status,
+			"message": model.Message,
+		}
+		if !model.Installed {
+			if state, ok := getManagedDownloadState("tts:supertonic"); ok {
+				response["status"] = state.Status
+				response["message"] = state.Message
+				response["progressPct"] = state.ProgressPct
+				response["failed"] = state.Finished && !state.Success
+				if !state.Active && !(state.Finished && !state.Success) {
+					_ = app.StartManagedModelDownload("tts:supertonic")
+				}
+			} else if err := app.StartManagedModelDownload("tts:supertonic"); err != nil {
+				response["failed"] = true
+				response["status"] = "failed"
+				response["message"] = err.Error()
+			} else {
+				response["status"] = "queued"
+				response["message"] = "메인 앱에서 Supertonic 3 모델 다운로드를 시작했습니다."
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		json.NewEncoder(w).Encode(response)
+	}
+}
+
+func handleOnDeviceTTSAsset() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !getTTSModelStatus().Installed {
+			http.Error(w, "Supertonic 3 assets are not ready", http.StatusServiceUnavailable)
+			return
+		}
+		name := strings.TrimPrefix(r.URL.Path, "/api/tts/on-device/assets/")
+		relPath, ok := onDeviceTTSFiles[name]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		filePath := filepath.Join(getTTSAssetsDir(), filepath.FromSlash(relPath))
+		file, err := os.Open(filePath)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		defer file.Close()
+		info, err := file.Stat()
+		if err != nil {
+			http.Error(w, "Failed to inspect TTS asset", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		http.ServeContent(w, r, filepath.Base(filePath), info.ModTime(), file)
+	}
 }
 
 // Global TTS instance
