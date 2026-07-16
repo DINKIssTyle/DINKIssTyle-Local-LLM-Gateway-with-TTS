@@ -11,3 +11,4 @@ all_funcs.txt
 *_test.go
 !internal/core/tts_chunk_test.go
 !internal/chatharness/response_id_test.go
+!internal/mcp/web_search_test.go

@@ -495,32 +495,65 @@ func readRecentBufferedSourcesMemory(userID string, sourceIDs []string, query st
 		return "", fmt.Errorf("buffered source not found")
 	}
 
+	type candidate struct {
+		source *BufferedWebSource
+		chunk  BufferedWebChunk
+		score  int
+	}
+	terms := tokenizeQuery(query)
+	var candidates []candidate
+	for _, source := range sources {
+		sourceScore := scoreBufferedChunk(source.Title+" "+source.Query+" "+source.Summary, terms)
+		for _, chunk := range source.Chunks {
+			score := scoreBufferedChunk(chunk.Text, terms)*4 + sourceScore
+			if len(terms) == 0 || score > 0 {
+				candidates = append(candidates, candidate{source: source, chunk: chunk, score: score})
+			}
+		}
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score > candidates[j].score
+		}
+		if !candidates[i].source.FetchedAt.Equal(candidates[j].source.FetchedAt) {
+			return candidates[i].source.FetchedAt.After(candidates[j].source.FetchedAt)
+		}
+		return candidates[i].chunk.Index < candidates[j].chunk.Index
+	})
+	perSourceCap := maxChunks
+	if len(sources) > 1 {
+		perSourceCap = max(1, (maxChunks+1)/2)
+	}
+	selected := make([]candidate, 0, maxChunks)
+	perSourceCounts := make(map[string]int)
+	for _, item := range candidates {
+		if perSourceCounts[item.source.SourceID] >= perSourceCap {
+			continue
+		}
+		selected = append(selected, item)
+		perSourceCounts[item.source.SourceID]++
+		if len(selected) >= maxChunks {
+			break
+		}
+	}
+
 	var b strings.Builder
 	fmt.Fprintf(&b, "Buffered Web Sources\n")
 	fmt.Fprintf(&b, "Focus Query: %s\n", query)
-	perSource := max(1, maxChunks/len(sources))
 	written := 0
-	for _, source := range sources {
-		if written >= maxChunks {
-			break
-		}
-		selected := selectRelevantBufferedChunks(source, query, perSource)
-		if len(selected) == 0 {
-			continue
-		}
-		fmt.Fprintf(&b, "\nSource ID: %s\n", source.SourceID)
-		fmt.Fprintf(&b, "Title: %s\n", source.Title)
-		if source.URL != "" {
-			fmt.Fprintf(&b, "URL: %s\n", source.URL)
-		}
-		fmt.Fprintf(&b, "Summary: %s\n", source.Summary)
-		for _, chunk := range selected {
-			if written >= maxChunks {
-				break
+	lastSourceID := ""
+	for _, item := range selected {
+		if item.source.SourceID != lastSourceID {
+			fmt.Fprintf(&b, "\nSource ID: %s\n", item.source.SourceID)
+			fmt.Fprintf(&b, "Title: %s\n", item.source.Title)
+			if item.source.URL != "" {
+				fmt.Fprintf(&b, "URL: %s\n", item.source.URL)
 			}
-			fmt.Fprintf(&b, "\nExcerpt %d.%d:\n%s\n", written+1, chunk.Index+1, chunk.Text)
-			written++
+			fmt.Fprintf(&b, "Summary: %s\n", item.source.Summary)
+			lastSourceID = item.source.SourceID
 		}
+		fmt.Fprintf(&b, "\nExcerpt %d.%d:\n%s\n", written+1, item.chunk.Index+1, item.chunk.Text)
+		written++
 	}
 	if written == 0 {
 		return "", fmt.Errorf("no buffered passages available")
@@ -806,44 +839,84 @@ func readRecentBufferedSourcesDB(userID string, sourceIDs []string, query string
 		return "", fmt.Errorf("buffered source not found")
 	}
 
+	type candidate struct {
+		source        *BufferedWebSource
+		chunk         BufferedWebChunk
+		retrievalMode string
+	}
+	var candidates []candidate
+	for _, source := range sources {
+		selected, retrievalMode, selectErr := selectRelevantBufferedChunksDB(source.UserID, source.SourceID, query, maxChunks)
+		if selectErr != nil {
+			continue
+		}
+		for _, chunk := range selected {
+			candidates = append(candidates, candidate{source: source, chunk: chunk, retrievalMode: retrievalMode})
+		}
+	}
+	terms := tokenizeQuery(query)
+	sort.SliceStable(candidates, func(i, j int) bool {
+		iScore := candidates[i].chunk.HybridScore
+		jScore := candidates[j].chunk.HybridScore
+		if iScore == 0 {
+			iScore = float64(scoreBufferedChunk(candidates[i].chunk.Text+" "+candidates[i].source.Title+" "+candidates[i].source.Query, terms))
+		}
+		if jScore == 0 {
+			jScore = float64(scoreBufferedChunk(candidates[j].chunk.Text+" "+candidates[j].source.Title+" "+candidates[j].source.Query, terms))
+		}
+		if iScore != jScore {
+			return iScore > jScore
+		}
+		if !candidates[i].source.FetchedAt.Equal(candidates[j].source.FetchedAt) {
+			return candidates[i].source.FetchedAt.After(candidates[j].source.FetchedAt)
+		}
+		return candidates[i].chunk.Index < candidates[j].chunk.Index
+	})
+	perSourceCap := maxChunks
+	if len(sources) > 1 {
+		perSourceCap = max(1, (maxChunks+1)/2)
+	}
+	selectedGlobal := make([]candidate, 0, maxChunks)
+	perSourceCounts := make(map[string]int)
+	for _, item := range candidates {
+		if perSourceCounts[item.source.SourceID] >= perSourceCap {
+			continue
+		}
+		selectedGlobal = append(selectedGlobal, item)
+		perSourceCounts[item.source.SourceID]++
+		if len(selectedGlobal) >= maxChunks {
+			break
+		}
+	}
+
 	var b strings.Builder
 	fmt.Fprintf(&b, "Buffered Web Sources\n")
 	if query != "" {
 		fmt.Fprintf(&b, "Focus Query: %s\n", query)
 	}
-
-	perSource := max(1, maxChunks/len(sources))
 	written := 0
 	selectedPayload := make([]map[string]interface{}, 0, maxChunks)
-	for _, source := range sources {
-		if written >= maxChunks {
-			break
-		}
-		selected, retrievalMode, err := selectRelevantBufferedChunksDB(source.UserID, source.SourceID, query, perSource)
-		if err != nil || len(selected) == 0 {
-			continue
-		}
-		fmt.Fprintf(&b, "\nSource ID: %s\n", source.SourceID)
-		fmt.Fprintf(&b, "Title: %s\n", source.Title)
-		if source.URL != "" {
-			fmt.Fprintf(&b, "URL: %s\n", source.URL)
-		}
-		fmt.Fprintf(&b, "Summary: %s\n", source.Summary)
-		fmt.Fprintf(&b, "Retrieval: %s\n", retrievalMode)
-		for _, chunk := range selected {
-			if written >= maxChunks {
-				break
+	lastSourceID := ""
+	for _, item := range selectedGlobal {
+		if item.source.SourceID != lastSourceID {
+			fmt.Fprintf(&b, "\nSource ID: %s\n", item.source.SourceID)
+			fmt.Fprintf(&b, "Title: %s\n", item.source.Title)
+			if item.source.URL != "" {
+				fmt.Fprintf(&b, "URL: %s\n", item.source.URL)
 			}
-			fmt.Fprintf(&b, "\nExcerpt %d.%d:\n%s\n", written+1, chunk.Index+1, chunk.Text)
-			selectedPayload = append(selectedPayload, map[string]interface{}{
-				"source_id": source.SourceID,
-				"title":     source.Title,
-				"url":       source.URL,
-				"index":     chunk.Index + 1,
-				"text":      chunk.Text,
-			})
-			written++
+			fmt.Fprintf(&b, "Summary: %s\n", item.source.Summary)
+			fmt.Fprintf(&b, "Retrieval: %s\n", item.retrievalMode)
+			lastSourceID = item.source.SourceID
 		}
+		fmt.Fprintf(&b, "\nExcerpt %d.%d:\n%s\n", written+1, item.chunk.Index+1, item.chunk.Text)
+		selectedPayload = append(selectedPayload, map[string]interface{}{
+			"source_id": item.source.SourceID,
+			"title":     item.source.Title,
+			"url":       item.source.URL,
+			"index":     item.chunk.Index + 1,
+			"text":      item.chunk.Text,
+		})
+		written++
 	}
 	if written == 0 {
 		return "", fmt.Errorf("no buffered passages available")

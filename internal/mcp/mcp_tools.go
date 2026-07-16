@@ -24,6 +24,7 @@ import (
 
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
+	nethtml "golang.org/x/net/html"
 )
 
 type Tool struct {
@@ -1297,6 +1298,8 @@ type webSearchResult struct {
 	Snippet string
 }
 
+const maxTimedToolCacheEntries = 64
+
 // SearchWeb performs a web search using DuckDuckGo Lite.
 func SearchWeb(query string) (string, error) {
 	originalQuery := query
@@ -1309,7 +1312,8 @@ func SearchWeb(query string) (string, error) {
 	}
 
 	cacheKey := strings.ToLower(strings.Join(strings.Fields(query), " "))
-	if cached, ok := getTimedToolCache(searchCache, &searchCacheMu, cacheKey, searchCacheTTL); ok {
+	cacheTTL := searchCacheTTLForQuery(query)
+	if cached, ok := getTimedToolCache(searchCache, &searchCacheMu, cacheKey, cacheTTL); ok {
 		emitTraceEvent("mcp", "search_web.cache_hit", "Using cached web search result", traceDetailsMap("query", query, "elapsed_ms", toolDurationMs(start), "provider", "duckduckgo"))
 		return cached, nil
 	}
@@ -1329,7 +1333,7 @@ func SearchWeb(query string) (string, error) {
 
 	emitTraceEvent("mcp", "search_web.complete", "DuckDuckGo search completed", traceDetailsMap("query", query, "elapsed_ms", toolDurationMs(start), "results", len(results), "provider", "duckduckgo"))
 	formatted := formatSearchResultsWithGuidance(query, results)
-	setTimedToolCache(searchCache, &searchCacheMu, cacheKey, formatted)
+	setTimedToolCache(searchCache, &searchCacheMu, cacheKey, formatted, cacheTTL)
 	return formatted, nil
 }
 
@@ -1340,29 +1344,159 @@ func searchDuckDuckGo(query string, client *http.Client) ([]webSearchResult, err
 		return nil, err
 	}
 
-	linkRegex := regexp.MustCompile(`(?s)href="(.*?)" class='result-link'>(.*?)</a>`)
-	snippetRegex := regexp.MustCompile(`(?s)class='result-snippet'>(.*?)</td>`)
+	return parseDuckDuckGoResults(htmlContent, 5)
+}
 
-	matches := linkRegex.FindAllStringSubmatch(htmlContent, 5)
-	snippets := snippetRegex.FindAllStringSubmatch(htmlContent, 5)
-
-	count := len(matches)
-	if len(snippets) < count {
-		count = len(snippets)
+func parseDuckDuckGoResults(input string, limit int) ([]webSearchResult, error) {
+	doc, err := nethtml.Parse(strings.NewReader(input))
+	if err != nil {
+		return nil, err
 	}
-
 	var results []webSearchResult
-	for i := 0; i < count; i++ {
-		link := cleanSearchText(matches[i][1])
-		title := cleanSearchText(matches[i][2])
-		snippet := cleanSearchText(snippets[i][1])
-		if title == "" || link == "" {
+	var walk func(*nethtml.Node)
+	walk = func(n *nethtml.Node) {
+		if len(results) >= limit {
+			return
+		}
+		if n.Type == nethtml.ElementNode && n.Data == "a" && nodeHasClass(n, "result-link") {
+			link := normalizeSearchResultURL(nodeAttr(n, "href"), "https://lite.duckduckgo.com/lite/")
+			title := cleanSearchText(nodeText(n))
+			snippet := findFollowingResultSnippet(n)
+			if title != "" && link != "" {
+				results = append(results, webSearchResult{Title: title, Link: link, Snippet: snippet})
+			}
+		}
+		for child := n.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	walk(doc)
+	return deduplicateSearchResults(results, limit), nil
+}
+
+func findFollowingResultSnippet(n *nethtml.Node) string {
+	for next := nextHTMLNode(n); next != nil; next = nextHTMLNode(next) {
+		if next.Type == nethtml.ElementNode && next.Data == "a" && nodeHasClass(next, "result-link") {
+			return ""
+		}
+		if next.Type == nethtml.ElementNode && nodeHasClass(next, "result-snippet") {
+			return cleanSearchText(nodeText(next))
+		}
+	}
+	return ""
+}
+
+func nextHTMLNode(n *nethtml.Node) *nethtml.Node {
+	if n.FirstChild != nil {
+		return n.FirstChild
+	}
+	for current := n; current != nil; current = current.Parent {
+		if current.NextSibling != nil {
+			return current.NextSibling
+		}
+	}
+	return nil
+}
+
+func nodeAttr(n *nethtml.Node, key string) string {
+	for _, attr := range n.Attr {
+		if strings.EqualFold(attr.Key, key) {
+			return attr.Val
+		}
+	}
+	return ""
+}
+
+func nodeHasClass(n *nethtml.Node, className string) bool {
+	for _, class := range strings.Fields(nodeAttr(n, "class")) {
+		if class == className {
+			return true
+		}
+	}
+	return false
+}
+
+func nodeText(n *nethtml.Node) string {
+	var b strings.Builder
+	var walk func(*nethtml.Node)
+	walk = func(current *nethtml.Node) {
+		if current.Type == nethtml.TextNode {
+			b.WriteString(current.Data)
+			b.WriteByte(' ')
+		}
+		for child := current.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	walk(n)
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+func findDescendantTextByClass(n *nethtml.Node, className string) string {
+	if n.Type == nethtml.ElementNode && nodeHasClass(n, className) {
+		return cleanSearchText(nodeText(n))
+	}
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		if text := findDescendantTextByClass(child, className); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func normalizeSearchResultURL(rawURL, baseURL string) string {
+	rawURL = strings.TrimSpace(html.UnescapeString(rawURL))
+	if rawURL == "" {
+		return ""
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	if !parsed.IsAbs() {
+		base, baseErr := url.Parse(baseURL)
+		if baseErr != nil {
+			return ""
+		}
+		parsed = base.ResolveReference(parsed)
+	}
+	if strings.HasSuffix(strings.ToLower(parsed.Hostname()), "duckduckgo.com") {
+		if target := parsed.Query().Get("uddg"); target != "" {
+			if resolved, resolveErr := url.Parse(target); resolveErr == nil && resolved.IsAbs() {
+				parsed = resolved
+			}
+		}
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return ""
+	}
+	parsed.Fragment = ""
+	query := parsed.Query()
+	for key := range query {
+		lower := strings.ToLower(key)
+		if strings.HasPrefix(lower, "utm_") || lower == "fbclid" || lower == "gclid" {
+			query.Del(key)
+		}
+	}
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
+
+func deduplicateSearchResults(results []webSearchResult, limit int) []webSearchResult {
+	seen := make(map[string]bool)
+	out := make([]webSearchResult, 0, len(results))
+	for _, result := range results {
+		key := strings.ToLower(strings.TrimSuffix(result.Link, "/"))
+		if key == "" || seen[key] {
 			continue
 		}
-		results = append(results, webSearchResult{Title: title, Link: link, Snippet: snippet})
+		seen[key] = true
+		out = append(out, result)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
 	}
-
-	return results, nil
+	return out
 }
 
 func formatSearchResultsWithGuidance(query string, results []webSearchResult) string {
@@ -1402,19 +1536,25 @@ func classifySearchResultQuality(rawURL string) string {
 	}
 	host := strings.ToLower(parsed.Hostname())
 	switch {
-	case strings.Contains(host, "wikipedia.org"), strings.Contains(host, "wikimedia.org"):
+	case hostMatchesDomain(host, "wikipedia.org"), hostMatchesDomain(host, "wikimedia.org"):
 		return "encyclopedic"
-	case strings.Contains(host, "namu.wiki"):
+	case hostMatchesDomain(host, "namu.wiki"):
 		return "wiki"
-	case strings.Contains(host, ".go.kr"), strings.Contains(host, ".gov"), strings.Contains(host, ".edu"), strings.Contains(host, "docs."), strings.Contains(host, "developer."):
+	case strings.HasSuffix(host, ".go.kr"), strings.HasSuffix(host, ".gov"), strings.HasSuffix(host, ".gov.uk"), strings.HasSuffix(host, ".edu"):
 		return "authoritative"
-	case strings.Contains(host, "naver.com"), strings.Contains(host, "blog."), strings.Contains(host, "tistory.com"):
+	case hostMatchesDomain(host, "naver.com"), strings.HasPrefix(host, "blog."), hostMatchesDomain(host, "tistory.com"):
 		return "blog_or_portal"
-	case strings.Contains(host, "instagram.com"), strings.Contains(host, "facebook.com"), strings.Contains(host, "x.com"), strings.Contains(host, "twitter.com"), strings.Contains(host, "tiktok.com"):
+	case hostMatchesDomain(host, "instagram.com"), hostMatchesDomain(host, "facebook.com"), hostMatchesDomain(host, "x.com"), hostMatchesDomain(host, "twitter.com"), hostMatchesDomain(host, "tiktok.com"):
 		return "social"
 	default:
 		return "general"
 	}
+}
+
+func hostMatchesDomain(host, domain string) bool {
+	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	domain = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domain)), ".")
+	return host == domain || strings.HasSuffix(host, "."+domain)
 }
 
 func shouldReadTopSearchResult(query string, result webSearchResult) bool {
@@ -1444,21 +1584,50 @@ func getTimedToolCache(cache map[string]timedToolCacheEntry, mu *sync.Mutex, key
 	return entry.Value, true
 }
 
-func setTimedToolCache(cache map[string]timedToolCacheEntry, mu *sync.Mutex, key, value string) {
+func setTimedToolCache(cache map[string]timedToolCacheEntry, mu *sync.Mutex, key, value string, ttl ...time.Duration) {
 	key = strings.TrimSpace(key)
 	if key == "" || strings.TrimSpace(value) == "" {
 		return
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(cache) > 64 {
-		for existingKey, entry := range cache {
-			if time.Since(entry.StoredAt) > searchCacheTTL {
-				delete(cache, existingKey)
-			}
+	entryTTL := searchCacheTTL
+	if len(ttl) > 0 && ttl[0] > 0 {
+		entryTTL = ttl[0]
+	}
+	for existingKey, entry := range cache {
+		if time.Since(entry.StoredAt) > entryTTL {
+			delete(cache, existingKey)
 		}
 	}
+	for len(cache) >= maxTimedToolCacheEntries {
+		var oldestKey string
+		var oldestTime time.Time
+		for existingKey, entry := range cache {
+			if oldestKey == "" || entry.StoredAt.Before(oldestTime) {
+				oldestKey, oldestTime = existingKey, entry.StoredAt
+			}
+		}
+		delete(cache, oldestKey)
+	}
 	cache[key] = timedToolCacheEntry{Value: value, StoredAt: time.Now()}
+}
+
+func searchCacheTTLForQuery(query string) time.Duration {
+	lower := strings.ToLower(query)
+	volatile := []string{"오늘", "현재", "실시간", "속보", "날씨", "주가", "환율", "경기 결과", "today", "current", "latest", "breaking", "weather", "stock price", "exchange rate", "score"}
+	for _, signal := range volatile {
+		if strings.Contains(lower, signal) {
+			return time.Minute
+		}
+	}
+	stable := []string{"공식 문서", "사용법", "문서", "documentation", "reference", "how to"}
+	for _, signal := range stable {
+		if strings.Contains(lower, signal) {
+			return 30 * time.Minute
+		}
+	}
+	return searchCacheTTL
 }
 
 func fetchSearchPage(client *http.Client, searchURL string) (string, error) {
@@ -1523,17 +1692,90 @@ func SearchNamuwiki(keyword string) (string, error) {
 // SearchNaver performs a search on Naver and returns the page content.
 // Specialized for dictionary, Korea-related content, weather, and news.
 func SearchNaver(query string) (string, error) {
+	query = normalizeToolSearchQuery(query)
 	log.Printf("[MCP] Searching Naver for: %s", query)
+	start := time.Now()
+	cacheKey := "naver:" + strings.ToLower(strings.Join(strings.Fields(query), " "))
+	cacheTTL := searchCacheTTLForQuery(query)
+	if cached, ok := getTimedToolCache(searchCache, &searchCacheMu, cacheKey, cacheTTL); ok {
+		emitTraceEvent("mcp", "naver_search.cache_hit", "Using cached Naver search result", traceDetailsMap("query", query, "elapsed_ms", toolDurationMs(start), "provider", "naver"))
+		return cached, nil
+	}
 
 	searchURL := fmt.Sprintf("https://search.naver.com/search.naver?&sm=top_hty&fbm=0&ie=utf8&query=%s", url.QueryEscape(query))
+	client := &http.Client{Timeout: 8 * time.Second}
+	if pageHTML, err := fetchSearchPage(client, searchURL); err == nil {
+		if results, parseErr := parseNaverSearchResults(pageHTML, 5); parseErr == nil && len(results) > 0 {
+			formatted := formatSearchResultsWithGuidance(query, results)
+			setTimedToolCache(searchCache, &searchCacheMu, cacheKey, formatted, cacheTTL)
+			emitTraceEvent("mcp", "naver_search.complete", "Naver search completed via HTTP", traceDetailsMap("query", query, "elapsed_ms", toolDurationMs(start), "results", len(results), "provider", "naver", "mode", "http"))
+			return formatted, nil
+		}
+	}
 
-	// Reuse ReadPage to fetch content
+	// Dynamic layouts occasionally omit server-rendered result cards; retain the
+	// browser path as a compatibility fallback rather than the default.
 	content, err := ReadPage(searchURL)
 	if err != nil {
 		return "", fmt.Errorf("failed to search Naver: %v", err)
 	}
 
 	return content, nil
+}
+
+func parseNaverSearchResults(input string, limit int) ([]webSearchResult, error) {
+	doc, err := nethtml.Parse(strings.NewReader(input))
+	if err != nil {
+		return nil, err
+	}
+	titleClasses := map[string]bool{
+		"title_link": true, "news_tit": true, "link_tit": true,
+		"api_txt_lines": true, "total_tit": true,
+	}
+	var results []webSearchResult
+	var walk func(*nethtml.Node)
+	walk = func(n *nethtml.Node) {
+		if len(results) >= limit {
+			return
+		}
+		if n.Type == nethtml.ElementNode && n.Data == "a" {
+			matched := false
+			for _, class := range strings.Fields(nodeAttr(n, "class")) {
+				if titleClasses[class] {
+					matched = true
+					break
+				}
+			}
+			if matched {
+				link := normalizeSearchResultURL(nodeAttr(n, "href"), "https://search.naver.com/")
+				title := cleanSearchText(nodeText(n))
+				if title != "" && link != "" {
+					snippet := findNearbyNaverSnippet(n)
+					results = append(results, webSearchResult{Title: title, Link: link, Snippet: snippet})
+				}
+			}
+		}
+		for child := n.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	walk(doc)
+	return deduplicateSearchResults(results, limit), nil
+}
+
+func findNearbyNaverSnippet(n *nethtml.Node) string {
+	snippetClasses := []string{"dsc_txt", "desc", "api_txt_lines", "news_dsc"}
+	for ancestor, depth := n.Parent, 0; ancestor != nil && depth < 4; ancestor, depth = ancestor.Parent, depth+1 {
+		for _, className := range snippetClasses {
+			if text := findDescendantTextByClass(ancestor, className); text != "" {
+				text = cleanSearchText(text)
+				if text != cleanSearchText(nodeText(n)) {
+					return text
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // ReadPage fetches the text content of a URL using a headless browser with anti-detection.
