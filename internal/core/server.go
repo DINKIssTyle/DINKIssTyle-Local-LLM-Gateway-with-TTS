@@ -4140,9 +4140,19 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	// Always unmarshal body into reqMap to prevent nil panics later in the turn loop
 	json.Unmarshal(body, &reqMap)
 	initialUserInputText := extractChatInputText(reqMap)
-	hasPreviousResponseID := llmMode == "stateful" && strings.TrimSpace(extractStringValue(reqMap, []string{"previous_response_id"})) != ""
+	incomingPreviousResponseID := extractStringValue(reqMap, []string{"previous_response_id"})
+	if llmMode == "stateful" && incomingPreviousResponseID != "" && !chatharness.IsValidResponseID(incomingPreviousResponseID) {
+		delete(reqMap, "previous_response_id")
+		body, _ = json.Marshal(reqMap)
+		incomingPreviousResponseID = ""
+	} else if llmMode == "stateful" && chatharness.IsValidResponseID(incomingPreviousResponseID) {
+		incomingPreviousResponseID = strings.TrimSpace(incomingPreviousResponseID)
+		reqMap["previous_response_id"] = incomingPreviousResponseID
+		body, _ = json.Marshal(reqMap)
+	}
+	hasPreviousResponseID := llmMode == "stateful" && chatharness.IsValidResponseID(incomingPreviousResponseID)
 	if !hasPreviousResponseID && llmMode == "stateful" && strings.TrimSpace(userID) != "" {
-		if existingSession, err := mcp.GetCurrentChatSession(userID); err == nil && strings.TrimSpace(existingSession.LastResponseID) != "" {
+		if existingSession, err := mcp.GetCurrentChatSession(userID); err == nil && chatharness.IsValidResponseID(existingSession.LastResponseID) {
 			hasPreviousResponseID = true
 		}
 	}
@@ -4343,10 +4353,10 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				statefulLastOutputTokensValue = existingSession.LastOutputTokens
 				statefulPeakInputTokensValue = existingSession.PeakInputTokens
 				statefulTokenBudgetValue = serverStatefulTokenBudgetValue
-				if strings.TrimSpace(existingSession.LastResponseID) != "" {
-					sessionLastResponseID = existingSession.LastResponseID
+				if chatharness.IsValidResponseID(existingSession.LastResponseID) {
+					sessionLastResponseID = strings.TrimSpace(existingSession.LastResponseID)
 					if reqMap != nil {
-						reqMap["previous_response_id"] = existingSession.LastResponseID
+						reqMap["previous_response_id"] = sessionLastResponseID
 					}
 				}
 			}
@@ -4743,7 +4753,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			})
 			if llmMode == "stateful" &&
 				!previousResponseRetryUsed &&
-				strings.Contains(errorMsg, "Could not find stored response for previous_response_id") {
+				(strings.Contains(errorMsg, "Could not find stored response for previous_response_id") ||
+					(strings.Contains(errorMsg, "previous_response_id") && strings.Contains(errorMsg, "must start with"))) {
 				previousResponseRetryUsed = true
 				lastResponseID = ""
 				sessionLastResponseID = ""
@@ -5093,9 +5104,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 								var endPayload map[string]interface{}
 								if err := json.Unmarshal([]byte(dataStr), &endPayload); err == nil {
 									if res, ok := endPayload["result"].(map[string]interface{}); ok {
-										if rid, ok := res["response_id"].(string); ok && !discardStatefulResponseIDForTurn {
-											lastResponseID = rid
-											sessionLastResponseID = rid
+										if rid, ok := res["response_id"].(string); ok && chatharness.IsValidResponseID(rid) && !discardStatefulResponseIDForTurn {
+											lastResponseID = strings.TrimSpace(rid)
+											sessionLastResponseID = lastResponseID
 											log.Printf("[handleChat] Captured response_id for chaining: %s", lastResponseID)
 										}
 										if stats, ok := res["stats"].(map[string]interface{}); ok {

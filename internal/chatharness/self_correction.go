@@ -143,7 +143,7 @@ func buildSelfCorrectionRequest(input SelfCorrectionInput) (map[string]interface
 			correctionReq["integrations"] = []string{"mcp/dinkisstyle-gateway"}
 		}
 
-		if strings.TrimSpace(input.LastResponseID) != "" {
+		if IsValidResponseID(input.LastResponseID) {
 			correctionReq["previous_response_id"] = strings.TrimSpace(input.LastResponseID)
 		} else if len(input.Body) > 0 {
 			var tempMap map[string]interface{}
@@ -151,8 +151,8 @@ func buildSelfCorrectionRequest(input SelfCorrectionInput) (map[string]interface
 				// Body 파싱 실패 시 에러를 반환하여 문제 파악을 돕습니다.
 				return nil, fmt.Errorf("failed to parse original body for last_response_id: %w", err)
 			}
-			if pid, ok := tempMap["previous_response_id"].(string); ok && pid != "" {
-				correctionReq["previous_response_id"] = pid
+			if pid, ok := tempMap["previous_response_id"].(string); ok && IsValidResponseID(pid) {
+				correctionReq["previous_response_id"] = strings.TrimSpace(pid)
 			}
 		}
 		return correctionReq, nil
@@ -172,4 +172,3 @@ func buildSelfCorrectionRequest(input SelfCorrectionInput) (map[string]interface
 	}
 	return correctionReq, nil
 }
-

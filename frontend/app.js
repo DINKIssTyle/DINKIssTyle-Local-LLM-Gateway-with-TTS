@@ -6107,8 +6107,8 @@ function buildChatPayload({ text, currentImage, temperatureOverride = null, repe
             payload.store = false;
         }
 
-        if (contextStrategy === 'stateful' && AppState.chat.stateful.lastResponseId) {
-            payload.previous_response_id = AppState.chat.stateful.lastResponseId;
+        if (contextStrategy === 'stateful' && /^resp_.+/.test(String(AppState.chat.stateful.lastResponseId || '').trim())) {
+            payload.previous_response_id = String(AppState.chat.stateful.lastResponseId).trim();
         }
         if (reasoningSelection) {
             payload.reasoning = reasoningSelection;
@@ -6621,7 +6621,8 @@ async function streamResponse(payload, elementId, turnId = '', streamOptions = {
                 throw new Error(errorDetails);
             }
 
-            if (errorBody.includes("Could not find stored response for previous_response_id")) {
+            if (errorBody.includes("Could not find stored response for previous_response_id")
+                || (errorBody.includes("previous_response_id") && errorBody.includes("must start with"))) {
                 console.warn("[Stateful] previous_response_id became invalid. Resetting and retrying without it...");
                 AppState.chat.stateful.lastResponseId = null;
                 AppState.chat.stateful.turnCount = 0;

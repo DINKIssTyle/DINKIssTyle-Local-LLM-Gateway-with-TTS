@@ -114,7 +114,7 @@ func isStatefulFollowup(llmMode string, contextStrategy string, reqMap map[strin
 		return false
 	}
 	pid, _ := reqMap["previous_response_id"].(string)
-	return strings.TrimSpace(pid) != ""
+	return IsValidResponseID(pid)
 }
 
 func normalizeContextStrategy(llmMode string, raw string) string {

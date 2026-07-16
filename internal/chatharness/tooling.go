@@ -63,10 +63,12 @@ func PrepareToolFollowupRequest(input ToolFollowupInput) (map[string]interface{}
 	var reqMap map[string]interface{}
 	if input.LLMMode == "stateful" {
 		reqMap = map[string]interface{}{
-			"model":                input.ModelID,
-			"input":                CompactToolResult(input.ToolName, input.ToolResult),
-			"previous_response_id": input.LastResponseID,
-			"stream":               true,
+			"model":  input.ModelID,
+			"input":  CompactToolResult(input.ToolName, input.ToolResult),
+			"stream": true,
+		}
+		if IsValidResponseID(input.LastResponseID) {
+			reqMap["previous_response_id"] = strings.TrimSpace(input.LastResponseID)
 		}
 	} else {
 		reqMap = input.ReqMap
