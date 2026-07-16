@@ -3,7 +3,7 @@
  * Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
  */
 
-const CACHE_NAME = 'dkst-chat-v34';
+const CACHE_NAME = 'dkst-chat-v35';
 const ASSETS = [
     '/',
     '/index.html',
@@ -17,7 +17,7 @@ const ASSETS = [
     '/app-i18n.js?v=2',
     '/app-saved-library.js?v=1',
     '/app-models.js?v=1',
-    '/app-tts.js?v=4',
+    '/app-tts.js?v=5',
     '/app-tts-ondevice.mjs?v=1',
     '/app-session.js?v=2',
     '/app-chat-streaming.js?v=1',

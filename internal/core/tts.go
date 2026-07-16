@@ -437,6 +437,25 @@ func (tts *TextToSpeech) CallPrechunked(ctx context.Context, text string, lang s
 
 func (tts *TextToSpeech) infer(ctx context.Context, textList []string, langList []string, style *Style, totalStep int, speed float32) ([]float32, []float32, error) {
 	bsz := len(textList)
+	runOptions, err := ort.NewRunOptions()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create ONNX run options: %w", err)
+	}
+	stopCancellationWatch := make(chan struct{})
+	cancellationWatchDone := make(chan struct{})
+	go func() {
+		defer close(cancellationWatchDone)
+		select {
+		case <-ctx.Done():
+			_ = runOptions.Terminate()
+		case <-stopCancellationWatch:
+		}
+	}()
+	defer func() {
+		close(stopCancellationWatch)
+		<-cancellationWatchDone
+		_ = runOptions.Destroy()
+	}()
 
 	textIDs, textMask := tts.textProcessor.Call(textList, langList)
 	textIDsShape := []int64{int64(bsz), int64(len(textIDs[0]))}
@@ -455,11 +474,15 @@ func (tts *TextToSpeech) infer(ctx context.Context, textList []string, langList 
 
 	// Predict duration
 	dpOutputs := make([]ort.ArbitraryTensor, 1)
-	err = tts.dpOrt.Run(
+	err = tts.dpOrt.RunWithOptions(
 		[]ort.ArbitraryTensor{textIDsTensor, style.DpTensor, textMaskTensor},
 		dpOutputs,
+		runOptions,
 	)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
+		}
 		return nil, nil, fmt.Errorf("failed to run duration predictor: %w", err)
 	}
 	durTensor := dpOutputs[0].(*ort.Tensor[float32])
@@ -477,11 +500,15 @@ func (tts *TextToSpeech) infer(ctx context.Context, textList []string, langList 
 	}
 	defer textIDsTensor2.Destroy()
 	textEncOutputs := make([]ort.ArbitraryTensor, 1)
-	err = tts.textEncOrt.Run(
+	err = tts.textEncOrt.RunWithOptions(
 		[]ort.ArbitraryTensor{textIDsTensor2, style.TtlTensor, textMaskTensor},
 		textEncOutputs,
+		runOptions,
 	)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
+		}
 		return nil, nil, fmt.Errorf("failed to run text encoder: %w", err)
 	}
 	textEmbTensor := textEncOutputs[0].(*ort.Tensor[float32])
@@ -537,14 +564,18 @@ func (tts *TextToSpeech) infer(ctx context.Context, textList []string, langList 
 		}
 
 		vectorEstOutputs := make([]ort.ArbitraryTensor, 1)
-		err = tts.vectorEstOrt.Run(
+		err = tts.vectorEstOrt.RunWithOptions(
 			[]ort.ArbitraryTensor{noisyLatentTensor, textEmbTensor, style.TtlTensor, latentMaskTensor, textMaskTensor2,
 				currentStepTensor, totalStepTensor},
 			vectorEstOutputs,
+			runOptions,
 		)
 		if err != nil {
 			currentStepTensor.Destroy()
 			noisyLatentTensor.Destroy()
+			if ctx.Err() != nil {
+				return nil, nil, ctx.Err()
+			}
 			return nil, nil, fmt.Errorf("failed to run vector estimator: %w", err)
 		}
 
@@ -574,11 +605,15 @@ func (tts *TextToSpeech) infer(ctx context.Context, textList []string, langList 
 	defer finalLatentTensor.Destroy()
 
 	vocoderOutputs := make([]ort.ArbitraryTensor, 1)
-	err = tts.vocoderOrt.Run(
+	err = tts.vocoderOrt.RunWithOptions(
 		[]ort.ArbitraryTensor{finalLatentTensor},
 		vocoderOutputs,
+		runOptions,
 	)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
+		}
 		return nil, nil, fmt.Errorf("failed to run vocoder: %w", err)
 	}
 

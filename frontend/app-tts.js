@@ -36,6 +36,25 @@
         let synthesisTail = Promise.resolve();
         let onDeviceModulePromise = null;
         let lastOnDeviceProgressAt = 0;
+        let activeTTSFetch = null;
+        let ttsRequestSequence = 0;
+        const ttsClientId = global.crypto?.randomUUID?.()
+            || `tts-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+        function abortActiveTTSFetch() {
+            activeTTSFetch?.controller?.abort?.();
+            activeTTSFetch = null;
+        }
+
+        function getTTSFetchController(sessionId) {
+            if (!activeTTSFetch
+                || activeTTSFetch.sessionId !== sessionId
+                || activeTTSFetch.controller.signal.aborted) {
+                abortActiveTTSFetch();
+                activeTTSFetch = { sessionId, controller: new AbortController() };
+            }
+            return activeTTSFetch.controller;
+        }
 
         function reportOnDeviceProgress(message) {
             console.log(`[On-device TTS] ${message}`);
@@ -496,6 +515,8 @@
             const state = getPlaybackState?.() || {};
             const currentAudio = state.currentAudio || null;
 
+            abortActiveTTSFetch();
+
             setPlaybackState?.({
                 ttsQueue: [],
                 audioWarmup: null
@@ -672,10 +693,18 @@
                         if (sessionAtSchedule !== (getPlaybackState?.() || {}).ttsSessionId) return null;
                         return global.URL.createObjectURL(blob);
                     }
+                    const fetchController = getTTSFetchController(sessionAtSchedule);
+                    const requestId = ++ttsRequestSequence;
                     const response = await global.fetch('/api/tts', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-TTS-Client-ID': ttsClientId,
+                            'X-TTS-Session-ID': String(sessionAtSchedule),
+                            'X-TTS-Request-ID': String(requestId)
+                        },
                         credentials: 'include',
+                        signal: fetchController.signal,
                         body: JSON.stringify(payload)
                     });
 
@@ -696,6 +725,10 @@
                     console.log(`[TTS] Prefetch complete: "${text.substring(0, 25)}..."${timing ? ` (${timing})` : ''}`);
                     return url;
                 } catch (e) {
+                    if (e?.name === 'AbortError') {
+                        console.debug('[TTS] Request aborted because the playback session changed.');
+                        return null;
+                    }
                     console.error('[TTS] Chunk error:', e);
                     return null;
                 }
@@ -713,6 +746,10 @@
         function endTTS(btn, sessionId) {
             const state = getPlaybackState?.() || {};
             if (sessionId !== state.ttsSessionId) return;
+
+            if (activeTTSFetch?.sessionId === sessionId) {
+                activeTTSFetch = null;
+            }
 
             if (btn) {
                 const iconEl = btn.querySelector('.material-icons-round');

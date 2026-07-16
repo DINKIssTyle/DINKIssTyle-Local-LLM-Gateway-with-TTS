@@ -59,7 +59,8 @@ var (
 	// Global TTS Mutex
 	globalTTSMutex sync.RWMutex
 	// A shared ONNX runtime performs best without competing CPU-bound calls.
-	ttsSynthesisSlot = make(chan struct{}, 1)
+	// New playback sessions supersede stale work for the same user/client.
+	ttsScheduler = newTTSRequestScheduler()
 
 	// Global App Instance (for handlers to access app methods)
 	globalApp *App
@@ -6010,21 +6011,19 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 		req.Format = "wav" // Default to WAV for backward compatibility
 	}
 
-	// Check if TTS is initialized
+	// Keep ONNX single-flight, but discard stale work when the same browser
+	// starts a newer playback session.
 	queueStarted := time.Now()
-	slotHeld := false
-	select {
-	case ttsSynthesisSlot <- struct{}{}:
-		slotHeld = true
-		defer func() {
-			if slotHeld {
-				<-ttsSynthesisSlot
-			}
-		}()
-	case <-r.Context().Done():
-		http.Error(w, "TTS request cancelled", http.StatusRequestTimeout)
+	runCtx, releaseSlot, err := ttsScheduler.acquire(r.Context(), ttsScheduleMetaFromRequest(r))
+	if err != nil {
+		if errors.Is(err, errTTSSuperseded) {
+			http.Error(w, err.Error(), http.StatusConflict)
+		} else if r.Context().Err() == nil {
+			http.Error(w, "TTS request cancelled", http.StatusRequestTimeout)
+		}
 		return
 	}
+	defer releaseSlot()
 	queueWait := time.Since(queueStarted)
 
 	globalTTSMutex.RLock()
@@ -6102,22 +6101,27 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 	// Use globalTTS directly while holding the lock to prevent destruction
 	inferenceStarted := time.Now()
 	var wavData []float32
-	var err error
+	var synthesisErr error
 	if req.Prechunked && len([]rune(req.Text)) <= ttsSafetyChunkLimit(req.Lang) {
-		wavData, _, err = globalTTS.CallPrechunked(r.Context(), req.Text, req.Lang, style, steps, speed)
+		wavData, _, synthesisErr = globalTTS.CallPrechunked(runCtx, req.Text, req.Lang, style, steps, speed)
 	} else {
 		// Direct API clients still receive the official SDK-compatible safety
 		// chunking: 120 characters for Korean/Japanese, 300 for other languages.
-		wavData, _, err = globalTTS.Call(r.Context(), req.Text, req.Lang, style, steps, speed, 0)
+		wavData, _, synthesisErr = globalTTS.Call(runCtx, req.Text, req.Lang, style, steps, speed, 0)
 	}
 	inferenceElapsed := time.Since(inferenceStarted)
 	sampleRate := globalTTS.SampleRate
 	globalTTSMutex.RUnlock()
-	<-ttsSynthesisSlot
-	slotHeld = false
+	releaseSlot()
 
-	if err != nil {
-		log.Printf("TTS failed: %v", err)
+	if synthesisErr != nil {
+		if errors.Is(synthesisErr, context.Canceled) || errors.Is(context.Cause(runCtx), errTTSSuperseded) {
+			if r.Context().Err() == nil {
+				http.Error(w, errTTSSuperseded.Error(), http.StatusConflict)
+			}
+			return
+		}
+		log.Printf("TTS failed: %v", synthesisErr)
 		http.Error(w, "TTS generation failed", http.StatusInternalServerError)
 		return
 	}
@@ -6162,6 +6166,22 @@ func ttsSafetyChunkLimit(lang string) int {
 		return 120
 	}
 	return 300
+}
+
+func ttsScheduleMetaFromRequest(r *http.Request) ttsScheduleMeta {
+	clientID := strings.TrimSpace(r.Header.Get("X-TTS-Client-ID"))
+	sessionID, sessionErr := strconv.ParseInt(strings.TrimSpace(r.Header.Get("X-TTS-Session-ID")), 10, 64)
+	requestID, _ := strconv.ParseInt(strings.TrimSpace(r.Header.Get("X-TTS-Request-ID")), 10, 64)
+	if clientID == "" || len(clientID) > 128 || sessionErr != nil || sessionID < 0 {
+		// Legacy API clients remain FIFO and do not supersede each other.
+		return ttsScheduleMeta{RequestID: requestID}
+	}
+	userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+	return ttsScheduleMeta{
+		Owner:     userID + "\x00" + clientID,
+		SessionID: sessionID,
+		RequestID: requestID,
+	}
 }
 
 // handleTTSStyles returns list of available voice styles
