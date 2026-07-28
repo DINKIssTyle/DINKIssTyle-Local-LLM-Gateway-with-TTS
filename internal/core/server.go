@@ -48,7 +48,7 @@ var (
 	ttsConfig = ServerTTSConfig{
 		Engine:     "supertonic",
 		VoiceStyle: "M1.json",
-		Speed:      1.0,
+		Speed:      0.9,
 		Threads:    4,
 		OSRate:     1.0,
 		OSPitch:    1.0,
@@ -6085,11 +6085,12 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 	if req.Speed > 0 {
 		speed = req.Speed
 	}
+	speed = normalizeTTSSpeed(speed)
 	steps := 5
 	if req.Steps > 0 {
 		steps = req.Steps
-		if steps > 50 {
-			steps = 50
+		if steps > 20 {
+			steps = 20
 		}
 	}
 	globalTTSMutex.RLock()
@@ -6105,9 +6106,11 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 	if req.Prechunked && len([]rune(req.Text)) <= ttsSafetyChunkLimit(req.Lang) {
 		wavData, _, synthesisErr = globalTTS.CallPrechunked(runCtx, req.Text, req.Lang, style, steps, speed)
 	} else {
-		// Direct API clients still receive the official SDK-compatible safety
-		// chunking: 120 characters for Korean/Japanese, 300 for other languages.
-		wavData, _, synthesisErr = globalTTS.Call(runCtx, req.Text, req.Lang, style, steps, speed, 0)
+		chunkSize := req.ChunkSize
+		if chunkSize <= 0 || chunkSize > ttsSafetyChunkLimit(req.Lang) {
+			chunkSize = ttsSafetyChunkLimit(req.Lang)
+		}
+		wavData, _, synthesisErr = globalTTS.Call(runCtx, req.Text, req.Lang, style, steps, speed, chunkSize)
 	}
 	inferenceElapsed := time.Since(inferenceStarted)
 	sampleRate := globalTTS.SampleRate
@@ -6161,11 +6164,8 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func ttsSafetyChunkLimit(lang string) int {
-	if lang == "ko" || lang == "ja" {
-		return 120
-	}
-	return 300
+func ttsSafetyChunkLimit(_ string) int {
+	return 1000
 }
 
 func ttsScheduleMetaFromRequest(r *http.Request) ttsScheduleMeta {
@@ -6298,6 +6298,7 @@ func handleOnDeviceTTSAsset() http.HandlerFunc {
 
 // InitTTS initializes the TTS engine
 func InitTTS(assetsDir string, threads int) error {
+	threads = normalizeTTSThreads(threads)
 	onnxDir := assetsDir + "/onnx"
 
 	// Check if TTS files exist

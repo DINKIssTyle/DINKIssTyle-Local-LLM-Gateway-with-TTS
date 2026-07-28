@@ -13,10 +13,10 @@ func TestTTSSafetyChunkLimit(t *testing.T) {
 		lang string
 		want int
 	}{
-		{lang: "ko", want: 120},
-		{lang: "ja", want: 120},
-		{lang: "en", want: 300},
-		{lang: "de", want: 300},
+		{lang: "ko", want: 1000},
+		{lang: "ja", want: 1000},
+		{lang: "en", want: 1000},
+		{lang: "de", want: 1000},
 	}
 
 	for _, tt := range tests {
@@ -28,9 +28,52 @@ func TestTTSSafetyChunkLimit(t *testing.T) {
 	}
 }
 
+func TestNormalizeTTSThreads(t *testing.T) {
+	tests := []struct {
+		input int
+		want  int
+	}{
+		{input: -1, want: 4},
+		{input: 0, want: 4},
+		{input: 1, want: 1},
+		{input: 2, want: 2},
+		{input: 4, want: 4},
+		{input: 5, want: 4},
+		{input: 16, want: 4},
+	}
+
+	for _, tt := range tests {
+		if got := normalizeTTSThreads(tt.input); got != tt.want {
+			t.Fatalf("normalizeTTSThreads(%d) = %d, want %d", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestNormalizeTTSSpeed(t *testing.T) {
+	tests := []struct {
+		input float32
+		want  float32
+	}{
+		{input: -1, want: 0.9},
+		{input: 0, want: 0.9},
+		{input: 0.5, want: 0.7},
+		{input: 0.7, want: 0.7},
+		{input: 0.9, want: 0.9},
+		{input: 1.05, want: 1.05},
+		{input: 2.0, want: 2.0},
+		{input: 3.0, want: 2.0},
+	}
+
+	for _, tt := range tests {
+		if got := normalizeTTSSpeed(tt.input); got != tt.want {
+			t.Fatalf("normalizeTTSSpeed(%v) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
+}
+
 func TestChunkTextHonorsJapaneseSafetyLimit(t *testing.T) {
 	text := ""
-	for i := 0; i < 121; i++ {
+	for i := 0; i < 1001; i++ {
 		text += "あ"
 	}
 
@@ -38,8 +81,46 @@ func TestChunkTextHonorsJapaneseSafetyLimit(t *testing.T) {
 	if len(chunks) != 2 {
 		t.Fatalf("chunkText returned %d chunks, want 2", len(chunks))
 	}
-	if got := len([]rune(chunks[0])); got > 120 {
-		t.Fatalf("first chunk has %d runes, want at most 120", got)
+	if got := len([]rune(chunks[0])); got > 1000 {
+		t.Fatalf("first chunk has %d runes, want at most 1000", got)
+	}
+}
+
+func TestChunkTextKeepsPunctuationInsideParagraph(t *testing.T) {
+	text := "첫 문장입니다. 둘째 문장도 이어집니다, 쉼표 뒤도 같은 문단입니다. 마지막 문장입니다!"
+	chunks := chunkText(text, 300)
+	if len(chunks) != 1 {
+		t.Fatalf("chunkText returned %d chunks, want one paragraph chunk: %#v", len(chunks), chunks)
+	}
+	if chunks[0] != text {
+		t.Fatalf("chunkText changed paragraph: %q", chunks[0])
+	}
+}
+
+func TestChunkTextSplitsOnlyAtParagraphBoundaryWithinLimit(t *testing.T) {
+	text := "첫 문단입니다. 문장이 여러 개여도 유지합니다.\n\n둘째 문단입니다, 쉼표도 유지합니다."
+	chunks := chunkText(text, 300)
+	if len(chunks) != 2 {
+		t.Fatalf("chunkText returned %d chunks, want 2 paragraphs: %#v", len(chunks), chunks)
+	}
+	if chunks[0] != "첫 문단입니다. 문장이 여러 개여도 유지합니다." {
+		t.Fatalf("unexpected first paragraph: %q", chunks[0])
+	}
+	if chunks[1] != "둘째 문단입니다, 쉼표도 유지합니다." {
+		t.Fatalf("unexpected second paragraph: %q", chunks[1])
+	}
+}
+
+func TestChunkTextHardWrapsLongParagraphAtWhitespace(t *testing.T) {
+	text := "하나 둘 셋 넷 다섯 여섯 일곱 여덟"
+	chunks := chunkText(text, 10)
+	if len(chunks) < 2 {
+		t.Fatalf("chunkText returned %d chunks, want a hard wrap: %#v", len(chunks), chunks)
+	}
+	for _, chunk := range chunks {
+		if got := len([]rune(chunk)); got > 10 {
+			t.Fatalf("chunk %q has %d runes, want at most 10", chunk, got)
+		}
 	}
 }
 

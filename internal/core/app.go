@@ -430,10 +430,10 @@ func (a *App) loadConfig() {
 		ttsConfig.VoiceStyle = cfg.TTS.VoiceStyle
 	}
 	if cfg.TTS.Speed > 0 {
-		ttsConfig.Speed = cfg.TTS.Speed
+		ttsConfig.Speed = normalizeTTSSpeed(cfg.TTS.Speed)
 	}
 	if cfg.TTS.Threads > 0 {
-		ttsConfig.Threads = cfg.TTS.Threads
+		ttsConfig.Threads = normalizeTTSThreads(cfg.TTS.Threads)
 	}
 	ttsConfig.OSVoiceURI = cfg.TTS.OSVoiceURI
 	ttsConfig.OSVoiceName = cfg.TTS.OSVoiceName
@@ -1357,7 +1357,7 @@ func (a *App) GetTTSConfig() ServerTTSConfig {
 // SetTTSConfig updates the global TTS configuration
 func (a *App) SetTTSConfig(style string, speed float32) {
 	ttsConfig.VoiceStyle = style
-	ttsConfig.Speed = speed
+	ttsConfig.Speed = normalizeTTSSpeed(speed)
 	a.saveConfig()
 }
 
@@ -1375,9 +1375,11 @@ func (a *App) SetServerTTSConfig(cfg ServerTTSConfig) {
 	if cfg.Speed <= 0 {
 		cfg.Speed = ttsConfig.Speed
 	}
+	cfg.Speed = normalizeTTSSpeed(cfg.Speed)
 	if cfg.Threads <= 0 {
 		cfg.Threads = ttsConfig.Threads
 	}
+	cfg.Threads = normalizeTTSThreads(cfg.Threads)
 	if cfg.OSRate <= 0 {
 		cfg.OSRate = 1.0
 	}
@@ -1405,9 +1407,7 @@ func (a *App) SetServerTTSConfig(cfg ServerTTSConfig) {
 
 // SetTTSThreads updates TTS thread count and reloads model
 func (a *App) SetTTSThreads(threads int) {
-	if threads <= 0 {
-		threads = 4
-	}
+	threads = normalizeTTSThreads(threads)
 	if ttsConfig.Threads == threads {
 		return
 	}

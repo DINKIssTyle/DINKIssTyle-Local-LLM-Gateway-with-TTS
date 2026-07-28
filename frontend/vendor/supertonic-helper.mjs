@@ -273,7 +273,7 @@ export class TextToSpeech {
         if (style.ttl.dims[0] !== 1) {
             throw new Error('Single speaker text to speech only supports single style');
         }
-        const maxLen = (lang === 'ko' || lang === 'ja') ? 120 : 300;
+        const maxLen = 1000;
         const textList = chunkText(text, maxLen);
         const langList = new Array(textList.length).fill(lang);
         let wavCat = [];
@@ -294,6 +294,13 @@ export class TextToSpeech {
         }
         
         return { wav: wavCat, duration: [durCat] };
+    }
+
+    async callPrechunked(text, lang, style, totalStep, speed = 1.05, progressCallback = null) {
+        if (style.ttl.dims[0] !== 1) {
+            throw new Error('Single speaker text to speech only supports single style');
+        }
+        return await this._infer([text], [lang], style, totalStep, speed, progressCallback);
     }
 
     async batch(textList, langList, style, totalStep, speed = 1.05, progressCallback = null) {
@@ -488,25 +495,20 @@ function chunkText(text, maxLen = 300) {
         paragraph = paragraph.trim();
         if (!paragraph) continue;
         
-        // Split by sentence boundaries (period, question mark, exclamation mark followed by space)
-        // But exclude common abbreviations like Mr., Mrs., Dr., etc. and single capital letters like F.
-        const sentences = paragraph.split(/(?<!Mr\.|Mrs\.|Ms\.|Dr\.|Prof\.|Sr\.|Jr\.|Ph\.D\.|etc\.|e\.g\.|i\.e\.|vs\.|Inc\.|Ltd\.|Co\.|Corp\.|St\.|Ave\.|Blvd\.)(?<!\b[A-Z]\.)(?<=[.!?])\s+/);
-        
-        let currentChunk = "";
-        
-        for (let sentence of sentences) {
-            if (currentChunk.length + sentence.length + 1 <= maxLen) {
-                currentChunk += (currentChunk ? " " : "") + sentence;
-            } else {
-                if (currentChunk) {
-                    chunks.push(currentChunk.trim());
+        let remaining = paragraph;
+        while (remaining.length > maxLen) {
+            let splitAt = maxLen;
+            for (let index = maxLen; index > 0; index -= 1) {
+                if (/\s/.test(remaining.charAt(index))) {
+                    splitAt = index;
+                    break;
                 }
-                currentChunk = sentence;
             }
+            chunks.push(remaining.slice(0, splitAt).trim());
+            remaining = remaining.slice(splitAt).trimStart();
         }
-        
-        if (currentChunk) {
-            chunks.push(currentChunk.trim());
+        if (remaining) {
+            chunks.push(remaining.trim());
         }
     }
     

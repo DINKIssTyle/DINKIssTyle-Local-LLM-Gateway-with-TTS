@@ -298,7 +298,8 @@
                             <option value="">Select a preset...</option>
                         </select>
                         <textarea id="cfg-system-prompt" rows="3"
-                            placeholder="You are my AI assistant that responds using voice. Please answer in a way that is suitable for text-to-speech, and avoid using tables or other formats that are not suitable for TTS."></textarea>
+                            placeholder="You are my AI assistant that responds using voice. Please answer in a way that is suitable for text-to-speech, and avoid using tables or other formats that are not suitable for TTS."
+                            autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false"></textarea>
                     </div>
 
                     <div class="setting-item">
@@ -440,11 +441,11 @@
                     </div>
 
                     <div class="setting-item" id="container-tts-supertonic-speed">
-                        <label data-i18n="setting.speed.label">Speed</label>
-                        <p class="setting-desc" data-i18n="setting.speed.desc">음성 재생 속도입니다.</p>
+                        <label data-i18n="setting.speed.label">합성 속도</label>
+                        <p class="setting-desc" data-i18n="setting.speed.desc">Supertonic 고유의 발화 속도입니다. 0.7은 느리게, 2.0은 빠르게 합성합니다. 자연스러운 기본값은 0.9입니다.</p>
                         <div class="slider-row">
-                            <input type="range" id="cfg-tts-speed" min="0.5" max="3.0" step="0.1" value="1.0">
-                            <span class="slider-value" id="speed-val">1.0</span>
+                            <input type="range" id="cfg-tts-speed" min="0.7" max="2.0" step="0.05" value="0.9">
+                            <span class="slider-value" id="speed-val">0.9</span>
                         </div>
                     </div>
 
@@ -514,25 +515,25 @@
 
                     <div class="setting-item" id="container-tts-chunk-size">
                         <label data-i18n="setting.chunkSize.label">Smart Chunking</label>
-                        <p class="setting-desc" data-i18n="setting.chunkSize.desc">(추천값: 150~300) TTS가 몇 글자씩 잘라 생성할지 지정
+                        <p class="setting-desc" data-i18n="setting.chunkSize.desc">문단 단위로 읽고, 이 길이를 넘는 긴 문단만 안전하게 나눕니다. (추천: 300)
                         </p>
                         <input type="number" id="cfg-chunk-size" value="300" min="50" max="1000">
                     </div>
 
                     <div class="setting-item" id="container-tts-supertonic-steps">
                         <label data-i18n="setting.steps.label">Inference Steps</label>
-                        <p class="setting-desc" data-i18n="setting.steps.desc">(추천값: 2~8, 기본값: 5) 높을수록 자연스러운 음성</p>
+                        <p class="setting-desc" data-i18n="setting.steps.desc">(범위: 1~20, 추천값: 2~8, 기본값: 5) 높을수록 자연스러운 음성</p>
                         <div class="slider-row">
-                            <input type="range" id="cfg-tts-steps" min="1" max="50" step="1" value="5">
+                            <input type="range" id="cfg-tts-steps" min="1" max="20" step="1" value="5">
                             <span class="slider-value" id="steps-val">5</span>
                         </div>
                     </div>
 
                     <div class="setting-item" id="container-tts-supertonic-threads">
                         <label data-i18n="setting.threads.label">CPU Threads</label>
-                        <p class="setting-desc" data-i18n="setting.threads.desc">(기본값: 4) TTS 생성에 할당하는 CPU 스레드</p>
+                        <p class="setting-desc" data-i18n="setting.threads.desc">(범위: 1~4, 기본값: 4) TTS 생성에 할당하는 CPU 스레드</p>
                         <div class="slider-row">
-                            <input type="range" id="cfg-tts-threads" min="1" max="16" step="1" value="4">
+                            <input type="range" id="cfg-tts-threads" min="1" max="4" step="1" value="4">
                             <span class="slider-value" id="threads-val">4</span>
                         </div>
                     </div>
@@ -615,7 +616,8 @@
                         class="saved-turn-inline-title-edit saved-turn-inline-title-edit-header" hidden>
                         <input id="saved-turn-inline-title-input" class="saved-turn-inline-title-input" type="text"
                             maxlength="80" data-i18n-placeholder="library.titlePlaceholder"
-                            placeholder="Enter a title" />
+                            placeholder="Enter a title"
+                            autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" />
                         <div class="saved-turn-inline-title-actions">
                             <button id="saved-turn-inline-title-cancel" class="saved-turn-inline-title-btn secondary"
                                 type="button" onclick="cancelEditSavedTurnTitle()"
@@ -763,7 +765,8 @@
             <div class="saved-library-header">
                 <div class="saved-library-search-shell">
                     <input id="saved-library-search" type="text" placeholder="Search saved turns..."
-                        oninput="handleSavedLibrarySearch(this.value)">
+                        oninput="handleSavedLibrarySearch(this.value)"
+                        autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
                     <button id="saved-library-search-clear" class="saved-library-search-clear" type="button"
                         onclick="clearSavedLibrarySearch()" title="Clear search" hidden>
                         <span class="material-icons-round">cancel</span>
@@ -789,8 +792,11 @@
                 </span>
                 <div id="chat-progress-dock" class="chat-progress-dock" hidden></div>
                 <div class="input-main">
-                    <textarea id="message-input" rows="1" placeholder="Type a message..."
-                        data-i18n-placeholder="input.placeholder"></textarea>
+                    <textarea id="message-input" name="chat_prompt_input" rows="1" placeholder="Type a message..."
+                        data-i18n-placeholder="input.placeholder"
+                        autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false"
+                        enterkeyhint="send" inputmode="text" data-form-type="other" data-lpignore="true"
+                        aria-autocomplete="none"></textarea>
 
                     <div class="input-actions">
                         <span id="stateful-budget-indicator" class="stateful-budget-indicator" hidden
@@ -901,16 +907,16 @@
             });
     </script>
     <script src="app-utils.js?v=2"></script>
-    <script src="app-i18n.js?v=2"></script>
+    <script src="app-i18n.js?v=6"></script>
     <script src="app-saved-library.js?v=1"></script>
     <script src="app-models.js?v=1"></script>
-    <script src="app-tts.js?v=5"></script>
+    <script src="app-tts.js?v=10"></script>
     <script src="app-session.js?v=2"></script>
     <script src="app-chat-streaming.js?v=1"></script>
     <script src="app-chat-ui.js?v=1"></script>
     <script src="app-progress-ui.js?v=1"></script>
     <script src="app-mic.js?v=2"></script>
-    <script src="app.js?v=25"></script>
+    <script src="app.js?v=31"></script>
 
 </body>
 

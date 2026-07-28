@@ -21,6 +21,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/go-audio/audio"
 	"github.com/go-audio/wav"
@@ -254,6 +255,7 @@ func (tts *TextToSpeech) Destroy() {
 
 // LoadTextToSpeech loads TTS components
 func LoadTextToSpeech(onnxDir string, cfg TTSConfig, threads int) (*TextToSpeech, error) {
+	threads = normalizeTTSThreads(threads)
 	fmt.Printf("Loading TTS models (CPU mode, Threads: %d)\n", threads)
 
 	dpPath := filepath.Join(onnxDir, "duration_predictor.onnx")
@@ -262,9 +264,6 @@ func LoadTextToSpeech(onnxDir string, cfg TTSConfig, threads int) (*TextToSpeech
 	vocoderPath := filepath.Join(onnxDir, "vocoder.onnx")
 
 	// Optimization: Set session options for multi-threading
-	if threads <= 0 {
-		threads = 4
-	}
 	so, _ := ort.NewSessionOptions()
 	defer so.Destroy()
 	so.SetGraphOptimizationLevel(ort.GraphOptimizationLevelEnableAll)
@@ -314,6 +313,26 @@ func LoadTextToSpeech(onnxDir string, cfg TTSConfig, threads int) (*TextToSpeech
 		chunkCompress: cfg.TTL.ChunkCompressFactor,
 		ldim:          cfg.TTL.LatentDim,
 	}, nil
+}
+
+func normalizeTTSThreads(threads int) int {
+	if threads < 1 || threads > 4 {
+		return 4
+	}
+	return threads
+}
+
+func normalizeTTSSpeed(speed float32) float32 {
+	if speed <= 0 {
+		return 0.9
+	}
+	if speed < 0.7 {
+		return 0.7
+	}
+	if speed > 2.0 {
+		return 2.0
+	}
+	return speed
 }
 
 // LoadVoiceStyle loads voice style from JSON file
@@ -368,10 +387,7 @@ func LoadVoiceStyle(voiceStylePath string) (*Style, error) {
 // Call synthesizes speech from text
 func (tts *TextToSpeech) Call(ctx context.Context, text string, lang string, style *Style, totalStep int, speed float32, maxLen int) ([]float32, float32, error) {
 	if maxLen == 0 {
-		maxLen = 300
-		if lang == "ko" || lang == "ja" {
-			maxLen = 120
-		}
+		maxLen = 1000
 	}
 	// Logic adapted from Supertonic's Python implementation
 	// Chunk text to avoid degradation on long inputs
@@ -860,14 +876,15 @@ func isValidLang(lang string) bool {
 
 func chunkText(text string, maxLen int) []string {
 	if maxLen <= 0 {
-		maxLen = 300
+		maxLen = 1000
 	}
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return []string{""}
 	}
 
-	// First, split by paragraphs
+	// Keep paragraph prosody intact. Only paragraphs above the hard limit are
+	// wrapped at whitespace; punctuation is never used as a chunk boundary.
 	paragraphs := regexp.MustCompile(`\n\s*\n+`).Split(text, -1)
 	var finalChunks []string
 
@@ -876,102 +893,7 @@ func chunkText(text string, maxLen int) []string {
 		if p == "" {
 			continue
 		}
-
-		// Split by sentence endings (. ! ? ; :) but keep the punctuation
-		// Protecting abbreviations like Mr. Mrs. etc.
-		temp := p
-		abbrevs := []string{"Mr.", "Mrs.", "Dr.", "vs.", "e.g.", "i.e."}
-		for _, abbr := range abbrevs {
-			safe := strings.ReplaceAll(abbr, ".", "\u0000")
-			temp = strings.ReplaceAll(temp, abbr, safe)
-		}
-
-		// Re-split with a more robust boundary
-		re := regexp.MustCompile(`([.!?])\s+`)
-		temp = re.ReplaceAllString(temp, "$1|")
-		temp = strings.ReplaceAll(temp, "\u0000", ".")
-		sentences := strings.Split(temp, "|")
-
-		var currentChunk strings.Builder
-		currentLen := 0
-
-		for _, s := range sentences {
-			s = strings.TrimSpace(s)
-			if s == "" {
-				continue
-			}
-
-			sRunes := []rune(s)
-			// If a SINGLE sentence is longer than maxLen, split it by words/spaces
-			if len(sRunes) > maxLen {
-				// Flush current before splitting long one
-				if currentLen > 0 {
-					finalChunks = append(finalChunks, currentChunk.String())
-					currentChunk.Reset()
-					currentLen = 0
-				}
-
-				// Split long sentence by spaces
-				words := strings.Fields(s)
-				var wordChunk strings.Builder
-				wordLen := 0
-				for _, w := range words {
-					wRunes := []rune(w)
-					// Languages such as Japanese and Korean may contain a long
-					// segment without spaces. Split that segment by rune so the
-					// safety limit is always enforced.
-					if len(wRunes) > maxLen {
-						if wordLen > 0 {
-							finalChunks = append(finalChunks, wordChunk.String())
-							wordChunk.Reset()
-							wordLen = 0
-						}
-						for len(wRunes) > maxLen {
-							finalChunks = append(finalChunks, string(wRunes[:maxLen]))
-							wRunes = wRunes[maxLen:]
-						}
-						if len(wRunes) > 0 {
-							wordChunk.WriteString(string(wRunes))
-							wordLen = len(wRunes)
-						}
-						continue
-					}
-					if wordLen+len(wRunes)+1 > maxLen && wordLen > 0 {
-						finalChunks = append(finalChunks, wordChunk.String())
-						wordChunk.Reset()
-						wordLen = 0
-					}
-					if wordLen > 0 {
-						wordChunk.WriteString(" ")
-						wordLen++
-					}
-					wordChunk.WriteString(w)
-					wordLen += len(wRunes)
-				}
-				if wordChunk.Len() > 0 {
-					finalChunks = append(finalChunks, wordChunk.String())
-				}
-				continue
-			}
-
-			// Typical grouping logic
-			if currentLen+len(sRunes)+1 > maxLen && currentLen > 0 {
-				finalChunks = append(finalChunks, currentChunk.String())
-				currentChunk.Reset()
-				currentLen = 0
-			}
-
-			if currentLen > 0 {
-				currentChunk.WriteString(" ")
-				currentLen++
-			}
-			currentChunk.WriteString(s)
-			currentLen += len(sRunes)
-		}
-
-		if currentChunk.Len() > 0 {
-			finalChunks = append(finalChunks, currentChunk.String())
-		}
+		finalChunks = append(finalChunks, hardWrapTTSParagraph(p, maxLen)...)
 	}
 
 	if len(finalChunks) == 0 {
@@ -979,6 +901,38 @@ func chunkText(text string, maxLen int) []string {
 	}
 
 	return finalChunks
+}
+
+func hardWrapTTSParagraph(paragraph string, maxLen int) []string {
+	runes := []rune(strings.TrimSpace(paragraph))
+	var chunks []string
+
+	for len(runes) > maxLen {
+		splitAt := maxLen
+		consumeAt := maxLen
+		for i := maxLen - 1; i >= 0; i-- {
+			if unicode.IsSpace(runes[i]) {
+				splitAt = i
+				consumeAt = i + 1
+				break
+			}
+		}
+		if splitAt == 0 {
+			splitAt = maxLen
+			consumeAt = maxLen
+		}
+
+		chunk := strings.TrimSpace(string(runes[:splitAt]))
+		if chunk != "" {
+			chunks = append(chunks, chunk)
+		}
+		runes = []rune(strings.TrimLeftFunc(string(runes[consumeAt:]), unicode.IsSpace))
+	}
+
+	if tail := strings.TrimSpace(string(runes)); tail != "" {
+		chunks = append(chunks, tail)
+	}
+	return chunks
 }
 
 func lengthToMask(lengths []int64, maxLen int) [][][]float64 {

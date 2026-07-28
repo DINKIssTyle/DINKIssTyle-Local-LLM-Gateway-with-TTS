@@ -1,6 +1,6 @@
 /* Supertonic 3 browser inference. Models are supplied by the authenticated DKST server. */
 import * as ort from './vendor/onnxruntime-web/ort.all.bundle.min.mjs';
-import { loadTextToSpeech, loadVoiceStyle, writeWavFile } from './vendor/supertonic-helper.mjs';
+import { loadTextToSpeech, loadVoiceStyle, writeWavFile } from './vendor/supertonic-helper.mjs?v=2';
 
 const ASSET_ROOT = '/api/tts/on-device/assets';
 const STATUS_URL = '/api/tts/on-device/status';
@@ -72,13 +72,13 @@ export async function synthesize({ text, lang, voice, steps, speed, onProgress }
     const engine = await getEngine(onProgress);
     const style = await getStyle(voice);
     onProgress?.(`Synthesizing on this device (${backend})…`);
-    const result = await engine.call(
+    const result = await engine.callPrechunked(
         String(text || ''),
         String(lang || 'ko'),
         style,
-        Math.max(1, Math.min(50, Number(steps) || 5)),
-        Math.max(0.5, Math.min(3, Number(speed) || 1.05)),
-        0.3
+        Math.max(1, Math.min(20, Number(steps) || 5)),
+        Math.max(0.7, Math.min(2.0, Number(speed) || 0.9)),
+        null
     );
     const length = Math.min(result.wav.length, Math.floor(engine.sampleRate * result.duration[0]));
     return new Blob([writeWavFile(result.wav.slice(0, length), engine.sampleRate)], { type: 'audio/wav' });

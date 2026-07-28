@@ -38,8 +38,17 @@
         let lastOnDeviceProgressAt = 0;
         let activeTTSFetch = null;
         let ttsRequestSequence = 0;
+        const TTS_INTER_CHUNK_PAUSE_MS = 300;
         const ttsClientId = global.crypto?.randomUUID?.()
             || `tts-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+        function normalizeTTSSynthesisSpeed(speed) {
+            return Math.max(0.7, Math.min(2.0, Number(speed) || 0.9));
+        }
+
+        function getConfiguredTTSSynthesisSpeed() {
+            return normalizeTTSSynthesisSpeed(config.ttsSpeed);
+        }
 
         function abortActiveTTSFetch() {
             activeTTSFetch?.controller?.abort?.();
@@ -66,7 +75,7 @@
 
         function getOnDeviceModule() {
             if (!onDeviceModulePromise) {
-                onDeviceModulePromise = import('./app-tts-ondevice.mjs?v=1').catch((error) => {
+                onDeviceModulePromise = import('./app-tts-ondevice.mjs?v=4').catch((error) => {
                     onDeviceModulePromise = null;
                     throw error;
                 });
@@ -75,22 +84,22 @@
         }
 
         function getTTSChunkLimits() {
-            const lang = String(config.ttsLang || '').toLowerCase();
-            const safetyLimit = lang === 'ko' || lang === 'ja' ? 120 : 300;
-            const configured = Math.max(parseInt(config.chunkSize) || 100, 32);
+            const safetyLimit = 1000;
+            const configured = Math.max(parseInt(config.chunkSize) || 300, 50);
+            const chunkLimit = Math.min(configured, safetyLimit);
             return {
-                first: Math.min(48, safetyLimit),
-                subsequent: Math.min(configured, safetyLimit),
+                first: chunkLimit,
+                subsequent: chunkLimit,
                 safety: safetyLimit
             };
         }
 
-        function buildTTSAudioCacheKey(text) {
+        function buildTTSAudioCacheKey(text, synthesisSpeed = getConfiguredTTSSynthesisSpeed()) {
             return [
                 config.ttsEngine,
                 config.ttsVoice,
                 config.ttsLang,
-                config.ttsSpeed,
+                normalizeTTSSynthesisSpeed(synthesisSpeed),
                 config.ttsSteps,
                 config.chunkSize,
                 config.ttsFormat,
@@ -164,7 +173,7 @@
             };
         }
 
-        function concatenateWavArrayBuffers(buffers) {
+        function concatenateWavArrayBuffers(buffers, silenceDurationMs = 0) {
             if (!Array.isArray(buffers) || buffers.length === 0) return null;
             if (buffers.length === 1) return buffers[0];
 
@@ -179,7 +188,13 @@
                 return null;
             }
 
-            const totalDataLength = headers.reduce((sum, header) => sum + header.dataLength, 0);
+            const silenceFrameCount = Math.max(
+                0,
+                Math.round(firstHeader.sampleRate * (Number(silenceDurationMs) || 0) / 1000)
+            );
+            const silenceByteLength = silenceFrameCount * firstHeader.blockAlign;
+            const totalDataLength = headers.reduce((sum, header) => sum + header.dataLength, 0)
+                + (silenceByteLength * (buffers.length - 1));
             const totalSize = 44 + totalDataLength;
             const merged = new ArrayBuffer(totalSize);
             const view = new DataView(merged);
@@ -211,6 +226,9 @@
                 const source = new Uint8Array(buffer, header.dataOffset, header.dataLength);
                 bytes.set(source, writeOffset);
                 writeOffset += header.dataLength;
+                if (index < buffers.length - 1) {
+                    writeOffset += silenceByteLength;
+                }
             });
 
             return merged;
@@ -230,7 +248,7 @@
             }
         }
 
-        async function combinePlayableChunks(primaryUrl, queuedTexts) {
+        async function combinePlayableChunks(primaryUrl, queuedTexts, synthesisSpeed = getConfiguredTTSSynthesisSpeed()) {
             if (!primaryUrl || !queuedTexts || queuedTexts.length === 0) {
                 return { url: primaryUrl, revokeInputs: null };
             }
@@ -243,7 +261,7 @@
             const consumedTexts = [];
             try {
                 for (const text of queuedTexts.slice(0, 2)) {
-                    const cachedPromise = getCachedAudioPromise?.(buildTTSAudioCacheKey(text));
+                    const cachedPromise = getCachedAudioPromise?.(buildTTSAudioCacheKey(text, synthesisSpeed));
                     if (!cachedPromise) break;
 
                     const nextUrl = await promiseWithTimeout(cachedPromise, 120);
@@ -261,7 +279,7 @@
                     const response = await fetch(url);
                     return await response.arrayBuffer();
                 }));
-                const mergedBuffer = concatenateWavArrayBuffers(buffers);
+                const mergedBuffer = concatenateWavArrayBuffers(buffers, TTS_INTER_CHUNK_PAUSE_MS);
                 if (!mergedBuffer) {
                     return { url: primaryUrl, revokeInputs: null };
                 }
@@ -269,7 +287,7 @@
                 if (consumedTexts.length > 0) {
                     onCombinedQueueConsumed?.(consumedTexts);
                     const cache = getAudioCache?.();
-                    consumedTexts.forEach((text) => cache?.delete(buildTTSAudioCacheKey(text)));
+                    consumedTexts.forEach((text) => cache?.delete(buildTTSAudioCacheKey(text, synthesisSpeed)));
                 }
 
                 return {
@@ -405,95 +423,64 @@
 
         function getStreamingChunkTargets() {
             const limits = getTTSChunkLimits();
-            const baseTarget = Math.max(limits.subsequent, 80);
-            const firstChunkTarget = limits.first;
+            const baseTarget = limits.subsequent;
             return {
-                firstChunkTarget,
-                weakBoundaryTarget: Math.max(Math.floor(baseTarget * 0.45), 36),
-                strongBoundaryTarget: Math.max(Math.floor(baseTarget * 0.72), 64),
-                hardCeiling: Math.min(Math.max(Math.floor(baseTarget * 1.2), 120), limits.safety)
+                firstChunkTarget: baseTarget,
+                weakBoundaryTarget: baseTarget,
+                strongBoundaryTarget: baseTarget,
+                hardCeiling: Math.min(baseTarget, limits.safety)
             };
         }
 
         function detectStreamingBoundary(newText) {
-            const patterns = [
-                { kind: 'strong', regex: /^([\s\S]*?\n{2,})/ },
-                { kind: 'strong', regex: /^([\s\S]*?\n)/ },
-                { kind: 'strong', regex: /^([\s\S]*?[.!?])(?:\s+|$)/ },
-                { kind: 'weak', regex: /^([\s\S]*?[,;:])(?:\s+|$)/ }
-            ];
-
-            for (const pattern of patterns) {
-                const match = newText.match(pattern.regex);
-                if (match && match[1] && match[1].trim()) {
-                    return { text: match[1], kind: pattern.kind };
-                }
+            const match = String(newText || '').match(/^([\s\S]*?\n\s*\n+)/);
+            if (match && match[1] && match[1].trim()) {
+                return { text: match[1], kind: 'paragraph' };
             }
             return null;
         }
 
         function shouldCommitStreamingBoundary(length, boundaryKind, hasQueuedAudio) {
-            const targets = getStreamingChunkTargets();
-            if (!hasQueuedAudio) {
-                return length >= targets.firstChunkTarget || boundaryKind === 'strong';
-            }
-            if (boundaryKind === 'strong') {
-                return length >= targets.strongBoundaryTarget;
-            }
-            return length >= targets.weakBoundaryTarget;
+            void hasQueuedAudio;
+            return boundaryKind === 'paragraph' && length > 0;
         }
 
         function splitTTSParagraphByPriority(text, maxChunkSize, minChunkLength, force = false) {
             const chunks = [];
-            let remaining = (text || '').trim();
-            if (!remaining) return chunks;
+            const limit = Math.max(parseInt(maxChunkSize) || 300, 1);
+            const paragraphs = String(text || '')
+                .split(/\n\s*\n+/)
+                .map((paragraph) => paragraph.trim())
+                .filter(Boolean);
 
-            const boundaryRegex = /([\s\S]*?(?:\n{2,}|\n|[.!?](?=\s|$)|[,;:](?=\s|$)))/g;
-
-            while (remaining) {
-                if (remaining.length <= maxChunkSize) {
-                    if ((remaining.length >= minChunkLength || force) && /[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ0-9]/.test(remaining)) {
-                        chunks.push(remaining.trim());
+            for (const paragraph of paragraphs) {
+                let remaining = paragraph;
+                while (remaining) {
+                    if (remaining.length <= limit) {
+                        if (/[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ0-9]/.test(remaining)) {
+                            chunks.push(remaining.trim());
+                        }
+                        break;
                     }
-                    break;
-                }
 
-                const windowText = remaining.slice(0, maxChunkSize + Math.floor(maxChunkSize * 0.25));
-                let bestStrong = null;
-                let bestWeak = null;
-                let match;
-
-                boundaryRegex.lastIndex = 0;
-                while ((match = boundaryRegex.exec(windowText)) !== null) {
-                    const segment = match[1];
-                    const boundaryEnd = match.index + segment.length;
-                    if (boundaryEnd < minChunkLength) continue;
-                    if (boundaryEnd > maxChunkSize) break;
-
-                    const trimmed = segment.trimEnd();
-                    if (!trimmed) continue;
-
-                    const isStrong = /(?:\n{2,}|\n|[.!?])\s*$/.test(trimmed);
-                    if (isStrong) {
-                        bestStrong = boundaryEnd;
-                    } else {
-                        bestWeak = boundaryEnd;
+                    let splitAt = limit;
+                    for (let index = limit; index > 0; index -= 1) {
+                        if (/\s/.test(remaining.charAt(index))) {
+                            splitAt = index;
+                            break;
+                        }
                     }
-                }
 
-                let splitAt = bestStrong || bestWeak;
-                if (!splitAt) {
-                    splitAt = remaining.lastIndexOf(' ', maxChunkSize);
-                    if (splitAt < minChunkLength) {
-                        splitAt = maxChunkSize;
+                    if (!force && splitAt < minChunkLength) {
+                        splitAt = limit;
                     }
-                }
 
-                const chunk = remaining.slice(0, splitAt).trim();
-                if (chunk && /[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ0-9]/.test(chunk)) {
-                    chunks.push(chunk);
+                    const chunk = remaining.slice(0, splitAt).trim();
+                    if (chunk && /[a-zA-Z가-힣ㄱ-ㅎㅏ-ㅣ0-9]/.test(chunk)) {
+                        chunks.push(chunk);
+                    }
+                    remaining = remaining.slice(splitAt).trimStart();
                 }
-                remaining = remaining.slice(splitAt).trimStart();
             }
 
             return chunks;
@@ -549,6 +536,7 @@
                 streamingTTSActive: false,
                 streamingTTSBuffer: '',
                 streamingTTSCommittedIndex: 0,
+                ttsSynthesisSpeed: 0.9,
                 activeTTSSessionLabel: '',
                 currentAudioBtn: null,
                 currentAudioPlaybackController: null
@@ -657,11 +645,25 @@
             setPlaybackState?.({ currentAudioPlaybackController: null });
         }
 
-        function prefetchTTSAudio(text) {
+        async function pauseBeforeNextTTSChunk(sessionId) {
+            const state = getPlaybackState?.() || {};
+            const queue = Array.isArray(state.ttsQueue) ? state.ttsQueue : [];
+            if (sessionId !== state.ttsSessionId
+                || (!state.streamingTTSActive && queue.length === 0)) {
+                return;
+            }
+            await new Promise((resolve) => global.setTimeout(resolve, TTS_INTER_CHUNK_PAUSE_MS));
+        }
+
+        function prefetchTTSAudio(text, synthesisSpeed = null) {
             if (!text) return null;
             const cache = getAudioCache?.();
             if (!cache) return null;
-            const cacheKey = buildTTSAudioCacheKey(text);
+            const playbackState = getPlaybackState?.() || {};
+            const requestedSpeed = normalizeTTSSynthesisSpeed(
+                synthesisSpeed ?? playbackState.ttsSynthesisSpeed ?? config.ttsSpeed
+            );
+            const cacheKey = buildTTSAudioCacheKey(text, requestedSpeed);
             if (cache.has(cacheKey)) return cache.get(cacheKey);
             const sessionAtSchedule = (getPlaybackState?.() || {}).ttsSessionId;
 
@@ -673,8 +675,8 @@
                         lang: config.ttsLang,
                         chunkSize: parseInt(config.chunkSize) || 300,
                         voiceStyle: config.ttsVoice,
-                        speed: parseFloat(config.ttsSpeed) || 1.0,
-                        steps: parseInt(config.ttsSteps) || 5,
+                        speed: requestedSpeed,
+                        steps: Math.max(1, Math.min(20, parseInt(config.ttsSteps, 10) || 5)),
                         format: config.ttsFormat || 'wav',
                         prechunked: true
                     };
@@ -798,17 +800,12 @@
 
             setPlaybackState?.({
                 activeTTSSessionLabel: cleanText.substring(0, 120) + (cleanText.length > 120 ? '...' : ''),
+                ttsSynthesisSpeed: getConfiguredTTSSynthesisSpeed(),
                 ttsQueue: []
             });
 
             const limits = getTTSChunkLimits();
-            const firstPass = splitTTSParagraphByPriority(cleanText, limits.first, 1, true);
-            const firstChunk = firstPass.shift() || '';
-            const remaining = firstPass.join(' ').trim();
-            const nextQueue = firstChunk ? [firstChunk] : [];
-            if (remaining) {
-                nextQueue.push(...splitTTSParagraphByPriority(remaining, limits.subsequent, 18, true));
-            }
+            const nextQueue = splitTTSParagraphByPriority(cleanText, limits.subsequent, 1, true);
 
             setPlaybackState?.({
                 ttsQueue: nextQueue
@@ -840,6 +837,8 @@
             const btn = initialState.currentAudioBtn;
             const sessionId = initialState.ttsSessionId;
             const mediaSessionLabel = initialState.activeTTSSessionLabel;
+            const osRate = Math.max(0.1, Math.min(10.0, Number(config.osTtsRate) || 1.0));
+            const osPitch = Math.max(0.0, Math.min(2.0, Number(config.osTtsPitch) || 1.0));
             let firstChunkPlayed = false;
 
             while (true) {
@@ -866,8 +865,8 @@
                 } else {
                     utterance.lang = config.osTtsVoiceLang || config.ttsLang || 'ko';
                 }
-                utterance.rate = parseFloat(config.osTtsRate) || 1.0;
-                utterance.pitch = parseFloat(config.osTtsPitch) || 1.0;
+                utterance.rate = osRate;
+                utterance.pitch = osPitch;
 
                 try {
                     if (!firstChunkPlayed && mediaSessionLabel) {
@@ -898,6 +897,8 @@
                 } catch (e) {
                     console.error('[OS TTS] Chunk playback error:', e);
                 }
+
+                await pauseBeforeNextTTSChunk(sessionId);
             }
 
             const finalState = getPlaybackState?.() || {};
@@ -920,6 +921,7 @@
             const btn = initialState.currentAudioBtn;
             const sessionId = initialState.ttsSessionId;
             const mediaSessionLabel = initialState.activeTTSSessionLabel;
+            const synthesisSpeed = normalizeTTSSynthesisSpeed(initialState.ttsSynthesisSpeed);
 
             if (btn) {
                 onSyncCurrentAudioButtonUI?.();
@@ -931,7 +933,7 @@
             const seededQueue = Array.isArray(seededState.ttsQueue) ? seededState.ttsQueue : [];
             // Keep only the current chunk and one look-ahead synthesis in flight.
             for (let i = 0; i < Math.min(2, seededQueue.length); i += 1) {
-                prefetchTTSAudio(seededQueue[i]);
+                prefetchTTSAudio(seededQueue[i], synthesisSpeed);
             }
 
             while (true) {
@@ -952,18 +954,18 @@
 
                 const nextQueue = Array.isArray(getPlaybackState?.().ttsQueue) ? getPlaybackState().ttsQueue : [];
                 for (let i = 0; i < Math.min(1, nextQueue.length); i += 1) {
-                    prefetchTTSAudio(nextQueue[i]);
+                    prefetchTTSAudio(nextQueue[i], synthesisSpeed);
                 }
 
                 let audioUrl = null;
                 let playbackBundle = null;
                 try {
-                    audioUrl = await prefetchTTSAudio(text);
+                    audioUrl = await prefetchTTSAudio(text, synthesisSpeed);
                 } catch (e) {
                     console.error('Prefetch failed', e);
                 }
 
-                const cacheKey = buildTTSAudioCacheKey(text);
+                const cacheKey = buildTTSAudioCacheKey(text, synthesisSpeed);
                 getAudioCache?.()?.delete(cacheKey);
 
                 if (!audioUrl) {
@@ -990,7 +992,7 @@
                     }
 
                     playbackBundle = firstChunkPlayed
-                        ? await combinePlayableChunks(audioUrl, [...(latestState.ttsQueue || [])])
+                        ? await combinePlayableChunks(audioUrl, [...(latestState.ttsQueue || [])], synthesisSpeed)
                         : { url: audioUrl, revokeInputs: null };
                     const playbackUrl = playbackBundle?.url || audioUrl;
 
@@ -1035,6 +1037,8 @@
                         }
 
                         activeAudio.src = playbackUrl;
+                        activeAudio.defaultPlaybackRate = 1.0;
+                        activeAudio.playbackRate = 1.0;
                         activeAudio.play().catch(reject);
                     });
                 } catch (e) {
@@ -1053,6 +1057,8 @@
                         global.URL.revokeObjectURL(playbackBundle.url);
                     }
                 }
+
+                await pauseBeforeNextTTSChunk(sessionId);
             }
 
             const finalState = getPlaybackState?.() || {};
@@ -1074,6 +1080,7 @@
                 streamingTTSActive: true,
                 streamingTTSCommittedIndex: 0,
                 streamingTTSBuffer: '',
+                ttsSynthesisSpeed: getConfiguredTTSSynthesisSpeed(),
                 activeTTSSessionLabel: 'Streaming TTS'
             });
 
@@ -1095,14 +1102,9 @@
             const hasQueuedAudio = queue.length > 0 || !!state.isPlayingQueue;
             const minChunkLength = hasQueuedAudio ? 40 : 18;
             const maxChunkSize = getTTSChunkLimits().subsequent;
-            const paragraphs = text.split(/\n+/);
-
-            for (const para of paragraphs) {
-                if (!para.trim()) continue;
-                const chunks = splitTTSParagraphByPriority(para, maxChunkSize, minChunkLength, force);
-                for (const chunk of chunks) {
-                    queue.push(chunk);
-                }
+            const chunks = splitTTSParagraphByPriority(text, maxChunkSize, minChunkLength, force);
+            for (const chunk of chunks) {
+                queue.push(chunk);
             }
 
             setPlaybackState?.({ ttsQueue: queue });
@@ -1188,11 +1190,18 @@
                 }
 
                 if (!committed && (nextBuffer.length + cleanTextForTTS(newText).length) >= targets.hardCeiling) {
-                    const forcedCommit = `${nextBuffer} ${cleanTextForTTS(newText.slice(0, targets.hardCeiling))}`.trim();
+                    let forceEnd = Math.min(newText.length, targets.hardCeiling);
+                    for (let index = forceEnd; index > 0; index -= 1) {
+                        if (/\s/.test(newText.charAt(index))) {
+                            forceEnd = index;
+                            break;
+                        }
+                    }
+                    const forcedCommit = `${nextBuffer} ${cleanTextForTTS(newText.slice(0, forceEnd))}`.trim();
                     if (forcedCommit) {
                         committed = forcedCommit;
                         nextBuffer = '';
-                        advanceBy = Math.min(newText.length, targets.hardCeiling);
+                        advanceBy = forceEnd;
                     }
                 }
 

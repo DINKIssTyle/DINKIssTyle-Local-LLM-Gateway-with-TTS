@@ -3,28 +3,29 @@
  * Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
  */
 
-const CACHE_NAME = 'dkst-chat-v35';
+const CACHE_NAME = 'dkst-chat-v42';
 const ASSETS = [
     '/',
     '/index.html',
     '/login.html',
     '/web.html',
-    '/web.html?v=25',
+    '/web.html?v=30',
     '/fonts.css?v=2',
     '/style.css?v=10',
     '/icons.css?v=2',
     '/app-utils.js?v=2',
-    '/app-i18n.js?v=2',
+    '/app-i18n.js?v=6',
     '/app-saved-library.js?v=1',
     '/app-models.js?v=1',
-    '/app-tts.js?v=5',
-    '/app-tts-ondevice.mjs?v=1',
+    '/app-tts.js?v=10',
+    '/app-tts-ondevice.mjs?v=4',
+    '/vendor/supertonic-helper.mjs?v=2',
     '/app-session.js?v=2',
     '/app-chat-streaming.js?v=1',
     '/app-chat-ui.js?v=1',
     '/app-progress-ui.js?v=1',
     '/app-mic.js?v=2',
-    '/app.js?v=25',
+    '/app.js?v=31',
     '/icons.css',
     '/public/icon-512.png',
     '/site.webmanifest',
@@ -97,7 +98,7 @@ self.addEventListener('fetch', event => {
     event.respondWith(
         fetch(event.request).catch(() => {
             if (event.request.mode === 'navigate') {
-                return caches.match('/web.html?v=23')
+                return caches.match('/web.html?v=30')
                     .then(response => response || caches.match('/web.html'))
                     .then(response => response || caches.match('/index.html'))
                     .then(response => {

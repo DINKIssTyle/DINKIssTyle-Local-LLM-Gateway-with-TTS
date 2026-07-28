@@ -26,11 +26,13 @@ let config = {
     enableMCP: true,       // Default: True
     enableMemory: true,    // Default: True
     ttsLang: 'ko',
-    chunkSize: 100,        // Default: 100 (Smart Chunking)
+    chunkSize: 300,        // Default: 300 (paragraph-first smart chunking)
+    ttsChunkingVersion: 2,
     systemPrompt: 'You are a helpful AI assistant.',
     ttsEngine: 'supertonic', // 'supertonic', 'supertonic-ondevice', or 'os'
     ttsVoice: 'F1',        // Default: F1
-    ttsSpeed: 1.1,         // Default: 1.1
+    ttsSpeed: 0.9,         // Default: 0.9 (native Supertonic synthesis speed)
+    ttsSpeedVersion: 2,
     autoTTS: false,        // Default: False (Auto-play)
     voiceInputAutoTTS: true, // Default: True (Override auto-play for STT messages)
     ttsFormat: 'wav',      // Default: wav
@@ -109,6 +111,7 @@ let AppState = {
         streamingTTSBuffer: '',
         streamingTTSProcessor: null,
         ttsSessionId: 0,
+        ttsSynthesisSpeed: 0.9,
         dictionary: {},
         dictionaryRegex: null,
         dictionaryLang: '',
@@ -1988,6 +1991,17 @@ function refreshChatScrollMetrics() {
 
 if (chatMessages) refreshChatScrollMetrics();
 const messageInput = document.getElementById('message-input');
+if (messageInput) {
+    messageInput.setAttribute('name', 'chat_prompt_input');
+    messageInput.setAttribute('autocomplete', 'off');
+    messageInput.setAttribute('autocorrect', 'off');
+    messageInput.setAttribute('autocapitalize', 'none');
+    messageInput.setAttribute('spellcheck', 'false');
+    messageInput.setAttribute('enterkeyhint', 'send');
+    messageInput.setAttribute('data-form-type', 'other');
+    messageInput.setAttribute('data-lpignore', 'true');
+    messageInput.setAttribute('aria-autocomplete', 'none');
+}
 const sendBtn = document.getElementById('send-btn');
 const imagePreviewVal = document.getElementById('image-preview');
 const previewContainer = document.getElementById('preview-container');
@@ -2025,7 +2039,8 @@ function getTTSPlaybackState() {
         streamingTTSActive: AppState.audio.streamingTTSActive,
         streamingTTSCommittedIndex: AppState.audio.streamingTTSCommittedIndex,
         streamingTTSBuffer: AppState.audio.streamingTTSBuffer,
-        ttsSessionId: AppState.audio.ttsSessionId
+        ttsSessionId: AppState.audio.ttsSessionId,
+        ttsSynthesisSpeed: AppState.audio.ttsSynthesisSpeed
     };
 }
 
@@ -2041,6 +2056,7 @@ function setTTSPlaybackState(patch = {}) {
     if (Object.prototype.hasOwnProperty.call(patch, 'streamingTTSCommittedIndex')) AppState.audio.streamingTTSCommittedIndex = patch.streamingTTSCommittedIndex;
     if (Object.prototype.hasOwnProperty.call(patch, 'streamingTTSBuffer')) AppState.audio.streamingTTSBuffer = patch.streamingTTSBuffer;
     if (Object.prototype.hasOwnProperty.call(patch, 'ttsSessionId')) AppState.audio.ttsSessionId = patch.ttsSessionId;
+    if (Object.prototype.hasOwnProperty.call(patch, 'ttsSynthesisSpeed')) AppState.audio.ttsSynthesisSpeed = patch.ttsSynthesisSpeed;
 }
 
 const ttsController = appTTS.createTTSController({
@@ -2374,8 +2390,8 @@ function concatenateWavArrayBuffers(buffers) {
     return ttsController.concatenateWavArrayBuffers(buffers);
 }
 
-async function combinePlayableChunks(primaryUrl, queuedTexts) {
-    return ttsController.combinePlayableChunks(primaryUrl, queuedTexts);
+async function combinePlayableChunks(primaryUrl, queuedTexts, synthesisSpeed = config.ttsSpeed) {
+    return ttsController.combinePlayableChunks(primaryUrl, queuedTexts, synthesisSpeed);
 }
 
 
@@ -3244,10 +3260,32 @@ function loadConfig() {
             // Keep the original config object reference so controllers created
             // before loadConfig() continue observing the latest settings.
             const savedConfig = JSON.parse(saved);
-            if (savedConfig && typeof savedConfig === 'object' && !Object.prototype.hasOwnProperty.call(savedConfig, 'webTheme') && savedConfig.theme) {
-                savedConfig.webTheme = savedConfig.theme;
+            if (savedConfig && typeof savedConfig === 'object') {
+                let configMigrated = false;
+                if (!Object.prototype.hasOwnProperty.call(savedConfig, 'webTheme') && savedConfig.theme) {
+                    savedConfig.webTheme = savedConfig.theme;
+                    configMigrated = true;
+                }
+                if ((parseInt(savedConfig.ttsChunkingVersion, 10) || 0) < 2) {
+                    if ((parseInt(savedConfig.chunkSize, 10) || 100) === 100) {
+                        savedConfig.chunkSize = 300;
+                    }
+                    savedConfig.ttsChunkingVersion = 2;
+                    configMigrated = true;
+                }
+                if ((parseInt(savedConfig.ttsSpeedVersion, 10) || 0) < 2) {
+                    if (!Object.prototype.hasOwnProperty.call(savedConfig, 'ttsSpeed')
+                        || Number(savedConfig.ttsSpeed) === 1.1) {
+                        savedConfig.ttsSpeed = 0.9;
+                    }
+                    savedConfig.ttsSpeedVersion = 2;
+                    configMigrated = true;
+                }
+                if (configMigrated) {
+                    localStorage.setItem('appConfig', JSON.stringify(savedConfig));
+                }
+                Object.assign(config, savedConfig);
             }
-            Object.assign(config, savedConfig);
         } catch (e) {
             console.error('Failed to parse saved config:', e);
             // Optional: localStorage.removeItem('appConfig');
@@ -3267,8 +3305,11 @@ function loadConfig() {
     config.autoDismissMobileKeyboard = config.autoDismissMobileKeyboard === true;
     config.hapticsEnabled = config.hapticsEnabled !== false;
     config.ttsLang = String(config.ttsLang || config.language || 'ko').trim() || 'ko';
+    config.ttsSpeed = Math.max(0.7, Math.min(2.0, Number(config.ttsSpeed) || 0.9));
     config.osTtsRate = Number(config.osTtsRate) > 0 ? Number(config.osTtsRate) : 1.0;
     config.osTtsPitch = Number(config.osTtsPitch) >= 0 ? Number(config.osTtsPitch) : 1.0;
+    config.ttsSteps = Math.max(1, Math.min(20, parseInt(config.ttsSteps, 10) || 5));
+    config.ttsThreads = Math.max(1, Math.min(4, parseInt(config.ttsThreads, 10) || 4));
     config.voiceInputAutoTTS = config.voiceInputAutoTTS !== false;
     config.contextStrategy = normalizeContextStrategyForMode(config.llmMode, config.contextStrategy);
     config.enableMCP = enforceMCPPolicyForMode(config.llmMode);
@@ -3312,11 +3353,11 @@ function loadConfig() {
     document.getElementById('cfg-tts-lang').value = config.ttsLang;
     document.getElementById('cfg-enable-embeddings').checked = config.enableEmbeddings || false;
     document.getElementById('cfg-embedding-model').value = config.embeddingModelId || 'multilingual-e5-small';
-    document.getElementById('cfg-chunk-size').value = config.chunkSize || 100;
+    document.getElementById('cfg-chunk-size').value = config.chunkSize || 300;
     document.getElementById('cfg-system-prompt').value = config.systemPrompt || 'You are a helpful AI assistant.';
     if (config.ttsVoice) document.getElementById('cfg-tts-voice').value = String(config.ttsVoice).replace(/\.json$/i, '');
-    document.getElementById('cfg-tts-speed').value = config.ttsSpeed || 1.0;
-    document.getElementById('speed-val').textContent = config.ttsSpeed || 1.0;
+    document.getElementById('cfg-tts-speed').value = config.ttsSpeed || 0.9;
+    document.getElementById('speed-val').textContent = config.ttsSpeed || 0.9;
     document.getElementById('cfg-tts-steps').value = config.ttsSteps || 5;
     document.getElementById('steps-val').textContent = config.ttsSteps || 5;
     document.getElementById('cfg-tts-threads').value = config.ttsThreads || 4;
@@ -3715,12 +3756,12 @@ function saveConfig(closeModal = true) {
     config.hapticsEnabled = document.getElementById('cfg-enable-haptics')?.checked !== false;
     config.chatFontSize = Math.max(12, Math.min(24, parseInt(config.chatFontSize, 10) || 16));
 
-    config.chunkSize = parseInt(document.getElementById('cfg-chunk-size').value) || 100;
+    config.chunkSize = parseInt(document.getElementById('cfg-chunk-size').value) || 300;
     config.systemPrompt = document.getElementById('cfg-system-prompt').value.trim() || 'You are a helpful AI assistant.';
     config.ttsVoice = document.getElementById('cfg-tts-voice').value;
-    config.ttsSpeed = parseFloat(document.getElementById('cfg-tts-speed').value);
-    config.ttsSteps = parseInt(document.getElementById('cfg-tts-steps').value);
-    config.ttsThreads = parseInt(document.getElementById('cfg-tts-threads').value);
+    config.ttsSpeed = Math.max(0.7, Math.min(2.0, parseFloat(document.getElementById('cfg-tts-speed').value) || 0.9));
+    config.ttsSteps = Math.max(1, Math.min(20, parseInt(document.getElementById('cfg-tts-steps').value, 10) || 5));
+    config.ttsThreads = Math.max(1, Math.min(4, parseInt(document.getElementById('cfg-tts-threads').value, 10) || 4));
     config.ttsFormat = document.getElementById('cfg-tts-format').value;
     config.osTtsRate = parseFloat(document.getElementById('cfg-os-tts-rate').value) || 1.0;
     config.osTtsPitch = parseFloat(document.getElementById('cfg-os-tts-pitch').value) || 1.0;
