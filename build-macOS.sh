@@ -9,6 +9,14 @@ echo "Cleaning build artifacts..."
 rm -rf build/bin
 rm -rf frontend/dist
 
+TRAY_ICON="build/darwin/trayicon.png"
+if [ ! -f "$TRAY_ICON" ]; then
+    echo "Error: macOS tray icon not found: $TRAY_ICON"
+    echo "Edit build/darwin/trayicon.svg and run ./scripts/generate-tray-icons.sh darwin"
+    exit 1
+fi
+echo "Using macOS menu-bar icon: $TRAY_ICON"
+
 # Setup PATH for Go and Wails
 export PATH="$HOME/go/bin:$PATH"
 export PATH="/usr/local/go/bin:$PATH"

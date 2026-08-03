@@ -15,14 +15,14 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
-	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // DesktopAssets groups the embedded resources needed to bootstrap the desktop app.
 type DesktopAssets struct {
-	Frontend    embed.FS
-	TrayIconPNG []byte
-	TrayIconICO []byte
+	Frontend         embed.FS
+	TrayIconMacOSPNG []byte
+	TrayIconLinuxPNG []byte
+	TrayIconWindows  []byte
 }
 
 // Desktop encapsulates the Wails bootstrap flow for the desktop application.
@@ -42,15 +42,18 @@ func NewDesktop(assets DesktopAssets) *Desktop {
 
 // Run starts the desktop application.
 func (d *Desktop) Run() error {
-	core.InitSystemTray(d.app, d.trayIcon())
 	return wails.Run(d.options())
 }
 
 func (d *Desktop) trayIcon() []byte {
-	if runtime.GOOS == "windows" {
-		return d.assets.TrayIconICO
+	switch runtime.GOOS {
+	case "darwin":
+		return d.assets.TrayIconMacOSPNG
+	case "windows":
+		return d.assets.TrayIconWindows
+	default:
+		return d.assets.TrayIconLinuxPNG
 	}
-	return d.assets.TrayIconPNG
 }
 
 func (d *Desktop) options() *options.App {
@@ -67,6 +70,7 @@ func (d *Desktop) options() *options.App {
 			d.initMemoryDB()
 			d.app.Startup(ctx)
 			core.InstallDockReopenHandler()
+			core.InitSystemTray(d.app, d.trayIcon())
 		},
 		OnShutdown: func(ctx context.Context) {
 			mcp.CloseDB()
@@ -78,7 +82,7 @@ func (d *Desktop) options() *options.App {
 				return false
 			}
 			if d.app.GetMinimizeToTray() {
-				wruntime.WindowHide(ctx)
+				d.app.HideToTray()
 				return true
 			}
 			return false

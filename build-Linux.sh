@@ -6,6 +6,14 @@ set -e # Exit immediately if a command exits with a non-zero status
 
 echo "Initializing build environment for Linux..."
 
+TRAY_ICON="build/linux/trayicon.png"
+if [ ! -f "$TRAY_ICON" ]; then
+    echo "Error: Linux tray icon not found: $TRAY_ICON"
+    echo "Edit build/linux/trayicon.svg and run ./scripts/generate-tray-icons.sh linux"
+    exit 1
+fi
+echo "Using Linux tray icon: $TRAY_ICON"
+
 # Helper to determine sudo usage
 SUDO=""
 if [ "$EUID" -ne 0 ]; then

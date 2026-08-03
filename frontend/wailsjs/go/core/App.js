@@ -194,6 +194,14 @@ export function GetWindowDimensions() {
   return window['go']['core']['App']['GetWindowDimensions']();
 }
 
+export function HideToTray() {
+  return window['go']['core']['App']['HideToTray']();
+}
+
+export function IsServerRunning() {
+  return window['go']['core']['App']['IsServerRunning']();
+}
+
 export function LoadModel(arg1) {
   return window['go']['core']['App']['LoadModel'](arg1);
 }
@@ -328,6 +336,10 @@ export function Show() {
 
 export function ShowAbout() {
   return window['go']['core']['App']['ShowAbout']();
+}
+
+export function ShowMainWindow() {
+  return window['go']['core']['App']['ShowMainWindow']();
 }
 
 export function Shutdown(arg1) {

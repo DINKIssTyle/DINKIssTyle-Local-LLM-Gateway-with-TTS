@@ -12,10 +12,13 @@ import (
 	"dinkisstyle-chat/internal/harness"
 )
 
-//go:embed bundle/trayicon.png
+//go:embed build/darwin/trayicon.png
 var trayIconPng []byte
 
-//go:embed bundle/trayicon.ico
+//go:embed build/linux/trayicon.png
+var trayIconLinuxPng []byte
+
+//go:embed build/windows/trayicon.ico
 var trayIconIco []byte
 
 //go:embed build/windows/icon.ico
@@ -26,9 +29,10 @@ var assets embed.FS
 
 func main() {
 	desktop := harness.NewDesktop(harness.DesktopAssets{
-		Frontend:    assets,
-		TrayIconPNG: trayIconPng,
-		TrayIconICO: trayIconIco,
+		Frontend:         assets,
+		TrayIconMacOSPNG: trayIconPng,
+		TrayIconLinuxPNG: trayIconLinuxPng,
+		TrayIconWindows:  trayIconIco,
 	})
 
 	err := desktop.Run()

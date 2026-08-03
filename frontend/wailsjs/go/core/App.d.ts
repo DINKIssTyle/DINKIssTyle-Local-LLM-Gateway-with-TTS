@@ -101,6 +101,10 @@ export function GetWelcomeState():Promise<core.WelcomeState>;
 
 export function GetWindowDimensions():Promise<Record<string, number>>;
 
+export function HideToTray():Promise<void>;
+
+export function IsServerRunning():Promise<boolean>;
+
 export function LoadModel(arg1:string):Promise<void>;
 
 export function LoadModelWithConfig(arg1:string,arg2:string,arg3:string,arg4:string):Promise<void>;
@@ -168,6 +172,8 @@ export function SetUserMemoryRetentionConfig(arg1:string,arg2:mcp.MemoryRetentio
 export function Show():Promise<void>;
 
 export function ShowAbout():Promise<void>;
+
+export function ShowMainWindow():Promise<void>;
 
 export function Shutdown(arg1:context.Context):Promise<void>;
 

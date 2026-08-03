@@ -2,6 +2,13 @@
 rem Created by DINKIssTyle on 2026.
 rem Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
 
+if not exist "build\windows\trayicon.ico" (
+    echo Error: Windows tray icon not found: build\windows\trayicon.ico
+    echo Edit build\windows\trayicon.svg and generate build\windows\trayicon.ico before building.
+    exit /b 1
+)
+echo Using Windows tray icon: build\windows\trayicon.ico
+
 echo Cleaning build artifacts...
 rem Only delete the binary to preserve assets, configuration, and downloaded models
 if exist "build\bin\DKST LLM Chat Server.exe" del "build\bin\DKST LLM Chat Server.exe"

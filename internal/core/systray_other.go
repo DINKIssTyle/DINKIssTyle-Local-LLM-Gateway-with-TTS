@@ -14,12 +14,14 @@ import (
 	"time"
 
 	"github.com/energye/systray"
-	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 var (
 	trayApp       *App
+	mServerStatus *systray.MenuItem
 	mServerToggle *systray.MenuItem
+	mShowWindow   *systray.MenuItem
+	mQuit         *systray.MenuItem
 	trayQuitChan  = make(chan struct{})
 )
 
@@ -54,10 +56,8 @@ func onTrayReady() {
 
 	// Show control window on icon click
 	systray.SetOnClick(func(menu systray.IMenu) {
-		if trayApp != nil && trayApp.ctx != nil {
-			wruntime.WindowShow(trayApp.ctx)
-			wruntime.WindowSetAlwaysOnTop(trayApp.ctx, true)
-			wruntime.WindowSetAlwaysOnTop(trayApp.ctx, false)
+		if trayApp != nil {
+			trayApp.ShowMainWindow()
 		}
 	})
 
@@ -67,44 +67,38 @@ func onTrayReady() {
 	})
 
 	// Menu items
-	mShowWindow := systray.AddMenuItem("컨트롤 창 보이기", "Show Control Window")
-	mShowWindow.Click(func() {
-		if trayApp != nil && trayApp.ctx != nil {
-			wruntime.WindowShow(trayApp.ctx)
-			wruntime.WindowSetAlwaysOnTop(trayApp.ctx, true)
-			wruntime.WindowSetAlwaysOnTop(trayApp.ctx, false)
-		}
-	})
+	mServerStatus = systray.AddMenuItem("서버 상태: 중지됨", "Current server status")
+	mServerStatus.Disable()
 
-	systray.AddSeparator()
-
-	mServerToggle = systray.AddMenuItem("서버 시작", "Start/Stop Server")
+	mServerToggle = systray.AddMenuItem("서버 시작", "Start or stop the server")
 	mServerToggle.Click(func() {
 		if trayApp != nil {
-			if trayApp.isRunning {
-				trayApp.StopServer()
-			} else {
-				go trayApp.StartServerWithCurrentConfig()
-			}
-			updateServerMenuItem()
+			go trayApp.toggleServerFromTray()
 		}
 	})
 
 	systray.AddSeparator()
 
-	mQuit := systray.AddMenuItem("종료", "Quit Application")
+	mShowWindow = systray.AddMenuItem("메인 창 열기", "Open Main Window")
+	mShowWindow.Click(func() {
+		if trayApp != nil {
+			trayApp.ShowMainWindow()
+		}
+	})
+
+	systray.AddSeparator()
+
+	mQuit = systray.AddMenuItem("종료", "Quit Application")
 	mQuit.Click(func() {
 		if trayApp != nil {
-			trayApp.StopServer()
-			if trayApp.ctx != nil {
-				wruntime.Quit(trayApp.ctx)
-			}
+			trayApp.Quit()
+			return
 		}
 		systray.Quit()
 	})
 
 	// Update menu based on initial server state
-	updateServerMenuItem()
+	updateServerMenuItems(trayApp != nil && trayApp.IsServerRunning())
 }
 
 func onTrayExit() {
@@ -115,23 +109,36 @@ func onTrayExit() {
 	os.Exit(0)
 }
 
-// updateServerMenuItem updates the server menu item text based on server state
-func updateServerMenuItem() {
-	if mServerToggle == nil {
-		return
+// updateServerMenuItems updates the status and action labels atomically from a
+// synchronized server-state snapshot supplied by App.
+func updateServerMenuItems(running bool) {
+	language := "ko"
+	if trayApp != nil {
+		language = trayApp.GetServerUILanguage()
 	}
-	if trayApp != nil && trayApp.isRunning {
-		mServerToggle.SetTitle("서버 종료")
-		mServerToggle.SetTooltip("Stop Server")
-	} else {
-		mServerToggle.SetTitle("서버 시작")
-		mServerToggle.SetTooltip("Start Server")
+	labels := getTrayMenuLabels(language, running)
+	if mServerStatus != nil {
+		mServerStatus.SetTitle(labels.status)
+	}
+	if mServerToggle != nil {
+		mServerToggle.SetTitle(labels.toggle)
+		if running {
+			mServerToggle.SetTooltip("Stop Server")
+		} else {
+			mServerToggle.SetTooltip("Start Server")
+		}
+	}
+	if mShowWindow != nil {
+		mShowWindow.SetTitle(labels.show)
+	}
+	if mQuit != nil {
+		mQuit.SetTitle(labels.quit)
 	}
 }
 
 // UpdateTrayServerState is called from App to update tray menu
-func UpdateTrayServerState() {
-	updateServerMenuItem()
+func UpdateTrayServerState(running bool) {
+	updateServerMenuItems(running)
 }
 
 // QuitSystemTray stops the system tray loop

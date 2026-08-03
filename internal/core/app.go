@@ -34,25 +34,26 @@ import (
 
 // App struct for Wails binding
 type App struct {
-	ctx               context.Context
-	server            *http.Server // HTTPS Server
-	httpServer        *http.Server // HTTP Compatibility Server
-	serverMux         sync.Mutex
-	isRunning         bool
-	port              string
-	llmEndpoint       string
-	llmApiToken       string
-	llmMode           string // "standard" or "stateful"
-	enableTTS         bool
-	enableTools       bool
-	enableDebugTrace  bool
-	certDomain        string
-	authMgr           *AuthManager
-	assets            embed.FS
-	IsQuitting        bool
-	welcomeDismissed  bool
-	alwaysShowWelcome bool
-	serverUILanguage  string
+	ctx                 context.Context
+	server              *http.Server // HTTPS Server
+	httpServer          *http.Server // HTTP Compatibility Server
+	serverMux           sync.Mutex
+	isRunning           bool
+	port                string
+	llmEndpoint         string
+	llmApiToken         string
+	llmMode             string // "standard" or "stateful"
+	enableTTS           bool
+	enableTools         bool
+	enableDebugTrace    bool
+	certDomain          string
+	authMgr             *AuthManager
+	assets              embed.FS
+	IsQuitting          bool
+	welcomeDismissed    bool
+	alwaysShowWelcome   bool
+	serverUILanguageMux sync.RWMutex
+	serverUILanguage    string
 
 	// Server-side Model Cache
 	modelCache     []byte
@@ -801,7 +802,9 @@ func createAppMenu(app *App, goos string) *menu.Menu {
 		})
 		appMenu.AddSeparator()
 		appMenu.AddText("Hide DKST LLM Chat Server", keys.CmdOrCtrl("h"), func(_ *menu.CallbackData) {
-			if app.ctx != nil {
+			if app.GetMinimizeToTray() {
+				app.HideToTray()
+			} else if app.ctx != nil {
 				wruntime.Hide(app.ctx)
 			}
 		})
@@ -823,8 +826,20 @@ func createAppMenu(app *App, goos string) *menu.Menu {
 	men.Append(menu.EditMenu())
 
 	windowMenu := men.AddSubmenu("Window")
+	if goos == "darwin" {
+		windowMenu.AddText("Close", keys.CmdOrCtrl("w"), func(_ *menu.CallbackData) {
+			if app.GetMinimizeToTray() {
+				app.HideToTray()
+				return
+			}
+			app.Quit()
+		})
+		windowMenu.AddSeparator()
+	}
 	windowMenu.AddText("Minimize", keys.CmdOrCtrl("m"), func(_ *menu.CallbackData) {
-		if app.ctx != nil {
+		if app.GetMinimizeToTray() {
+			app.HideToTray()
+		} else if app.ctx != nil {
 			wruntime.WindowMinimise(app.ctx)
 		}
 	})
@@ -1170,7 +1185,7 @@ func (a *App) StartServer(port string) error {
 	}()
 
 	a.isRunning = true
-	UpdateTrayServerState()
+	UpdateTrayServerState(true)
 	return nil
 }
 
@@ -1249,7 +1264,7 @@ func (a *App) StopServer() error {
 
 	a.isRunning = false
 	fmt.Println("[SERVER] All servers stopped")
-	UpdateTrayServerState()
+	UpdateTrayServerState(false)
 	return nil
 }
 
@@ -1827,15 +1842,20 @@ func (a *App) GetAlwaysShowWelcome() bool {
 }
 
 func (a *App) SetServerUILanguage(language string) {
+	a.serverUILanguageMux.Lock()
 	if strings.EqualFold(strings.TrimSpace(language), "en") {
 		a.serverUILanguage = "en"
 	} else {
 		a.serverUILanguage = "ko"
 	}
+	a.serverUILanguageMux.Unlock()
 	a.saveConfig()
+	UpdateTrayServerState(a.IsServerRunning())
 }
 
 func (a *App) GetServerUILanguage() string {
+	a.serverUILanguageMux.RLock()
+	defer a.serverUILanguageMux.RUnlock()
 	if strings.EqualFold(strings.TrimSpace(a.serverUILanguage), "en") {
 		return "en"
 	}
@@ -1945,11 +1965,29 @@ func (a *App) GetSystemPrompts() []SystemPrompt {
 	return promptkit.LoadSystemPrompts(GetAppDataDir())
 }
 
-// Show makes the window visible
-func (a *App) Show() {
+// ShowMainWindow restores the main window and its taskbar/Dock presence.
+func (a *App) ShowMainWindow() {
 	if a.ctx != nil {
+		setDockIconVisible(true)
+		wruntime.WindowUnminimise(a.ctx)
 		wruntime.WindowShow(a.ctx)
+		wruntime.WindowSetAlwaysOnTop(a.ctx, true)
+		wruntime.WindowSetAlwaysOnTop(a.ctx, false)
 	}
+}
+
+// HideToTray hides the main window. On macOS it also removes the Dock icon
+// while leaving the menu-bar status item active.
+func (a *App) HideToTray() {
+	if a.ctx != nil {
+		wruntime.WindowHide(a.ctx)
+		setDockIconVisible(false)
+	}
+}
+
+// Show makes the window visible for existing Wails bindings.
+func (a *App) Show() {
+	a.ShowMainWindow()
 }
 
 // OpenMemoryFolder opens the folder containing the user's memory files

@@ -16,6 +16,7 @@ all_funcs.txt
 !internal/core/tool_parser_test.go
 !internal/core/auth_tools_test.go
 !internal/core/tool_transport_test.go
+!internal/core/tray_test.go
 !internal/mcp/web_search_test.go
 !internal/mcp/live_tools_test.go
 !internal/promptkit/runtime_tools_test.go
