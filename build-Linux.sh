@@ -165,6 +165,10 @@ if [ -f "$APP_CONTENT_DIR/DKST LLM Chat Server" ]; then
     cp -f bundle/config.json "$APP_CONTENT_DIR"
     cp bundle/system_prompts.json "$APP_CONTENT_DIR" 2>/dev/null || true
     cp bundle/ThirdPartyNotices.md "$APP_CONTENT_DIR" 2>/dev/null || true
+    if [ -d "bundle/skills/builtin" ]; then
+        mkdir -p "$APP_CONTENT_DIR/skills"
+        cp -R bundle/skills/builtin "$APP_CONTENT_DIR/skills/"
+    fi
     
     echo "Build success! Output directory: $APP_CONTENT_DIR"
 else

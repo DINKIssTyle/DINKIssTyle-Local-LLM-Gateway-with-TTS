@@ -30,7 +30,7 @@ To establish a connection, follow these steps within the **LM Studio** applicati
     2. Click **+ Create new token** <span class="number-square">4</span>.
 <div><img src="./img/LMStdio_Endpoint_003.png"><br></div>
 
-    3. Set **Allow calling servers from mcp.json** <span class="number-square">5</span> to **Allow**, then click **Create token** <span class="number-square">6</span>.
+    3. Click **Create token** <span class="number-square">6</span>. App tools run inside DKST LLM Chat Server, so no MCP permission or `mcp.json` setup is required.
 <div><img src="./img/LMStdio_Endpoint_004.png"><br></div>  
 
     4. Click the **Copy** <span class="number-square">7</span> button next to the newly generated token.
@@ -84,7 +84,7 @@ To establish a connection, follow these steps within the **LM Studio** applicati
     <div><br><img src="./img/LMStdio_Endpoint_002.png"><br></div> 
     2. **+ Create new token** <span class="number-square">4</span>을 클릭합니다.
     <div><br><img src="./img/LMStdio_Endpoint_003.png"><br></div> 
-    3. **Allow calling servers from mcp.json**을 **Allow** <span class="number-square">5</span>로 설정한 뒤 **Create token** <span class="number-square">6</span> 을 누릅니다.
+    3. **Create token** <span class="number-square">6</span>을 누릅니다. 앱 도구는 DKST LLM Chat Server 내부에서 실행되므로 MCP 권한이나 `mcp.json` 설정이 필요하지 않습니다.
 
     <div><br><img src="./img/LMStdio_Endpoint_004.png"><br></div> 
     4. 새로 만든 토큰 옆 **Copy** <span class="number-square">7</span> 버튼으로 복사합니다.

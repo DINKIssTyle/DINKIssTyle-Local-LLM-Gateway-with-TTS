@@ -33,7 +33,7 @@ type UserSettings struct {
 	ContextStrategy *string `json:"context_strategy,omitempty"`
 	// TTS state is kept browser-local now, but these fields remain for legacy users.json reads.
 	EnableTTS             *bool                      `json:"enable_tts,omitempty"`
-	EnableMCP             *bool                      `json:"enable_mcp,omitempty"`
+	EnableTools           *bool                      `json:"enable_tools,omitempty"`
 	EnableMemory          *bool                      `json:"enable_memory,omitempty"`
 	StatefulTurnLimit     *int                       `json:"stateful_turn_limit,omitempty"`
 	StatefulCharBudget    *int                       `json:"stateful_char_budget,omitempty"`
@@ -216,7 +216,7 @@ func (am *AuthManager) loadUsersFromJSONLocked() error {
 		if u == nil || strings.TrimSpace(u.ID) == "" {
 			continue
 		}
-		u.Settings.DisabledTools = expandDisabledToolAliases(u.Settings.DisabledTools)
+		u.Settings = normalizePersistedSettings(u.Settings)
 		am.users[u.ID] = u
 	}
 	return nil
@@ -279,7 +279,7 @@ func (am *AuthManager) loadUsersFromDBLocked() error {
 				return fmt.Errorf("failed to parse settings for %s: %w", rec.AccountID, err)
 			}
 		}
-		settings.DisabledTools = expandDisabledToolAliases(settings.DisabledTools)
+		settings = normalizePersistedSettings(settings)
 		am.users[rec.AccountID] = &User{
 			ID:           rec.AccountID,
 			PasswordHash: rec.PasswordHash,
@@ -364,7 +364,7 @@ func (am *AuthManager) AddUser(id, password, role string) error {
 	}
 
 	// Default user settings persisted on the server.
-	enableMCP := true
+	enableTools := true
 	enableMemory := true
 	defaultLLMMode := "stateful"
 	defaultContextStrategy := "retrieval"
@@ -382,7 +382,7 @@ func (am *AuthManager) AddUser(id, password, role string) error {
 		Settings: UserSettings{
 			LLMMode:         &defaultLLMMode,
 			ContextStrategy: &defaultContextStrategy,
-			EnableMCP:       &enableMCP,
+			EnableTools:     &enableTools,
 			EnableMemory:    &enableMemory,
 			EmbeddingConfig: &defaultEmbeddingConfig,
 			DisallowedCommands: []string{

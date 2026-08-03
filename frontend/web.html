@@ -206,14 +206,13 @@
                         </div>
                     </div>
 
-                    <div class="setting-item" id="container-enable-mcp">
+                    <div class="setting-item" id="container-enable-tools">
                         <div class="setting-toggle"
-                            onclick="toggleSwitch('cfg-enable-mcp'); updateSettingsVisibility()">
-                            <span data-i18n="setting.enableMCP.label">Enable MCP Features</span>
-                            <input type="checkbox" id="cfg-enable-mcp">
+                            onclick="toggleSwitch('cfg-enable-tools'); updateSettingsVisibility()">
+                            <span data-i18n="setting.enableTools.label">Enable App Tools</span>
+                            <input type="checkbox" id="cfg-enable-tools">
                         </div>
-                        <p class="setting-desc" data-i18n="setting.enableMCP.desc">Enable integration with Model Context
-                            Protocol (web search, browsing)</p>
+                        <p class="setting-desc" data-i18n="setting.enableTools.desc">Let every configured model provider use tools executed inside this app.</p>
                     </div>
 
                     <!-- Personal Memory Settings -->
@@ -906,17 +905,18 @@
                 return null;
             });
     </script>
-    <script src="app-utils.js?v=2"></script>
+    <script src="app-utils.js?v=3"></script>
     <script src="app-i18n.js?v=6"></script>
     <script src="app-saved-library.js?v=1"></script>
     <script src="app-models.js?v=1"></script>
     <script src="app-tts.js?v=10"></script>
     <script src="app-session.js?v=2"></script>
+    <script src="app-stream-protocol.js?v=1"></script>
     <script src="app-chat-streaming.js?v=1"></script>
     <script src="app-chat-ui.js?v=1"></script>
     <script src="app-progress-ui.js?v=1"></script>
     <script src="app-mic.js?v=2"></script>
-    <script src="app.js?v=31"></script>
+    <script src="app.js?v=32"></script>
 
 </body>
 

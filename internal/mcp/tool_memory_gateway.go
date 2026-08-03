@@ -101,7 +101,7 @@ func formatMemoryCandidateSource(candidate memoryCandidate) string {
 
 // SearchMemoryDB calls the SQLite db to search memory by keyword
 func SearchMemoryDB(userID, query string) (string, error) {
-	log.Printf("[MCP] SearchMemoryDB: User=%s, Query=%s", userID, query)
+	log.Printf("[ToolRuntime] SearchMemoryDB: User=%s, Query=%s", userID, query)
 	candidates, err := buildMemoryCandidates(userID, query, 8)
 	if err != nil {
 		return "", fmt.Errorf("memory candidate search failed: %v", err)
@@ -322,7 +322,7 @@ func GetMemorySnapshot(userID string) string {
 func GetMemorySnapshotDebug(userID string) MemorySnapshotDebug {
 	results, err := SearchMemoriesByRecent(userID, 5)
 	if err != nil {
-		log.Printf("[MCP] Failed to get memory snapshot: %v", err)
+		log.Printf("[ToolRuntime] Failed to get memory snapshot: %v", err)
 		return MemorySnapshotDebug{Text: "No recent memories found."}
 	}
 	if len(results) == 0 {
@@ -381,7 +381,7 @@ func AutoSearchMemory(userID, input string) string {
 
 func AutoSearchMemoryDebugQuery(userID, input string) AutoSearchMemoryDebug {
 	trimmed := strings.TrimSpace(input)
-	log.Printf("[MCP] AutoSearchMemory: Input=%q", trimmed)
+	log.Printf("[ToolRuntime] AutoSearchMemory: Input=%q", trimmed)
 	if trimmed == "" {
 		return AutoSearchMemoryDebug{}
 	}
@@ -420,7 +420,7 @@ func AutoSearchMemoryDebugQuery(userID, input string) AutoSearchMemoryDebug {
 	// Perform server-side memory synthesis
 	syn, err := SynthesizeMemoryContext(userID, trimmed, rawContext)
 	if err != nil {
-		log.Printf("[MCP] Synthesize failed, falling back to compact context: %v", err)
+		log.Printf("[ToolRuntime] Synthesize failed, falling back to compact context: %v", err)
 		debug.Context = "\n[PROACTIVE MEMORY RETRIEVAL]\n" + rawContext
 		return debug
 	}
@@ -615,7 +615,7 @@ func isCJKRune(r rune) bool {
 
 // ReadMemoryDB calls the SQLite db to read full text of a specific memory ID
 func ReadMemoryDB(userID string, memoryID int64) (string, error) {
-	log.Printf("[MCP] ReadMemoryDB: User=%s, ID=%d", userID, memoryID)
+	log.Printf("[ToolRuntime] ReadMemoryDB: User=%s, ID=%d", userID, memoryID)
 	if isSavedTurnMemoryID(memoryID) {
 		turn, err := GetSavedTurn(userID, originalSavedTurnID(memoryID))
 		if err != nil {
@@ -634,7 +634,7 @@ func ReadMemoryDB(userID string, memoryID int64) (string, error) {
 }
 
 func ReadMemoryContextDB(userID string, memoryID int64, chunkIndex int) (string, error) {
-	log.Printf("[MCP] ReadMemoryContextDB: User=%s, ID=%d, Chunk=%d", userID, memoryID, chunkIndex)
+	log.Printf("[ToolRuntime] ReadMemoryContextDB: User=%s, ID=%d, Chunk=%d", userID, memoryID, chunkIndex)
 	if isSavedTurnMemoryID(memoryID) {
 		turn, err := GetSavedTurn(userID, originalSavedTurnID(memoryID))
 		if err != nil {
@@ -673,7 +673,7 @@ func ReadMemoryContextDB(userID string, memoryID int64, chunkIndex int) (string,
 
 // DeleteMemoryDB removes a specific memory entry.
 func DeleteMemoryDB(userID string, memoryID int64) (string, error) {
-	log.Printf("[MCP] DeleteMemoryDB: User=%s, ID=%d", userID, memoryID)
+	log.Printf("[ToolRuntime] DeleteMemoryDB: User=%s, ID=%d", userID, memoryID)
 	if isSavedTurnMemoryID(memoryID) {
 		err := DeleteSavedTurn(userID, originalSavedTurnID(memoryID))
 		if err != nil {

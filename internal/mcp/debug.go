@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// TraceEvent is a lightweight debug event emitted by the MCP package.
+// TraceEvent is a lightweight debug event emitted by the app tool implementation package.
 type TraceEvent struct {
 	Timestamp time.Time              `json:"timestamp"`
 	Source    string                 `json:"source"`
@@ -20,7 +20,7 @@ var (
 	traceHook   func(TraceEvent)
 )
 
-// SetTraceHook registers a callback for MCP debug traces.
+// SetTraceHook registers a callback for app tool debug traces.
 func SetTraceHook(fn func(TraceEvent)) {
 	traceHookMu.Lock()
 	defer traceHookMu.Unlock()

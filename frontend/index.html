@@ -421,21 +421,21 @@
             flex: 1 1 0;
         }
 
-        .mcp-port-label-row {
+        .api-port-label-row {
             display: flex;
             align-items: center;
             margin-bottom: 6px;
         }
 
-        .mcp-port-label-row label {
+        .api-port-label-row label {
             margin-bottom: 0;
         }
 
-        .mcp-port-group {
+        .api-port-group {
             position: relative;
         }
 
-        .mcp-port-input-wrap {
+        .api-port-input-wrap {
             position: relative;
         }
 
@@ -479,14 +479,14 @@
             margin-right: 3px;
         }
 
-        .mcp-port-input-wrap .help-icon-btn {
+        .api-port-input-wrap .help-icon-btn {
             position: absolute;
             top: 50%;
             left: calc(100% + 12px);
             transform: translateY(-50%);
         }
 
-        .mcp-port-input-wrap .help-icon-btn:hover {
+        .api-port-input-wrap .help-icon-btn:hover {
             transform: translateY(calc(-50% - 1px));
         }
 
@@ -718,10 +718,6 @@
             z-index: 150;
         }
 
-        #mcp-help-modal {
-            z-index: 130;
-        }
-
         .modal {
             background: var(--card-bg);
             border: 1px solid var(--border-color);
@@ -757,183 +753,10 @@
             border-top: 1px solid var(--border-color);
         }
 
-        .mcp-help-modal {
-            max-width: 840px;
-            width: min(840px, 92vw);
-            max-height: min(82vh, 860px);
-        }
-
         .doc-help-modal {
             max-width: 840px;
             width: min(840px, 92vw);
             max-height: min(82vh, 860px);
-        }
-
-        .mcp-inline-json-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 16px;
-            margin-top: 18px;
-            margin-bottom: 10px;
-        }
-
-        .mcp-inline-json-title {
-            font-size: 12px;
-            letter-spacing: 0.18em;
-            text-transform: uppercase;
-            color: var(--text-secondary);
-            font-weight: 800;
-        }
-
-        .mcp-inline-json-copy {
-            flex-shrink: 0;
-        }
-
-        .mcp-inline-json-caption {
-            margin: 0 0 10px;
-            color: var(--text-secondary);
-            font-size: 13px;
-        }
-
-        .mcp-inline-json-box {
-            margin: 0 0 4px;
-            padding: 14px;
-            border-radius: 10px;
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            background: #0b1016;
-            color: #d7e3f0;
-            font-family: "JetBrains Mono", Consolas, monospace;
-            font-size: 13px;
-            line-height: 1.6;
-            overflow: auto;
-            white-space: pre;
-        }
-
-        .mcp-help-markdown {
-            padding: 20px;
-            overflow: auto;
-            line-height: 1.65;
-            color: var(--text-color);
-        }
-
-        .mcp-help-markdown h1,
-        .mcp-help-markdown h2,
-        .mcp-help-markdown h3 {
-            margin: 0 0 12px;
-            line-height: 1.25;
-        }
-
-        .mcp-help-markdown h1 {
-            font-size: 22px;
-        }
-
-        .mcp-help-markdown h2 {
-            font-size: 18px;
-            margin-top: 22px;
-        }
-
-        .mcp-help-markdown h3 {
-            font-size: 15px;
-            margin-top: 18px;
-        }
-
-        .mcp-help-markdown p,
-        .mcp-help-markdown ul,
-        .mcp-help-markdown ol,
-        .mcp-help-markdown pre,
-        .mcp-help-markdown blockquote {
-            margin: 0 0 12px;
-        }
-
-        .mcp-help-markdown p+hr,
-        .mcp-help-markdown ul+hr,
-        .mcp-help-markdown ol+hr,
-        .mcp-help-markdown blockquote+hr,
-        .mcp-help-markdown pre+hr,
-        .mcp-help-markdown hr+p,
-        .mcp-help-markdown hr+ul,
-        .mcp-help-markdown hr+ol,
-        .mcp-help-markdown hr+blockquote,
-        .mcp-help-markdown hr+pre {
-            margin-top: 16px;
-        }
-
-        .mcp-help-markdown ul,
-        .mcp-help-markdown ol {
-            padding-left: 20px;
-        }
-
-        .mcp-help-markdown code {
-            font-family: "JetBrains Mono", Consolas, monospace;
-            font-size: 0.92em;
-            background: rgba(255, 255, 255, 0.08);
-            border-radius: 6px;
-            padding: 0.12em 0.4em;
-        }
-
-        .mcp-help-markdown pre {
-            background: #0b1016;
-            border: 1px solid rgba(255, 255, 255, 0.06);
-            border-radius: 10px;
-            padding: 14px;
-            overflow: auto;
-        }
-
-        .mcp-help-markdown pre code {
-            background: transparent;
-            padding: 0;
-        }
-
-        .mcp-help-markdown blockquote {
-            border-left: 3px solid rgba(88, 166, 255, 0.5);
-            padding-left: 12px;
-            color: #c2cfdb;
-        }
-
-        .mcp-help-markdown .md-callout {
-            margin: 0 0 12px;
-            padding: 12px 14px;
-            border-radius: 10px;
-            border: 1px solid rgba(88, 166, 255, 0.22);
-            background: rgba(88, 166, 255, 0.08);
-        }
-
-        .mcp-help-markdown .md-callout-title {
-            font-size: 12px;
-            font-weight: 700;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-            color: #9fcdff;
-            margin-bottom: 6px;
-        }
-
-        .mcp-help-markdown .md-callout-body {
-            color: #d6e6f7;
-        }
-
-        .mcp-help-markdown a {
-            color: #79b8ff;
-        }
-
-        .mcp-help-markdown img {
-            max-width: 100%;
-            height: auto;
-            display: block;
-        }
-
-        .mcp-help-markdown hr {
-            border: 0;
-            border-top: 1px solid var(--border-color);
-            margin: 16px 0;
-        }
-
-        .mcp-help-markdown.is-loading,
-        .mcp-help-markdown.is-error {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
         }
 
         .doc-help-body {
@@ -1064,12 +887,6 @@
             border: 0;
             border-top: 1px solid var(--border-color);
             margin: 16px 0;
-        }
-
-        @media (max-width: 900px) {
-            .mcp-help-modal {
-                width: min(840px, 96vw);
-            }
         }
 
         .managed-models-list {
@@ -1477,8 +1294,8 @@
                 <div class="card">
                     <div class="card-header">
                         <div class="card-title" data-i18n="card.serverStatus">Server Status</div>
-                        <button class="icon-btn help-icon-btn" type="button" onclick="openMcpHelpModal()"
-                            data-i18n-title="help.mcp.title" data-i18n-aria-label="help.mcp.ariaLabel">
+                        <button class="icon-btn help-icon-btn" type="button" onclick="openDocHelpModalByKey('help.llmEndpoint.title', 'public/help/LMStdio_Endpoint.md')"
+                            data-i18n-title="help.llmEndpoint.title" data-i18n-aria-label="help.llmEndpoint.ariaLabel">
                             <span class="material-icons-round">help</span>
                         </button>
                     </div>
@@ -1495,11 +1312,11 @@
                             <input type="text" id="port-input" value="7860" placeholder="7860" onkeyup="updateMcpPort()"
                                 onchange="savePort()">
                         </div>
-                        <div class="form-group mcp-port-group">
-                            <div class="mcp-port-label-row">
-                                <label for="mcp-port-input" data-i18n="label.mcpPort">MCP Port (HTTP)</label>
+                        <div class="form-group api-port-group">
+                            <div class="api-port-label-row">
+                                <label for="api-port-input" data-i18n="label.apiPort">HTTP API Port</label>
                             </div>
-                            <input type="text" id="mcp-port-input" value="7861" readonly
+                            <input type="text" id="api-port-input" value="7861" readonly
                                 style="background: rgba(255,255,255,0.05); color: var(--text-secondary); cursor: not-allowed;">
                         </div>
                     </div>
@@ -1567,19 +1384,17 @@
             <div class="col right-col">
                 <!-- Additional Assets -->
                 <div class="card">
-                    <div class="card-title" data-i18n="card.additionalAssets">Additional Assets</div>
-                    <div class="form-group">
-                        <div class="setting-row"
-                            style="display: flex; align-items: center; justify-content: space-between; padding: 4px 0;">
-                            <label style="margin:0; font-weight: 500;" data-i18n="label.enableAssets">Enable TTS &amp;
-                                Vector DB</label>
-                            <input type="checkbox" id="enable-tts" style="width: auto;" onchange="toggleEnableTTS()">
-                        </div>
+                    <div class="card-header">
+                        <div class="card-title" data-i18n="card.additionalAssets">Additional Assets</div>
+                        <button class="icon-btn help-icon-btn" type="button"
+                            onclick="openDocHelpModalByKey('help.additionalAssets.title', 'public/help/AdditionalAssets.md')"
+                            data-i18n-title="help.additionalAssets.title" data-i18n-aria-label="help.additionalAssets.ariaLabel">
+                            <span class="material-icons-round">help</span>
+                        </button>
                     </div>
 
                     <!-- Compact Asset Status Summary -->
-                    <div class="form-group"
-                        style="margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--border-color);">
+                    <div class="form-group" style="margin-top: 12px;">
                         <div class="asset-summary-grid">
                             <div class="asset-summary-item">
                                 <span class="asset-summary-label" data-i18n="label.modelAssets">Models</span>
@@ -1589,7 +1404,7 @@
                                 </div>
                             </div>
                             <div class="asset-summary-item">
-                                <span class="asset-summary-label" data-i18n="label.dedicatedBrowser">MCP Dedicated Chromium</span>
+                                <span class="asset-summary-label" data-i18n="label.dedicatedBrowser">App Tool Browser</span>
                                 <div class="asset-summary-status">
                                     <span class="status-dot" id="browser-asset-status-dot"></span>
                                     <span id="browser-asset-status-text">Checking...</span>
@@ -1602,6 +1417,12 @@
                         <button class="btn btn-secondary btn-block" onclick="openModelManagerModal()">
                             <span class="material-icons-round">inventory_2</span>
                             <span data-i18n="modal.modelManager.title">Asset Manager</span>
+                        </button>
+                    </div>
+                    <div class="inline-actions" style="margin-top: 8px;">
+                        <button class="btn btn-secondary btn-block" onclick="openSkillsFolder()">
+                            <span class="material-icons-round">folder_open</span>
+                            <span data-i18n="action.openSkillsFolder">Open Skills Folder</span>
                         </button>
                     </div>
                 </div>
@@ -1819,24 +1640,6 @@
         </div>
     </div>
 
-    <div class="modal-overlay" id="mcp-help-modal">
-        <div class="modal mcp-help-modal">
-            <div class="modal-header">
-                <div class="modal-title" data-i18n="modal.mcpHelp.title">LM Studio MCP Help</div>
-                <button class="icon-btn" onclick="closeMcpHelpModal()">
-                    <span class="material-icons-round">close</span>
-                </button>
-            </div>
-            <div class="modal-body doc-help-body">
-                <div id="mcp-help-markdown" class="mcp-help-markdown is-loading" data-i18n="help.loading">Loading help
-                    document...</div>
-            </div>
-            <div class="modal-footer" style="display: flex; justify-content: flex-end;">
-                <button class="btn btn-primary" onclick="closeMcpHelpModal()" data-i18n="action.close">Close</button>
-            </div>
-        </div>
-    </div>
-
     <div class="modal-overlay" id="doc-help-modal">
         <div class="modal doc-help-modal">
             <div class="modal-header">
@@ -1896,6 +1699,15 @@
                 </button>
             </div>
             <div class="modal-body">
+                <div class="form-group"
+                    style="margin-bottom: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--border-color);">
+                    <div class="setting-row"
+                        style="display: flex; align-items: center; justify-content: space-between; padding: 4px 0;">
+                        <label style="margin:0; font-weight: 500;" data-i18n="label.enableAssets">Enable TTS &amp;
+                            Vector DB</label>
+                        <input type="checkbox" id="enable-tts" style="width: auto;" onchange="toggleEnableTTS()">
+                    </div>
+                </div>
                 <div class="form-group">
                     <label data-i18n="label.modelStorageFolder">Asset Storage Folder</label>
                     <div id="models-root-dir"
@@ -2051,10 +1863,10 @@
                     </div>
                 </div>
 
-                <!-- MCP Tool Permissions Section -->
+                <!-- App Tool Permissions Section -->
                 <div>
                     <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-color);"
-                        data-i18n="edit.section.toolPermissions">MCP Tool Permissions
+                        data-i18n="edit.section.toolPermissions">App Tool Permissions
                     </div>
                     <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 12px;"
                         data-i18n="edit.help.toolPermissions">
@@ -2156,8 +1968,6 @@
         let debugTraceAutoExpanded = false;
         let debugTracePreviousSize = null;
         let openTracePayloadEntry = null;
-        let mcpHelpMarkdownLoaded = false;
-        let mcpHelpMarkdownSource = '';
         const docHelpMarkdownCache = new Map();
         let openDocHelpPath = '';
         let managedModelsRefreshTimer = null;
@@ -2181,8 +1991,6 @@
                 'action.saveOnly': '저장만',
                 'action.restartNow': '지금 재시작',
                 'card.serverStatus': '서버 상태',
-                'help.mcp.title': 'MCP 도움말',
-                'help.mcp.ariaLabel': 'MCP 도움말 열기',
                 'status.stopped': '중지됨',
                 'status.running': '실행 중',
                 'status.checking': '확인 중...',
@@ -2194,7 +2002,7 @@
                 'status.failed': '실패',
                 'status.unknown': '알 수 없음',
                 'label.webPort': '웹 포트 (HTTPS)',
-                'label.mcpPort': 'MCP 포트 (HTTP)',
+                'label.apiPort': 'HTTP API 포트',
                 'action.startServer': '서버 시작',
                 'action.stopServer': '서버 중지',
                 'card.additionalAssets': '추가 자산',
@@ -2203,13 +2011,13 @@
                 'label.enableAssets': 'TTS 및 벡터 DB 활성화',
                 'label.assetStatus': '자산 상태',
 				'label.modelAssets': '모델 자산',
-				'label.dedicatedBrowser': 'MCP 전용 Chromium',
+				'label.dedicatedBrowser': '앱 도구 전용 Chromium',
 				'action.prepareBrowser': '전용 Chromium 준비',
 				'action.updateBrowser': '전용 Chromium 업데이트',
 				'message.browserReady': '준비됨',
 				'message.browserMissing': '설치 필요',
 				'message.browserDownloading': '설치 중...',
-				'message.browserInstalled': 'MCP 웹 접근은 시스템 Chrome 대신 이 전용 브라우저를 사용합니다.',
+				'message.browserInstalled': '앱 웹 도구는 시스템 Chrome 대신 이 전용 브라우저를 사용합니다.',
 				'browser.meta.provider': '제공자',
 				'browser.meta.version': '버전',
 				'browser.meta.installDir': '설치 위치',
@@ -2220,6 +2028,9 @@
                 'label.minimizeToTray': '트레이로 최소화',
                 'label.autoStartServer': '서버 자동 시작',
                 'modal.modelManager.title': '자산 관리자',
+                'action.openSkillsFolder': '스킬 폴더 열기',
+                'help.additionalAssets.title': '추가 자산 도움말',
+                'help.additionalAssets.ariaLabel': '추가 자산 도움말 열기',
                 'card.advancedSettings': '고급 설정',
                 'help.certificate.title': '인증서 도움말',
                 'help.certificate.ariaLabel': '인증서 도움말 열기',
@@ -2251,7 +2062,6 @@
                 'modal.addAccount.title': '계정 추가',
                 'modal.editAccount.title': '계정 편집',
                 'modal.confirm.title': '확인',
-                'modal.mcpHelp.title': 'LM Studio MCP 도움말',
                 'modal.welcome.title': '환영합니다',
                 'label.username': '사용자 이름',
                 'label.password': '비밀번호',
@@ -2267,7 +2077,7 @@
                 'edit.section.apiKey': 'API 키',
                 'edit.section.memoryRetention': '메모리 보존',
                 'edit.section.securityRestrictions': '보안 제한',
-                'edit.section.toolPermissions': 'MCP 도구 권한',
+				'edit.section.toolPermissions': '앱 도구 권한',
                 'edit.label.newPassword': '새 비밀번호',
                 'edit.label.confirmNewPassword': '새 비밀번호 확인',
                 'edit.label.llmApiKey': 'LLM API 키',
@@ -2308,7 +2118,6 @@
                 'message.userSettingsSaved': '사용자 설정을 저장했습니다.',
                 'message.passwordChanged': '비밀번호를 변경했습니다.',
                 'error.loadHelp': '도움말 문서를 불러오지 못했습니다.',
-                'error.loadMcpHelp': 'MCP 도움말을 불러오지 못했습니다.',
                 'error.loadWelcomeState': '웰컴 상태를 불러오지 못했습니다.',
                 'error.dismissWelcome': '웰컴 모달을 닫지 못했습니다.',
                 'error.loadUserDetails': '사용자 상세 정보를 불러오지 못했습니다: {error}',
@@ -2333,9 +2142,7 @@
                 'trace.copied': '트레이스 페이로드를 클립보드에 복사했습니다.',
                 'trace.copyFailed': '트레이스 페이로드 복사 실패: {error}',
                 'trace.noPayload': '복사할 페이로드가 없습니다.',
-                'mcp.json.title': 'MCP.JSON 예시',
                 'action.copyJson': 'JSON 복사',
-                'mcp.json.caption': 'LM Studio의 <code>mcp.json</code>에서 아래 현재 서버 주소를 사용하세요.',
                 'llm.processing': 'LLM 처리 중',
                 'llm.idle': 'LLM 대기 중',
                 'models.button.download': '다운로드',
@@ -2358,8 +2165,6 @@
                 'action.saveOnly': 'Save Only',
                 'action.restartNow': 'Restart Now',
                 'card.serverStatus': 'Server Status',
-                'help.mcp.title': 'MCP Help',
-                'help.mcp.ariaLabel': 'Open MCP help',
                 'status.stopped': 'Stopped',
                 'status.running': 'Running',
                 'status.checking': 'Checking...',
@@ -2371,7 +2176,7 @@
                 'status.failed': 'Failed',
                 'status.unknown': 'Unknown',
                 'label.webPort': 'Web Port (HTTPS)',
-                'label.mcpPort': 'MCP Port (HTTP)',
+                'label.apiPort': 'HTTP API Port',
                 'action.startServer': 'Start Server',
                 'action.stopServer': 'Stop Server',
                 'card.additionalAssets': 'Additional Assets',
@@ -2380,13 +2185,13 @@
                 'label.enableAssets': 'Enable TTS & Vector DB',
                 'label.assetStatus': 'Asset Status',
 				'label.modelAssets': 'Model Assets',
-				'label.dedicatedBrowser': 'MCP Dedicated Chromium',
+				'label.dedicatedBrowser': 'App Tool Browser',
 				'action.prepareBrowser': 'Prepare Dedicated Chromium',
 				'action.updateBrowser': 'Update Dedicated Chromium',
 				'message.browserReady': 'Ready',
 				'message.browserMissing': 'Installation required',
 				'message.browserDownloading': 'Installing...',
-				'message.browserInstalled': 'MCP web access uses this dedicated browser instead of system Chrome.',
+				'message.browserInstalled': 'App web tools use this dedicated browser instead of system Chrome.',
 				'browser.meta.provider': 'Provider',
 				'browser.meta.version': 'Version',
 				'browser.meta.installDir': 'Install location',
@@ -2397,6 +2202,9 @@
                 'label.minimizeToTray': 'Minimize to Tray',
                 'label.autoStartServer': 'Auto Start Server',
                 'modal.modelManager.title': 'Asset Manager',
+                'action.openSkillsFolder': 'Open Skills Folder',
+                'help.additionalAssets.title': 'Additional Assets Help',
+                'help.additionalAssets.ariaLabel': 'Open additional assets help',
                 'card.advancedSettings': 'Advanced Settings',
                 'help.certificate.title': 'Certificate Help',
                 'help.certificate.ariaLabel': 'Open Certificate help',
@@ -2428,7 +2236,6 @@
                 'modal.addAccount.title': 'Add Account',
                 'modal.editAccount.title': 'Edit Account',
                 'modal.confirm.title': 'Confirm',
-                'modal.mcpHelp.title': 'LM Studio MCP Help',
                 'modal.welcome.title': 'Welcome',
                 'label.username': 'Username',
                 'label.password': 'Password',
@@ -2444,7 +2251,7 @@
                 'edit.section.apiKey': 'API Key',
                 'edit.section.memoryRetention': 'Memory Retention',
                 'edit.section.securityRestrictions': 'Security Restrictions',
-                'edit.section.toolPermissions': 'MCP Tool Permissions',
+				'edit.section.toolPermissions': 'App Tool Permissions',
                 'edit.label.newPassword': 'New Password',
                 'edit.label.confirmNewPassword': 'Confirm New Password',
                 'edit.label.llmApiKey': 'LLM API Key',
@@ -2485,7 +2292,6 @@
                 'message.userSettingsSaved': 'User settings saved successfully.',
                 'message.passwordChanged': 'Password changed successfully.',
                 'error.loadHelp': 'Failed to load help document.',
-                'error.loadMcpHelp': 'Failed to load MCP help markdown.',
                 'error.loadWelcomeState': 'Failed to load welcome state.',
                 'error.dismissWelcome': 'Failed to dismiss welcome modal.',
                 'error.loadUserDetails': 'Failed to load user details: {error}',
@@ -2510,9 +2316,7 @@
                 'trace.copied': 'Trace payload copied to clipboard.',
                 'trace.copyFailed': 'Failed to copy trace payload: {error}',
                 'trace.noPayload': 'There is no payload to copy.',
-                'mcp.json.title': 'MCP.JSON EXAMPLE',
                 'action.copyJson': 'Copy JSON',
-                'mcp.json.caption': 'Use the current server address shown below in LM Studio\'s <code>mcp.json</code>.',
                 'llm.processing': 'LLM processing',
                 'llm.idle': 'LLM idle',
                 'models.button.download': 'Download',
@@ -2605,11 +2409,6 @@
             updateLlmActivityIndicator(llmActivityBusy);
             if (welcomeState) {
                 renderWelcomeModal(false);
-            }
-            const mcpHelpEl = document.getElementById('mcp-help-markdown');
-            if (mcpHelpEl && mcpHelpMarkdownLoaded && mcpHelpMarkdownSource) {
-                mcpHelpEl.innerHTML = renderMcpHelpContent(extractLocalizedMarkdown(mcpHelpMarkdownSource));
-                resolveHelpAssetPaths(mcpHelpEl, 'public/help/LMStudio_MCP.md');
             }
             const docHelpModal = document.getElementById('doc-help-modal');
             const docHelpEl = document.getElementById('doc-help-markdown');
@@ -3103,60 +2902,6 @@
             }
         }
 
-        function getCurrentMcpServerUrl() {
-            const configuredPort = parseInt(document.getElementById('port-input')?.value, 10);
-            const mcpPort = !Number.isNaN(configuredPort) ? configuredPort + 1 : 7861;
-            let host = 'localhost';
-
-            try {
-                const protocol = String(window?.location?.protocol || '').toLowerCase();
-                const hostname = String(window?.location?.hostname || '').trim().toLowerCase();
-                const isBrowserProtocol = protocol === 'http:' || protocol === 'https:';
-                const isUsableHost = hostname
-                    && hostname !== 'wails'
-                    && hostname !== 'localhost'
-                    && !hostname.includes(':');
-                if (isBrowserProtocol && isUsableHost) {
-                    host = hostname;
-                }
-            } catch (_) {
-                // Fall back to localhost for Wails/internal runtimes.
-            }
-
-            return `http://${host}:${mcpPort}/mcp/sse`;
-        }
-
-        function buildMcpJsonExample(url) {
-            return JSON.stringify({
-                mcpServers: {
-                    "dinkisstyle-gateway": {
-                        url
-                    }
-                }
-            }, null, 2);
-        }
-
-        function buildMcpJsonAppendixHtml() {
-            const jsonText = buildMcpJsonExample(getCurrentMcpServerUrl());
-            return `
-                <div class="mcp-inline-json">
-                    <div class="mcp-inline-json-header">
-                        <div class="mcp-inline-json-title">${escapeHtml(t('mcp.json.title'))}</div>
-                        <button class="btn btn-secondary btn-compact mcp-inline-json-copy" type="button" onclick="copyMcpJsonExample()">
-                            <span class="material-icons-round">content_copy</span>
-                            ${escapeHtml(t('action.copyJson'))}
-                        </button>
-                    </div>
-                    <p class="mcp-inline-json-caption">${t('mcp.json.caption')}</p>
-                    <pre class="mcp-inline-json-box"><code>${escapeHtml(jsonText)}</code></pre>
-                </div>
-            `;
-        }
-
-        function renderMcpHelpContent(markdown) {
-            return renderSimpleMarkdown(markdown) + buildMcpJsonAppendixHtml();
-        }
-
         function formatInlineMarkdown(text) {
             return escapeHtml(String(text || ''))
                 .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
@@ -3265,17 +3010,6 @@
             });
         }
 
-        async function loadMcpHelpMarkdown() {
-            if (mcpHelpMarkdownLoaded) return mcpHelpMarkdownSource;
-            const response = await fetch('public/help/LMStudio_MCP.md', { cache: 'no-store' });
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
-            }
-            mcpHelpMarkdownSource = await response.text();
-            mcpHelpMarkdownLoaded = true;
-            return mcpHelpMarkdownSource;
-        }
-
         async function loadDocHelpMarkdown(path) {
             if (docHelpMarkdownCache.has(path)) {
                 return docHelpMarkdownCache.get(path);
@@ -3287,41 +3021,6 @@
             const markdown = await response.text();
             docHelpMarkdownCache.set(path, markdown);
             return markdown;
-        }
-
-        async function openMcpHelpModal() {
-            const modal = document.getElementById('mcp-help-modal');
-            const markdownEl = document.getElementById('mcp-help-markdown');
-            modal.style.display = 'flex';
-
-            if (!markdownEl) return;
-
-            if (mcpHelpMarkdownLoaded && mcpHelpMarkdownSource) {
-                markdownEl.classList.remove('is-loading', 'is-error');
-                markdownEl.innerHTML = renderMcpHelpContent(extractLocalizedMarkdown(mcpHelpMarkdownSource));
-                resolveHelpAssetPaths(markdownEl, 'public/help/LMStudio_MCP.md');
-                return;
-            }
-
-            markdownEl.classList.add('is-loading');
-            markdownEl.classList.remove('is-error');
-            markdownEl.textContent = t('help.loading');
-
-            try {
-                const markdown = await loadMcpHelpMarkdown();
-                markdownEl.classList.remove('is-loading', 'is-error');
-                markdownEl.innerHTML = renderMcpHelpContent(extractLocalizedMarkdown(markdown));
-                resolveHelpAssetPaths(markdownEl, 'public/help/LMStudio_MCP.md');
-            } catch (e) {
-                console.error('Failed to load MCP help markdown:', e);
-                markdownEl.classList.remove('is-loading');
-                markdownEl.classList.add('is-error');
-                markdownEl.textContent = t('help.loadFailed');
-            }
-        }
-
-        function closeMcpHelpModal() {
-            document.getElementById('mcp-help-modal').style.display = 'none';
         }
 
         async function openDocHelpModal(title, path) {
@@ -3357,23 +3056,6 @@
         function closeDocHelpModal() {
             openDocHelpPath = '';
             document.getElementById('doc-help-modal').style.display = 'none';
-        }
-
-        async function copyMcpJsonExample() {
-            const text = buildMcpJsonExample(getCurrentMcpServerUrl());
-            try {
-                if (window.runtime && typeof window.runtime.ClipboardSetText === 'function') {
-                    await window.runtime.ClipboardSetText(text);
-                } else if (navigator.clipboard && navigator.clipboard.writeText) {
-                    await navigator.clipboard.writeText(text);
-                } else {
-                    throw new Error('Clipboard API unavailable');
-                }
-                showAlert(currentServerLanguage === 'ko' ? 'mcp.json 예시를 클립보드에 복사했습니다.' : 'mcp.json example copied to clipboard.');
-            } catch (e) {
-                console.error('Failed to copy mcp.json example:', e);
-                showAlert((currentServerLanguage === 'ko' ? 'mcp.json 예시 복사 실패: ' : 'Failed to copy mcp.json example: ') + e.message);
-            }
         }
 
         function appendDebugTraceEntry(entry) {
@@ -3494,6 +3176,15 @@
             } catch (e) {
                 console.error('Failed to open certificate folder:', e);
                 showAlert((currentServerLanguage === 'ko' ? '폴더 열기 실패: ' : 'Failed to open folder: ') + e);
+            }
+        }
+
+        async function openSkillsFolder() {
+            try {
+                await window.go.core.App.OpenSkillsFolder();
+            } catch (e) {
+                console.error('Failed to open skills folder:', e);
+                showAlert((currentServerLanguage === 'ko' ? '스킬 폴더 열기 실패: ' : 'Failed to open skills folder: ') + e);
             }
         }
 
@@ -3731,6 +3422,7 @@
 
         function openModelManagerModal() {
             document.getElementById('model-manager-modal').style.display = 'flex';
+            loadTTSConfig();
             refreshManagedModels();
         }
 
@@ -3914,14 +3606,9 @@
         function updateMcpPort() {
             const port = parseInt(document.getElementById('port-input').value);
             if (!isNaN(port)) {
-                document.getElementById('mcp-port-input').value = port + 1;
+                document.getElementById('api-port-input').value = port + 1;
             } else {
-                document.getElementById('mcp-port-input').value = '-';
-            }
-            const markdownEl = document.getElementById('mcp-help-markdown');
-            if (markdownEl && mcpHelpMarkdownLoaded && mcpHelpMarkdownSource) {
-                markdownEl.innerHTML = renderMcpHelpContent(mcpHelpMarkdownSource);
-                resolveHelpAssetPaths(markdownEl, 'public/help/LMStudio_MCP.md');
+                document.getElementById('api-port-input').value = '-';
             }
         }
 
@@ -3993,15 +3680,15 @@
                 dot.classList.add('running');
                 text.textContent = t('status.running');
 
-                const mcpPort = parseInt(port) + 1;
+                const apiPort = parseInt(port) + 1;
                 const webUrl = `https://localhost:${port}`;
-                const mcpUrl = `http://localhost:${mcpPort}/mcp/sse`;
+                const apiUrl = `http://localhost:${apiPort}/api/health`;
 
                 portDisplay.innerHTML = `
                     <div style="text-align: right; display: flex; flex-direction: column; gap: 2px;">
                         <a href="#" onclick="window.runtime.BrowserOpenURL('${webUrl}'); return false;" style="color: var(--accent-color); text-decoration: none; font-size: 13px;">Web: ${webUrl}</a>
                         <span style="color: var(--text-secondary); font-size: 11px; cursor: pointer; border-bottom: 1px dotted var(--text-secondary);" 
-                              onclick="window.runtime.ClipboardSetText('${mcpUrl}'); alert('MCP URL copied to clipboard');">MCP: ${mcpUrl}</span>
+                              onclick="window.runtime.ClipboardSetText('${apiUrl}'); alert('HTTP API URL copied to clipboard');">API: ${apiUrl}</span>
                     </div>
                 `;
 

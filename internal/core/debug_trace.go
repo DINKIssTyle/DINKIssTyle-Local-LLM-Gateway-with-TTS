@@ -116,7 +116,7 @@ func shouldBufferDebugTraceEntry(entry DebugTraceEntry) bool {
 		return true
 	case source == "chat" && strings.HasPrefix(stage, "tool_call."):
 		return true
-	case source == "mcp":
+	case source == "tool_runtime" || source == "mcp":
 		return true
 	case source == "saved-turn-title" && stage == "llm.request":
 		return true

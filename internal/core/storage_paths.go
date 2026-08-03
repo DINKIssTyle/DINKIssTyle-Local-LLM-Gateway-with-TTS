@@ -21,6 +21,8 @@ const (
 	onnxRuntimeDirName        = "onnxruntime"
 	browserDirName            = "browser"
 	chromeForTestingDirName   = "chrome-for-testing"
+	skillsDirName             = "skills"
+	userSkillsDirName         = "user"
 	legacyModelsDirName       = "models"
 	legacyTTSOnnxDirName      = "onnx"
 	legacyTTSVoiceStylesDir   = "voice_styles"
@@ -87,6 +89,10 @@ func getWritableONNXRuntimeDir() string {
 
 func getChromeForTestingInstallDir() string {
 	return joinAppDataPath(assetsDirName, browserDirName, chromeForTestingDirName)
+}
+
+func getWritableSkillsDir() string {
+	return joinAppDataPath(skillsDirName, userSkillsDirName)
 }
 
 func GetMemoryDatabasePath() string {

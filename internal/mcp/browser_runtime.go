@@ -10,7 +10,7 @@ var browserRuntimeConfig struct {
 	executablePath string
 }
 
-// SetBrowserExecutablePath configures the dedicated browser used by MCP page
+// SetBrowserExecutablePath configures the dedicated browser used by app tool page
 // reads. An empty path leaves chromedp's normal browser discovery in place.
 func SetBrowserExecutablePath(path string) {
 	browserRuntimeConfig.Lock()

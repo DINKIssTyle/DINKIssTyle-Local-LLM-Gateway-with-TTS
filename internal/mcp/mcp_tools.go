@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"html"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,6 +36,7 @@ type Tool struct {
 }
 
 type ToolContext struct {
+	RequestID      string
 	UserID         string
 	EnableMemory   bool
 	DisabledTools  []string
@@ -109,12 +112,11 @@ func (h ToolHostFuncs) ReadTerminalTail(lines int, maxWaitMs int, idleMs int) (s
 var (
 	currentHost           ToolHost
 	hostMu                sync.RWMutex
-	currentContext        = ToolContext{UserID: "default"}
-	contextMu             sync.RWMutex
 	currentHooks          ToolHooks
 	hooksMu               sync.RWMutex
 	helpDocsFS            fs.FS
 	helpDocsFSRoot        string
+	helpDocsMu            sync.RWMutex
 	verboseLoggingEnabled atomic.Uint32
 )
 
@@ -145,8 +147,8 @@ func SetToolHooks(hooks ToolHooks) {
 }
 
 func SetHelpDocsFS(fsys fs.FS, root string) {
-	contextMu.Lock()
-	defer contextMu.Unlock()
+	helpDocsMu.Lock()
+	defer helpDocsMu.Unlock()
 	helpDocsFS = fsys
 	helpDocsFSRoot = strings.Trim(strings.TrimSpace(root), "/")
 }
@@ -163,38 +165,11 @@ func getHost() ToolHost {
 	return currentHost
 }
 
-func SetContext(userID string, enableMemory bool, disabledTools []string, locationInfo string, disallowedCmds []string, disallowedDirs []string) {
-	contextMu.Lock()
-	defer contextMu.Unlock()
-	currentContext = ToolContext{
-		UserID:         userID,
-		EnableMemory:   enableMemory,
-		DisabledTools:  append([]string(nil), disabledTools...),
-		LocationInfo:   locationInfo,
-		DisallowedCmds: append([]string(nil), disallowedCmds...),
-		DisallowedDirs: append([]string(nil), disallowedDirs...),
-	}
-	log.Printf("[MCP] Set Context -> User: %s, Memory: %v, DisabledTools: %v, Location: %s, DisallowedCmds: %v, DisallowedDirs: %v", userID, enableMemory, disabledTools, locationInfo, disallowedCmds, disallowedDirs)
-}
-
-func GetContext() ToolContext {
-	contextMu.RLock()
-	defer contextMu.RUnlock()
-	return ToolContext{
-		UserID:         currentContext.UserID,
-		EnableMemory:   currentContext.EnableMemory,
-		DisabledTools:  append([]string(nil), currentContext.DisabledTools...),
-		LocationInfo:   currentContext.LocationInfo,
-		DisallowedCmds: append([]string(nil), currentContext.DisallowedCmds...),
-		DisallowedDirs: append([]string(nil), currentContext.DisallowedDirs...),
-	}
-}
-
 func GetToolList() []Tool {
 	tools := []Tool{
 		{
 			Name:        "search_web",
-			Description: "Search the internet for current information using DuckDuckGo.",
+			Description: "Search the internet for current information using the app's available search providers.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -205,7 +180,7 @@ func GetToolList() []Tool {
 		},
 		{
 			Name:        "search_web_multi",
-			Description: "Run exactly two independent DuckDuckGo searches concurrently and return both result sets in deterministic query order. Use only when the user's comparison or research question clearly needs two distinct search angles; use search_web for a single query.",
+			Description: "Run exactly two independent web searches concurrently and return both result sets in deterministic query order. Use only when the user's comparison or research question clearly needs two distinct search angles; use search_web for a single query.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -246,7 +221,7 @@ func GetToolList() []Tool {
 		},
 		{
 			Name:        "read_help",
-			Description: "Read the app's built-in help guides for setup and usage questions. Use this when the user asks how to use the app, configure LM Studio or MCP, certificates, endpoints, or built-in features. This returns a buffered help source handle plus summary; if more detail is needed, call read_buffered_source with the source_id and the user's actual question.",
+			Description: "Read the app's built-in help guides for setup and usage questions. Use this when the user asks how to use the app, configure LM Studio or app tools, certificates, endpoints, or built-in features. This returns a buffered help source handle plus summary; if more detail is needed, call read_buffered_source with the source_id and the user's actual question.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -629,10 +604,10 @@ func loadHelpDocumentContent(query string) (string, string, error) {
 }
 
 func loadHelpDocumentContentFromEmbeddedFS(query string) (string, string, error) {
-	contextMu.RLock()
+	helpDocsMu.RLock()
 	fsys := helpDocsFS
 	root := helpDocsFSRoot
-	contextMu.RUnlock()
+	helpDocsMu.RUnlock()
 
 	if fsys == nil || root == "" {
 		return "", "", fmt.Errorf("embedded help docs not configured")
@@ -846,19 +821,11 @@ func runDeleteMemoryHook(userID string, memoryID int64) (string, error) {
 }
 
 func defaultReadPageTimeoutForURL(pageURL string) time.Duration {
-	hooks := getToolHooks()
-	if hooks.ReadPageTimeoutForURL != nil {
-		return hooks.ReadPageTimeoutForURL(pageURL)
-	}
-	return defaultReadPageTimeoutForURL(pageURL)
+	return readPageTimeoutForToolURL(pageURL)
 }
 
 func defaultChallengeWaitIterations(timeout time.Duration) int {
-	hooks := getToolHooks()
-	if hooks.ChallengeWaitIterations != nil {
-		return hooks.ChallengeWaitIterations(timeout)
-	}
-	return defaultChallengeWaitIterations(timeout)
+	return challengeWaitIterationsForTool(timeout)
 }
 
 func normalizeRelaxedArgsJSON(raw []byte) []byte {
@@ -930,6 +897,7 @@ func rewriteExecuteCommandToolProxy(argumentsJSON []byte) (string, []byte) {
 }
 
 func normalizeToolArguments(toolName string, argumentsJSON []byte) (string, []byte) {
+	toolName = strings.ToLower(strings.TrimSpace(toolName))
 	argumentsJSON = normalizeRelaxedArgsJSON(argumentsJSON)
 	if toolName == "execute_command" {
 		toolName, argumentsJSON = rewriteExecuteCommandToolProxy(argumentsJSON)
@@ -956,20 +924,50 @@ func normalizeToolArguments(toolName string, argumentsJSON []byte) (string, []by
 		}
 		return ""
 	}
+	copyStringAlias := func(target string, aliases ...string) {
+		if strings.TrimSpace(readString(target)) != "" {
+			return
+		}
+		if value := readString(aliases...); value != "" {
+			raw[target] = value
+		}
+	}
+	coerceIntegerString := func(key string) {
+		value, ok := raw[key].(string)
+		if !ok {
+			return
+		}
+		parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		if err == nil {
+			raw[key] = parsed
+		}
+	}
 
 	switch toolName {
+	case "search_web", "naver_search", "search_memory":
+		copyStringAlias("query", "question", "text", "keyword")
+	case "search_web_multi":
+		if _, ok := raw["queries"]; !ok {
+			if combined := readString("query", "question", "text"); combined != "" {
+				parts := strings.FieldsFunc(combined, func(r rune) bool { return r == '|' || r == '\n' || r == ';' })
+				queries := make([]string, 0, len(parts))
+				for _, part := range parts {
+					if part = strings.TrimSpace(part); part != "" {
+						queries = append(queries, part)
+					}
+				}
+				if len(queries) == 2 {
+					raw["queries"] = queries
+				}
+			}
+		}
+	case "read_web_page":
+		copyStringAlias("url", "link", "page_url")
 	case "read_buffered_source":
-		if strings.TrimSpace(readString("query")) == "" {
-			if question := readString("question", "text"); question != "" {
-				raw["query"] = question
-			}
-		}
+		copyStringAlias("query", "question", "text")
+		coerceIntegerString("max_chunks")
 	case "read_help":
-		if strings.TrimSpace(readString("query")) == "" {
-			if question := readString("question", "text"); question != "" {
-				raw["query"] = question
-			}
-		}
+		copyStringAlias("query", "question", "text", "topic")
 	case "read_memory", "read_memory_context":
 		if _, ok := raw["memory_id"]; !ok {
 			if query := readString("query", "question", "text"); query != "" {
@@ -979,6 +977,19 @@ func normalizeToolArguments(toolName string, argumentsJSON []byte) (string, []by
 				}
 			}
 		}
+		coerceIntegerString("memory_id")
+		coerceIntegerString("chunk_index")
+	case "delete_memory":
+		coerceIntegerString("memory_id")
+	case "save_user_fact":
+		copyStringAlias("fact_key", "key", "name")
+		copyStringAlias("fact_value", "value")
+	case "delete_user_fact":
+		copyStringAlias("fact_key", "key", "name")
+	case "namu_wiki":
+		copyStringAlias("keyword", "query", "question", "text")
+	case "execute_command":
+		copyStringAlias("command", "cmd")
 	}
 
 	if bytes, err := json.Marshal(raw); err == nil {
@@ -987,26 +998,32 @@ func normalizeToolArguments(toolName string, argumentsJSON []byte) (string, []by
 	return toolName, argumentsJSON
 }
 
-func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, enableMemory bool, disabledTools []string) (string, error) {
-	start := time.Now()
-	ctx := GetContext()
-	if userID == "" {
-		userID = ctx.UserID
-	}
-	if disabledTools == nil {
-		disabledTools = ctx.DisabledTools
-	}
-	if !enableMemory {
-		enableMemory = ctx.EnableMemory
-	}
+// NormalizeToolCall preserves compatibility with common local-model argument
+// aliases before the app runtime validates and dispatches the call.
+func NormalizeToolCall(toolName string, argumentsJSON []byte) (string, []byte) {
+	return normalizeToolArguments(toolName, argumentsJSON)
+}
 
-	log.Printf("[MCP] ExecuteToolByName: %s (User: %s, Memory: %v, Loc: %s)", toolName, userID, enableMemory, ctx.LocationInfo)
+// ExecuteToolWithContext executes a tool with request-scoped state. Gateway
+// requests must use this entry point so concurrent users never share another
+// request's user policy or location.
+func ExecuteToolWithContext(toolName string, argumentsJSON []byte, ctx ToolContext) (string, error) {
+	start := time.Now()
+	userID := strings.TrimSpace(ctx.UserID)
+	if userID == "" {
+		userID = "default"
+	}
+	enableMemory := ctx.EnableMemory
+	disabledTools := append([]string(nil), ctx.DisabledTools...)
+
+	log.Printf("[Tool Runtime] Execute: %s (User: %s, Memory: %v, Loc: %s)", toolName, userID, enableMemory, ctx.LocationInfo)
 	toolName, argumentsJSON = normalizeToolArguments(toolName, argumentsJSON)
 	if !isToolConfiguredEnabled(toolName) {
 		return "", fmt.Errorf("tool '%s' is disabled by app config", toolName)
 	}
-	emitTraceEvent("mcp", "tool.start", "Executing MCP tool", traceDetailsMap(
+	emitTraceEvent("tool_runtime", "tool.start", "Executing app tool", traceDetailsMap(
 		"tool", toolName,
+		"request_id", strings.TrimSpace(ctx.RequestID),
 		"user", userID,
 		"args_bytes", len(argumentsJSON),
 		"memory", enableMemory,
@@ -1014,7 +1031,7 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 
 	for _, disabled := range disabledTools {
 		if disabled == toolName {
-			emitTraceEvent("mcp", "tool.error", "Tool blocked by user policy", traceDetailsMap("tool", toolName, "elapsed_ms", toolDurationMs(start)))
+			emitTraceEvent("tool_runtime", "tool.error", "Tool blocked by user policy", traceDetailsMap("tool", toolName, "elapsed_ms", toolDurationMs(start)))
 			return "", fmt.Errorf("tool '%s' is disabled for this user", toolName)
 		}
 	}
@@ -1061,7 +1078,7 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 		} else {
 			if fallback, ok := bufferToolFallbackAfterError(userID, toolName, args.URL, err); ok {
 				result = fallback
-				emitTraceEvent("mcp", "tool.fallback", "Using buffered fallback after page read failure", traceDetailsMap(
+				emitTraceEvent("tool_runtime", "tool.fallback", "Using buffered fallback after page read failure", traceDetailsMap(
 					"tool", toolName,
 					"user", userID,
 					"url", args.URL,
@@ -1294,14 +1311,14 @@ func ExecuteToolByName(toolName string, argumentsJSON []byte, userID string, ena
 		return result, err
 
 	default:
-		emitTraceEvent("mcp", "tool.error", "Unknown tool requested", traceDetailsMap("tool", toolName, "elapsed_ms", toolDurationMs(start)))
+		emitTraceEvent("tool_runtime", "tool.error", "Unknown tool requested", traceDetailsMap("tool", toolName, "elapsed_ms", toolDurationMs(start)))
 		return "", fmt.Errorf("tool not found: %s", toolName)
 	}
 }
 
 func emitToolResultTrace(toolName string, start time.Time, result string, err error) {
 	if err != nil {
-		emitTraceEvent("mcp", "tool.error", "Tool execution failed", traceDetailsMap(
+		emitTraceEvent("tool_runtime", "tool.error", "Tool execution failed", traceDetailsMap(
 			"tool", toolName,
 			"elapsed_ms", toolDurationMs(start),
 			"error", toolErrorDetail(err),
@@ -1309,7 +1326,7 @@ func emitToolResultTrace(toolName string, start time.Time, result string, err er
 		return
 	}
 
-	emitTraceEvent("mcp", "tool.complete", "Tool execution completed", traceDetailsMap(
+	emitTraceEvent("tool_runtime", "tool.complete", "Tool execution completed", traceDetailsMap(
 		"tool", toolName,
 		"elapsed_ms", toolDurationMs(start),
 		"result_chars", len(result),
@@ -1335,7 +1352,7 @@ const maxTimedToolCacheEntries = 64
 func SearchWeb(query string) (string, error) {
 	originalQuery := query
 	query = normalizeToolSearchQuery(query)
-	log.Printf("[MCP] Searching Web for: %s", query)
+	log.Printf("[ToolRuntime] Searching Web for: %s", query)
 	start := time.Now()
 	traceArgs := []interface{}{"query", query}
 	if query != originalQuery {
@@ -1345,24 +1362,24 @@ func SearchWeb(query string) (string, error) {
 	cacheKey := strings.ToLower(strings.Join(strings.Fields(query), " "))
 	cacheTTL := searchCacheTTLForQuery(query)
 	if cached, ok := getTimedToolCache(searchCache, &searchCacheMu, cacheKey, cacheTTL); ok {
-		emitTraceEvent("mcp", "search_web.cache_hit", "Using cached web search result", traceDetailsMap("query", query, "elapsed_ms", toolDurationMs(start), "provider", "duckduckgo"))
+		emitTraceEvent("tool_runtime", "search_web.cache_hit", "Using cached web search result", traceDetailsMap("query", query, "elapsed_ms", toolDurationMs(start), "provider", "duckduckgo"))
 		return cached, nil
 	}
 
-	emitTraceEvent("mcp", "search_web.start", "Starting web search", traceDetailsMap(traceArgs...))
+	emitTraceEvent("tool_runtime", "search_web.start", "Starting web search", traceDetailsMap(traceArgs...))
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	results, err := searchDuckDuckGo(query, client)
+	client := &http.Client{Timeout: 12 * time.Second}
+	results, provider, err := searchWebWithProviders(query, client)
 	if err != nil {
-		emitTraceEvent("mcp", "search_web.error", "Web search failed", traceDetailsMap("query", query, "elapsed_ms", toolDurationMs(start), "error", toolErrorDetail(err)))
+		emitTraceEvent("tool_runtime", "search_web.error", "Web search failed", traceDetailsMap("query", query, "elapsed_ms", toolDurationMs(start), "error", toolErrorDetail(err)))
 		return "", err
 	}
 	if len(results) == 0 {
-		emitTraceEvent("mcp", "search_web.complete", "Web search returned no parsed results", traceDetailsMap("query", query, "elapsed_ms", toolDurationMs(start), "provider", "duckduckgo"))
+		emitTraceEvent("tool_runtime", "search_web.complete", "Web search returned no parsed results", traceDetailsMap("query", query, "elapsed_ms", toolDurationMs(start), "provider", provider))
 		return "No results found or parsing failed.", nil
 	}
 
-	emitTraceEvent("mcp", "search_web.complete", "DuckDuckGo search completed", traceDetailsMap("query", query, "elapsed_ms", toolDurationMs(start), "results", len(results), "provider", "duckduckgo"))
+	emitTraceEvent("tool_runtime", "search_web.complete", "Web search completed", traceDetailsMap("query", query, "elapsed_ms", toolDurationMs(start), "results", len(results), "provider", provider))
 	formatted := formatSearchResultsWithGuidance(query, results)
 	setTimedToolCache(searchCache, &searchCacheMu, cacheKey, formatted, cacheTTL)
 	return formatted, nil
@@ -1387,7 +1404,7 @@ func searchWebMultiWith(queries []string, search func(string) (string, error)) (
 		return "", fmt.Errorf("search_web_multi requires exactly two distinct non-empty queries")
 	}
 	start := time.Now()
-	emitTraceEvent("mcp", "search_web_multi.start", "Starting parallel web searches", traceDetailsMap("queries", queries, "count", len(queries)))
+	emitTraceEvent("tool_runtime", "search_web_multi.start", "Starting parallel web searches", traceDetailsMap("queries", queries, "count", len(queries)))
 
 	outcomes := make([]parallelSearchOutcome, len(queries))
 	var wg sync.WaitGroup
@@ -1413,7 +1430,7 @@ func searchWebMultiWith(queries []string, search func(string) (string, error)) (
 		successes++
 		fmt.Fprintf(&b, "%s\n", strings.TrimSpace(outcome.Result))
 	}
-	emitTraceEvent("mcp", "search_web_multi.complete", "Parallel web searches completed", traceDetailsMap("queries", queries, "count", len(queries), "successes", successes, "failures", len(queries)-successes, "elapsed_ms", toolDurationMs(start)))
+	emitTraceEvent("tool_runtime", "search_web_multi.complete", "Parallel web searches completed", traceDetailsMap("queries", queries, "count", len(queries), "successes", successes, "failures", len(queries)-successes, "elapsed_ms", toolDurationMs(start)))
 	if successes == 0 {
 		return "", fmt.Errorf("all parallel web searches failed")
 	}
@@ -1447,8 +1464,82 @@ func searchDuckDuckGo(query string, client *http.Client) ([]webSearchResult, err
 	if err != nil {
 		return nil, err
 	}
+	if isDuckDuckGoChallengePage(htmlContent) {
+		return nil, fmt.Errorf("DuckDuckGo returned an automated-traffic challenge")
+	}
 
 	return parseDuckDuckGoResults(htmlContent, 5)
+}
+
+func searchWebWithProviders(query string, client *http.Client) ([]webSearchResult, string, error) {
+	results, duckErr := searchDuckDuckGo(query, client)
+	if duckErr == nil && len(results) > 0 {
+		return results, "duckduckgo", nil
+	}
+
+	results, bingErr := searchBingRSS(query, client)
+	if bingErr == nil && len(results) > 0 {
+		emitTraceEvent("tool_runtime", "search_web.fallback", "Using Bing RSS after DuckDuckGo did not return usable results", traceDetailsMap(
+			"query", query,
+			"from_provider", "duckduckgo",
+			"to_provider", "bing_rss",
+			"reason", toolErrorDetail(duckErr),
+		))
+		return results, "bing_rss", nil
+	}
+
+	if duckErr == nil {
+		duckErr = fmt.Errorf("DuckDuckGo returned no parsed results")
+	}
+	if bingErr == nil {
+		bingErr = fmt.Errorf("Bing RSS returned no parsed results")
+	}
+	return nil, "", fmt.Errorf("all web search providers failed: duckduckgo: %v; bing_rss: %v", duckErr, bingErr)
+}
+
+func isDuckDuckGoChallengePage(input string) bool {
+	lower := strings.ToLower(input)
+	return strings.Contains(lower, "anomaly-modal") ||
+		strings.Contains(lower, "challenge-form") ||
+		strings.Contains(lower, "bots use duckduckgo too")
+}
+
+func searchBingRSS(query string, client *http.Client) ([]webSearchResult, error) {
+	searchURL := fmt.Sprintf("https://www.bing.com/search?format=rss&count=5&q=%s", url.QueryEscape(query))
+	content, err := fetchSearchPage(client, searchURL)
+	if err != nil {
+		return nil, err
+	}
+	return parseBingRSSResults(content, 5)
+}
+
+func parseBingRSSResults(input string, limit int) ([]webSearchResult, error) {
+	var feed struct {
+		Channel struct {
+			Items []struct {
+				Title       string `xml:"title"`
+				Link        string `xml:"link"`
+				Description string `xml:"description"`
+			} `xml:"item"`
+		} `xml:"channel"`
+	}
+	if err := xml.Unmarshal([]byte(input), &feed); err != nil {
+		return nil, fmt.Errorf("parse Bing RSS: %w", err)
+	}
+	results := make([]webSearchResult, 0, len(feed.Channel.Items))
+	for _, item := range feed.Channel.Items {
+		link := normalizeSearchResultURL(item.Link, "https://www.bing.com/")
+		title := cleanSearchText(item.Title)
+		if title == "" || link == "" {
+			continue
+		}
+		results = append(results, webSearchResult{
+			Title:   title,
+			Link:    link,
+			Snippet: cleanSearchText(item.Description),
+		})
+	}
+	return deduplicateSearchResults(results, limit), nil
 }
 
 func parseDuckDuckGoResults(input string, limit int) ([]webSearchResult, error) {
@@ -1762,7 +1853,7 @@ func fetchSearchPage(client *http.Client, searchURL string) (string, error) {
 	if len(preview) > 500 {
 		preview = preview[:500]
 	}
-	log.Printf("[MCP-DEBUG] Search HTML Preview: %s", preview)
+	log.Printf("[ToolRuntime-DEBUG] Search HTML Preview: %s", preview)
 	return htmlContent, nil
 }
 
@@ -1771,12 +1862,13 @@ func cleanSearchText(input string) string {
 	input = html.UnescapeString(input)
 	input = strings.ReplaceAll(input, "\u00a0", " ")
 	input = strings.Join(strings.Fields(input), " ")
+	input = regexp.MustCompile(`\s+([.,!?;:])`).ReplaceAllString(input, `$1`)
 	return strings.TrimSpace(input)
 }
 
 // SearchNamuwiki searches Namuwiki by constructing a direct URL and reading the page.
 func SearchNamuwiki(keyword string) (string, error) {
-	log.Printf("[MCP] Searching Namuwiki for: %s", keyword)
+	log.Printf("[ToolRuntime] Searching Namuwiki for: %s", keyword)
 
 	// Construct Namuwiki URL: https://namu.wiki/w/Keyword
 	// Namuwiki uses direct path for terms
@@ -1797,12 +1889,12 @@ func SearchNamuwiki(keyword string) (string, error) {
 // Specialized for dictionary, Korea-related content, weather, and news.
 func SearchNaver(query string) (string, error) {
 	query = normalizeToolSearchQuery(query)
-	log.Printf("[MCP] Searching Naver for: %s", query)
+	log.Printf("[ToolRuntime] Searching Naver for: %s", query)
 	start := time.Now()
 	cacheKey := "naver:" + strings.ToLower(strings.Join(strings.Fields(query), " "))
 	cacheTTL := searchCacheTTLForQuery(query)
 	if cached, ok := getTimedToolCache(searchCache, &searchCacheMu, cacheKey, cacheTTL); ok {
-		emitTraceEvent("mcp", "naver_search.cache_hit", "Using cached Naver search result", traceDetailsMap("query", query, "elapsed_ms", toolDurationMs(start), "provider", "naver"))
+		emitTraceEvent("tool_runtime", "naver_search.cache_hit", "Using cached Naver search result", traceDetailsMap("query", query, "elapsed_ms", toolDurationMs(start), "provider", "naver"))
 		return cached, nil
 	}
 
@@ -1812,7 +1904,7 @@ func SearchNaver(query string) (string, error) {
 		if results, parseErr := parseNaverSearchResults(pageHTML, 5); parseErr == nil && len(results) > 0 {
 			formatted := formatSearchResultsWithGuidance(query, results)
 			setTimedToolCache(searchCache, &searchCacheMu, cacheKey, formatted, cacheTTL)
-			emitTraceEvent("mcp", "naver_search.complete", "Naver search completed via HTTP", traceDetailsMap("query", query, "elapsed_ms", toolDurationMs(start), "results", len(results), "provider", "naver", "mode", "http"))
+			emitTraceEvent("tool_runtime", "naver_search.complete", "Naver search completed via HTTP", traceDetailsMap("query", query, "elapsed_ms", toolDurationMs(start), "results", len(results), "provider", "naver", "mode", "http"))
 			return formatted, nil
 		}
 	}
@@ -1884,13 +1976,13 @@ func findNearbyNaverSnippet(n *nethtml.Node) string {
 
 // ReadPage fetches the text content of a URL using a headless browser with anti-detection.
 func ReadPage(pageURL string) (string, error) {
-	log.Printf("[MCP] Reading Page (Advanced + Anti-Detection): %s", pageURL)
+	log.Printf("[ToolRuntime] Reading Page (Advanced + Anti-Detection): %s", pageURL)
 	start := time.Now()
-	emitTraceEvent("mcp", "read_web_page.start", "Starting page read", traceDetailsMap("url", pageURL))
+	emitTraceEvent("tool_runtime", "read_web_page.start", "Starting page read", traceDetailsMap("url", pageURL))
 
 	cacheKey := strings.TrimSpace(pageURL)
 	if cached, ok := getTimedToolCache(pageCache, &pageCacheMu, cacheKey, pageCacheTTL); ok {
-		emitTraceEvent("mcp", "read_web_page.cache_hit", "Using cached page read result", traceDetailsMap("url", pageURL, "elapsed_ms", toolDurationMs(start), "chars", len(cached)))
+		emitTraceEvent("tool_runtime", "read_web_page.cache_hit", "Using cached page read result", traceDetailsMap("url", pageURL, "elapsed_ms", toolDurationMs(start), "chars", len(cached)))
 		return cached, nil
 	}
 
@@ -1899,7 +1991,7 @@ func ReadPage(pageURL string) (string, error) {
 			fastResult = fastResult[:30000] + "... (truncated)"
 		}
 		setTimedToolCache(pageCache, &pageCacheMu, cacheKey, fastResult)
-		emitTraceEvent("mcp", "read_web_page.complete", "Page read completed via fast HTTP path", traceDetailsMap("url", pageURL, "elapsed_ms", toolDurationMs(start), "chars", len(fastResult), "mode", "http_fast_path"))
+		emitTraceEvent("tool_runtime", "read_web_page.complete", "Page read completed via fast HTTP path", traceDetailsMap("url", pageURL, "elapsed_ms", toolDurationMs(start), "chars", len(fastResult), "mode", "http_fast_path"))
 		return fastResult, nil
 	}
 
@@ -1960,7 +2052,7 @@ func ReadPage(pageURL string) (string, error) {
 					strings.Contains(titleLower, "attention required") ||
 					strings.Contains(titleLower, "checking your browser") ||
 					strings.Contains(titleLower, "please wait") {
-					log.Printf("[MCP] Cloudflare challenge detected (title: %s), waiting... (%d/%d)", title, i+1, maxChallengeWait)
+					log.Printf("[ToolRuntime] Cloudflare challenge detected (title: %s), waiting... (%d/%d)", title, i+1, maxChallengeWait)
 					time.Sleep(1 * time.Second)
 					continue
 				}
@@ -2056,7 +2148,7 @@ func ReadPage(pageURL string) (string, error) {
 	)
 
 	if err != nil {
-		emitTraceEvent("mcp", "read_web_page.error", "Page read failed", traceDetailsMap("url", pageURL, "elapsed_ms", toolDurationMs(start), "error", toolErrorDetail(err)))
+		emitTraceEvent("tool_runtime", "read_web_page.error", "Page read failed", traceDetailsMap("url", pageURL, "elapsed_ms", toolDurationMs(start), "error", toolErrorDetail(err)))
 		return "", fmt.Errorf("failed to read page: %v", err)
 	}
 
@@ -2066,7 +2158,7 @@ func ReadPage(pageURL string) (string, error) {
 	}
 	setTimedToolCache(pageCache, &pageCacheMu, cacheKey, res)
 
-	emitTraceEvent("mcp", "read_web_page.complete", "Page read completed", traceDetailsMap("url", pageURL, "elapsed_ms", toolDurationMs(start), "chars", len(res)))
+	emitTraceEvent("tool_runtime", "read_web_page.complete", "Page read completed", traceDetailsMap("url", pageURL, "elapsed_ms", toolDurationMs(start), "chars", len(res)))
 	return res, nil
 }
 
@@ -2279,7 +2371,7 @@ func defaultNormalizeSearchQuery(query string) string {
 
 // ExecuteCommand runs a shell command with restrictions
 func ExecuteCommand(command string, disallowedCmds []string, disallowedDirs []string) (string, error) {
-	log.Printf("[MCP] ExecuteCommand: %s", command)
+	log.Printf("[ToolRuntime] ExecuteCommand: %s", command)
 
 	// 1. Basic Security Checks
 	if strings.TrimSpace(command) == "" {
@@ -2324,7 +2416,7 @@ func ExecuteCommand(command string, disallowedCmds []string, disallowedDirs []st
 	// Capture Output
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Sprintf("Error: %v\nOutput: %s", err, string(output)), nil
+		return fmt.Sprintf("Command failed: %v\nOutput:\n%s", err, strings.TrimSpace(string(output))), err
 	}
 
 	return string(output), nil

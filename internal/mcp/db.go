@@ -161,6 +161,7 @@ func CloseDB() {
 	if db != nil {
 		log.Println("[DB] Closing SQLite database.")
 		_ = db.Close()
+		db = nil
 	}
 	memoryRetentionSchemaMu.Lock()
 	memoryRetentionSchemaChecked = false
@@ -3222,7 +3223,7 @@ func DeleteUserProfileFactByID(userID string, factID int64) error {
 func FormatUserProfileForPrompt(userID string) string {
 	facts, err := GetUserProfileFacts(userID)
 	if err != nil {
-		log.Printf("[MCP] Failed to load user profile facts: %v", err)
+		log.Printf("[ToolRuntime] Failed to load user profile facts: %v", err)
 		return ""
 	}
 	if len(facts) == 0 {

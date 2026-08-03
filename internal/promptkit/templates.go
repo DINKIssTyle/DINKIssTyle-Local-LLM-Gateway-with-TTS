@@ -2,14 +2,15 @@ package promptkit
 
 import "fmt"
 
-
 // SelfCorrectionPromptTemplate returns the prompt to ask the model to fix its tool call format.
 func SelfCorrectionPromptTemplate(badContent string) string {
 	return fmt.Sprintf(`
-Return only one valid <tool_call> block.
+Return only one valid tool-specific XML element.
 Do not explain anything.
 Do not include markdown.
-Use strict JSON for arguments.
+Use the registered tool name for both tags and strict JSON for the body.
+General form: <tool_name>{...}</tool_name>
+Do not use Python/function syntax such as tool_name(key="value").
 
 Tool reminders:
 - read_buffered_source uses {"source_id":"...","query":"..."}.
@@ -25,7 +26,7 @@ Malformed output:
 %s
 
 Valid example:
-<tool_call>{"name":"search_web","arguments":{"query":"weather in Seoul"}}</tool_call>
+<search_web>{"query":"weather in Seoul"}</search_web>
 `, badContent[:min(len(badContent), 100)])
 }
 

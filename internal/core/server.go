@@ -18,6 +18,7 @@ import (
 	"dinkisstyle-chat/internal/chatharness"
 	"dinkisstyle-chat/internal/mcp"
 	"dinkisstyle-chat/internal/promptkit"
+	"dinkisstyle-chat/internal/toolruntime"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -324,12 +325,40 @@ func normalizeBufferedToolMatch(toolName string, toolArgsStr string) (string, st
 	}
 
 	var wrapper struct {
-		Name      string      `json:"name"`
-		Arguments interface{} `json:"arguments"`
+		Name          string      `json:"name"`
+		Tool          string      `json:"tool"`
+		ToolName      string      `json:"tool_name"`
+		Arguments     interface{} `json:"arguments"`
+		ToolArguments interface{} `json:"tool_arguments"`
+		Parameters    interface{} `json:"parameters"`
+		Params        interface{} `json:"params"`
 	}
 	if err := json.Unmarshal([]byte(toolArgsStr), &wrapper); err == nil {
-		if strings.TrimSpace(wrapper.Name) != "" && wrapper.Arguments != nil {
-			return strings.TrimSpace(wrapper.Name), toolArgsStr, wrapper.Arguments, true
+		wrapperName := strings.TrimSpace(wrapper.Name)
+		if wrapperName == "" {
+			wrapperName = strings.TrimSpace(wrapper.Tool)
+		}
+		if wrapperName == "" {
+			wrapperName = strings.TrimSpace(wrapper.ToolName)
+		}
+		wrapperArguments := wrapper.Arguments
+		if wrapperArguments == nil {
+			wrapperArguments = wrapper.ToolArguments
+		}
+		if wrapperArguments == nil {
+			wrapperArguments = wrapper.Parameters
+		}
+		if wrapperArguments == nil {
+			wrapperArguments = wrapper.Params
+		}
+		if wrapperName != "" {
+			if wrapperArguments == nil {
+				wrapperArguments = map[string]interface{}{}
+			}
+			argumentBytes, marshalErr := json.Marshal(wrapperArguments)
+			if marshalErr == nil {
+				return wrapperName, string(argumentBytes), wrapperArguments, true
+			}
 		}
 	}
 
@@ -338,6 +367,43 @@ func normalizeBufferedToolMatch(toolName string, toolArgsStr string) (string, st
 		return toolName, toolArgsStr, args, false
 	}
 	return toolName, toolArgsStr, nil, false
+}
+
+func parseJSONToolCall(raw string) (string, string, interface{}, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if strings.HasPrefix(trimmed, "```") {
+		match := regexp.MustCompile("(?is)^```(?:json)?\\s*([\\s\\S]*?)\\s*```").FindStringSubmatch(trimmed)
+		if len(match) < 2 {
+			return "", "", nil, false
+		}
+		trimmed = strings.TrimSpace(match[1])
+	}
+	if !strings.HasPrefix(trimmed, "{") || !strings.HasSuffix(trimmed, "}") {
+		return "", "", nil, false
+	}
+	name, argumentsJSON, arguments, wrapper := normalizeBufferedToolMatch("", trimmed)
+	if !wrapper || strings.TrimSpace(name) == "" || arguments == nil {
+		return "", "", nil, false
+	}
+	return name, argumentsJSON, arguments, true
+}
+
+func looksLikeJSONToolCallPrefix(raw string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(raw))
+	return strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "```json")
+}
+
+func looksLikeJSONToolCallPossiblePrefix(raw string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(raw))
+	if trimmed == "" {
+		return false
+	}
+	for _, marker := range []string{"```json", "{"} {
+		if strings.HasPrefix(marker, trimmed) {
+			return true
+		}
+	}
+	return false
 }
 
 func parseXMLLikeToolCall(raw string) (string, string, interface{}, bool) {
@@ -381,6 +447,20 @@ func parseXMLLikeToolCall(raw string) (string, string, interface{}, bool) {
 		return "", "", nil, false
 	}
 	body := trimmed[bodyStart+1 : closeIdx]
+	body = strings.TrimSpace(body)
+	if body == "" {
+		emptyArgs := map[string]interface{}{}
+		return toolName, `{}`, emptyArgs, true
+	}
+	if body != "" {
+		var jsonArgs interface{}
+		if err := json.Unmarshal([]byte(body), &jsonArgs); err == nil {
+			argBytes, marshalErr := json.Marshal(jsonArgs)
+			if marshalErr == nil {
+				return toolName, string(argBytes), jsonArgs, true
+			}
+		}
+	}
 
 	argPattern := regexp.MustCompile(`(?s)<arg_key>\s*([^<]+?)\s*</arg_key>\s*<arg_value>\s*([\s\S]*?)\s*</arg_value>`)
 	argMatches := argPattern.FindAllStringSubmatch(body, -1)
@@ -398,22 +478,16 @@ func parseXMLLikeToolCall(raw string) (string, string, interface{}, bool) {
 	}
 
 	if len(args) == 0 {
-		tagArgPattern := regexp.MustCompile(`(?s)<([a-zA-Z_][a-zA-Z0-9_]*)>\s*([\s\S]*?)\s*</\1>`)
-		tagMatches := tagArgPattern.FindAllStringSubmatch(body, -1)
-		for _, match := range tagMatches {
-			if len(match) < 3 {
+		tagArgPattern := regexp.MustCompile(`(?s)<([a-zA-Z_][a-zA-Z0-9_]*)>\s*([^<]*?)\s*</([a-zA-Z_][a-zA-Z0-9_]*)>`)
+		for _, match := range tagArgPattern.FindAllStringSubmatch(body, -1) {
+			if len(match) < 4 || !strings.EqualFold(strings.TrimSpace(match[1]), strings.TrimSpace(match[3])) {
 				continue
 			}
 			key := strings.TrimSpace(match[1])
 			value := strings.TrimSpace(match[2])
-			if key == "" || value == "" {
-				continue
+			if key != "" && value != "" {
+				args[key] = value
 			}
-			switch key {
-			case "tool_call", "remark", "think":
-				continue
-			}
-			args[key] = value
 		}
 	}
 	if len(args) == 0 {
@@ -424,7 +498,7 @@ func parseXMLLikeToolCall(raw string) (string, string, interface{}, bool) {
 	if err != nil {
 		return "", "", nil, false
 	}
-	return toolName, string(argBytes), args, false
+	return toolName, string(argBytes), args, true
 }
 
 func buildImplicitToolArgs(toolName string, explicitText string, userText string) (string, interface{}, bool) {
@@ -512,21 +586,52 @@ func looksLikeToolMarkup(raw string) bool {
 	if trimmed == "" {
 		return false
 	}
+	if _, _, _, ok := parseJSONToolCall(raw); ok {
+		return true
+	}
+	hasToolName := strings.Contains(trimmed, `"tool"`) ||
+		strings.Contains(trimmed, `"name"`) ||
+		strings.Contains(trimmed, `"tool_name"`)
+	hasToolArguments := strings.Contains(trimmed, `"arguments"`) ||
+		strings.Contains(trimmed, `"tool_arguments"`) ||
+		strings.Contains(trimmed, `"parameters"`) ||
+		strings.Contains(trimmed, `"params"`)
+	if (strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "```json")) && hasToolName && hasToolArguments {
+		return true
+	}
 	markers := []string{
 		"<tool_call",
+		"</tool_call",
+		"<tool_code",
+		"</tool_code",
+		"<|tool_code|>",
+		"<|/tool_code|>",
 		"<execute_command",
+		"</execute_command",
 		"<search_memory",
+		"</search_memory",
 		"<read_memory",
+		"</read_memory",
 		"<read_memory_context",
+		"</read_memory_context",
 		"<read_buffered_source",
+		"</read_buffered_source",
 		"<read_help",
+		"</read_help",
 		"<search_web",
+		"</search_web",
 		"<naver_search",
+		"</naver_search",
 		"<namu_wiki",
+		"</namu_wiki",
 		"<arg_key",
+		"</arg_key",
 		"<arg_value",
+		"</arg_value",
 		"<query>",
+		"</query>",
 		"<source_id>",
+		"</source_id>",
 	}
 	for _, marker := range markers {
 		if strings.Contains(trimmed, marker) {
@@ -534,6 +639,249 @@ func looksLikeToolMarkup(raw string) bool {
 		}
 	}
 	return false
+}
+
+func classifyPromptToolMarkup(raw string, tools []promptkit.ToolDefinition) (recognized bool, possiblePrefix bool) {
+	trimmed := strings.ToLower(strings.TrimSpace(raw))
+	if trimmed == "" {
+		return false, false
+	}
+	markers := []string{"<tool_call>", "<tool_code>", "<|tool_code|>"}
+	for _, tool := range tools {
+		name := strings.ToLower(strings.TrimSpace(tool.Name))
+		if name != "" {
+			markers = append(markers, "<"+name+">", name+"(", name+" (")
+		}
+	}
+	for _, marker := range markers {
+		if strings.HasPrefix(trimmed, marker) {
+			return true, true
+		}
+		if strings.HasPrefix(marker, trimmed) {
+			possiblePrefix = true
+		}
+	}
+	return false, possiblePrefix
+}
+
+func hasPromptToolClosingTag(raw string, tools []promptkit.ToolDefinition) bool {
+	lower := strings.ToLower(raw)
+	if strings.Contains(lower, "</tool_call>") {
+		return true
+	}
+	if strings.Contains(lower, "</tool_code>") || strings.Contains(lower, "<|/tool_code|>") {
+		return true
+	}
+	for _, tool := range tools {
+		name := strings.ToLower(strings.TrimSpace(tool.Name))
+		if name != "" && strings.Contains(lower, "</"+name+">") {
+			return true
+		}
+		trimmed := strings.TrimSpace(lower)
+		if name != "" && (strings.HasPrefix(trimmed, name+"(") || strings.HasPrefix(trimmed, name+" (")) && strings.HasSuffix(trimmed, ")") {
+			return true
+		}
+	}
+	return false
+}
+
+func isRegisteredPromptTool(name string, tools []promptkit.ToolDefinition) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	for _, tool := range tools {
+		if strings.EqualFold(strings.TrimSpace(tool.Name), name) {
+			return true
+		}
+	}
+	return false
+}
+
+func parsePromptToolMarkup(raw string) (string, string, interface{}, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if name, argumentsJSON, arguments, ok := parseJSONToolCall(trimmed); ok {
+		return name, argumentsJSON, arguments, true
+	}
+	if name, argumentsJSON, arguments, ok := parseToolCodeCall(trimmed); ok {
+		return name, argumentsJSON, arguments, true
+	}
+	if strings.HasPrefix(strings.ToLower(trimmed), "<tool_call>") {
+		match := regexp.MustCompile(`(?s)^\s*<tool_call>\s*([\s\S]*?)\s*</tool_call>\s*$`).FindStringSubmatch(raw)
+		if len(match) < 2 {
+			return "", "", nil, false
+		}
+		name, argumentsJSON, arguments, _ := normalizeBufferedToolMatch("", strings.TrimSpace(match[1]))
+		if strings.TrimSpace(name) == "" || arguments == nil {
+			return "", "", nil, false
+		}
+		return name, argumentsJSON, arguments, true
+	}
+	if name, argumentsJSON, arguments, ok := parseXMLLikeToolCall(raw); ok {
+		return name, argumentsJSON, arguments, true
+	}
+	if name, argumentsJSON, arguments, ok := parseFunctionLikeToolCall(raw); ok {
+		return name, argumentsJSON, arguments, true
+	}
+	return "", "", nil, false
+}
+
+func parseToolCodeCall(raw string) (string, string, interface{}, bool) {
+	trimmed := strings.TrimSpace(raw)
+	match := regexp.MustCompile(`(?is)^\s*(?:<tool_code>|<\|tool_code\|>)\s*([\s\S]*?)\s*(?:</tool_code>|<\|/tool_code\|>)\s*$`).FindStringSubmatch(trimmed)
+	if len(match) < 2 {
+		return "", "", nil, false
+	}
+	body := strings.TrimSpace(match[1])
+	if printMatch := regexp.MustCompile(`(?is)^print\s*\(([\s\S]*)\)\s*$`).FindStringSubmatch(body); len(printMatch) >= 2 {
+		body = strings.TrimSpace(printMatch[1])
+	}
+	return parseFunctionLikeToolCall(body)
+}
+
+func parseFunctionLikeToolCall(raw string) (string, string, interface{}, bool) {
+	match := regexp.MustCompile(`(?s)^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\(([\s\S]*)\)\s*$`).FindStringSubmatch(raw)
+	if len(match) < 3 {
+		return "", "", nil, false
+	}
+	toolName := strings.TrimSpace(match[1])
+	inner := strings.TrimSpace(match[2])
+	args := map[string]interface{}{}
+	if inner != "" {
+		parts, ok := splitFunctionLikeArguments(inner)
+		if !ok {
+			return "", "", nil, false
+		}
+		keyPattern := regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+		for _, part := range parts {
+			assignment := topLevelAssignmentIndex(part)
+			if assignment < 0 {
+				return "", "", nil, false
+			}
+			key := strings.TrimSpace(part[:assignment])
+			if !keyPattern.MatchString(key) {
+				return "", "", nil, false
+			}
+			value, ok := parseFunctionLikeValue(strings.TrimSpace(part[assignment+1:]))
+			if !ok {
+				return "", "", nil, false
+			}
+			args[key] = value
+		}
+	}
+	argumentsJSON, err := json.Marshal(args)
+	if err != nil {
+		return "", "", nil, false
+	}
+	return toolName, string(argumentsJSON), args, true
+}
+
+func splitFunctionLikeArguments(raw string) ([]string, bool) {
+	parts := []string{}
+	start := 0
+	quote := byte(0)
+	escaped := false
+	depth := 0
+	for i := 0; i < len(raw); i++ {
+		ch := raw[i]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch ch {
+		case '\'', '"':
+			quote = ch
+		case '{', '[', '(':
+			depth++
+		case '}', ']', ')':
+			depth--
+			if depth < 0 {
+				return nil, false
+			}
+		case ',':
+			if depth == 0 {
+				part := strings.TrimSpace(raw[start:i])
+				if part == "" {
+					return nil, false
+				}
+				parts = append(parts, part)
+				start = i + 1
+			}
+		}
+	}
+	if quote != 0 || escaped || depth != 0 {
+		return nil, false
+	}
+	last := strings.TrimSpace(raw[start:])
+	if last == "" {
+		return nil, false
+	}
+	return append(parts, last), true
+}
+
+func topLevelAssignmentIndex(raw string) int {
+	quote := byte(0)
+	escaped := false
+	depth := 0
+	for i := 0; i < len(raw); i++ {
+		ch := raw[i]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch ch {
+		case '\'', '"':
+			quote = ch
+		case '{', '[', '(':
+			depth++
+		case '}', ']', ')':
+			depth--
+		case '=':
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func parseFunctionLikeValue(raw string) (interface{}, bool) {
+	if raw == "" {
+		return nil, false
+	}
+	if strings.HasPrefix(raw, `"`) {
+		value, err := strconv.Unquote(raw)
+		return value, err == nil
+	}
+	if strings.HasPrefix(raw, "'") && strings.HasSuffix(raw, "'") && len(raw) >= 2 {
+		inner := raw[1 : len(raw)-1]
+		inner = strings.NewReplacer(`\\`, `\`, `\'`, `'`, `\n`, "\n", `\t`, "\t").Replace(inner)
+		return inner, true
+	}
+	var value interface{}
+	if err := json.Unmarshal([]byte(raw), &value); err == nil {
+		return value, true
+	}
+	if strings.ContainsAny(raw, ",()") {
+		return nil, false
+	}
+	return raw, true
 }
 
 func normalizeModelChannelMarkup(raw string) string {
@@ -1468,6 +1816,26 @@ func isWebEvidenceTool(toolName string) bool {
 	default:
 		return false
 	}
+}
+
+func availableToolNames(tools []promptkit.ToolDefinition) []string {
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		if name := strings.TrimSpace(tool.Name); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+func completedToolNames(tools []promptkit.ToolDefinition, usage map[string]int) []string {
+	names := make([]string, 0, len(usage))
+	for _, name := range availableToolNames(tools) {
+		if usage[name] > 0 {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 func isWebSearchProviderTool(toolName string) bool {
@@ -2570,12 +2938,6 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	mux.HandleFunc("/api/saved-turns", AuthMiddleware(authMgr, handleSavedTurns()))
 	mux.HandleFunc("/api/saved-turns/title-refresh", AuthMiddleware(authMgr, handleSavedTurnTitleRefresh()))
 
-	// MCP Endpoints (Conditional)
-	// MCP Endpoints (Always Enabled if server runs)
-	log.Println("[Server] MCP Support Active")
-	mux.HandleFunc("/mcp/sse", mcp.HandleSSE)
-	mux.HandleFunc("/mcp/messages", mcp.HandleMessages)
-
 	// Certificate Download Endpoint
 	mux.HandleFunc("/api/cert/download", func(w http.ResponseWriter, r *http.Request) {
 		certPath, _, _ := getActiveCertPaths(GetAppDataDir(), app.GetCertDomain())
@@ -2596,7 +2958,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 				SecondaryModel      *string               `json:"secondary_model"`
 				LLMMode             string                `json:"llm_mode"`
 				ContextStrategy     *string               `json:"context_strategy"`
-				EnableMCP           *bool                 `json:"enable_mcp"`
+				EnableTools         *bool                 `json:"enable_tools"`
 				EnableMemory        *bool                 `json:"enable_memory"`
 				StatefulTurnLimit   *int                  `json:"stateful_turn_limit"`
 				StatefulCharBudget  *int                  `json:"stateful_char_budget"`
@@ -2604,6 +2966,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 				EmbeddingConfig     *EmbeddingModelConfig `json:"embedding_config"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&newCfg); err == nil {
+				enableToolsUpdate := newCfg.EnableTools
 				// Check for authenticated user
 				userID := r.Header.Get("X-User-ID")
 				var user *User
@@ -2647,23 +3010,13 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 						user.Settings.ContextStrategy = &value
 						updated = true
 					}
-					if newCfg.EnableMCP != nil {
-						allowMCP := *newCfg.EnableMCP
-						if mode := strings.TrimSpace(strings.ToLower(newCfg.LLMMode)); mode != "" && mode != "stateful" {
-							allowMCP = false
-						} else if newCfg.LLMMode == "" && user.Settings.LLMMode != nil && strings.TrimSpace(strings.ToLower(*user.Settings.LLMMode)) != "stateful" {
-							allowMCP = false
-						}
-						user.Settings.EnableMCP = &allowMCP
+					if enableToolsUpdate != nil {
+						user.Settings.EnableTools = enableToolsUpdate
 						updated = true
 					}
 					if newCfg.EnableMemory != nil {
 						user.Settings.EnableMemory = newCfg.EnableMemory
 						updated = true
-						// Sync to MCP context
-						// We need disallowed lists here too, but handleConfig is partial update.
-						// Let's retrieve full user settings to be safe.
-						mcp.SetContext(user.ID, *newCfg.EnableMemory, user.Settings.DisabledTools, "", user.Settings.DisallowedCommands, user.Settings.DisallowedDirectories)
 					}
 					if newCfg.StatefulTurnLimit != nil {
 						value := *newCfg.StatefulTurnLimit
@@ -2725,14 +3078,8 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 						if newCfg.LLMMode != "" {
 							app.SetLLMMode(newCfg.LLMMode)
 						}
-						if newCfg.EnableMCP != nil {
-							allowMCP := *newCfg.EnableMCP
-							if strings.TrimSpace(strings.ToLower(newCfg.LLMMode)) != "" && strings.TrimSpace(strings.ToLower(newCfg.LLMMode)) != "stateful" {
-								allowMCP = false
-							} else if strings.TrimSpace(strings.ToLower(newCfg.LLMMode)) == "" && strings.TrimSpace(strings.ToLower(app.llmMode)) != "stateful" {
-								allowMCP = false
-							}
-							app.SetEnableMCP(allowMCP)
+						if enableToolsUpdate != nil {
+							app.SetEnableTools(*enableToolsUpdate)
 						}
 						if newCfg.EnableMemory != nil {
 							// Global memory toggle is removed, handled per-user
@@ -2755,7 +3102,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 			"context_strategy":      defaultContextStrategyForMode(app.llmMode),
 			"secondary_model":       "",
 			"enable_tts":            app.enableTTS,
-			"enable_mcp":            app.enableMCP,
+			"enable_tools":          app.enableTools,
 			"enable_memory":         false, // Global default is false, overridden by user settings below
 			"stateful_turn_limit":   8,
 			"stateful_char_budget":  32000,
@@ -2784,8 +3131,8 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 				if user.Settings.SecondaryModel != nil {
 					resp["secondary_model"] = *user.Settings.SecondaryModel
 				}
-				if user.Settings.EnableMCP != nil {
-					resp["enable_mcp"] = *user.Settings.EnableMCP
+				if user.Settings.EnableTools != nil {
+					resp["enable_tools"] = *user.Settings.EnableTools
 				}
 				if user.Settings.EnableMemory != nil {
 					resp["enable_memory"] = *user.Settings.EnableMemory
@@ -2809,10 +3156,6 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 				// If the user wants to clear it, they send empty string.
 				// But we assume if they set it, they know it.
 			}
-		}
-
-		if modeValue, ok := resp["llm_mode"].(string); ok && strings.TrimSpace(strings.ToLower(modeValue)) != "stateful" {
-			resp["enable_mcp"] = false
 		}
 
 		json.NewEncoder(w).Encode(resp)
@@ -4030,7 +4373,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	tokenRaw := app.llmApiToken
 	llmMode := app.llmMode
 	contextStrategy := defaultContextStrategyForMode(llmMode)
-	enableMCP := app.enableMCP
+	enableTools := app.enableTools
 	enableMemory := false // Default to false (Secure by default for unauthenticated)
 
 	var disabledTools []string
@@ -4083,8 +4426,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			if user.Settings.ContextStrategy != nil {
 				contextStrategy = normalizeContextStrategyForMode(llmMode, *user.Settings.ContextStrategy)
 			}
-			if user.Settings.EnableMCP != nil {
-				enableMCP = *user.Settings.EnableMCP
+			if user.Settings.EnableTools != nil {
+				enableTools = *user.Settings.EnableTools
 			}
 			if user.Settings.EnableMemory != nil {
 				enableMemory = *user.Settings.EnableMemory
@@ -4114,13 +4457,25 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	if requestContextStrategy != "" {
 		contextStrategy = normalizeContextStrategyForMode(llmMode, requestContextStrategy)
 	}
-	if strings.TrimSpace(strings.ToLower(llmMode)) != "stateful" {
-		enableMCP = false
+	toolExecCtx := toolruntime.ExecutionContext{
+		RequestID:             clientTurnID,
+		UserID:                userID,
+		EnableMemory:          enableMemory,
+		LocationInfo:          locationInfo,
+		DisabledTools:         disabledTools,
+		DisallowedCommands:    disallowedCmds,
+		DisallowedDirectories: disallowedDirs,
 	}
-
-	// Set MCP Context for this user interaction
-	// This ensures that when LM Studio calls back to MCP, it has the correct context
-	mcp.SetContext(userID, enableMemory, disabledTools, locationInfo, disallowedCmds, disallowedDirs)
+	var promptTools []promptkit.ToolDefinition
+	if enableTools {
+		for _, definition := range toolruntime.Default.List(toolExecCtx) {
+			promptTools = append(promptTools, promptkit.ToolDefinition{
+				Name:        definition.Name,
+				Description: definition.Description,
+				InputSchema: definition.InputSchema,
+			})
+		}
+	}
 	log.Printf("[handleChat-DEBUG] userID=%s, enableMemory=%v, disabledTools=%v, Location=%s, DisallowedCmds=%v, DisallowedDirs=%v", userID, enableMemory, disabledTools, locationInfo, disallowedCmds, disallowedDirs)
 	AddDebugTrace("chat", "request.context", "Resolved chat execution context", map[string]interface{}{
 		"user":                userID,
@@ -4223,7 +4578,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			"user":                     userID,
 			"mode":                     llmMode,
 			"memory_enabled":           enableMemory,
-			"mcp_enabled":              enableMCP,
+			"tools_enabled":            enableTools,
 			"recent_context_chars":     len([]rune(strings.TrimSpace(recentContext))),
 			"recent_context_empty":     strings.TrimSpace(recentContext) == "",
 			"recent_context_preview":   compactText(recentContext, 420),
@@ -4263,13 +4618,14 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		TokenRaw:          tokenRaw,
 		LLMMode:           llmMode,
 		ContextStrategy:   contextStrategy,
-		EnableMCP:         enableMCP,
+		EnableTools:       enableTools,
 		EnableMemory:      enableMemory,
 		RecentContext:     recentContext,
 		MemorySnapshot:    memorySnapshot,
 		ActiveContext:     autoContext,
 		RetrievalInjected: strings.TrimSpace(recentContext) != "" || strings.TrimSpace(memorySnapshot) != "" || strings.TrimSpace(autoContext) != "",
 		UserProfileFacts:  userProfileFacts,
+		Tools:             promptTools,
 	})
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to prepare chat request: %v", err), http.StatusInternalServerError)
@@ -4282,8 +4638,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	if preparedRequest.InjectedPrompt {
 		log.Println("[handleChat] Injected or deduplicated System Prompt instructions")
 	}
-	if !enableMCP || llmMode == "standard" {
-		log.Printf("[handleChat] MCP integration limited (EnableMCP=%v, Mode=%s, ContextStrategy=%s)", enableMCP, llmMode, contextStrategy)
+	if !enableTools {
+		log.Printf("[handleChat] App tools disabled (Mode=%s, ContextStrategy=%s)", llmMode, contextStrategy)
 	}
 
 	body = preparedRequest.Body
@@ -4609,10 +4965,16 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	webEvidenceBudget := webEvidenceToolBudget
 	webSearchProviderLimit := webSearchProviderBudget
 	bufferedSourceReadLimit := bufferedSourceReadBudget
-	if isDeepWebResearchRequest(initialUserInputText) {
+	bulkToolTestRequest := chatharness.IsBulkToolTestRequest(initialUserInputText)
+	if isDeepWebResearchRequest(initialUserInputText) || bulkToolTestRequest {
 		webEvidenceBudget = deepWebEvidenceToolBudget
 		webSearchProviderLimit = deepWebSearchProviderBudget
 		bufferedSourceReadLimit = deepBufferedSourceReadBudget
+	}
+	if bulkToolTestRequest {
+		// A complete catalog smoke test needs four provider tools, while
+		// search_web_multi consumes two provider slots by design.
+		webSearchProviderLimit = 6
 	}
 	previousResponseRetryUsed := false
 	discardStatefulResponseIDForTurn := false
@@ -4692,8 +5054,11 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	}
 
 	// --- TURN LOOP START ---
-	// We allow up to 10 turns (tool call cycles) per request
-	for turn := 0; turn < 10; turn++ {
+	maxToolTurns := 10
+	if bulkToolTestRequest {
+		maxToolTurns = 24
+	}
+	for turn := 0; turn < maxToolTurns; turn++ {
 		turnStart := time.Now()
 		toolExecutedThisTurn := false
 		nativeToolLoopDetected := false
@@ -4707,7 +5072,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		nativeToolSignatureCounts := make(map[string]int)
 		var lastToolName string
 		var lastToolArgsStr string
+		var lastToolCallID string
 		var lastSavedBufferForTurn string
+		chatToolCalls := chatharness.NewChatToolAccumulator()
 
 		// Variables for tool execution (shared between Regex and JSON modes)
 		var toolName string
@@ -4799,12 +5166,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			if resp.StatusCode == http.StatusUnauthorized || strings.Contains(errorMsg, "invalid_api_key") || strings.Contains(errorMsg, "Malformed LM Studio API token") {
 				// Frontend will detect this prefix and show translated message
 				http.Error(w, "LM_STUDIO_AUTH_ERROR: "+errorMsg, resp.StatusCode)
-				return
-			}
-
-			// Check for MCP Permission Error (403)
-			if resp.StatusCode == http.StatusForbidden && strings.Contains(errorMsg, "Permission denied to use plugin") {
-				http.Error(w, "LM_STUDIO_MCP_ERROR: "+errorMsg, resp.StatusCode)
 				return
 			}
 
@@ -4907,8 +5268,44 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				// 1. Check for Standard OpenAI [DONE]
 				if dataStr == "[DONE]" {
 					log.Println("[handleChat-DEBUG] [DONE] signal received (Standard)")
+					if enableTools && chatToolCalls.HasCalls() {
+						continue
+					}
+					if enableTools && isBuffering && strings.TrimSpace(buffer) != "" {
+						if parsedTool, parsedArgsJSON, parsedArgs, ok := parsePromptToolMarkup(buffer); ok && isRegisteredPromptTool(parsedTool, promptTools) {
+							toolExecutedThisTurn = true
+							lastToolName = parsedTool
+							lastToolArgsStr = parsedArgsJSON
+							lastSavedBufferForTurn = fullResponse
+							startEvt := map[string]interface{}{"type": "tool_call.start", "tool": parsedTool}
+							startBytes, _ := json.Marshal(startEvt)
+							appendChatEvent("assistant", "tool_call.start", startEvt)
+							emitStreamChunk(fmt.Sprintf("data: %s", string(startBytes)))
+							argsEvt := map[string]interface{}{"type": "tool_call.arguments", "tool": parsedTool, "arguments": parsedArgs}
+							argsBytes, _ := json.Marshal(argsEvt)
+							appendChatEvent("assistant", "tool_call.arguments", argsEvt)
+							emitStreamChunk(fmt.Sprintf("data: %s", string(argsBytes)))
+							buffer = ""
+							isBuffering = false
+							toolPattern = nil
+							continue
+						}
+					}
+					if enableTools && isBuffering && looksLikeJSONToolCallPrefix(buffer) {
+						break streamScanLoop
+					}
 					// If buffering, flush any remaining buffer as content before sending DONE
 					if isBuffering && len(buffer) > 0 {
+						recognized, _ := classifyPromptToolMarkup(buffer, promptTools)
+						if enableTools && (recognized || looksLikeToolMarkup(buffer)) {
+							needsCorrection = true
+							if badContentCapture == "" {
+								badContentCapture = buffer
+							}
+							buffer = ""
+							emitStreamChunk(line)
+							continue
+						}
 						payload := map[string]interface{}{
 							"choices": []interface{}{
 								map[string]interface{}{
@@ -4931,12 +5328,79 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 				// 2. Parse JSON
 				var chunk map[string]interface{}
+				hasNativeToolDelta := false
 				if err := json.Unmarshal([]byte(dataStr), &chunk); err == nil {
+					if enableTools {
+						hasNativeToolDelta = chatToolCalls.AddChunk(chunk)
+					}
 
 					// --- A. Handle Custom Format (type: "message.delta", etc) ---
 					if msgType, ok := chunk["type"].(string); ok {
 						if msgType == "message.delta" {
 							if content, ok := chunk["content"].(string); ok {
+								if enableTools {
+									candidate := content
+									if isBuffering && toolPattern != nil && toolPattern["format"] == "text-tool" {
+										buffer += content
+										candidate = buffer
+									} else if partialTagBuffer != "" {
+										candidate = partialTagBuffer + content
+									}
+
+									if !isBuffering {
+										recognized, possiblePrefix := classifyPromptToolMarkup(candidate, promptTools)
+										if !recognized && possiblePrefix {
+											partialTagBuffer = candidate
+											continue
+										}
+										if recognized {
+											isBuffering = true
+											buffer = candidate
+											partialTagBuffer = ""
+											toolPattern = map[string]string{"format": "text-tool"}
+										} else if partialTagBuffer != "" {
+											content = candidate
+											partialTagBuffer = ""
+										}
+									}
+
+									if isBuffering && toolPattern != nil && toolPattern["format"] == "text-tool" {
+										if parsedTool, parsedArgsJSON, parsedArgs, _ := parsePromptToolMarkup(buffer); isRegisteredPromptTool(parsedTool, promptTools) {
+											toolExecutedThisTurn = true
+											lastToolName = parsedTool
+											lastToolArgsStr = parsedArgsJSON
+											lastSavedBufferForTurn = fullResponse
+											generationPhase = "tool_call"
+											emitGenerationEvent("generation.phase", map[string]interface{}{"phase": generationPhase, "tool": parsedTool})
+
+											startEvt := map[string]interface{}{"type": "tool_call.start", "tool": parsedTool}
+											startBytes, _ := json.Marshal(startEvt)
+											appendChatEvent("assistant", "tool_call.start", startEvt)
+											emitStreamChunk(fmt.Sprintf("data: %s", string(startBytes)))
+
+											argsEvt := map[string]interface{}{"type": "tool_call.arguments", "tool": parsedTool, "arguments": parsedArgs}
+											argsBytes, _ := json.Marshal(argsEvt)
+											appendChatEvent("assistant", "tool_call.arguments", argsEvt)
+											emitStreamChunk(fmt.Sprintf("data: %s", string(argsBytes)))
+
+											buffer = ""
+											isBuffering = false
+											toolPattern = nil
+											continue
+										}
+										if hasPromptToolClosingTag(buffer, promptTools) {
+											needsCorrection = true
+											badContentCapture = buffer
+											AddDebugTrace("chat", "tool.quarantine", "Suppressed malformed streamed tool markup", map[string]interface{}{
+												"snippet": compactText(buffer, 220),
+											})
+											buffer = ""
+											isBuffering = false
+											toolPattern = nil
+										}
+										continue
+									}
+								}
 								if !generationFirstTokenEmitted {
 									generationFirstTokenEmitted = true
 									emitGenerationEvent("generation.first_token", map[string]interface{}{"phase": "answering"})
@@ -4947,11 +5411,15 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 								}
 								if reasoningActive {
 									totalReasoningMs := reasoningAccumulatedMs + time.Since(reasoningStartedAt).Milliseconds()
-									appendChatEvent("assistant", "reasoning.end", map[string]interface{}{
+									reasoningEndEvt := map[string]interface{}{
 										"type":             "reasoning.end",
 										"elapsed_ms":       time.Since(reasoningStartedAt).Milliseconds(),
 										"total_elapsed_ms": requestElapsedMs(),
-									})
+									}
+									appendChatEvent("assistant", "reasoning.end", reasoningEndEvt)
+									if reasoningEndBytes, err := json.Marshal(reasoningEndEvt); err == nil {
+										emitStreamChunk(fmt.Sprintf("data: %s", string(reasoningEndBytes)))
+									}
 									reasoningAccumulatedMs = totalReasoningMs
 									reasoningActive = false
 									reasoningStartedAt = time.Time{}
@@ -4959,7 +5427,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 								fullResponse += content
 
 								// 🔍 Self-Evolution for Custom Format
-								if enableMCP && toolPattern == nil && len(content) > 5 {
+								if enableTools && toolPattern == nil && len(content) > 5 {
 									lc := strings.ToLower(content)
 									if strings.Contains(lc, "<|") ||
 										strings.Contains(lc, "function") ||
@@ -5041,7 +5509,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 							}
 							continue
 						} else if msgType == "tool_call.arguments" {
-							if !enableMCP {
+							if !enableTools {
 								continue
 							}
 							eventPayload := map[string]interface{}{}
@@ -5049,15 +5517,21 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 								eventPayload[key] = value
 							}
 
-							toolName, _ := chunk["tool"].(string)
-							argsJSON := "{}"
-							if args, ok := chunk["arguments"]; ok {
-								if bytes, err := json.Marshal(args); err == nil && len(bytes) > 0 {
-									argsJSON = string(bytes)
-								}
+							providerCall, parsedArgs, hasProviderCall := chatharness.ParseProviderToolArgumentsEvent(chunk, pendingNativeToolName)
+							normalizedTool := strings.TrimSpace(providerCall.Name)
+							argsJSON := providerCall.Arguments
+							if isRegisteredPromptTool(normalizedTool, promptTools) {
+								toolExecutedThisTurn = true
+								lastToolName = normalizedTool
+								lastToolArgsStr = argsJSON
+								lastSavedBufferForTurn = fullResponse
+								lastToolCallID = providerCall.ID
+								eventPayload["tool"] = normalizedTool
+								eventPayload["arguments"] = parsedArgs
+							} else if hasProviderCall {
+								needsCorrection = true
+								badContentCapture = fmt.Sprintf("Unknown app tool %q with arguments %s", normalizedTool, argsJSON)
 							}
-
-							normalizedTool := strings.TrimSpace(toolName)
 							toolSig := normalizedTool + ":" + compactText(strings.TrimSpace(argsJSON), 240)
 							nativeToolSignatureCounts[toolSig]++
 							if normalizedTool == "execute_command" {
@@ -5095,7 +5569,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 							emitStreamChunk(line)
 							continue
 						} else if msgType == "tool_call.name" || msgType == "tool_call.start" || msgType == "tool_call.success" || msgType == "tool_call.failure" {
-							if !enableMCP {
+							if !enableTools {
 								continue
 							}
 							if msgType == "tool_call.name" {
@@ -5138,6 +5612,47 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 										}
 									}
 								}
+							}
+
+							// LM Studio repeats the complete assistant message in chat.end.
+							// A textual tool call may therefore appear here even when its
+							// message.delta chunks were already quarantined. Parse a call
+							// that only exists in the terminal payload, then suppress the
+							// intermediate end event so the client cannot render it as the
+							// final assistant answer.
+							endContent := extractFinalAssistantContent(chunk)
+							if enableTools && !toolExecutedThisTurn && strings.TrimSpace(endContent) != "" {
+								if parsedTool, parsedArgsJSON, parsedArgs, _ := parsePromptToolMarkup(endContent); isRegisteredPromptTool(parsedTool, promptTools) {
+									toolExecutedThisTurn = true
+									lastToolName = parsedTool
+									lastToolArgsStr = parsedArgsJSON
+									lastSavedBufferForTurn = fullResponse
+									generationPhase = "tool_call"
+									emitGenerationEvent("generation.phase", map[string]interface{}{"phase": generationPhase, "tool": parsedTool})
+
+									startEvt := map[string]interface{}{"type": "tool_call.start", "tool": parsedTool}
+									startBytes, _ := json.Marshal(startEvt)
+									appendChatEvent("assistant", "tool_call.start", startEvt)
+									emitStreamChunk(fmt.Sprintf("data: %s", string(startBytes)))
+
+									argsEvt := map[string]interface{}{"type": "tool_call.arguments", "tool": parsedTool, "arguments": parsedArgs}
+									argsBytes, _ := json.Marshal(argsEvt)
+									appendChatEvent("assistant", "tool_call.arguments", argsEvt)
+									emitStreamChunk(fmt.Sprintf("data: %s", string(argsBytes)))
+								} else {
+									recognized, possiblePrefix := classifyPromptToolMarkup(endContent, promptTools)
+									if recognized || possiblePrefix || looksLikeToolMarkup(endContent) {
+										needsCorrection = true
+										badContentCapture = endContent
+									}
+								}
+							}
+							if enableTools && (toolExecutedThisTurn || needsCorrection) {
+								AddDebugTrace("chat", "tool.end_suppressed", "Suppressed intermediate LM Studio end payload containing tool markup", map[string]interface{}{
+									"turn":    turn,
+									"snippet": compactText(endContent, 220),
+								})
+								continue
 							}
 
 							appendChatEvent("assistant", msgType, chunk)
@@ -5203,8 +5718,31 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 						}
 					}
 
+					// Buffer JSON wrappers emitted as assistant content. They are parsed
+					// after the stream closes so no fragment can leak to the frontend.
+					if enableTools && isBuffering && toolPattern == nil && looksLikeJSONToolCallPrefix(buffer) {
+						var content string
+						if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
+							if choice, ok := choices[0].(map[string]interface{}); ok {
+								if delta, ok := choice["delta"].(map[string]interface{}); ok {
+									content, _ = delta["content"].(string)
+								} else if message, ok := choice["message"].(map[string]interface{}); ok {
+									content, _ = message["content"].(string)
+								}
+							}
+						}
+						buffer += content
+						if len(buffer) > bufferingThreshold {
+							needsCorrection = true
+							badContentCapture = buffer
+							buffer = ""
+							isBuffering = false
+						}
+						continue
+					}
+
 					// --- B. Handle Tool Pattern Logic (if enabled and buffering) ---
-					if enableMCP && toolPattern != nil && isBuffering {
+					if enableTools && toolPattern != nil && isBuffering {
 						// Extract content for buffering
 						var content string
 						if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
@@ -5225,6 +5763,35 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 							}
 						}
 						buffer += content
+
+						if toolPattern["format"] == "text-tool" {
+							if parsedTool, parsedArgsJSON, parsedArgs, ok := parsePromptToolMarkup(buffer); ok && isRegisteredPromptTool(parsedTool, promptTools) {
+								toolExecutedThisTurn = true
+								lastToolName = parsedTool
+								lastToolArgsStr = parsedArgsJSON
+								lastSavedBufferForTurn = fullResponse
+								startEvt := map[string]interface{}{"type": "tool_call.start", "tool": parsedTool}
+								startBytes, _ := json.Marshal(startEvt)
+								appendChatEvent("assistant", "tool_call.start", startEvt)
+								emitStreamChunk(fmt.Sprintf("data: %s", string(startBytes)))
+								argsEvt := map[string]interface{}{"type": "tool_call.arguments", "tool": parsedTool, "arguments": parsedArgs}
+								argsBytes, _ := json.Marshal(argsEvt)
+								appendChatEvent("assistant", "tool_call.arguments", argsEvt)
+								emitStreamChunk(fmt.Sprintf("data: %s", string(argsBytes)))
+								buffer = ""
+								isBuffering = false
+								toolPattern = nil
+								continue
+							}
+							if hasPromptToolClosingTag(buffer, promptTools) {
+								needsCorrection = true
+								badContentCapture = buffer
+								buffer = ""
+								isBuffering = false
+								toolPattern = nil
+							}
+							continue
+						}
 
 						// Check Regex
 						matches := toolRegex.FindStringSubmatch(buffer)
@@ -5443,14 +6010,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 									})
 								}
 								if c, ok := delta["content"].(string); ok {
-									if !generationFirstTokenEmitted {
-										generationFirstTokenEmitted = true
-										emitGenerationEvent("generation.first_token", map[string]interface{}{"phase": "answering"})
-									}
-									if generationPhase != "answering" {
-										generationPhase = "answering"
-										emitGenerationEvent("generation.phase", map[string]interface{}{"phase": generationPhase})
-									}
 									if cleaned, changed := sanitizeLeakedModelChannelContent(c); changed {
 										if strings.TrimSpace(cleaned) == "" {
 											continue
@@ -5460,13 +6019,74 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 											"snippet": compactText(c, 220),
 										})
 									}
+									if enableTools && !isBuffering {
+										candidate := c
+										if partialTagBuffer != "" {
+											candidate = partialTagBuffer + c
+										}
+										recognized, possiblePrefix := classifyPromptToolMarkup(candidate, promptTools)
+										if !recognized && possiblePrefix {
+											partialTagBuffer = candidate
+											continue
+										}
+										if recognized {
+											isBuffering = true
+											buffer = candidate
+											partialTagBuffer = ""
+											toolPattern = map[string]string{"format": "text-tool"}
+											continue
+										}
+										if len(fullResponse) < 50 && looksLikeJSONToolCallPrefix(candidate) {
+											c = candidate
+											partialTagBuffer = ""
+										} else if len(fullResponse) < 50 && looksLikeJSONToolCallPossiblePrefix(candidate) {
+											partialTagBuffer = candidate
+											continue
+										} else if partialTagBuffer != "" {
+											c = candidate
+											partialTagBuffer = ""
+										}
+									}
+									if enableTools && toolPattern == nil && !isBuffering && len(fullResponse) < 50 && looksLikeJSONToolCallPrefix(c) {
+										if reasoningActive {
+											totalReasoningMs := reasoningAccumulatedMs + time.Since(reasoningStartedAt).Milliseconds()
+											reasoningEndEvt := map[string]interface{}{
+												"type":             "reasoning.end",
+												"elapsed_ms":       time.Since(reasoningStartedAt).Milliseconds(),
+												"total_elapsed_ms": requestElapsedMs(),
+											}
+											appendChatEvent("assistant", "reasoning.end", reasoningEndEvt)
+											if reasoningEndBytes, err := json.Marshal(reasoningEndEvt); err == nil {
+												emitStreamChunk(fmt.Sprintf("data: %s", string(reasoningEndBytes)))
+											}
+											reasoningAccumulatedMs = totalReasoningMs
+											reasoningActive = false
+											reasoningStartedAt = time.Time{}
+										}
+										log.Printf("[handleChat] Detected JSON tool wrapper before assistant content emission. Switching to buffering mode.")
+										isBuffering = true
+										buffer = c
+										continue
+									}
+									if !generationFirstTokenEmitted {
+										generationFirstTokenEmitted = true
+										emitGenerationEvent("generation.first_token", map[string]interface{}{"phase": "answering"})
+									}
+									if generationPhase != "answering" {
+										generationPhase = "answering"
+										emitGenerationEvent("generation.phase", map[string]interface{}{"phase": generationPhase})
+									}
 									if reasoningActive {
 										totalReasoningMs := reasoningAccumulatedMs + time.Since(reasoningStartedAt).Milliseconds()
-										appendChatEvent("assistant", "reasoning.end", map[string]interface{}{
+										reasoningEndEvt := map[string]interface{}{
 											"type":             "reasoning.end",
 											"elapsed_ms":       time.Since(reasoningStartedAt).Milliseconds(),
 											"total_elapsed_ms": requestElapsedMs(),
-										})
+										}
+										appendChatEvent("assistant", "reasoning.end", reasoningEndEvt)
+										if reasoningEndBytes, err := json.Marshal(reasoningEndEvt); err == nil {
+											emitStreamChunk(fmt.Sprintf("data: %s", string(reasoningEndBytes)))
+										}
 										reasoningAccumulatedMs = totalReasoningMs
 										reasoningActive = false
 										reasoningStartedAt = time.Time{}
@@ -5504,16 +6124,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 							content = cleaned
 						}
 
-						// 🛠️ Structured Output Support: Force buffering if start of JSON object is detected
-						if !isBuffering && len(fullResponse) < 50 && strings.HasPrefix(strings.TrimSpace(content), "{") {
-							log.Printf("[handleChat] Detected potential JSON start. Switching to buffering mode.")
-							isBuffering = true
-							buffer = content
-							continue
-						}
-
 						// 🧪 Special Handling for Command-R / GPT-OSS Format (<|channel|>)
-						if enableMCP && !isBuffering && (looksLikeChannelToolMarkup(content) || strings.Contains(content, "<|tool_code|>") || strings.Contains(content, "<tool_call>") || strings.Contains(content, "<execute_command") || strings.Contains(content, "<search_memory") || strings.Contains(content, "<read_memory") || strings.Contains(content, "<read_memory_context") || strings.Contains(content, "<read_buffered_source") || strings.Contains(content, "<read_help")) {
+						if enableTools && !isBuffering && (looksLikeChannelToolMarkup(content) || strings.Contains(content, "<|tool_code|>") || strings.Contains(content, "<tool_call>") || strings.Contains(content, "<execute_command") || strings.Contains(content, "<search_memory") || strings.Contains(content, "<read_memory") || strings.Contains(content, "<read_memory_context") || strings.Contains(content, "<read_buffered_source") || strings.Contains(content, "<read_help")) {
 							log.Printf("[handleChat] Detected Command-R/GPT-OSS/Qwen Tool Call Pattern. Switching to buffering mode.")
 							isBuffering = true
 							buffer = content
@@ -5534,7 +6146,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 						}
 
 						// 🔍 Self-Correction for non-buffered models
-						if enableMCP && len(content) > 5 {
+						if enableTools && len(content) > 5 {
 							lc := strings.ToLower(content)
 							// Broaden trigger keywords: <|, function, tool, execute, {"name":, and tool names
 							hasToolName := strings.Contains(lc, "search_web") ||
@@ -5582,6 +6194,12 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 					}
 				}
 
+				// Native provider deltas are converted into the app's canonical tool events
+				// after all argument fragments have been accumulated.
+				if hasNativeToolDelta {
+					continue
+				}
+
 				// Forward the line (if not already continued by custom format or tool logic)
 				emitStreamChunk(line)
 
@@ -5605,6 +6223,48 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 		resp.Body.Close() // Explicit close after scanner is done with this turn
 
+		if enableTools && chatToolCalls.HasCalls() {
+			calls := chatToolCalls.Calls()
+			if len(calls) > 0 {
+				call := calls[0]
+				toolExecutedThisTurn = true
+				lastToolCallID = call.ID
+				lastToolName = call.Name
+				lastToolArgsStr = call.Arguments
+				lastSavedBufferForTurn = fullResponse
+
+				startEvt := map[string]interface{}{
+					"type":    "tool_call.start",
+					"tool":    lastToolName,
+					"call_id": lastToolCallID,
+				}
+				startBytes, _ := json.Marshal(startEvt)
+				appendChatEvent("assistant", "tool_call.start", startEvt)
+				emitStreamChunk(fmt.Sprintf("data: %s", string(startBytes)))
+
+				var parsedArguments interface{} = map[string]interface{}{}
+				if err := json.Unmarshal([]byte(lastToolArgsStr), &parsedArguments); err != nil {
+					parsedArguments = lastToolArgsStr
+				}
+				argsEvt := map[string]interface{}{
+					"type":      "tool_call.arguments",
+					"tool":      lastToolName,
+					"call_id":   lastToolCallID,
+					"arguments": parsedArguments,
+				}
+				argsBytes, _ := json.Marshal(argsEvt)
+				appendChatEvent("assistant", "tool_call.arguments", argsEvt)
+				emitStreamChunk(fmt.Sprintf("data: %s", string(argsBytes)))
+
+				if len(calls) > 1 {
+					AddDebugTrace("chat", "tool.multiple", "Provider returned multiple tool calls; executing the first because sequential mode is active", map[string]interface{}{
+						"turn":  turn,
+						"count": len(calls),
+					})
+				}
+			}
+		}
+
 		if nativeToolLoopDetected {
 			AddDebugTrace("chat", "turn.complete", "Turn stopped due to native tool loop", map[string]interface{}{
 				"turn":           turn,
@@ -5625,54 +6285,40 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			break
 		}
 
-		// 🛠️ Structured Output Support (JSON)
-		// Check if buffer looks like a complete JSON object from a Structured Output model
-		// Pattern: {"thought": "...", "tool_name": "...", "tool_arguments": ...}
-		if enableMCP && (isBuffering || (strings.HasPrefix(strings.TrimSpace(buffer), "{") && strings.Contains(buffer, "\"tool_name\""))) {
-			var structTool StructuredToolCall
-			if err := json.Unmarshal([]byte(buffer), &structTool); err == nil {
-				if structTool.ToolName != "" {
-					log.Printf("[handleChat] Detected Structured JSON Tool Call: %s", structTool.ToolName)
-					toolName = structTool.ToolName
-
-					// Convert arguments back to JSON string for consistent handling
-					if argsBytes, err := json.Marshal(structTool.ToolArguments); err == nil {
-						toolArgsStr = string(argsBytes)
-					} else {
-						toolArgsStr = "{}"
-					}
-
+		// Recover local models that print a JSON tool wrapper as assistant text
+		// instead of using the provider's native function-call field.
+		if enableTools && isBuffering {
+			if parsedTool, parsedArgsJSON, parsedArgs, ok := parseJSONToolCall(buffer); ok {
+				if isRegisteredPromptTool(parsedTool, promptTools) {
+					log.Printf("[handleChat] Recovered JSON Tool Call: %s", parsedTool)
 					toolExecutedThisTurn = true
-					lastToolName = toolName
-					lastToolArgsStr = toolArgsStr
+					lastToolName = parsedTool
+					lastToolArgsStr = parsedArgsJSON
+					lastSavedBufferForTurn = fullResponse
 
-					// Emit events to frontend
-					startEvt := map[string]string{
-						"type": "tool_call.start",
-						"tool": toolName,
-					}
+					startEvt := map[string]interface{}{"type": "tool_call.start", "tool": parsedTool}
 					startBytes, _ := json.Marshal(startEvt)
+					appendChatEvent("assistant", "tool_call.start", startEvt)
 					emitStreamChunk(fmt.Sprintf("data: %s", string(startBytes)))
 
-					argsEvt := map[string]interface{}{
-						"type":      "tool_call.arguments",
-						"tool":      toolName,
-						"arguments": structTool.ToolArguments,
-					}
+					argsEvt := map[string]interface{}{"type": "tool_call.arguments", "tool": parsedTool, "arguments": parsedArgs}
 					argsBytes, _ := json.Marshal(argsEvt)
+					appendChatEvent("assistant", "tool_call.arguments", argsEvt)
 					emitStreamChunk(fmt.Sprintf("data: %s", string(argsBytes)))
 
-					// Clear buffer and stop any further buffering
 					buffer = ""
 					isBuffering = false
-					continue
+				} else {
+					needsCorrection = true
+					badContentCapture = buffer
 				}
 			}
 		}
 
 		// 🛠️ FINAL BUFFER FLUSH: If we were buffering and the stream ended, flush what's left.
 		if isBuffering && len(buffer) > 0 {
-			if looksLikeToolMarkup(buffer) {
+			recognized, _ := classifyPromptToolMarkup(buffer, promptTools)
+			if looksLikeToolMarkup(buffer) || recognized {
 				log.Printf("[handleChat] Final buffer flush suppressed raw tool markup")
 				needsCorrection = true
 				if badContentCapture == "" {
@@ -5688,27 +6334,41 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			}
 			buffer = ""
 		} else if len(partialTagBuffer) > 0 {
-			// Flush partial tag buffer if stream ends
-			emitCanonicalAssistantDelta(partialTagBuffer)
-			lastSavedBufferForTurn += partialTagBuffer
+			recognized, possiblePrefix := classifyPromptToolMarkup(partialTagBuffer, promptTools)
+			if enableTools && (recognized || possiblePrefix || looksLikeJSONToolCallPossiblePrefix(partialTagBuffer) || looksLikeToolMarkup(partialTagBuffer)) {
+				needsCorrection = true
+				if badContentCapture == "" {
+					badContentCapture = partialTagBuffer
+				}
+				AddDebugTrace("chat", "tool.quarantine", "Suppressed incomplete streamed tool markup", map[string]interface{}{
+					"snippet": compactText(partialTagBuffer, 220),
+				})
+			} else {
+				emitCanonicalAssistantDelta(partialTagBuffer)
+				lastSavedBufferForTurn += partialTagBuffer
+			}
 			partialTagBuffer = ""
 		}
 
 		log.Printf("[handleChat-DEBUG] turn %d processing complete. Total response len: %d", turn, len(fullResponse))
 		if reasoningActive {
 			totalReasoningMs := reasoningAccumulatedMs + time.Since(reasoningStartedAt).Milliseconds()
-			appendChatEvent("assistant", "reasoning.end", map[string]interface{}{
+			reasoningEndEvt := map[string]interface{}{
 				"type":             "reasoning.end",
 				"elapsed_ms":       time.Since(reasoningStartedAt).Milliseconds(),
 				"total_elapsed_ms": requestElapsedMs(),
-			})
+			}
+			appendChatEvent("assistant", "reasoning.end", reasoningEndEvt)
+			if reasoningEndBytes, err := json.Marshal(reasoningEndEvt); err == nil {
+				emitStreamChunk(fmt.Sprintf("data: %s", string(reasoningEndBytes)))
+			}
 			reasoningAccumulatedMs = totalReasoningMs
 			reasoningActive = false
 			reasoningStartedAt = time.Time{}
 		}
 
 		// 🛡️ TOOL EXECUTION & LOOP LOGIC
-		if enableMCP && toolExecutedThisTurn {
+		if enableTools && toolExecutedThisTurn {
 			log.Printf("[handleChat] Turn %d detected Tool Call: %s. Executing...", turn, lastToolName)
 			AddDebugTrace("chat", "tool.detected", "Tool call detected in assistant output", map[string]interface{}{
 				"turn": turn,
@@ -5801,7 +6461,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 					"count": toolSignatureCounts[toolSig],
 				})
 			} else {
-				result, err = mcp.ExecuteToolByName(lastToolName, []byte(lastToolArgsStr), userID, enableMemory, disabledTools)
+				toolResult, callErr := toolruntime.Default.Call(chatCtx, toolExecCtx, lastToolName, json.RawMessage(lastToolArgsStr))
+				result, err = toolResult.Content, callErr
 			}
 			var toolResultEvt map[string]interface{}
 			if err != nil {
@@ -5817,7 +6478,11 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 					"tool":   lastToolName,
 					"reason": err.Error(),
 				}
-				result = fmt.Sprintf("Error executing tool %s: %v", lastToolName, err)
+				if strings.TrimSpace(result) == "" {
+					result = fmt.Sprintf("Error executing tool %s: %v", lastToolName, err)
+				} else {
+					result = fmt.Sprintf("Error executing tool %s: %v\n\n%s", lastToolName, err, strings.TrimSpace(result))
+				}
 			} else {
 				log.Printf("[handleChat] Tool Execution Success.")
 				AddDebugTrace("chat", "tool.success", "Tool execution completed", map[string]interface{}{
@@ -5847,7 +6512,11 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				ToolResult:          result,
 				LastAssistantBuffer: lastSavedBufferForTurn,
 				ReqMap:              reqMap,
-				EnableMCP:           enableMCP,
+				ToolCallID:          lastToolCallID,
+				ToolArguments:       lastToolArgsStr,
+				OriginalUserText:    initialUserInputText,
+				CompletedTools:      completedToolNames(promptTools, toolUsageCounts),
+				AvailableTools:      availableToolNames(promptTools),
 			})
 			AddDebugTrace("chat", "turn.followup", "Prepared follow-up turn with tool result", map[string]interface{}{
 				"turn":       turn,
@@ -5855,6 +6524,40 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				"body_bytes": len(body),
 			})
 			continue // Start next turn loop
+		}
+
+		if enableTools && needsCorrection && badContentCapture != "" && turn < 9 {
+			correctionPrompt := promptkit.SelfCorrectionPromptTemplate(badContentCapture)
+			if llmMode == "stateful" {
+				reqMap = map[string]interface{}{
+					"model":       modelID,
+					"input":       correctionPrompt,
+					"stream":      true,
+					"temperature": 0.1,
+				}
+				if chatharness.IsValidResponseID(lastResponseID) {
+					reqMap["previous_response_id"] = strings.TrimSpace(lastResponseID)
+				}
+			} else {
+				messages, _ := reqMap["messages"].([]interface{})
+				messages = append(messages,
+					map[string]interface{}{"role": "assistant", "content": badContentCapture},
+					map[string]interface{}{"role": "user", "content": correctionPrompt},
+				)
+				reqMap["messages"] = messages
+				reqMap["temperature"] = 0.1
+			}
+			var marshalErr error
+			body, marshalErr = json.Marshal(reqMap)
+			if marshalErr == nil {
+				AddDebugTrace("chat", "self_correction.retry", "Retrying malformed tool call through the normal parser", map[string]interface{}{
+					"turn":    turn,
+					"snippet": compactText(badContentCapture, 180),
+				})
+				needsCorrection = false
+				badContentCapture = ""
+				continue
+			}
 		}
 
 		// If no tool executed, we are done with all turns
@@ -5866,33 +6569,14 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		break
 	} // --- TURN LOOP END ---
 
-	// 🛡️ SELF-CORRECTION TRIGGER (Only if we didn't loop or at the very end)
-	if enableMCP && needsCorrection && badContentCapture != "" {
-		log.Printf("[handleChat] Triggering Self-Correction for invalid tool format...")
-		AddDebugTrace("chat", "self_correction.start", "Triggering tool-call self-correction", map[string]interface{}{
+	// A malformed call that still remains after the bounded retry loop is never
+	// forwarded as assistant content.
+	if enableTools && needsCorrection && badContentCapture != "" {
+		log.Printf("[handleChat] Tool call remained malformed after self-correction")
+		AddDebugTrace("chat", "self_correction.exhausted", "Tool-call self-correction was exhausted", map[string]interface{}{
 			"snippet": compactText(badContentCapture, 180),
 		})
-
-		correctionPrompt := promptkit.SelfCorrectionPromptTemplate(badContentCapture)
-		if err := chatharness.ExecuteSelfCorrection(chatharness.SelfCorrectionInput{
-			Body:           body,
-			Endpoint:       app.llmEndpoint,
-			APIToken:       app.llmApiToken,
-			LLMMode:        llmMode,
-			ModelID:        modelID,
-			EnableMCP:      enableMCP,
-			LastResponseID: lastResponseID,
-			Prompt:         correctionPrompt,
-		}, func(line string) error {
-			return emitter.EmitRaw(line)
-		}, func(content string) {
-			fullResponse += content
-		}); err != nil {
-			log.Printf("[handleChat] Self-Correction Request Failed: %v", err)
-			AddDebugTrace("chat", "self_correction.error", "Self-correction request failed", map[string]interface{}{
-				"error": err.Error(),
-			})
-		}
+		emitter.SendError("TOOL_CALL_FORMAT_ERROR: The model did not produce a valid app tool call.")
 	}
 
 	// 🔍 FINAL Memory Logging: Catch everything after all turns and corrections

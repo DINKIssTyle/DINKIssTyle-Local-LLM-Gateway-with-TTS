@@ -14,7 +14,6 @@
         const {
             DEFAULT_REASONING_OPTIONS = [],
             config,
-            enforceMCPPolicyForMode,
             escapeAttr,
             escapeHtml,
             isGenerating,

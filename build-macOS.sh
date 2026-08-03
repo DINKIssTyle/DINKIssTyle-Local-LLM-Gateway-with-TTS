@@ -148,6 +148,10 @@ if [ -d "build/bin/DKST LLM Chat Server.app" ]; then
     cp bundle/config.json "$APP_RESOURCE_DIR" 2>/dev/null || true
     cp bundle/system_prompts.json "$APP_RESOURCE_DIR" 2>/dev/null || true
     cp bundle/ThirdPartyNotices.md "$APP_RESOURCE_DIR" 2>/dev/null || true
+    if [ -d "bundle/skills/builtin" ]; then
+        mkdir -p "$APP_RESOURCE_DIR/skills"
+        cp -R bundle/skills/builtin "$APP_RESOURCE_DIR/skills/"
+    fi
     
     # Re-sign binaries to fix "Code Signature Invalid" crash
     echo "Cleaning detritus and re-signing binaries..."

@@ -13,7 +13,7 @@ Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
   <img src="manual/imgs/highlight.png" alt="overview" width="100%">
 </p>
 
-DKST LLM Chat Server는 강력한 지능형 기능을 결합한 차세대 로컬 LLM 웹 인터페이스입니다. LM Studio, Ollama 등 로컬 API 중계를 넘어, 독자적인 **MCP(Model Context Protocol)**와 Supertonic2 고품질 TTS를 통합해 탁월한 개인 비서 경험을 제공합니다.
+DKST LLM Chat Server는 강력한 지능형 기능을 결합한 차세대 로컬 LLM 웹 인터페이스입니다. LM Studio, OpenAI 호환 API 등 다양한 모델 공급자와 앱 내부 도구 런타임, Supertonic 고품질 TTS를 통합해 탁월한 개인 비서 경험을 제공합니다.
 
 특히 **FTS5와 Vector** 기반의 하이브리드 검색은 방대한 장기 기억을 초고속으로 인출하여 프리필(Pre-fill) 속도를 혁신적으로 단축합니다. 여기에 **유저 프로필 기억** 기능으로 개인화된 맞춤형 답변을 제공하며, 점수 평가 기반의 **지능형 망각 시스템**을 통해 불필요한 정보는 걸러내고 핵심적인 기억만을 유지함으로써 개인 비서로써의 품질을 높였습니다.
 
@@ -34,9 +34,12 @@ DKST LLM Chat Server는 강력한 지능형 기능을 결합한 차세대 로컬
 *   **자연스러운 발음**: 한국어 발음 사전을 통한 정확하고 자연스러운 억양.
 *   **실시간 스트리밍**: 음성 합성을 실시간으로 스트리밍하여 지연 없는 대화 경험.
 
-### 4. MCP(Model Context Protocol) 통합
+### 4. 공급자 독립 앱 도구
+*   **앱 내부 실행**: LM Studio의 `mcp.json` 등록 없이 웹 검색, 메모리 및 시스템 도구를 실행합니다.
+*   **공통 도구 카탈로그**: LM Studio와 OpenAI 호환 공급자가 동일한 사용자별 도구 권한을 사용합니다.
 *   **웹 검색**: 실시간 웹 정보 검색.
 *   **멀티모달 비전**: 이미지 업로드 및 분석 지원 (LM Studio Vision 모델 연동).
+*   **개발자 문서**: 새 도구 등록과 공급자 어댑터 구조는 [TOOL_RUNTIME.md](TOOL_RUNTIME.md)를 참고하세요.
 
 ## 설치 및 빌드 (Installation & Build)
 
@@ -55,7 +58,7 @@ DKST LLM Chat Server는 강력한 지능형 기능을 결합한 차세대 로컬
 
 1.  앱 실행 후 **Start Server**를 클릭합니다.
     *   **챗봇 접속 (UI)**: `https://localhost:8080`
-    *   **API/MCP 연결**: `http://localhost:8081`
+    *   **HTTP API 연결**: `http://localhost:8081`
 2.  **Settings**에서 연동할 로컬 LLM 주소를 입력합니다 (예: `http://localhost:1234`).
 3.  저장 폴더 구조는 공통으로 다음처럼 사용합니다.
     *   인증서는 `cert/`

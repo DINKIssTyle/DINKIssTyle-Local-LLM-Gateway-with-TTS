@@ -1,6 +1,7 @@
 package promptkit
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -9,14 +10,21 @@ import (
 const toolGuidelineMarker = "### TOOL CALL GUIDELINES ###"
 
 type RuntimeInstructionsInput struct {
-	EnvironmentInfo       string
-	ModelID               string
-	UseNativeIntegrations bool
-	RecentContext         string
-	MemorySnapshot        string
-	ActiveContext         string
-	RetrievalInjected     bool
-	UserProfileFacts      string
+	EnvironmentInfo   string
+	ModelID           string
+	UseNativeTools    bool
+	Tools             []ToolDefinition
+	RecentContext     string
+	MemorySnapshot    string
+	ActiveContext     string
+	RetrievalInjected bool
+	UserProfileFacts  string
+}
+
+type ToolDefinition struct {
+	Name        string
+	Description string
+	InputSchema json.RawMessage
 }
 
 func ToolGuidelineMarker() string {
@@ -25,11 +33,11 @@ func ToolGuidelineMarker() string {
 
 func BuildRuntimeInstructions(input RuntimeInstructionsInput) string {
 	extraInstr := ""
-	if input.UseNativeIntegrations {
-		extraInstr = buildToolUsage(input.EnvironmentInfo, input.ModelID, input.UseNativeIntegrations)
+	if len(input.Tools) > 0 {
+		extraInstr = buildToolUsage(input.EnvironmentInfo, input.ModelID, input.UseNativeTools, input.Tools)
 	}
 	if input.RecentContext != "" || input.MemorySnapshot != "" || input.ActiveContext != "" || input.UserProfileFacts != "" {
-		if input.UseNativeIntegrations {
+		if len(input.Tools) > 0 {
 			extraInstr += buildMemoryTemplate("", input.RecentContext, input.MemorySnapshot, input.ActiveContext, input.RetrievalInjected, input.UserProfileFacts)
 		} else {
 			extraInstr += buildPassiveMemoryTemplate(input.RecentContext, input.MemorySnapshot, input.ActiveContext, input.UserProfileFacts)
@@ -145,18 +153,18 @@ func truncateMessages(messages []interface{}) []interface{} {
 	return truncated
 }
 
-func buildToolUsage(envInfo string, modelID string, useNativeIntegrations bool) string {
+func buildToolUsage(envInfo string, modelID string, useNativeTools bool, tools []ToolDefinition) string {
 	lowerModelID := strings.ToLower(strings.TrimSpace(modelID))
 	lines := []string{"", "", toolGuidelineMarker}
 
-	if useNativeIntegrations {
+	if useNativeTools {
 		lines = append(lines,
 			"1. If a tool is needed, use the provider's native tool-calling integration instead of printing a textual tool call.",
 			"2. Do not output XML-like wrappers or pseudo-schemas such as <tool_call>, </tool_call>, <remark>, </remark>, <think>, or JSON meant only for the tool parser.",
 			"3. If no tool is needed, answer normally in plain text.",
-			"4. Call at most one tool at a time. After each tool result, either answer the user directly or make one clearly necessary next tool call. For a comparison that clearly needs two independent web search angles, use one search_web_multi call instead of emitting multiple simultaneous tool calls.",
+			"4. Call at most one tool at a time. After each tool result, either answer the user directly or make one clearly necessary next tool call. Exception: when the user explicitly asks to test all or multiple tools, continue sequentially through the remaining safe tools without asking which tool to test next. For a comparison that clearly needs two independent web search angles, use one search_web_multi call instead of emitting multiple simultaneous tool calls.",
 			"5. Avoid search_web or read_web_page for person identification or image description unless explicitly asked.",
-			"6. For app usage, setup, certificates, endpoints, LM Studio, or MCP configuration questions, prefer read_help before searching the web.",
+			"6. For app usage, setup, certificates, endpoints, LM Studio, or app-tool configuration questions, prefer read_help before searching the web.",
 			"7. Web tools return compact buffered evidence handles to save context; use the smallest useful number of calls.",
 			"8. Web evidence budget: usually make 1 web/search tool call; make at most 3 total web evidence calls unless the user explicitly asks for deep research or source comparison.",
 			"9. Never present weak, conflicting, or off-topic web evidence as fact. If evidence quality is poor after the budget, say it is not well verified and ask whether to continue with deeper research.",
@@ -169,26 +177,47 @@ func buildToolUsage(envInfo string, modelID string, useNativeIntegrations bool) 
 			"16. Never use execute_command to imitate built-in tools such as search_memory, search_web, read_memory, read_memory_context, read_web_page, read_help, or read_buffered_source. Call the real tool directly.",
 			"17. After execute_command returns enough information, answer the user directly. Do not repeat the same or near-identical command in the same answer unless the user explicitly asked to re-run or refresh it.",
 			"18. MEMORY-THEN-WEB RULE: If the user asks about prior chats, personal facts, preferences, or earlier reasons, search memory first. If memory is insufficient and the question is still a factual/public information question, then search the web.",
+			"19. RESPONSE LANGUAGE RULE: Always answer in the same language as the user's current request unless the user explicitly asks for another language. Tool names, tool arguments, and tool results must never change the response language.",
+			"20. COMMAND RECOVERY RULE: A failed command is not evidence that the task is complete. Read its actual error and, when a safe OS-appropriate alternative exists, call execute_command again yourself. Never end by asking the user to run the replacement command for you.",
+			"21. BULK TOOL TEST RULE: If the user explicitly requests every/all tools to be tested, do not claim only the most recently used tool is available. Test one safe tool per turn, continue automatically, and finish with a pass/fail/skipped summary. Never delete real user data merely to satisfy a diagnostic.",
 		)
 	} else {
 		lines = append(lines,
-			"1. For any tool use, output exactly one valid <tool_call> block.",
-			"2. If no tool is needed, answer normally.",
-			"3. Avoid search_web or read_web_page for person identification or image description unless explicitly asked.",
-			"4. For app usage, setup, certificates, endpoints, LM Studio, or MCP configuration questions, prefer read_help before searching the web.",
-			"5. Web tools return compact buffered evidence handles to save context; use the smallest useful number of calls.",
-			"6. Web evidence budget: usually make 1 web/search tool call; make at most 3 total web evidence calls unless the user explicitly asks for deep research or source comparison.",
-			"7. Never present weak, conflicting, or off-topic web evidence as fact. If evidence quality is poor after the budget, say it is not well verified and ask whether to continue with deeper research.",
-			"8. After search_web or search_web_multi, answer directly from search evidence when it is sufficient. Use search_web_multi only with exactly two distinct queries for genuine comparison or multi-angle research. Call read_web_page only for a specific high-value URL, and call read_buffered_source only when you need focused excerpts from buffered long content.",
-			"9. If read_buffered_source omits source_id, it can search the recent buffered sources for this user; use a focused query.",
-			"10. Avoid search_web -> read_buffered_source -> read_web_page -> read_buffered_source chains for simple factual/profile questions. Prefer search_web once, then either answer or read one authoritative page.",
-			"11. Avoid repeating the same search_web or read_web_page call with near-identical inputs in one answer, but one refined follow-up search is acceptable if it materially improves evidence quality.",
-			"12. If read_web_page fails or times out, do not retry the exact same page immediately. Prefer answering from the buffered search evidence, or read a different relevant source if that would clearly improve quality.",
-			"13. For execute_command, use the provided ENVIRONMENT INFO to choose OS-appropriate commands. Do not call execute_command only to discover the OS or shell when ENVIRONMENT INFO already tells you.",
-			"14. Never use execute_command to imitate built-in tools such as search_memory, search_web, read_memory, read_memory_context, read_web_page, read_help, or read_buffered_source. Call the real tool directly.",
-			"15. After execute_command returns enough information, answer the user directly. Do not repeat the same or near-identical command in the same answer unless the user explicitly asked to re-run or refresh it.",
-			"16. MEMORY-THEN-WEB RULE: If the user asks about prior chats, personal facts, preferences, or earlier reasons, search memory first. If memory is insufficient and the question is still a factual/public information question, then search the web.",
+			"1. For any tool use, output exactly one tool-specific XML element whose body is the JSON arguments object. Example: <get_current_time>{}</get_current_time>. General form: <tool_name>{...}</tool_name>.",
+			"2. Output the tool call only. Do not add prose before or after it. Do not use Python/function syntax such as tool_name(key=\"value\"); use the XML form above. Wait for the app to return the result.",
+			"3. If no tool is needed, answer normally.",
+			"4. Avoid search_web or read_web_page for person identification or image description unless explicitly asked.",
+			"5. For app usage, setup, certificates, endpoints, LM Studio, or app-tool configuration questions, prefer read_help before searching the web.",
+			"6. Web tools return compact buffered evidence handles to save context; use the smallest useful number of calls.",
+			"7. Web evidence budget: usually make 1 web/search tool call; make at most 3 total web evidence calls unless the user explicitly asks for deep research or source comparison.",
+			"8. Never present weak, conflicting, or off-topic web evidence as fact. If evidence quality is poor after the budget, say it is not well verified and ask whether to continue with deeper research.",
+			"9. After search_web or search_web_multi, answer directly from search evidence when it is sufficient. Use search_web_multi only with exactly two distinct queries for genuine comparison or multi-angle research. Call read_web_page only for a specific high-value URL, and call read_buffered_source only when you need focused excerpts from buffered long content.",
+			"10. If read_buffered_source omits source_id, it can search the recent buffered sources for this user; use a focused query.",
+			"11. Avoid search_web -> read_buffered_source -> read_web_page -> read_buffered_source chains for simple factual/profile questions. Prefer search_web once, then either answer or read one authoritative page.",
+			"12. Avoid repeating the same search_web or read_web_page call with near-identical inputs in one answer, but one refined follow-up search is acceptable if it materially improves evidence quality.",
+			"13. If read_web_page fails or times out, do not retry the exact same page immediately. Prefer answering from the buffered search evidence, or read a different relevant source if that would clearly improve quality.",
+			"14. For execute_command, use the provided ENVIRONMENT INFO to choose OS-appropriate commands. Do not call execute_command only to discover the OS or shell when ENVIRONMENT INFO already tells you.",
+			"15. Never use execute_command to imitate built-in tools such as search_memory, search_web, read_memory, read_memory_context, read_web_page, read_help, or read_buffered_source. Call the real tool directly.",
+			"16. After execute_command returns enough information, answer the user directly. Do not repeat the same or near-identical command in the same answer unless the user explicitly asked to re-run or refresh it.",
+			"17. MEMORY-THEN-WEB RULE: If the user asks about prior chats, personal facts, preferences, or earlier reasons, search memory first. If memory is insufficient and the question is still a factual/public information question, then search the web.",
+			"18. RESPONSE LANGUAGE RULE: Always answer in the same language as the user's current request unless the user explicitly asks for another language. Tool names, tool arguments, and tool results must never change the response language.",
+			"19. COMMAND RECOVERY RULE: A failed command is not evidence that the task is complete. Read its actual error and, when a safe OS-appropriate alternative exists, call execute_command again yourself. Never end by asking the user to run the replacement command for you.",
+			"20. BULK TOOL TEST RULE: If the user explicitly requests every/all tools to be tested, continue automatically with one remaining safe tool per turn instead of asking which tool to test next. Finish with a pass/fail/skipped summary and never delete real user data merely to satisfy a diagnostic.",
 		)
+	}
+	if guidance := platformCommandGuidance(envInfo); guidance != "" {
+		lines = append(lines, guidance)
+	}
+
+	if len(tools) > 0 && !useNativeTools {
+		lines = append(lines, "AVAILABLE APP TOOLS:")
+		for _, tool := range tools {
+			schema := strings.TrimSpace(string(tool.InputSchema))
+			if schema == "" {
+				schema = `{"type":"object","properties":{}}`
+			}
+			lines = append(lines, fmt.Sprintf("- %s: %s Input JSON Schema: %s", tool.Name, strings.TrimSpace(tool.Description), schema))
+		}
 	}
 
 	if strings.Contains(lowerModelID, "gemma-4") {
@@ -206,6 +235,20 @@ func buildToolUsage(envInfo string, modelID string, useNativeIntegrations bool) 
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+func platformCommandGuidance(envInfo string) string {
+	lower := strings.ToLower(envInfo)
+	switch {
+	case strings.Contains(lower, "operating system: darwin"):
+		return "PLATFORM COMMAND GUIDE (Darwin/macOS, BSD userland): Do not use GNU-only flags such as ps --sort. For processes by memory, use `ps axo pid,comm,%mem,rss | sort -k3 -nr | head -n 11`. For boot time, use `sysctl -n kern.boottime`."
+	case strings.Contains(lower, "operating system: linux"):
+		return "PLATFORM COMMAND GUIDE (Linux, GNU userland): For processes by memory, use `ps -eo pid,comm,%mem,rss --sort=-%mem | head -n 11`. For boot time, use `uptime -s` (or an available equivalent if unsupported)."
+	case strings.Contains(lower, "operating system: windows"):
+		return "PLATFORM COMMAND GUIDE (Windows): Use Windows-native commands. For processes by memory, use `powershell -NoProfile -Command \"Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 10 Id,ProcessName,WorkingSet64\"`. For boot time, use `powershell -NoProfile -Command \"(Get-CimInstance Win32_OperatingSystem).LastBootUpTime\"`."
+	default:
+		return ""
+	}
 }
 
 func buildMemoryTemplate(staticMemory string, recentContext string, userProfile string, activeContext string, retrievalInjected bool, userProfileFacts string) string {

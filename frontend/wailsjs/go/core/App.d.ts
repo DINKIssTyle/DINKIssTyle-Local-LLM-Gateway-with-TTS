@@ -71,6 +71,8 @@ export function GetServerStatus():Promise<Record<string, any>>;
 
 export function GetServerUILanguage():Promise<string>;
 
+export function GetSkillsFolderPath():Promise<string>;
+
 export function GetStartOnBoot():Promise<boolean>;
 
 export function GetSystemPrompts():Promise<Array<promptkit.SystemPrompt>>;
@@ -109,6 +111,8 @@ export function OpenCertFolder():Promise<void>;
 
 export function OpenMemoryFolder(arg1:string):Promise<string>;
 
+export function OpenSkillsFolder():Promise<void>;
+
 export function Quit():Promise<void>;
 
 export function ResetMemory(arg1:string):Promise<string>;
@@ -127,9 +131,9 @@ export function SetDebugTraceEnabled(arg1:boolean):Promise<void>;
 
 export function SetEmbeddingModelConfig(arg1:core.EmbeddingModelConfig):Promise<void>;
 
-export function SetEnableMCP(arg1:boolean):Promise<void>;
-
 export function SetEnableTTS(arg1:boolean):Promise<void>;
+
+export function SetEnableTools(arg1:boolean):Promise<void>;
 
 export function SetLLMApiToken(arg1:string):Promise<void>;
 

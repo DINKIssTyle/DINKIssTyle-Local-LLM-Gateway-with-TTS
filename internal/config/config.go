@@ -7,7 +7,7 @@ package config
 
 const (
 	// AppVersion is the current version of the application
-	AppVersion = "3.3.0"
+	AppVersion = "4.0.0"
 
 	// Window Constants
 	NormalWindowWidth  = 780

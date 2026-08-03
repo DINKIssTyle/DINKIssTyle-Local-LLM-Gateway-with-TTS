@@ -16,13 +16,14 @@ type RequestInput struct {
 	TokenRaw          string
 	LLMMode           string
 	ContextStrategy   string
-	EnableMCP         bool
+	EnableTools       bool
 	EnableMemory      bool
 	RecentContext     string
 	MemorySnapshot    string
 	ActiveContext     string
 	RetrievalInjected bool
 	UserProfileFacts  string
+	Tools             []promptkit.ToolDefinition
 }
 
 type PreparedRequest struct {
@@ -54,25 +55,28 @@ func PrepareRequest(input RequestInput) (PreparedRequest, error) {
 	prepared.ReqMap = reqMap
 	prepared.InitialUserInputText = extractChatInputText(reqMap)
 	prepared.IsStatefulFollowup = isStatefulFollowup(input.LLMMode, contextStrategy, reqMap)
+	removedLegacyIntegration := removeLegacyMCPIntegration(reqMap)
+	removedProviderTools := removeProviderToolControls(reqMap)
 
-	useNativeIntegrations := input.EnableMCP && strings.TrimSpace(strings.ToLower(input.LLMMode)) == "stateful"
+	useNativeTools := input.EnableTools && strings.TrimSpace(strings.ToLower(input.LLMMode)) != "stateful"
 	includeRetrievalMemory := contextStrategy == "retrieval"
-	shouldInjectRuntime := useNativeIntegrations || includeRetrievalMemory
+	shouldInjectRuntime := input.EnableTools || includeRetrievalMemory
 
 	if shouldInjectRuntime {
-		if useNativeIntegrations {
-			ensureMCPIntegration(reqMap)
+		if useNativeTools {
+			ensureChatCompletionTools(reqMap, input.Tools)
 		}
 		if !prepared.IsStatefulFollowup {
 			extraInstr := promptkit.BuildRuntimeInstructions(promptkit.RuntimeInstructionsInput{
-				EnvironmentInfo:       buildEnvironmentInfo(),
-				ModelID:               extractModelID(reqMap),
-				UseNativeIntegrations: useNativeIntegrations,
-				RecentContext:         conditionalContextValue(includeRetrievalMemory, input.RecentContext),
-				MemorySnapshot:        conditionalContextValue(includeRetrievalMemory, input.MemorySnapshot),
-				ActiveContext:         conditionalContextValue(includeRetrievalMemory, input.ActiveContext),
-				RetrievalInjected:     includeRetrievalMemory && input.RetrievalInjected,
-				UserProfileFacts:      input.UserProfileFacts,
+				EnvironmentInfo:   buildEnvironmentInfo(),
+				ModelID:           extractModelID(reqMap),
+				UseNativeTools:    useNativeTools,
+				Tools:             input.Tools,
+				RecentContext:     conditionalContextValue(includeRetrievalMemory, input.RecentContext),
+				MemorySnapshot:    conditionalContextValue(includeRetrievalMemory, input.MemorySnapshot),
+				ActiveContext:     conditionalContextValue(includeRetrievalMemory, input.ActiveContext),
+				RetrievalInjected: includeRetrievalMemory && input.RetrievalInjected,
+				UserProfileFacts:  input.UserProfileFacts,
 			})
 			prepared.InjectedPrompt = promptkit.InjectPrompt(reqMap, extraInstr)
 		}
@@ -80,6 +84,12 @@ func PrepareRequest(input RequestInput) (PreparedRequest, error) {
 		newBody, err := json.Marshal(reqMap)
 		if err != nil {
 			return prepared, fmt.Errorf("marshal prepared request: %w", err)
+		}
+		prepared.Body = newBody
+	} else if removedLegacyIntegration || removedProviderTools {
+		newBody, err := json.Marshal(reqMap)
+		if err != nil {
+			return prepared, fmt.Errorf("marshal request after sanitizing tool controls: %w", err)
 		}
 		prepared.Body = newBody
 	}
@@ -143,25 +153,66 @@ func conditionalContextValue(enabled bool, value string) string {
 	return value
 }
 
-func ensureMCPIntegration(reqMap map[string]interface{}) {
+func removeLegacyMCPIntegration(reqMap map[string]interface{}) bool {
 	const targetMCP = "mcp/dinkisstyle-gateway"
-
-	var integrations []string
+	var integrations []interface{}
+	removed := false
 	if existing, ok := reqMap["integrations"].([]interface{}); ok {
 		for _, v := range existing {
-			if str, ok := v.(string); ok {
-				integrations = append(integrations, str)
+			if str, ok := v.(string); ok && str == targetMCP {
+				removed = true
+				continue
 			}
+			integrations = append(integrations, v)
 		}
 	}
+	if len(integrations) == 0 {
+		if _, exists := reqMap["integrations"]; exists {
+			delete(reqMap, "integrations")
+		}
+		return removed
+	}
+	reqMap["integrations"] = integrations
+	return removed
+}
 
-	for _, integration := range integrations {
-		if integration == targetMCP {
-			return
+func removeProviderToolControls(reqMap map[string]interface{}) bool {
+	removed := false
+	for _, key := range []string{"tools", "tool_choice", "parallel_tool_calls", "functions", "function_call"} {
+		if _, exists := reqMap[key]; exists {
+			delete(reqMap, key)
+			removed = true
 		}
 	}
+	return removed
+}
 
-	reqMap["integrations"] = append(integrations, targetMCP)
+func ensureChatCompletionTools(reqMap map[string]interface{}, definitions []promptkit.ToolDefinition) {
+	tools := make([]interface{}, 0, len(definitions))
+	for _, definition := range definitions {
+		if strings.TrimSpace(definition.Name) == "" {
+			continue
+		}
+		var parameters interface{}
+		if err := json.Unmarshal(definition.InputSchema, &parameters); err != nil {
+			continue
+		}
+		tools = append(tools, map[string]interface{}{
+			"type": "function",
+			"function": map[string]interface{}{
+				"name":        definition.Name,
+				"description": definition.Description,
+				"parameters":  parameters,
+			},
+		})
+	}
+	if len(tools) == 0 {
+		delete(reqMap, "tools")
+		return
+	}
+	reqMap["tools"] = tools
+	reqMap["tool_choice"] = "auto"
+	reqMap["parallel_tool_calls"] = false
 }
 
 func buildEnvironmentInfo() string {

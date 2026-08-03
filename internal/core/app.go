@@ -44,7 +44,7 @@ type App struct {
 	llmApiToken       string
 	llmMode           string // "standard" or "stateful"
 	enableTTS         bool
-	enableMCP         bool
+	enableTools       bool
 	enableDebugTrace  bool
 	certDomain        string
 	authMgr           *AuthManager
@@ -70,6 +70,7 @@ type AppConfig struct {
 	LLMApiToken       string               `json:"llmApiToken"`
 	LLMMode           string               `json:"llmMode"`
 	EnableTTS         bool                 `json:"enableTTS"`
+	EnableTools       *bool                `json:"enableTools,omitempty"`
 	TTS               ServerTTSConfig      `json:"tts"`
 	Embedding         EmbeddingModelConfig `json:"embedding"`
 	StartOnBoot       bool                 `json:"startOnBoot"`
@@ -367,7 +368,7 @@ func (a *App) loadConfig() {
 	a.port = "8080"
 	a.llmEndpoint = "http://127.0.0.1:1234"
 	a.enableTTS = true
-	a.enableMCP = true
+	a.enableTools = true
 	a.llmMode = "stateful"
 	a.certDomain = "localhost"
 	ttsConfig = ServerTTSConfig{
@@ -407,6 +408,9 @@ func (a *App) loadConfig() {
 	}
 	a.llmApiToken = cfg.LLMApiToken
 	a.enableTTS = cfg.EnableTTS
+	if cfg.EnableTools != nil {
+		a.enableTools = *cfg.EnableTools
+	}
 	a.enableDebugTrace = cfg.DebugTraceEnabled
 	a.welcomeDismissed = cfg.WelcomeDismissed
 	a.alwaysShowWelcome = cfg.AlwaysShowWelcome
@@ -465,6 +469,8 @@ func (a *App) saveConfig() {
 	cfg.LLMMode = a.llmMode
 	cfg.LLMApiToken = a.llmApiToken
 	cfg.EnableTTS = a.enableTTS
+	enableTools := a.enableTools
+	cfg.EnableTools = &enableTools
 	cfg.DebugTraceEnabled = a.enableDebugTrace
 	cfg.CertDomain = a.certDomain
 	cfg.WelcomeDismissed = a.welcomeDismissed
@@ -577,7 +583,7 @@ func (a *App) GetServerStatus() map[string]interface{} {
 	llmMode := a.llmMode
 	hasAPIToken := a.llmApiToken != ""
 	enableTTS := a.enableTTS
-	enableMCP := a.enableMCP
+	enableTools := a.enableTools
 	enableDebugTrace := a.enableDebugTrace
 	a.serverMux.Unlock()
 
@@ -595,7 +601,7 @@ func (a *App) GetServerStatus() map[string]interface{} {
 		"llmMode":          llmMode,
 		"hasApiToken":      hasAPIToken,
 		"enableTTS":        enableTTS,
-		"enableMCP":        enableMCP,
+		"enableTools":      enableTools,
 		"enableDebugTrace": enableDebugTrace,
 	}
 }
@@ -672,11 +678,11 @@ func (a *App) SetEnableTTS(enabled bool) {
 	a.saveConfig()
 }
 
-// SetEnableMCP sets the MCP enabled state
-func (a *App) SetEnableMCP(enabled bool) {
+// SetEnableTools enables or disables the provider-independent app tool runtime.
+func (a *App) SetEnableTools(enabled bool) {
 	a.serverMux.Lock()
 	defer a.serverMux.Unlock()
-	a.enableMCP = enabled
+	a.enableTools = enabled
 	a.saveConfig()
 }
 
@@ -1070,8 +1076,8 @@ func (a *App) StartServer(port string) error {
 
 	// Redirect Handler: Redirects HTTP to HTTPS on the SAME port
 	redirectHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Allow MCP and API endpoints to work on HTTP to avoid breaking local clients
-		if strings.HasPrefix(r.URL.Path, "/mcp/") || strings.HasPrefix(r.URL.Path, "/api/") {
+		// Allow API endpoints to work on HTTP for local/web clients.
+		if strings.HasPrefix(r.URL.Path, "/api/") {
 			loggingMux.ServeHTTP(w, r)
 			return
 		}

@@ -81,6 +81,7 @@ if exist "build\bin\DKST LLM Chat Server.exe" (
     if not exist "build\bin\config.json" copy /Y "bundle\config.json" "build\bin\" 2>nul
     copy /Y "bundle\system_prompts.json" "build\bin\" >nul
     copy /Y "bundle\ThirdPartyNotices.md" "build\bin\" >nul
+    if exist "bundle\skills\builtin" xcopy /E /I /Y "bundle\skills\builtin" "build\bin\skills\builtin" >nul
     
     echo Build success!
 ) else (

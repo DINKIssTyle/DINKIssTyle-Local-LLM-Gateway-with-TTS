@@ -7,7 +7,7 @@
     "settings": {
       "llm_mode": "stateful",
       "context_strategy": "retrieval",
-      "enable_mcp": true,
+      "enable_tools": true,
       "enable_memory": true,
       "embedding_config": {
         "provider": "local",

@@ -191,6 +191,24 @@
             });
     }
 
+    function repairPunctuationWrappedStrongEmphasis(segment) {
+        const repair = (source, marker) => {
+            const pattern = marker === '**'
+                ? /\*\*([^\s*\n](?:[^*\n]*?[^\s*\n])?)\*\*/gu
+                : /__([^\s_\n](?:[^_\n]*?[^\s_\n])?)__/gu;
+            return source.replace(pattern, (match, content) => {
+                // CommonMark deliberately rejects emphasis such as
+                // **'Qwen'**를 because both edges inside the delimiter are
+                // punctuation. Local models emit this form frequently. Convert
+                // only that rejected subset to equivalent safe inline HTML.
+                if (!/^\p{P}/u.test(content) && !/\p{P}$/u.test(content)) return match;
+                return `<strong>${content}</strong>`;
+            });
+        };
+
+        return repair(repair(String(segment || ''), '**'), '__');
+    }
+
     function normalizeMarkdownOutsideCode(text, transform) {
         const parts = String(text).split(/(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]+`)/g);
         return parts.map((part, index) => {
@@ -400,6 +418,10 @@
                 .replace(/(\|[^\n]+\|)\n\s*\n(?=\|[^\n]+\|)/g, '$1\n')
                 .replace(/\n{3,}/g, '\n\n');
         });
+
+        normalized = normalizeMarkdownOutsideCode(normalized, (segment) =>
+            repairPunctuationWrappedStrongEmphasis(segment)
+        );
 
         normalized = restoreProtectedSegments(normalized, protectedTables.placeholders);
         return restoreProtectedMathSegments(normalized, protectedMath.placeholders);

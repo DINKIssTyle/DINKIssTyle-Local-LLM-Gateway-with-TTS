@@ -99,7 +99,7 @@ func (a *App) GetBrowserAssetStatus() BrowserAssetStatus {
 	} else if downloading {
 		status.Message = "Downloading and installing Chrome for Testing..."
 	} else if status.Installed {
-		status.Message = "Dedicated Chromium is ready for MCP web access."
+		status.Message = "Dedicated Chromium is ready for app tool web access."
 	}
 	return status
 }

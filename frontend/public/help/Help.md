@@ -13,10 +13,10 @@
 
 *   **크로스 플랫폼 지원:** 서버는 Windows, macOS, Linux 환경에서 구동되며, 클라이언트는 데스크톱, 모바일 등 대부분의 현대적인 웹 브라우저를 통해 접속할 수 있습니다.
 *   **PWA(Progressive Web App) 기술:** 본 서비스는 PWA 기술이 적용되어 있습니다. iOS, Android 성 단말기는 물론 데스크톱 환경에서도 별도의 앱처럼 설치(`홈 화면에 추가` 등)하여 편리하게 사용할 수 있습니다.
-*   **MCP 도구 지원:** DKST LLM Chat Server가 직접 제공하는 **Model Context Protocol(MCP)** 도구를 사용할 수 있습니다. 사용 가능한 도구 목록은 서버에서 광고되는 정보를 확인하여 답변에 반영하세요.
+*   **앱 도구 지원:** DKST LLM Chat Server가 직접 제공하는 웹 검색, 메모리, 페이지 읽기 등의 도구를 사용할 수 있습니다. 도구는 앱 내부에서 실행되며 모델 공급자에 별도로 등록할 필요가 없습니다.
 *   **기술 스택:** 백엔드는 Go 언어로 작성되었으며, 데스크톱 앱 구성에는 Wails 프레임워크가 사용되었습니다.
 *   **런타임 연동:** OpenAI API 엔드포인트를 지원하지만, **LM Studio**(특히 0.4.0 버전 이상)와 가장 밀접하고 최적화되어 작동합니다.
-    *   LM Studio 연동 시: 모델 로딩 상태, 프롬프트 처리 진행률(Progress), 모델 언로드, Stateful 컨텍스트 관리, MCP 도구 사용 등의 차별화된 기능을 제공합니다.
+    *   LM Studio 연동 시: 모델 로딩 상태, 프롬프트 처리 진행률(Progress), 모델 언로드, Stateful 컨텍스트 관리, 앱 도구 사용 등의 차별화된 기능을 제공합니다.
     *   OpenAI 모드에서는 위와 같은 특수 기능 중 일부가 제한될 수 있습니다.
 
 
@@ -40,7 +40,7 @@
 
 
 ### 도구 호출(Tool Call) 실패 관련
-*   MCP 도구 호출에 자주 실패하거나 오류가 발생한다면, **컨텍스트 길이(Context Length)를 늘려야 합니다.**
+*   앱 도구 호출 형식을 모델이 자주 만들지 못한다면, **컨텍스트 길이(Context Length)를 늘리거나 tool-use 지원 모델을 사용하세요.**
 *   특히 웹 검색과 같이 방대한 양의 정보를 처리하는 도구는 더 많은 컨텍스트 공간을 요구합니다. 이는 시스템 설정이 아닌 사용자가 연결한 LLM 런타임(예: LM Studio)의 설정 메뉴에서 직접 변경해야 합니다.
 
 
@@ -54,7 +54,7 @@
 
 ## 4. 계정 및 관리 설정 (Member & Account Management)
 *   **Account Management:** 서버 관리 화면의 상세 설정을 통해 각 계정별 권한을 세밀하게 제어할 수 있습니다.
-*   **MCP 사용 권한:** 각 사용자 계정마다 MCP 도구 사용 가능 여부를 개별적으로 지정할 수 있으므로, 권한 문제가 발생할 경우 관리자 설정을 확인하도록 안내하세요.
+*   **앱 도구 사용 권한:** 각 사용자 계정마다 도구 사용 가능 여부를 개별적으로 지정할 수 있으므로, 권한 문제가 발생할 경우 관리자 설정을 확인하도록 안내하세요.
 
 
 ---
@@ -80,7 +80,7 @@
     *   **사용자 메시지:** 'You' 라는 라벨 아래 컬러풀한 버블 형태로 표시됩니다. 버블 색상은 설정에서 변경 가능합니다.
     *   **어시스턴트 응답:** 'ASSISTANT' 라벨 아래 별도의 버블 없이 출력됩니다.
         *   **Reasoning 카드:** 추론 모델의 경우 생각하는 과정을 컴팩트한 카드로 보여줍니다. 클릭하여 펼쳐볼 수 있습니다.
-        *   **MCP 카드:** 도구 사용 히스토리를 보여줍니다. 역시 펼쳐서 상세 실행 내용을 확인할 수 있습니다.
+        *   **도구 카드:** 도구 사용 히스토리를 보여줍니다. 펼쳐서 상세 실행 내용을 확인할 수 있습니다.
         *   **액션 버튼:** 응답 하단에 `대화 저장`, `복사`, `말하기(TTS)` 버튼이 위치합니다.
 
 
@@ -176,8 +176,8 @@
 | `setting.contextStrategy.option.stateful` | Stateful |
 | `setting.contextStrategy.option.none` | 비활성화 |
 | `setting.contextStrategy.option.history` | 단순 히스토리 |
-| `setting.enableMCP.label` | MCP 기능 활성화 |
-| `setting.enableMCP.desc` | Model Context Protocol 통합 기능을 사용합니다 (웹 검색, 브라우징 등) |
+| `setting.enableTools.label` | 앱 도구 사용 |
+| `setting.enableTools.desc` | 공급자와 무관하게 앱 내부 도구를 사용합니다 |
 | `setting.enableMemory.label` | 개인 메모리 활성화 |
 | `setting.enableMemory.desc` | LLM이 로컬 파일에 개인적인 세부 사항을 기억하도록 허용합니다. |
 | `setting.showReasoningControl.label` | Reasoning 컨트롤 표시 |
@@ -259,7 +259,6 @@
 | `chat.startup.welcomeTitle` | 환영합니다. |
 | `chat.startup.restore` | 이전 대화 불러오기 |
 | `error.authFailed` | LM Studio 인증 실패 및 해결 방법 안내 |
-| `error.mcpFailed` | LM Studio MCP 연결 실패 및 해결 방법 안내 |
 | `error.contextExceeded` | 대화 문맥 길이 초과 안내 |
 | `error.visionNotSupported` | 이미지 인식 미지원 안내 |
 | `warning.loopDetected` | 반복적인 응답 감지 안내 |

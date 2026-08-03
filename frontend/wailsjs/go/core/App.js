@@ -134,6 +134,10 @@ export function GetServerUILanguage() {
   return window['go']['core']['App']['GetServerUILanguage']();
 }
 
+export function GetSkillsFolderPath() {
+  return window['go']['core']['App']['GetSkillsFolderPath']();
+}
+
 export function GetStartOnBoot() {
   return window['go']['core']['App']['GetStartOnBoot']();
 }
@@ -210,6 +214,10 @@ export function OpenMemoryFolder(arg1) {
   return window['go']['core']['App']['OpenMemoryFolder'](arg1);
 }
 
+export function OpenSkillsFolder() {
+  return window['go']['core']['App']['OpenSkillsFolder']();
+}
+
 export function Quit() {
   return window['go']['core']['App']['Quit']();
 }
@@ -246,12 +254,12 @@ export function SetEmbeddingModelConfig(arg1) {
   return window['go']['core']['App']['SetEmbeddingModelConfig'](arg1);
 }
 
-export function SetEnableMCP(arg1) {
-  return window['go']['core']['App']['SetEnableMCP'](arg1);
-}
-
 export function SetEnableTTS(arg1) {
   return window['go']['core']['App']['SetEnableTTS'](arg1);
+}
+
+export function SetEnableTools(arg1) {
+  return window['go']['core']['App']['SetEnableTools'](arg1);
 }
 
 export function SetLLMApiToken(arg1) {

@@ -23,7 +23,7 @@ let config = {
     temperature: null,     // null => Auto (omit from payload)
     historyCount: 10,
     enableTTS: true,       // Default: True
-    enableMCP: true,       // Default: True
+    enableTools: true,     // Default: True
     enableMemory: true,    // Default: True
     ttsLang: 'ko',
     chunkSize: 300,        // Default: 300 (paragraph-first smart chunking)
@@ -352,8 +352,8 @@ function usesRetrievalConversationContext() {
     return getNormalizedContextStrategy() === 'retrieval';
 }
 
-function enforceMCPPolicyForMode(mode) {
-    return mode === 'stateful' ? !!config.enableMCP : false;
+function enforceToolPolicyForMode(mode) {
+    return !!config.enableTools;
 }
 
 const WEB_THEME_OPTIONS = ['auto', 'dark', 'light'];
@@ -609,82 +609,7 @@ async function throwIfReasoningRunawayRepetition(ctx) {
     ctx.streamRestartRequested = true;
     throw repetitionError;
 }
-/**
- * SSEParser: raw bytes -> JSON events
- */
-class SSEParser {
-    constructor() {
-        this.decoder = new TextDecoder();
-        this.buffer = '';
-    }
-
-    parse(value) {
-        this.buffer += this.decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
-        const events = [];
-        let boundary = this.buffer.indexOf('\n\n');
-        while (boundary !== -1) {
-            const rawBlock = this.buffer.slice(0, boundary);
-            this.buffer = this.buffer.slice(boundary + 2);
-            boundary = this.buffer.indexOf('\n\n');
-
-            const block = String(rawBlock || '').trim();
-            if (!block) continue;
-
-            let eventName = 'message';
-            const dataLines = [];
-            for (const rawLine of block.split('\n')) {
-                const line = String(rawLine || '');
-                if (!line) continue;
-                if (line.startsWith(':')) continue;
-                if (line.startsWith('event:')) {
-                    eventName = line.slice(6).trim() || 'message';
-                    continue;
-                }
-                if (line.startsWith('data:')) {
-                    dataLines.push(line.startsWith('data: ') ? line.slice(6) : line.slice(5));
-                    continue;
-                }
-                if (line.startsWith('{')) {
-                    dataLines.push(line);
-                }
-            }
-
-            const dataStr = dataLines.join('\n').trim();
-            if (!dataStr) continue;
-            if (dataStr === '[DONE]') {
-                events.push({ type: 'stream.done' });
-                continue;
-            }
-
-            try {
-                const parsed = JSON.parse(dataStr);
-                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && !parsed.type && eventName && eventName !== 'message') {
-                    parsed.type = eventName;
-                }
-                events.push(parsed);
-            } catch (e) {
-                if (eventName === 'error') {
-                    events.push({
-                        type: 'error',
-                        error: {
-                            message: dataStr
-                        }
-                    });
-                } else {
-                    console.warn('[SSE] JSON Parse Error', e, dataStr);
-                    events.push({
-                        type: 'stream.parse_error',
-                        error: {
-                            message: t('status.unexpectedStop'),
-                            detail: dataStr.slice(0, 240)
-                        }
-                    });
-                }
-            }
-        }
-        return events;
-    }
-}
+const SSEParser = window.DKSTStreamProtocol.SSEParser;
 
 /**
  * StreamState: Maintains state for a single streaming response
@@ -1372,55 +1297,6 @@ function extractRuntimeErrorMessage(errorLike) {
     return '';
 }
 
-function getSuggestedMcpServerUrl() {
-    const defaultUrl = 'http://localhost:8081/mcp/sse';
-
-    try {
-        const protocol = String(window?.location?.protocol || '').toLowerCase();
-        const hostname = String(window?.location?.hostname || '').trim().toLowerCase();
-        const port = String(window?.location?.port || '').trim();
-        const isUsableHost = hostname
-            && hostname !== 'wails'
-            && hostname !== 'localhost'
-            && !hostname.includes(':');
-        if ((protocol === 'http:' || protocol === 'https:') && isUsableHost) {
-            const host = port ? `${hostname}:${port}` : hostname;
-            return `http://${host}/mcp/sse`;
-        }
-    } catch (_) {
-        // Ignore window/location access failures and fall back below.
-    }
-
-    const configuredPort = String(
-        document.getElementById('server-port')?.value
-        || ''
-    ).trim();
-    if (configuredPort) {
-        return `http://localhost:${configuredPort}/mcp/sse`;
-    }
-
-    return defaultUrl;
-}
-
-function isLMStudioPluginToolConnectionError(errorLike, rawMessage = '') {
-    const errorType = errorLike && typeof errorLike === 'object'
-        ? String(errorLike.type || '').trim()
-        : '';
-    const errorParam = errorLike && typeof errorLike === 'object'
-        ? String(errorLike.param || '').trim()
-        : '';
-    const normalizedMessage = String(rawMessage || '').toLowerCase();
-
-    return errorType === 'plugin_connection_error'
-        || (
-            errorParam === 'integrations'
-            && normalizedMessage.includes('unable to get plugin tools')
-        )
-        || normalizedMessage.includes("unable to get plugin tools for 'mcp/dinkisstyle-gateway'")
-        || normalizedMessage.includes("plugin identifier 'mcp/dinkisstyle-gateway'")
-        || normalizedMessage.includes('plugin process exited with code 1');
-}
-
 function getLocalizedRuntimeErrorMessage(errorLike) {
     const rawMessage = extractRuntimeErrorMessage(errorLike);
     if (!rawMessage) return '';
@@ -1428,20 +1304,12 @@ function getLocalizedRuntimeErrorMessage(errorLike) {
     if (rawMessage.startsWith('LM_STUDIO_AUTH_ERROR: ')) {
         return t('error.authFailed') + rawMessage.replace('LM_STUDIO_AUTH_ERROR: ', '');
     }
-    if (rawMessage.startsWith('LM_STUDIO_MCP_ERROR: ')) {
-        return t('error.mcpFailed') + rawMessage.replace('LM_STUDIO_MCP_ERROR: ', '');
-    }
     if (rawMessage.startsWith('LM_STUDIO_CONTEXT_ERROR: ')) {
         return t('error.contextExceeded');
     }
     if (rawMessage.startsWith('LM_STUDIO_VISION_ERROR: ')) {
         return t('error.visionNotSupported');
     }
-    if (isLMStudioPluginToolConnectionError(errorLike, rawMessage)) {
-        return t('error.mcpPluginToolsUnavailable')
-            .replace('{url}', getSuggestedMcpServerUrl());
-    }
-
     return '';
 }
 
@@ -2101,7 +1969,6 @@ const modelController = appModels.createModelController({
     deps: {
         DEFAULT_REASONING_OPTIONS,
         config,
-        enforceMCPPolicyForMode,
         escapeAttr,
         escapeHtml,
         isGenerating: () => AppState.chat.isGenerating,
@@ -3312,7 +3179,7 @@ function loadConfig() {
     config.ttsThreads = Math.max(1, Math.min(4, parseInt(config.ttsThreads, 10) || 4));
     config.voiceInputAutoTTS = config.voiceInputAutoTTS !== false;
     config.contextStrategy = normalizeContextStrategyForMode(config.llmMode, config.contextStrategy);
-    config.enableMCP = enforceMCPPolicyForMode(config.llmMode);
+    config.enableTools = enforceToolPolicyForMode(config.llmMode);
 
     // Update UI
     const cfgApi = document.getElementById('cfg-api');
@@ -3329,8 +3196,8 @@ function loadConfig() {
     document.getElementById('cfg-llm-mode').value = config.llmMode || 'standard';
     renderContextStrategyOptions();
     document.getElementById('cfg-context-strategy').value = config.contextStrategy;
-    const mcpEl = document.getElementById('cfg-enable-mcp');
-    if (mcpEl) mcpEl.checked = config.enableMCP || false;
+    const toolsEl = document.getElementById('cfg-enable-tools');
+    if (toolsEl) toolsEl.checked = config.enableTools || false;
     updateSettingsVisibility(); // Update UI visibility based on mode
     renderReasoningControl();
 
@@ -3425,7 +3292,7 @@ function updateSettingsVisibility() {
     const tokenContainer = document.getElementById('container-api-token');
     const historyContainer = document.getElementById('container-history');
     const contextStrategyContainer = document.getElementById('container-context-strategy');
-    const mcpContainer = document.getElementById('container-enable-mcp');
+    const toolsContainer = document.getElementById('container-enable-tools');
     const memContainer = document.getElementById('container-enable-memory');
     const statefulBudgetContainer = document.getElementById('container-stateful-budget');
     const embeddingSection = document.getElementById('container-embedding-section');
@@ -3435,7 +3302,7 @@ function updateSettingsVisibility() {
     config.llmMode = mode;
     renderContextStrategyOptions();
     config.contextStrategy = normalizeContextStrategyForMode(mode, document.getElementById('cfg-context-strategy')?.value || config.contextStrategy);
-    config.enableMCP = enforceMCPPolicyForMode(mode);
+    config.enableTools = enforceToolPolicyForMode(mode);
     const contextStrategyEl = document.getElementById('cfg-context-strategy');
     if (contextStrategyEl) {
         contextStrategyEl.value = config.contextStrategy;
@@ -3443,19 +3310,19 @@ function updateSettingsVisibility() {
 
     const showToken = true;
     const showHistory = usesHistoryConversationContext();
-    const showMCP = mode === 'stateful';
+    const showTools = true;
     const showStatefulBudget = usesStatefulConversationContext();
     const showEmbeddingSettings = usesRetrievalConversationContext();
     const voiceInputAutoTTSContainer = document.getElementById('container-voice-input-auto-tts');
-    const mcpEl = document.getElementById('cfg-enable-mcp');
-    if (mcpEl) {
-        mcpEl.checked = config.enableMCP;
+    const toolsEl = document.getElementById('cfg-enable-tools');
+    if (toolsEl) {
+        toolsEl.checked = config.enableTools;
     }
 
     if (tokenContainer) tokenContainer.style.display = showToken ? 'block' : 'none';
     if (historyContainer) historyContainer.style.display = showHistory ? 'block' : 'none';
     if (contextStrategyContainer) contextStrategyContainer.style.display = 'block';
-    if (mcpContainer) mcpContainer.style.display = showMCP ? 'block' : 'none';
+    if (toolsContainer) toolsContainer.style.display = showTools ? 'block' : 'none';
     if (statefulBudgetContainer) statefulBudgetContainer.style.display = showStatefulBudget ? 'block' : 'none';
     if (embeddingSection) embeddingSection.style.display = showEmbeddingSettings ? 'block' : 'none';
     if (forceReasoningContainer) forceReasoningContainer.style.display = showReasoningControl ? 'block' : 'none';
@@ -3566,7 +3433,7 @@ function buildServerConfigSignature(serverCfg) {
             llm_mode: serverCfg?.llm_mode || '',
             context_strategy: serverCfg?.context_strategy || '',
             secondary_model: serverCfg?.secondary_model || '',
-            enable_mcp: serverCfg?.enable_mcp === true,
+            enable_tools: serverCfg?.enable_tools === true,
             enable_tts: serverCfg?.enable_tts === true,
             enable_memory: serverCfg?.enable_memory === true,
             stateful_turn_limit: Number(serverCfg?.stateful_turn_limit || 0),
@@ -3712,9 +3579,9 @@ function saveConfig(closeModal = true) {
     delete config.maxTokens;
     config.historyCount = parseInt(document.getElementById('cfg-history').value);
 
-    // Save MCP setting
-    const mcpEl = document.getElementById('cfg-enable-mcp');
-    config.enableMCP = mcpEl ? mcpEl.checked : false;
+    // Save app tool setting
+    const toolsEl = document.getElementById('cfg-enable-tools');
+    config.enableTools = toolsEl ? toolsEl.checked : false;
 
     // Save Memory setting
     const memEl = document.getElementById('setting-enable-memory');
@@ -3742,7 +3609,7 @@ function saveConfig(closeModal = true) {
 
     config.llmMode = document.getElementById('cfg-llm-mode').value;
     config.contextStrategy = normalizeContextStrategyForMode(config.llmMode, document.getElementById('cfg-context-strategy')?.value);
-    config.enableMCP = enforceMCPPolicyForMode(config.llmMode);
+    config.enableTools = enforceToolPolicyForMode(config.llmMode);
     config.reasoning = normalizeReasoningValue(config.reasoning);
     config.statefulTurnLimit = Math.max(1, parseInt(document.getElementById('cfg-stateful-turn-limit')?.value, 10) || DEFAULT_STATEFUL_TURN_LIMIT);
     config.statefulCharBudget = Math.max(1000, parseInt(document.getElementById('cfg-stateful-char-budget')?.value, 10) || DEFAULT_STATEFUL_CHAR_BUDGET);
@@ -3800,7 +3667,9 @@ function saveConfig(closeModal = true) {
         window.go.core.App.SetLLMEndpoint(config.apiEndpoint).catch(console.error);
         window.go.core.App.SetLLMApiToken(config.apiToken).catch(console.error);
         window.go.core.App.SetLLMMode(config.llmMode).catch(console.error);
-        window.go.core.App.SetEnableMCP(config.enableMCP);
+        if (window.go.core.App.SetEnableTools) {
+            Promise.resolve(window.go.core.App.SetEnableTools(config.enableTools)).catch(console.error);
+        }
         window.go.core.App.SetServerTTSConfig({
             engine: config.ttsEngine,
             voiceStyle: config.ttsVoice,
@@ -3827,7 +3696,7 @@ function saveConfig(closeModal = true) {
         secondary_model: config.secondaryModel,
         llm_mode: config.llmMode,
         context_strategy: config.contextStrategy,
-        enable_mcp: config.enableMCP,
+        enable_tools: config.enableTools,
         enable_memory: config.enableMemory,
         stateful_turn_limit: config.statefulTurnLimit,
         stateful_char_budget: config.statefulCharBudget,
@@ -5489,10 +5358,10 @@ async function syncServerConfig(options = {}) {
                 const modelEl = document.getElementById('cfg-embedding-model');
                 if (modelEl) modelEl.value = config.embeddingModelId;
             }
-            if (serverCfg.enable_mcp !== undefined) {
-                config.enableMCP = serverCfg.llm_mode === 'stateful' ? serverCfg.enable_mcp : false;
-                const mcpEl = document.getElementById('cfg-enable-mcp');
-                if (mcpEl) mcpEl.checked = config.enableMCP;
+            if (serverCfg.enable_tools !== undefined) {
+                config.enableTools = serverCfg.enable_tools ?? config.enableTools;
+                const toolsEl = document.getElementById('cfg-enable-tools');
+                if (toolsEl) toolsEl.checked = config.enableTools;
             }
             if (serverCfg.enable_tts !== undefined) {
                 config.enableTTS = serverCfg.enable_tts === true;
@@ -6744,7 +6613,7 @@ async function streamResponse(payload, elementId, turnId = '', streamOptions = {
 // Helper to process the stream reader (shared by direct and proxy)
 async function processStream(response, elementId, turnId = '', streamOptions = {}) {
     const reader = response.body.getReader();
-    const parser = new SSEParser();
+    const parser = new SSEParser({ parseErrorMessage: t('status.unexpectedStop') });
     const ctx = new StreamState(elementId, turnId, streamOptions);
     let streamError = null;
 
@@ -6757,6 +6626,9 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
             for (const event of events) {
                 await handleStreamEvent(event, ctx);
             }
+        }
+        for (const event of parser.finish()) {
+            await handleStreamEvent(event, ctx);
         }
     } catch (err) {
         if (err.name === 'AbortError') {
@@ -7288,7 +7160,7 @@ function ensureToolCard(elementId, toolName = 'Tool') {
         <button type="button" class="reasoning-header tool-strip-header" onclick="toggleReasoningCard(this)">
             <span class="reasoning-chevron material-icons-round">play_arrow</span>
             <span class="tool-header-group is-live">
-                <span class="reasoning-title">MCP</span>
+                <span class="reasoning-title">Tool</span>
                 <span class="tool-header-separator" aria-hidden="true">•</span>
                 <span class="tool-header-name">${escapeHtml(formatToolDisplayName(toolName))}</span>
                 <span class="tool-header-separator" aria-hidden="true">•</span>
@@ -7360,7 +7232,7 @@ function setToolCardState(elementId, state, summary = '', args = null, toolName 
     }
 
     if (titleEl) {
-        titleEl.textContent = 'MCP';
+        titleEl.textContent = 'Tool';
     }
     if (nameEl) {
         nameEl.textContent = formatToolDisplayName(activeToolName);
@@ -8180,12 +8052,57 @@ function sanitizeAssistantRenderText(text) {
 function stripHiddenAssistantProtocolText(text) {
     let cleanText = String(text || '');
 
+    const appToolNames = 'search_web|search_web_multi|read_web_page|read_buffered_source|read_help|get_current_time|search_memory|read_memory|read_memory_context|delete_memory|save_user_fact|delete_user_fact|naver_search|namu_wiki|get_current_location|execute_command';
+    const appToolTagPattern = new RegExp(`<\\/?(?:${appToolNames})\\b[^>]*>`, 'gi');
+    const containsAppToolTag = new RegExp(`<\\/?(?:${appToolNames})\\b`, 'i').test(cleanText);
+
+    const isAppToolJSON = (candidate) => {
+        const normalizedCandidate = String(candidate || '').trim();
+        if (!normalizedCandidate.startsWith('{') || !normalizedCandidate.endsWith('}')) return false;
+        try {
+            const parsed = JSON.parse(normalizedCandidate);
+            const toolName = parsed?.tool || parsed?.name || parsed?.tool_name;
+            const hasArguments = Object.prototype.hasOwnProperty.call(parsed || {}, 'arguments') ||
+                Object.prototype.hasOwnProperty.call(parsed || {}, 'tool_arguments') ||
+                Object.prototype.hasOwnProperty.call(parsed || {}, 'parameters') ||
+                Object.prototype.hasOwnProperty.call(parsed || {}, 'params');
+            return typeof toolName === 'string' &&
+                new RegExp(`^(?:${appToolNames})$`, 'i').test(toolName.trim()) &&
+                hasArguments;
+        } catch (_) {
+            return false;
+        }
+    };
+    const trimmedToolText = cleanText.trim();
+    const fencedToolMatch = trimmedToolText.match(/^```(?:json)?\s*([\s\S]*?)\s*```/i);
+    if (fencedToolMatch && isAppToolJSON(fencedToolMatch[1])) {
+        cleanText = trimmedToolText.slice(fencedToolMatch[0].length);
+    } else if (isAppToolJSON(trimmedToolText)) {
+        cleanText = '';
+    }
+
+    cleanText = cleanText.replace(/<tool_call>\s*[\s\S]*?<\/tool_call>/gi, '');
+    cleanText = cleanText.replace(/(?:<tool_code>|<\|tool_code\|>)[\s\S]*?(?:<\/tool_code>|<\|\/tool_code\|>)/gi, '');
+    cleanText = cleanText.replace(/<\/?tool_code>?/gi, '');
+    cleanText = cleanText.replace(/<\|\/?tool_code\|>/gi, '');
+    cleanText = cleanText.replace(/<([a-zA-Z_][a-zA-Z0-9_]*)>\s*\{[\s\S]*?\}\s*<\/\1>/gi, '');
+    if (containsAppToolTag) {
+        cleanText = cleanText.replace(appToolTagPattern, '');
+        cleanText = cleanText.replace(/^\s*\{[^{}\n]*(?:"(?:query|queries|source_id|source_ids|memory_id|chunk_index|fact_key|fact_value|category|keyword|url|command)"\s*:)[^{}\n]*\}\s*$/gmi, '');
+    }
+    if (/^\s*(?:search_web|search_web_multi|read_web_page|read_buffered_source|read_help|get_current_time|search_memory|read_memory|read_memory_context|delete_memory|save_user_fact|delete_user_fact|naver_search|namu_wiki|get_current_location|execute_command)\s*\([\s\S]*\)\s*$/i.test(cleanText)) {
+        cleanText = '';
+    }
+    if (new RegExp(`^\\s*print\\s*\\(\\s*(?:${appToolNames})\\s*\\([\\s\\S]*\\)\\s*\\)\\s*$`, 'i').test(cleanText)) {
+        cleanText = '';
+    }
     cleanText = cleanText.replace(/<think>[\s\S]*?<\/think>/g, '');
     cleanText = cleanText.replace(/<\|channel\|>analysis[\s\S]*?(?=<\|channel\|>final|$)/g, '');
     cleanText = cleanText.replace(/<\|channel\|>(analysis|final|message)/g, '');
     cleanText = cleanText.replace(/<\|end\|>/g, '');
     cleanText = cleanText.replace(/\{"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*\{[^}]*\}\}/g, '');
     cleanText = cleanText.replace(/\{"name"\s*:\s*"[^"]+"[^}]*\}/g, '');
+    cleanText = cleanText.replace(/\{"tool"\s*:\s*"(?:search_web|search_web_multi|read_web_page|read_buffered_source|read_help|get_current_time|search_memory|read_memory|read_memory_context|delete_memory|save_user_fact|delete_user_fact|naver_search|namu_wiki|get_current_location|execute_command)"\s*,\s*"(?:arguments|parameters|params)"\s*:\s*\{[^}]*\}\}/gi, '');
     cleanText = cleanText.replace(/<\|[\s\S]*?\|>/g, '');
 
     // Strip Gemma 4 reasoning channels

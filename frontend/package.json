@@ -4,7 +4,8 @@
     "description": "Frontend for DINKIssTyle Chat",
     "scripts": {
         "dev": "echo 'No dev build needed'",
-        "build": "echo 'Static frontend - no build step'"
+        "build": "echo 'Static frontend - no build step'",
+        "test": "node --test app-utils.test.mjs app-stream-protocol.test.mjs"
     },
     "dependencies": {
         "mermaid": "^11.14.0",

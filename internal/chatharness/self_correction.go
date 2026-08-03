@@ -31,7 +31,6 @@ type SelfCorrectionInput struct {
 	APIToken       string
 	LLMMode        string
 	ModelID        string
-	EnableMCP      bool
 	LastResponseID string
 	Prompt         string
 }
@@ -139,10 +138,6 @@ func buildSelfCorrectionRequest(input SelfCorrectionInput) (map[string]interface
 			"stream":      true,
 			"temperature": 0.1,
 		}
-		if input.EnableMCP {
-			correctionReq["integrations"] = []string{"mcp/dinkisstyle-gateway"}
-		}
-
 		if IsValidResponseID(input.LastResponseID) {
 			correctionReq["previous_response_id"] = strings.TrimSpace(input.LastResponseID)
 		} else if len(input.Body) > 0 {
@@ -166,9 +161,6 @@ func buildSelfCorrectionRequest(input SelfCorrectionInput) (map[string]interface
 		},
 		"stream":      true,
 		"temperature": 0.1,
-	}
-	if input.EnableMCP {
-		correctionReq["integrations"] = []string{"mcp/dinkisstyle-gateway"}
 	}
 	return correctionReq, nil
 }

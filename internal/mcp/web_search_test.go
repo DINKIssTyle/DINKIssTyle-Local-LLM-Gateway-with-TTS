@@ -32,6 +32,30 @@ func TestParseDuckDuckGoResultsKeepsRowsAlignedAndNormalizesURLs(t *testing.T) {
 	}
 }
 
+func TestDuckDuckGoChallengePageIsRejected(t *testing.T) {
+	input := `<form id="challenge-form"><div class="anomaly-modal">Unfortunately, bots use DuckDuckGo too.</div></form>`
+	if !isDuckDuckGoChallengePage(input) {
+		t.Fatal("DuckDuckGo challenge page was not recognized")
+	}
+}
+
+func TestParseBingRSSResults(t *testing.T) {
+	input := `<?xml version="1.0"?><rss><channel>
+<item><title>Example &amp; Guide</title><link>https://example.com/guide?utm_source=bing</link><description>Useful &lt;b&gt;summary&lt;/b&gt;.</description></item>
+<item><title>Second</title><link>https://second.example/item</link><description>Second summary.</description></item>
+</channel></rss>`
+	results, err := parseBingRSSResults(input, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 Bing results, got %d: %#v", len(results), results)
+	}
+	if results[0].Title != "Example & Guide" || results[0].Link != "https://example.com/guide" || results[0].Snippet != "Useful summary." {
+		t.Fatalf("unexpected Bing result: %#v", results[0])
+	}
+}
+
 func TestParseNaverSearchResultsExtractsCompactCards(t *testing.T) {
 	input := `<html><body><div class='card'>
 <a class='news_tit' href='https://news.example/article?utm_medium=portal'>기사 제목</a>
@@ -122,6 +146,18 @@ func TestSearchWebMultiRejectsDuplicateOrWrongQueryCount(t *testing.T) {
 		if _, err := searchWebMultiWith(queries, search); err == nil {
 			t.Fatalf("expected invalid query set to fail: %#v", queries)
 		}
+	}
+}
+
+func TestDefaultBrowserTimingHooksDelegateToPolicies(t *testing.T) {
+	if got, want := defaultReadPageTimeoutForURL("https://platform.openai.com/docs"), 35*time.Second; got != want {
+		t.Fatalf("documentation page timeout = %s, want %s", got, want)
+	}
+	if got, want := defaultReadPageTimeoutForURL("https://example.com"), 25*time.Second; got != want {
+		t.Fatalf("default page timeout = %s, want %s", got, want)
+	}
+	if got, want := defaultChallengeWaitIterations(25*time.Second), 9; got != want {
+		t.Fatalf("challenge wait iterations = %d, want %d", got, want)
 	}
 }
 
