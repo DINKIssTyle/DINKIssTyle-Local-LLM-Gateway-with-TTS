@@ -1,14 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!--
-  macOS menu-bar template source.
-  Canvas: 36x36 px (18x18 pt at @2x).
-  Keep the artwork monochrome and the background transparent. AppKit uses
-  alpha as a template mask and automatically supplies the light/dark tint.
--->
-<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36">
-  <g fill="none" stroke="#000000" stroke-linecap="round" stroke-linejoin="round">
-    <rect x="5" y="5" width="26" height="26" rx="7" stroke-width="3"/>
-    <path d="M12 14v8M24 14v8M12 18h12" stroke-width="3"/>
-    <circle cx="18" cy="18" r="2.5" fill="#000000" stroke="none"/>
+<svg id="Layer_1" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 36 36">
+  <!-- Generator: Adobe Illustrator 30.7.0, SVG Export Plug-In . SVG Version: 2.1.4 Build 114)  -->
+  <g>
+    <path d="M8.38,16.31v-1.62c0-.34-.29-.61-.65-.61s-.65.27-.65.61v1.62c0,.34.29.61.65.61s.65-.27.65-.61Z"/>
+    <path d="M10.55,17.93v-4.85c0-.34-.29-.61-.65-.61s-.65.27-.65.61v4.85c0,.34.29.61.65.61s.65-.27.65-.61Z"/>
+    <path d="M12.71,19.14v-7.27c0-.34-.29-.61-.65-.61s-.65.27-.65.61v7.27c0,.34.29.61.65.61s.65-.27.65-.61Z"/>
+    <path d="M14.88,17.12v-3.23c0-.34-.29-.61-.65-.61s-.65.27-.65.61v3.23c0,.34.29.61.65.61s.65-.27.65-.61Z"/>
+    <path d="M22.16,17.12v-3.23c0-.34-.29-.61-.65-.61s-.65.27-.65.61v3.23c0,.34.29.61.65.61s.65-.27.65-.61Z"/>
+    <path d="M24.33,19.14v-7.27c0-.34-.29-.61-.65-.61s-.65.27-.65.61v7.27c0,.34.29.61.65.61s.65-.27.65-.61Z"/>
+    <path d="M26.49,17.93v-4.85c0-.34-.29-.61-.65-.61s-.65.27-.65.61v4.85c0,.34.29.61.65.61s.65-.27.65-.61Z"/>
+    <path d="M28.66,16.31v-1.62c0-.34-.29-.61-.65-.61s-.65.27-.65.61v1.62c0,.34.29.61.65.61s.65-.27.65-.61Z"/>
+    <path d="M24,4.5h-12c-4.14,0-7.5,3.36-7.5,7.5v3.68h1c0-3.59,2.93-6.52,6.52-6.52h11.96c3.59,0,6.52,2.92,6.52,6.52s-2.92,6.52-6.52,6.52h-3.71c1.16.75,1.93,2.05,1.93,3.53,0,2.32-1.89,4.2-4.2,4.2s-4.2-1.89-4.2-4.2c0-1.48.77-2.78,1.93-3.53h-3.71c-3.59,0-6.52-2.92-6.52-6.52h-1v8.32c0,4.14,3.36,7.5,7.5,7.5h12c4.14,0,7.5-3.36,7.5-7.5v-12c0-4.14-3.36-7.5-7.5-7.5Z"/>
   </g>
+  <circle cx="18" cy="25.9" r="2.86"/>
 </svg>

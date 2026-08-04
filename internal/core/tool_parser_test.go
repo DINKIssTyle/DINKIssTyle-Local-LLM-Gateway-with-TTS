@@ -50,6 +50,50 @@ func TestLooksLikeJSONToolCallPossiblePrefixHoldsSplitFence(t *testing.T) {
 	}
 }
 
+func TestPromptToolStreamClassifierQuarantinesCustomJSONDeltas(t *testing.T) {
+	tools := []promptkit.ToolDefinition{{Name: "read_buffered_source"}}
+	for _, prefix := range []string{"`", "``", "```", "```j"} {
+		start, hold := classifyPromptToolStreamCandidate(prefix, tools)
+		if start || !hold {
+			t.Fatalf("split JSON prefix %q was not held: start=%v hold=%v", prefix, start, hold)
+		}
+	}
+	if start, hold := classifyPromptToolStreamCandidate("```json", tools); !start || hold {
+		t.Fatalf("complete JSON fence prefix did not start buffering: start=%v hold=%v", start, hold)
+	}
+
+	complete := "```json\n{\"name\":\"read_buffered_source\",\"arguments\":{\"source_id\":\"src_1\",\"query\":\"테마\"}}\n```"
+	start, hold := classifyPromptToolStreamCandidate(complete, tools)
+	if !start || hold {
+		t.Fatalf("complete JSON wrapper was not quarantined: start=%v hold=%v", start, hold)
+	}
+	name, _, _, ok := parsePromptToolMarkup(complete)
+	if !ok || name != "read_buffered_source" {
+		t.Fatalf("quarantined JSON wrapper was not executable: name=%q ok=%v", name, ok)
+	}
+
+	if start, hold := classifyPromptToolStreamCandidate("일반 답변입니다.", tools); start || hold {
+		t.Fatalf("ordinary assistant text was quarantined: start=%v hold=%v", start, hold)
+	}
+}
+
+func TestFinalAnswerQuarantineRemovesRecordedStatefulToolJSON(t *testing.T) {
+	tools := []promptkit.ToolDefinition{{Name: "read_buffered_source"}}
+	leaked := "```json\n{\n  \"name\": \"read_buffered_source\",\n  \"arguments\": {\n    \"source_id\": \"src_18c8710db44f8328\",\n    \"query\": \"채팅창 테마 변경 방법\"\n  }\n}\n```\n\n제공된 도움말에 따르면 설정 화면에서 변경할 수 있습니다."
+	cleaned, changed := stripLeadingPromptToolArtifacts(leaked, tools)
+	if !changed {
+		t.Fatal("recorded stateful tool JSON was not removed")
+	}
+	if cleaned != "제공된 도움말에 따르면 설정 화면에서 변경할 수 있습니다." {
+		t.Fatalf("unexpected cleaned answer: %q", cleaned)
+	}
+
+	legitimate := "```json\n{\"theme\":\"dark\"}\n```\n설정 예시입니다."
+	if cleaned, changed := stripLeadingPromptToolArtifacts(legitimate, tools); changed || cleaned != legitimate {
+		t.Fatalf("ordinary JSON example was incorrectly removed: changed=%v cleaned=%q", changed, cleaned)
+	}
+}
+
 func TestParseToolCodeCallAcceptsPrintedFunctionSyntax(t *testing.T) {
 	raw := `<tool_code>
 print(read_buffered_source(source_id="src_18c835144500", query="What is Engine? Features, installation, usage examples, architecture"))
@@ -101,6 +145,18 @@ func TestParsePromptToolMarkupAcceptsLegacyWrapper(t *testing.T) {
 	name, argumentsJSON, _, ok := parsePromptToolMarkup(`<tool_call>{"name":"get_current_time","arguments":{}}</tool_call>`)
 	if !ok || name != "get_current_time" || argumentsJSON != `{}` {
 		t.Fatalf("legacy wrapper was not normalized: name=%q args=%q ok=%v", name, argumentsJSON, ok)
+	}
+}
+
+func TestParsePromptToolMarkupAcceptsQwenFunctionParameterWrapper(t *testing.T) {
+	raw := `<tool_call><function=read_web_page><parameter=url>https://go.dev/doc/go1.25</parameter></function></tool_call>`
+	name, argumentsJSON, arguments, ok := parsePromptToolMarkup(raw)
+	if !ok || name != "read_web_page" {
+		t.Fatalf("Qwen function/parameter wrapper was not parsed: name=%q args=%q ok=%v", name, argumentsJSON, ok)
+	}
+	args, _ := arguments.(map[string]interface{})
+	if args["url"] != "https://go.dev/doc/go1.25" {
+		t.Fatalf("Qwen wrapper arguments were not preserved: %#v", args)
 	}
 }
 

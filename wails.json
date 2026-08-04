@@ -4,10 +4,10 @@
     "frontend:dir": "frontend",
     "author": {
         "name": "DINKIssTyle",
-        "email": "dinki@me.com"
+        "email": "support@example.invalid"
     },
     "info": {
-        "productVersion": "3.3.0",
+        "productVersion": "4.0.0",
         "copyright": "Copyright (C) 2026 DINKI'ssTyle. All rights reserved.",
         "comments": "Local LLM Gateway with TTS"
     },

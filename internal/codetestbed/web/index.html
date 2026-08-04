@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Local LLM Code Testbed</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <p class="eyebrow">LOCAL LLM</p>
+        <h1>Code Testbed</h1>
+        <p class="subtitle">문제를 조사하고, 허용된 범위에서 수정하고, 테스트 결과까지 확인합니다.</p>
+      </div>
+      <span id="statusBadge" class="badge idle">대기</span>
+    </header>
+
+    <section class="panel settings">
+      <div class="field wide">
+        <label for="endpoint">로컬 LLM 엔드포인트</label>
+        <div class="inline">
+          <input id="endpoint" type="url" spellcheck="false" placeholder="http://127.0.0.1:1234/v1">
+          <button id="loadModels" class="secondary" type="button">모델 조회</button>
+        </div>
+      </div>
+      <div class="field">
+        <label for="model">모델</label>
+        <input id="model" list="modelList" spellcheck="false" placeholder="모델 ID">
+        <datalist id="modelList"></datalist>
+      </div>
+      <div class="field">
+        <label for="apiKey">API 키 <span>(선택)</span></label>
+        <input id="apiKey" type="password" autocomplete="off" placeholder="로컬 서버에 필요한 경우만">
+      </div>
+      <div class="field wide">
+        <label for="workspace">작업 폴더</label>
+        <input id="workspace" spellcheck="false" placeholder="/absolute/path/to/repository">
+      </div>
+    </section>
+
+    <section class="panel task-panel">
+      <div class="task-head">
+        <div class="field mode-field">
+          <label for="mode">실행 모드</label>
+          <select id="mode">
+            <option value="diagnose">문제 진단</option>
+            <option value="fix">진단 및 수정</option>
+          </select>
+        </div>
+        <div class="permissions">
+          <label class="toggle"><input id="allowWrites" type="checkbox" disabled><span>파일 수정 허용</span></label>
+          <label class="toggle"><input id="allowCommands" type="checkbox"><span>테스트 명령 허용</span></label>
+        </div>
+      </div>
+      <label for="testPrompt">실제 대화 테스트 질의</label>
+      <textarea id="testPrompt" rows="4" placeholder="예: 오늘 대전 날씨"></textarea>
+      <label class="analysis-label" for="analysisTask">결과 분석 및 수정 지시 <span>(선택)</span></label>
+      <textarea id="analysisTask" rows="4" placeholder="비워두면 응답·스킬·도구 기록을 자동 분석하고, 문제가 확인될 때만 수정합니다."></textarea>
+      <div class="actions">
+        <label for="maxSteps">최대 단계</label>
+        <input id="maxSteps" type="number" min="1" max="20" value="8">
+        <button id="run" class="primary" type="button">테스트베드 실행</button>
+      </div>
+      <p class="notice">파일 수정과 명령 실행은 각각 체크한 경우에만 가능합니다. 모든 경로는 작업 폴더 내부로 제한됩니다.</p>
+    </section>
+
+    <section id="resultPanel" class="panel result-panel hidden">
+      <div class="result-head">
+        <div>
+          <p class="eyebrow">RESULT</p>
+          <h2>실행 결과</h2>
+        </div>
+        <span id="runMeta" class="meta"></span>
+      </div>
+      <div id="failure" class="failure hidden"></div>
+      <div id="testSection" class="test-section hidden">
+        <h3>실제 대화 테스트</h3>
+        <div id="testMeta" class="meta"></div>
+        <pre id="testAnswer" class="answer"></pre>
+        <div id="testTrace" class="trace compact"></div>
+      </div>
+      <h3>최종 답변</h3>
+      <pre id="answer" class="answer"></pre>
+      <div id="changedSection" class="hidden">
+        <h3>변경 파일</h3>
+        <ul id="changedFiles"></ul>
+      </div>
+      <h3>도구 실행 기록</h3>
+      <div id="trace" class="trace"></div>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

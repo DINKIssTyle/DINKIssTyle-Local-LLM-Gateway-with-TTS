@@ -22,3 +22,7 @@ all_funcs.txt
 !internal/promptkit/runtime_tools_test.go
 !internal/toolruntime/runtime_test.go
 !internal/toolruntime/tool_contract_test.go
+!internal/evalharness/harness_test.go
+.env.eval.local
+.eval-results/
+.gocache

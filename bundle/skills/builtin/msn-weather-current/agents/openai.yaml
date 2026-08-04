@@ -1,0 +1,4 @@
+interface:
+  display_name: "MSN 현재 날씨"
+  short_description: "Check current local weather on MSN Weather"
+  default_prompt: "Use $msn-weather-current to check the current weather for Seoul, South Korea."

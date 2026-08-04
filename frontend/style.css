@@ -1540,6 +1540,7 @@ textarea::-webkit-credentials-auto-fill-button {
 }
 
 .mermaid-diagram {
+  position: relative;
   width: 100%;
   max-width: 100%;
   margin: 0 0 12px;
@@ -1547,11 +1548,24 @@ textarea::-webkit-credentials-auto-fill-button {
   min-width: 0;
   box-sizing: border-box;
   overflow-x: hidden;
-  overflow-y: hidden;
+  overflow-y: visible;
   border: 1px solid rgba(95, 140, 255, 0.16);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.035);
   overflow-anchor: none;
+  contain: layout paint style;
+  isolation: isolate;
+}
+
+.mermaid-render-sandbox {
+  position: fixed;
+  left: -100000px;
+  top: 0;
+  width: min(1200px, 90vw);
+  height: auto;
+  visibility: hidden;
+  pointer-events: none;
+  contain: strict;
 }
 
 .mermaid-diagram-frame {
@@ -1560,6 +1574,63 @@ textarea::-webkit-credentials-auto-fill-button {
   height: min(420px, 62vh);
   border: 0;
   background: transparent;
+}
+
+.mermaid-diagram-frame.is-auto-height {
+  height: 1px;
+}
+
+.mermaid-expand-btn {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  color: var(--text-color);
+  background: color-mix(in srgb, var(--sidebar-bg) 88%, transparent);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+}
+
+.mermaid-expand-btn:hover,
+.mermaid-expand-btn:focus-visible {
+  color: var(--accent-color);
+  border-color: rgba(var(--accent-color-rgb), 0.45);
+  background: var(--sidebar-bg);
+  outline: none;
+}
+
+.mermaid-expand-btn .material-icons-round {
+  font-size: 20px;
+}
+
+.modal.mermaid-diagram-modal {
+  width: min(calc(100vw - 40px), 1600px);
+  height: calc(100vh - 40px);
+  max-width: none;
+  max-height: calc(100vh - 40px);
+  border-radius: 18px;
+}
+
+.mermaid-diagram-modal-body {
+  flex: 1;
+  min-height: 0;
+  padding: 20px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.mermaid-diagram-modal-body .mermaid-diagram-frame {
+  width: 100%;
 }
 
 .mermaid-diagram-status {
@@ -1575,6 +1646,8 @@ textarea::-webkit-credentials-auto-fill-button {
 .mermaid-diagram.is-error pre {
   margin-top: 8px;
   margin-bottom: 0;
+  max-height: 240px;
+  overflow: auto;
 }
 
 .markdown-body p {
@@ -1792,6 +1865,19 @@ textarea::-webkit-credentials-auto-fill-button {
 .tool-status-card {
   background: transparent;
   border: none;
+}
+
+.skill-strip-header {
+  cursor: default;
+}
+
+.skill-status-card .skill-status-icon {
+  color: var(--success-color);
+  transform: none;
+}
+
+.skill-status-card .tool-header-status {
+  color: var(--success-color);
 }
 
 .system-strip-card {
@@ -2987,6 +3073,16 @@ body.keyboard-open .scroll-to-bottom-btn {
     height: calc(100vh - 16px);
     max-width: none;
     max-height: calc(100vh - 16px);
+  }
+
+  .modal.mermaid-diagram-modal {
+    width: calc(100vw - 16px);
+    height: calc(100vh - 16px);
+    max-height: calc(100vh - 16px);
+  }
+
+  .mermaid-diagram-modal-body {
+    padding: 10px;
   }
 
   .modal-body {

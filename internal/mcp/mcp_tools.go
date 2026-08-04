@@ -180,7 +180,7 @@ func GetToolList() []Tool {
 		},
 		{
 			Name:        "search_web_multi",
-			Description: "Run exactly two independent web searches concurrently and return both result sets in deterministic query order. Use only when the user's comparison or research question clearly needs two distinct search angles; use search_web for a single query.",
+			Description: "Run exactly two independent web searches concurrently and return both result sets in deterministic query order. Use this for freshness-sensitive requests such as latest news, current events, recent changes, comparisons, or multi-angle research; use search_web for a stable single lookup.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -346,11 +346,11 @@ func GetToolList() []Tool {
 		},
 		{
 			Name:        "namu_wiki",
-			Description: "Search and read definitions from Namuwiki (Korean Wiki). Use this for Korean pop culture, history, or slang definitions. Input must be the exact keyword/title.",
+			Description: "Search and read a Namuwiki page (Korean Wiki). Input must be only the exact page keyword/title. Resolve it from a prior turn only when the current request genuinely omits the subject; never include 'Namuwiki', search commands, or unrelated prior requests.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
-					"keyword": map[string]interface{}{"type": "string", "description": "The exact keyword to search on Namuwiki"},
+					"keyword": map[string]interface{}{"type": "string", "description": "Only the exact Namuwiki page title, for example: 훈민정음"},
 				},
 				"required": []string{"keyword"},
 			},
@@ -1341,9 +1341,12 @@ func GetCurrentTime() (string, error) {
 }
 
 type webSearchResult struct {
-	Title   string
-	Link    string
-	Snippet string
+	Title       string
+	Link        string
+	Snippet     string
+	Publisher   string
+	SourceURL   string
+	PublishedAt string
 }
 
 const maxTimedToolCacheEntries = 64
@@ -1380,7 +1383,7 @@ func SearchWeb(query string) (string, error) {
 	}
 
 	emitTraceEvent("tool_runtime", "search_web.complete", "Web search completed", traceDetailsMap("query", query, "elapsed_ms", toolDurationMs(start), "results", len(results), "provider", provider))
-	formatted := formatSearchResultsWithGuidance(query, results)
+	formatted := formatSearchResultsWithGuidance(query, provider, results)
 	setTimedToolCache(searchCache, &searchCacheMu, cacheKey, formatted, cacheTTL)
 	return formatted, nil
 }
@@ -1473,11 +1476,36 @@ func searchDuckDuckGo(query string, client *http.Client) ([]webSearchResult, err
 
 func searchWebWithProviders(query string, client *http.Client) ([]webSearchResult, string, error) {
 	results, duckErr := searchDuckDuckGo(query, client)
-	if duckErr == nil && len(results) > 0 {
+	results = filterRelevantSearchResults(query, results)
+	if duckErr == nil && len(results) > 0 && (!isFreshnessSearchQuery(query) || hasHighQualitySearchResult(results)) {
 		return results, "duckduckgo", nil
 	}
 
+	freshnessSearch := isFreshnessSearchQuery(query)
+	var newsErr error
+	if freshnessSearch {
+		var newsResults []webSearchResult
+		newsResults, newsErr = searchGoogleNewsRSS(query, client)
+		newsResults = filterRelevantSearchResults(query, newsResults)
+		if newsErr == nil && len(newsResults) > 0 {
+			emitTraceEvent("tool_runtime", "search_web.fallback", "Using Google News RSS for freshness-sensitive search", traceDetailsMap(
+				"query", query,
+				"from_provider", "duckduckgo",
+				"to_provider", "google_news_rss",
+				"reason", toolErrorDetail(duckErr),
+			))
+			return newsResults, "google_news_rss", nil
+		}
+		if duckErr == nil && len(results) > 0 {
+			return results, "duckduckgo", nil
+		}
+		if newsErr == nil {
+			newsErr = fmt.Errorf("Google News RSS returned no relevant parsed results")
+		}
+	}
+
 	results, bingErr := searchBingRSS(query, client)
+	results = filterRelevantSearchResults(query, results)
 	if bingErr == nil && len(results) > 0 {
 		emitTraceEvent("tool_runtime", "search_web.fallback", "Using Bing RSS after DuckDuckGo did not return usable results", traceDetailsMap(
 			"query", query,
@@ -1492,9 +1520,130 @@ func searchWebWithProviders(query string, client *http.Client) ([]webSearchResul
 		duckErr = fmt.Errorf("DuckDuckGo returned no parsed results")
 	}
 	if bingErr == nil {
-		bingErr = fmt.Errorf("Bing RSS returned no parsed results")
+		bingErr = fmt.Errorf("Bing RSS returned no relevant parsed results")
+	}
+	if freshnessSearch {
+		return nil, "", fmt.Errorf("all web search providers failed: duckduckgo: %v; google_news_rss: %v; bing_rss: %v", duckErr, newsErr, bingErr)
 	}
 	return nil, "", fmt.Errorf("all web search providers failed: duckduckgo: %v; bing_rss: %v", duckErr, bingErr)
+}
+
+func searchGoogleNewsRSS(query string, client *http.Client) ([]webSearchResult, error) {
+	locale := "hl=en-US&gl=US&ceid=US:en"
+	if containsKoreanText(query) {
+		locale = "hl=ko&gl=KR&ceid=KR:ko"
+	}
+	searchURL := fmt.Sprintf("https://news.google.com/rss/search?q=%s&%s", url.QueryEscape(query), locale)
+	content, err := fetchSearchPage(client, searchURL)
+	if err != nil {
+		return nil, err
+	}
+	return parseGoogleNewsRSSResults(content, 8)
+}
+
+func containsKoreanText(text string) bool {
+	for _, r := range text {
+		if (r >= '\u1100' && r <= '\u11ff') || (r >= '\u3130' && r <= '\u318f') || (r >= '\uac00' && r <= '\ud7af') {
+			return true
+		}
+	}
+	return false
+}
+
+func filterRelevantSearchResults(query string, results []webSearchResult) []webSearchResult {
+	terms := searchRelevanceTerms(query)
+	if len(terms) == 0 {
+		return results
+	}
+	filtered := make([]webSearchResult, 0, len(results))
+	for _, result := range results {
+		haystack := strings.ToLower(result.Title + " " + result.Snippet + " " + result.Publisher)
+		for _, term := range terms {
+			if searchHaystackContainsTerm(haystack, term) {
+				filtered = append(filtered, result)
+				break
+			}
+		}
+	}
+	return filtered
+}
+
+func searchHaystackContainsTerm(haystack, term string) bool {
+	asciiShort := len(term) <= 4
+	for _, r := range term {
+		if r > unicode.MaxASCII || (!unicode.IsLetter(r) && !unicode.IsDigit(r)) {
+			asciiShort = false
+			break
+		}
+	}
+	if !asciiShort {
+		return strings.Contains(haystack, term)
+	}
+	for _, token := range strings.FieldsFunc(haystack, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		if token == term {
+			return true
+		}
+	}
+	return false
+}
+
+var fourDigitSearchYearPattern = regexp.MustCompile(`^\d{4}(?:년)?$`)
+
+func searchRelevanceTerms(query string) []string {
+	stop := map[string]bool{
+		"latest": true, "current": true, "today": true, "recent": true, "news": true, "update": true,
+		"official": true, "announcement": true, "announcements": true, "major": true, "august": true,
+		"최신": true, "현재": true, "오늘": true, "최근": true, "뉴스": true, "소식": true, "동향": true,
+	}
+	seen := make(map[string]bool)
+	var terms []string
+	for _, field := range strings.Fields(strings.ToLower(query)) {
+		term := strings.Trim(field, " \t\r\n.,:;!?()[]{}\"'`/\\|-_+")
+		if len([]rune(term)) < 2 || stop[term] || fourDigitSearchYearPattern.MatchString(term) {
+			continue
+		}
+		if !seen[term] {
+			seen[term] = true
+			terms = append(terms, term)
+		}
+	}
+	return terms
+}
+
+func parseGoogleNewsRSSResults(input string, limit int) ([]webSearchResult, error) {
+	var feed struct {
+		Channel struct {
+			Items []struct {
+				Title       string `xml:"title"`
+				Link        string `xml:"link"`
+				Description string `xml:"description"`
+				PubDate     string `xml:"pubDate"`
+				Source      struct {
+					URL  string `xml:"url,attr"`
+					Name string `xml:",chardata"`
+				} `xml:"source"`
+			} `xml:"item"`
+		} `xml:"channel"`
+	}
+	if err := xml.Unmarshal([]byte(input), &feed); err != nil {
+		return nil, fmt.Errorf("parse Google News RSS: %w", err)
+	}
+	results := make([]webSearchResult, 0, len(feed.Channel.Items))
+	for _, item := range feed.Channel.Items {
+		link := normalizeSearchResultURL(item.Link, "https://news.google.com/")
+		title := cleanSearchText(item.Title)
+		if title == "" || link == "" {
+			continue
+		}
+		results = append(results, webSearchResult{
+			Title: title, Link: link, Snippet: cleanSearchText(item.Description),
+			Publisher: cleanSearchText(item.Source.Name), SourceURL: normalizeSearchResultURL(item.Source.URL, "https://news.google.com/"),
+			PublishedAt: strings.TrimSpace(item.PubDate),
+		})
+	}
+	return deduplicateSearchResults(results, limit), nil
 }
 
 func isDuckDuckGoChallengePage(input string) bool {
@@ -1694,34 +1843,84 @@ func deduplicateSearchResults(results []webSearchResult, limit int) []webSearchR
 	return out
 }
 
-func formatSearchResultsWithGuidance(query string, results []webSearchResult) string {
+func formatSearchResultsWithGuidance(query, provider string, results []webSearchResult) string {
+	results = rankSearchResultsByQuality(results)
 	var b strings.Builder
 	quality := "mixed"
 	if len(results) > 0 {
-		quality = classifySearchResultQuality(results[0].Link)
+		quality = searchResultQuality(results[0])
 	}
 	nextAction := "answer_from_search_if_sufficient"
-	if len(results) > 0 && shouldReadTopSearchResult(query, results[0]) {
+	if isFreshnessSearchQuery(query) && !hasHighQualitySearchResult(results) {
+		nextAction = "refine_search_for_authoritative_source"
+	} else if len(results) > 0 && shouldReadTopSearchResult(query, results[0]) {
 		nextAction = "read_top_result_if_more_detail_is_needed"
 	}
 
 	fmt.Fprintf(&b, "Search Guidance\n")
 	fmt.Fprintf(&b, "Query: %s\n", query)
+	fmt.Fprintf(&b, "Search Provider: %s\n", strings.TrimSpace(provider))
+	fmt.Fprintf(&b, "Retrieved At: %s\n", time.Now().Format(time.RFC3339))
 	fmt.Fprintf(&b, "Recommended Next Action: %s\n", nextAction)
 	fmt.Fprintf(&b, "Top Result Quality: %s\n", quality)
 	if len(results) > 0 {
 		fmt.Fprintf(&b, "Top Result URL: %s\n", results[0].Link)
 	}
-	fmt.Fprintf(&b, "Note: For simple factual or profile questions, answer from these search results when the snippets are sufficient. Read at most one authoritative page only if needed.\n")
+	if nextAction == "refine_search_for_authoritative_source" {
+		fmt.Fprintf(&b, "Evidence Quality Warning: no_authoritative_or_reputable_source\n")
+		fmt.Fprintf(&b, "Note: Do not present these results as verified facts or read this weak buffer. Make exactly one refined search_web call (not search_web_multi) targeting official primary sources or an established newsroom, using the current year.\n")
+	} else {
+		fmt.Fprintf(&b, "Note: For simple factual or profile questions, answer from these search results when the snippets are sufficient. Read at most one authoritative page only if needed.\n")
+	}
 	fmt.Fprintf(&b, "---\n")
 	for _, result := range results {
 		fmt.Fprintf(&b, "Title: %s\n", result.Title)
 		fmt.Fprintf(&b, "Link: %s\n", result.Link)
-		fmt.Fprintf(&b, "Source Quality: %s\n", classifySearchResultQuality(result.Link))
+		if result.Publisher != "" {
+			fmt.Fprintf(&b, "Publisher: %s\n", result.Publisher)
+		}
+		if result.SourceURL != "" {
+			fmt.Fprintf(&b, "Publisher URL: %s\n", result.SourceURL)
+		}
+		if result.PublishedAt != "" {
+			fmt.Fprintf(&b, "Published At: %s\n", result.PublishedAt)
+		}
+		fmt.Fprintf(&b, "Source Quality: %s\n", searchResultQuality(result))
 		fmt.Fprintf(&b, "Snippet: %s\n", result.Snippet)
 		fmt.Fprintf(&b, "---\n")
 	}
 	return strings.TrimSuffix(b.String(), "\n---\n")
+}
+
+func searchResultQuality(result webSearchResult) string {
+	if strings.TrimSpace(result.SourceURL) != "" {
+		return classifySearchResultQuality(result.SourceURL)
+	}
+	return classifySearchResultQuality(result.Link)
+}
+
+func rankSearchResultsByQuality(results []webSearchResult) []webSearchResult {
+	ranked := append([]webSearchResult(nil), results...)
+	qualityRank := func(result webSearchResult) int {
+		switch searchResultQuality(result) {
+		case "authoritative", "reputable_news", "primary_repository":
+			return 0
+		case "encyclopedic":
+			return 1
+		case "general":
+			return 2
+		case "blog_or_portal", "wiki":
+			return 3
+		case "social":
+			return 4
+		default:
+			return 5
+		}
+	}
+	sort.SliceStable(ranked, func(i, j int) bool {
+		return qualityRank(ranked[i]) < qualityRank(ranked[j])
+	})
+	return ranked
 }
 
 func classifySearchResultQuality(rawURL string) string {
@@ -1735,8 +1934,13 @@ func classifySearchResultQuality(rawURL string) string {
 		return "encyclopedic"
 	case hostMatchesDomain(host, "namu.wiki"):
 		return "wiki"
-	case strings.HasSuffix(host, ".go.kr"), strings.HasSuffix(host, ".gov"), strings.HasSuffix(host, ".gov.uk"), strings.HasSuffix(host, ".edu"):
+	case strings.HasSuffix(host, ".go.kr"), strings.HasSuffix(host, ".gov"), strings.HasSuffix(host, ".gov.uk"), strings.HasSuffix(host, ".edu"),
+		hostMatchesAnyDomain(host, "go.dev", "golang.org", "openai.com", "anthropic.com", "deepmind.google", "ai.google.dev", "blog.google", "microsoft.com", "meta.com", "nvidia.com", "un.org", "unhcr.org", "iom.int", "europa.eu", "nia.or.kr"):
 		return "authoritative"
+	case hostMatchesAnyDomain(host, "reuters.com", "apnews.com", "bbc.com", "bbc.co.uk", "nytimes.com", "ft.com", "theguardian.com", "bloomberg.com", "wsj.com", "cnn.com", "aljazeera.com", "washingtonpost.com", "foxnews.com", "techcrunch.com", "theverge.com", "wired.com", "arstechnica.com", "yna.co.kr", "yonhapnews.co.kr", "chosun.com", "joongang.co.kr", "donga.com", "hani.co.kr", "khan.co.kr", "mk.co.kr", "sedaily.com", "etnews.com", "zdnet.co.kr", "aitimes.com", "lawtimes.co.kr", "aa.com.tr", "elpais.com", "euronews.com"):
+		return "reputable_news"
+	case hostMatchesAnyDomain(host, "github.com", "huggingface.co"):
+		return "primary_repository"
 	case hostMatchesDomain(host, "naver.com"), strings.HasPrefix(host, "blog."), hostMatchesDomain(host, "tistory.com"):
 		return "blog_or_portal"
 	case hostMatchesDomain(host, "instagram.com"), hostMatchesDomain(host, "facebook.com"), hostMatchesDomain(host, "x.com"), hostMatchesDomain(host, "twitter.com"), hostMatchesDomain(host, "tiktok.com"):
@@ -1744,6 +1948,35 @@ func classifySearchResultQuality(rawURL string) string {
 	default:
 		return "general"
 	}
+}
+
+func hostMatchesAnyDomain(host string, domains ...string) bool {
+	for _, domain := range domains {
+		if hostMatchesDomain(host, domain) {
+			return true
+		}
+	}
+	return false
+}
+
+func isFreshnessSearchQuery(query string) bool {
+	normalized := strings.ToLower(strings.Join(strings.Fields(query), " "))
+	for _, signal := range []string{"latest", "today", "current", "recent", "news", "update", "2026", "최신", "오늘", "현재", "최근", "뉴스", "소식", "동향"} {
+		if strings.Contains(normalized, signal) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasHighQualitySearchResult(results []webSearchResult) bool {
+	for _, result := range results {
+		switch searchResultQuality(result) {
+		case "authoritative", "reputable_news", "primary_repository":
+			return true
+		}
+	}
+	return false
 }
 
 func hostMatchesDomain(host, domain string) bool {
@@ -1754,11 +1987,11 @@ func hostMatchesDomain(host, domain string) bool {
 
 func shouldReadTopSearchResult(query string, result webSearchResult) bool {
 	lowerQuery := strings.ToLower(query)
-	if strings.Contains(lowerQuery, "공식") || strings.Contains(lowerQuery, "latest") || strings.Contains(lowerQuery, "최근") || strings.Contains(lowerQuery, "today") {
+	if strings.Contains(lowerQuery, "공식") || strings.Contains(lowerQuery, "official") {
 		return true
 	}
-	quality := classifySearchResultQuality(result.Link)
-	return quality == "authoritative" && len([]rune(result.Snippet)) < 80
+	quality := searchResultQuality(result)
+	return (quality == "authoritative" || quality == "reputable_news" || quality == "primary_repository") && len([]rune(result.Snippet)) < 80
 }
 
 func getTimedToolCache(cache map[string]timedToolCacheEntry, mu *sync.Mutex, key string, ttl time.Duration) (string, bool) {
@@ -1902,7 +2135,7 @@ func SearchNaver(query string) (string, error) {
 	client := &http.Client{Timeout: 8 * time.Second}
 	if pageHTML, err := fetchSearchPage(client, searchURL); err == nil {
 		if results, parseErr := parseNaverSearchResults(pageHTML, 5); parseErr == nil && len(results) > 0 {
-			formatted := formatSearchResultsWithGuidance(query, results)
+			formatted := formatSearchResultsWithGuidance(query, "naver", results)
 			setTimedToolCache(searchCache, &searchCacheMu, cacheKey, formatted, cacheTTL)
 			emitTraceEvent("tool_runtime", "naver_search.complete", "Naver search completed via HTTP", traceDetailsMap("query", query, "elapsed_ms", toolDurationMs(start), "results", len(results), "provider", "naver", "mode", "http"))
 			return formatted, nil
@@ -2038,6 +2271,27 @@ func ReadPage(pageURL string) (string, error) {
 
 		chromedp.Navigate(pageURL),
 
+		// Wait for meaningful rendered content instead of assuming a fixed sleep is
+		// enough. Dynamic weather pages often finish document loading before their
+		// client-side data has appeared in the DOM. This wait is best-effort: after
+		// the bounded window, extraction still runs so partially useful pages are not
+		// discarded solely because a site changed its labels.
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			readinessExpression := pageReadinessExpression(pageURL)
+			for attempt := 0; attempt < 12; attempt++ {
+				var ready bool
+				if err := chromedp.Evaluate(readinessExpression, &ready).Do(ctx); err == nil && ready {
+					return nil
+				}
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(500 * time.Millisecond):
+				}
+			}
+			return nil
+		}),
+
 		// 3. Anti-Detection: Wait briefly for challenge pages, but keep the total budget bounded.
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			maxChallengeWait := challengeWaitIterationsForTool(timeout)
@@ -2061,9 +2315,6 @@ func ReadPage(pageURL string) (string, error) {
 			}
 			return nil
 		}),
-
-		// Wait for page content to settle after challenge
-		chromedp.Sleep(2*time.Second),
 
 		// 4. Auto-scroll logic to trigger lazy loading
 		chromedp.Evaluate(`
@@ -2162,6 +2413,22 @@ func ReadPage(pageURL string) (string, error) {
 	return res, nil
 }
 
+func pageReadinessExpression(pageURL string) string {
+	parsed, _ := url.Parse(pageURL)
+	requireWeatherContent := strings.Contains(strings.ToLower(parsed.Hostname()), "msn.com")
+	return fmt.Sprintf(`
+		(() => {
+			if (document.readyState !== 'complete' || !document.body) return false;
+			const text = (document.body.innerText || '').replace(/\s+/g, ' ').trim();
+			if (text.length < 300) return false;
+			if (!%t) return true;
+			const hasTemperature = /(?:-?\d{1,3}\s*°|°\s*[CF])/.test(text);
+			const hasWeatherField = /(습도|체감|풍속|바람|강수|Humidity|Feels like|Wind|Precipitation)/i.test(text);
+			return hasTemperature && hasWeatherField;
+		})()
+	`, requireWeatherContent)
+}
+
 func readPageFastHTTP(pageURL string) (string, error) {
 	parsed, err := url.Parse(pageURL)
 	if err != nil {
@@ -2213,6 +2480,7 @@ func requiresBrowserPageRead(host string) bool {
 		strings.Contains(host, "x.com"),
 		strings.Contains(host, "twitter.com"),
 		strings.Contains(host, "tiktok.com"),
+		strings.Contains(host, "msn.com"),
 		strings.Contains(host, "naver.com"),
 		strings.Contains(host, "youtube.com"):
 		return true

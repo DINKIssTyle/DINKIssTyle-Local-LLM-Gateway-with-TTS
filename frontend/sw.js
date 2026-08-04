@@ -3,18 +3,18 @@
  * Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
  */
 
-const CACHE_NAME = 'dkst-chat-v43';
+const CACHE_NAME = 'dkst-chat-v47';
 const ASSETS = [
     '/',
     '/index.html',
     '/login.html',
     '/web.html',
-    '/web.html?v=30',
+    '/web.html?v=32',
     '/fonts.css?v=2',
-    '/style.css?v=10',
-    '/icons.css?v=2',
+    '/style.css?v=14',
+    '/icons.css?v=4',
     '/app-utils.js?v=3',
-    '/app-i18n.js?v=6',
+    '/app-i18n.js?v=9',
     '/app-saved-library.js?v=1',
     '/app-models.js?v=1',
     '/app-tts.js?v=10',
@@ -26,7 +26,7 @@ const ASSETS = [
     '/app-chat-ui.js?v=1',
     '/app-progress-ui.js?v=1',
     '/app-mic.js?v=2',
-    '/app.js?v=32',
+    '/app.js?v=35',
     '/icons.css',
     '/public/icon-512.png',
     '/site.webmanifest',
@@ -51,7 +51,7 @@ const ASSETS = [
     '/vendor/fonts/noto-sans-kr-600.ttf',
     '/vendor/fonts/noto-sans-kr-700.ttf',
     '/vendor/fonts/jetbrains-mono-400-latin.woff2',
-    '/vendor/fonts/material-icons-round.woff2',
+    '/vendor/fonts/material-icons-round.woff2?v=4',
     '/vendor/fonts/KaTeX_Main-Regular.woff2',
     '/vendor/fonts/KaTeX_Main-Regular.woff',
     '/vendor/fonts/KaTeX_Main-Regular.ttf',
@@ -99,7 +99,7 @@ self.addEventListener('fetch', event => {
     event.respondWith(
         fetch(event.request).catch(() => {
             if (event.request.mode === 'navigate') {
-                return caches.match('/web.html?v=30')
+                return caches.match('/web.html?v=32')
                     .then(response => response || caches.match('/web.html'))
                     .then(response => response || caches.match('/index.html'))
                     .then(response => {

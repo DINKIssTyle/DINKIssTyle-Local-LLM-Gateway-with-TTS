@@ -1,0 +1,339 @@
+{
+  "scenarios": [
+    {
+      "id": "skill_msn_weather_busan",
+      "category": "skill_web",
+      "prompt": "부산의 현재 날씨를 알려주세요.",
+      "tool_names": ["search_web", "read_web_page", "read_buffered_source"],
+      "max_turns": 4,
+      "expectations": {
+        "require_tool_call": true,
+        "require_web_tool": true,
+        "max_search_angles": 1,
+        "min_sources": 1,
+        "require_citations": true,
+        "forbid_duplicates": true,
+        "forbid_tool_argument_errors": true,
+        "required_skills": ["builtin:msn-weather-current"],
+        "required_url_substrings": ["msn.com/ko-kr/weather"],
+        "allowed_tools": ["search_web", "read_web_page", "read_buffered_source"]
+      }
+    },
+    {
+      "id": "skill_msn_weather_daejeon",
+      "category": "skill_web",
+      "prompt": "오늘 대전 날씨",
+      "tool_names": ["search_web", "read_web_page", "read_buffered_source"],
+      "max_turns": 4,
+      "expectations": {
+        "require_tool_call": true,
+        "require_web_tool": true,
+        "max_search_angles": 0,
+        "min_sources": 1,
+        "require_citations": true,
+        "forbid_duplicates": true,
+        "forbid_tool_argument_errors": true,
+        "required_skills": ["builtin:msn-weather-current"],
+        "required_url_substrings": ["msn.com/ko-kr/weather/forecast/in-Daejeon,Daejeon"],
+        "allowed_tools": ["read_web_page", "read_buffered_source"]
+      }
+    },
+    {
+      "id": "skill_msn_weather_followup_nonsan",
+      "category": "skill_web_followup",
+      "history": [
+        {
+          "role": "user",
+          "content": "논산의 현재 날씨를 알려주세요."
+        },
+        {
+          "role": "assistant",
+          "content": "기상청이나 포털 날씨를 검색해 확인할 수 있습니다."
+        }
+      ],
+      "prompt": "날씨 스킬을 이용하세요.",
+      "tool_names": ["search_web", "search_web_multi", "naver_search", "read_web_page", "read_buffered_source"],
+      "max_turns": 4,
+      "expectations": {
+        "require_tool_call": true,
+        "require_web_tool": true,
+        "max_search_angles": 0,
+        "min_sources": 1,
+        "require_citations": true,
+        "forbid_duplicates": true,
+        "forbid_tool_argument_errors": true,
+        "required_skills": ["builtin:msn-weather-current"],
+        "required_url_substrings": ["msn.com/ko-kr/weather"],
+        "allowed_tools": ["read_web_page", "read_buffered_source"]
+      }
+    },
+    {
+      "id": "latest_migration_news",
+	  "category": "web_freshness",
+      "prompt": "스페인·아프리카 난민 대규모 유입 사태의 최신 뉴스를 검색하고, 확인된 사실과 불확실한 내용을 구분해 출처와 함께 한국어로 요약해 주세요.",
+      "max_turns": 6,
+      "expectations": {
+        "require_tool_call": true,
+        "require_web_tool": true,
+        "min_search_angles": 2,
+		"max_search_angles": 3,
+        "min_sources": 2,
+		"min_authoritative_sources": 1,
+        "require_citations": true,
+        "forbid_duplicates": true,
+		"forbid_future_dates": true,
+        "allowed_tools": ["search_web", "search_web_multi", "naver_search", "read_web_page", "read_buffered_source"]
+      }
+    },
+    {
+      "id": "latest_ai_news",
+	  "category": "web_freshness",
+      "prompt": "오늘 주요 AI 모델 및 로컬 LLM 생태계의 최신 소식 중 중요한 것만 여러 출처로 교차 확인해 한국어로 정리해 주세요.",
+      "max_turns": 6,
+      "expectations": {
+        "require_tool_call": true,
+        "require_web_tool": true,
+        "min_search_angles": 2,
+		"max_search_angles": 3,
+        "min_sources": 2,
+		"min_authoritative_sources": 1,
+        "require_citations": true,
+        "forbid_duplicates": true,
+		"forbid_future_dates": true,
+        "allowed_tools": ["search_web", "search_web_multi", "naver_search", "read_web_page", "read_buffered_source"]
+      }
+    },
+    {
+      "id": "stable_official_lookup",
+	  "category": "web_exact_lookup",
+      "prompt": "Go 1.25 공식 릴리스 노트 https://go.dev/doc/go1.25 페이지를 웹 도구로 직접 읽고, 실제 페이지에서 확인한 핵심 변경점만 출처와 함께 한국어로 요약해 주세요.",
+      "max_turns": 5,
+      "expectations": {
+        "require_tool_call": true,
+        "require_web_tool": true,
+		"max_search_angles": 1,
+        "min_sources": 1,
+		"min_authoritative_sources": 1,
+        "require_citations": true,
+        "forbid_duplicates": true,
+		"required_url_substrings": ["go.dev/doc/go1.25"],
+        "allowed_tools": ["search_web", "search_web_multi", "read_web_page", "read_buffered_source"]
+      }
+    },
+    {
+      "id": "korean_contextual_followup_tom_cruise_children",
+	  "category": "web_contextual_followup",
+      "prompt": "자녀들 정보",
+      "context_strategy": "retrieval",
+      "recent_context": "Recent Turn 1\nUser: 탐크루즈 생년월일\nAssistant: 톰 크루즈(Tom Cruise)는 1962년 7월 3일생입니다.",
+      "memory_snapshot": "오래된 무관한 기억: 테스트인물A의 자녀는 테스트인물B와 테스트인물C입니다.",
+      "active_context": "무관한 검색 결과: 테스트인물A의 자녀 정보와 출생 시각.",
+      "max_turns": 5,
+      "expectations": {
+        "require_tool_call": true,
+        "require_web_tool": true,
+        "max_search_angles": 2,
+        "min_sources": 1,
+        "require_citations": true,
+        "forbid_duplicates": true,
+        "required_answer_substrings": ["크루즈", "입양"],
+        "forbidden_answer_substrings": ["테스트인물A", "테스트인물B", "테스트인물C", "낳은 딸", "낳은 아들"],
+        "forbid_tool_argument_errors": true,
+        "allowed_tools": ["search_web", "search_web_multi", "naver_search", "namu_wiki", "read_web_page", "read_buffered_source"]
+      }
+    },
+    {
+      "id": "general_stable_fact_tools_available",
+      "category": "general_knowledge",
+      "prompt": "물의 화학식이 무엇인지 한 문장으로 답해 주세요.",
+      "max_turns": 2,
+      "expectations": {
+        "forbid_tool_call": true,
+        "max_llm_rounds": 1,
+        "max_answer_chars": 80,
+        "required_answer_substrings": ["H2O"]
+      }
+    },
+    {
+      "id": "general_arithmetic_no_tools",
+      "category": "reasoning",
+      "prompt": "17과 25를 더한 결과만 간단히 알려 주세요.",
+      "enable_tools": false,
+      "max_turns": 1,
+      "expectations": {
+        "forbid_tool_call": true,
+        "max_llm_rounds": 1,
+        "max_answer_chars": 20,
+        "required_answer_substrings": ["42"]
+      }
+    },
+    {
+      "id": "general_stable_fact_no_tools",
+      "category": "tool_routing_control",
+      "prompt": "물의 화학식이 무엇인지 한 문장으로 답해 주세요.",
+      "enable_tools": false,
+      "max_turns": 1,
+      "expectations": {
+        "forbid_tool_call": true,
+        "max_llm_rounds": 1,
+        "max_answer_chars": 80,
+        "required_answer_substrings": ["H2O"]
+      }
+    },
+    {
+      "id": "general_translation_no_tools",
+      "category": "translation",
+      "prompt": "다음 문장을 자연스러운 영어로만 번역해 주세요: 금요일까지 검토 의견을 보내드리겠습니다.",
+      "enable_tools": false,
+      "max_turns": 1,
+      "expectations": {
+        "forbid_tool_call": true,
+        "max_llm_rounds": 1,
+        "max_answer_chars": 120,
+        "required_answer_substrings": ["Friday"]
+      }
+    },
+    {
+      "id": "general_rewrite_no_tools",
+      "category": "writing",
+      "prompt": "'일정이 좀 밀릴 것 같으니 양해 바랍니다'를 정중하고 간결한 업무 문장으로 다듬어 주세요.",
+      "enable_tools": false,
+      "max_turns": 1,
+      "expectations": {
+        "forbid_tool_call": true,
+        "max_llm_rounds": 1,
+        "max_answer_chars": 220,
+        "required_answer_substrings": ["일정", "양해"]
+      }
+    },
+    {
+      "id": "general_history_followup_no_tools",
+      "category": "conversation_followup",
+      "prompt": "그 장점을 두 문장으로 더 쉽게 설명해 주세요.",
+      "enable_tools": false,
+      "history": [
+        {"role": "user", "content": "Go의 고루틴이 무엇인지 설명해 주세요."},
+        {"role": "assistant", "content": "고루틴은 Go 런타임이 가볍게 관리하는 동시 실행 단위입니다. 많은 작업을 적은 비용으로 함께 처리할 수 있습니다."}
+      ],
+      "max_turns": 1,
+      "expectations": {
+        "forbid_tool_call": true,
+        "max_llm_rounds": 1,
+        "max_answer_chars": 200,
+        "required_answer_substrings": ["고루틴"]
+      }
+    },
+    {
+      "id": "general_retrieval_context_no_tools",
+      "category": "memory_context",
+      "prompt": "제가 말한 프로젝트 코드명이 무엇이었죠? 코드명만 답해 주세요.",
+      "enable_tools": false,
+      "context_strategy": "retrieval",
+      "recent_context": "Recent Turn 1\nUser: 새 번역 프로젝트의 코드명은 오로라입니다.\nAssistant: 알겠습니다. 번역 프로젝트 코드명은 오로라입니다.",
+      "max_turns": 1,
+      "expectations": {
+        "forbid_tool_call": true,
+        "max_llm_rounds": 1,
+        "max_answer_chars": 30,
+        "required_answer_substrings": ["오로라"]
+      }
+    },
+    {
+      "id": "general_creative_no_tools",
+      "category": "creative_writing",
+      "prompt": "비 오는 날 도서관을 찾은 고양이에 관한 따뜻한 두 문장 이야기를 써 주세요.",
+      "enable_tools": false,
+      "max_turns": 1,
+      "expectations": {
+        "forbid_tool_call": true,
+        "max_llm_rounds": 1,
+        "max_answer_chars": 250,
+        "required_answer_substrings": ["고양이", "도서관"]
+      }
+    },
+    {
+      "id": "general_arithmetic_reasoning_none",
+      "category": "reasoning_control",
+      "prompt": "17과 25를 더한 결과만 간단히 알려 주세요.",
+      "enable_tools": false,
+      "reasoning_effort": "none",
+      "max_turns": 1,
+      "expectations": {
+        "forbid_tool_call": true,
+        "max_llm_rounds": 1,
+        "max_answer_chars": 20,
+        "required_answer_substrings": ["42"]
+      }
+    },
+    {
+      "id": "general_translation_reasoning_none",
+      "category": "reasoning_control",
+      "prompt": "다음 문장을 자연스러운 영어로만 번역해 주세요: 금요일까지 검토 의견을 보내드리겠습니다.",
+      "enable_tools": false,
+      "reasoning_effort": "none",
+      "max_turns": 1,
+      "expectations": {
+        "forbid_tool_call": true,
+        "max_llm_rounds": 1,
+        "max_answer_chars": 120,
+        "required_answer_substrings": ["Friday"]
+      }
+    },
+    {
+      "id": "general_rewrite_reasoning_none",
+      "category": "reasoning_control",
+      "prompt": "'일정이 좀 밀릴 것 같으니 양해 바랍니다'를 정중하고 간결한 업무 문장으로 다듬어 주세요.",
+      "enable_tools": false,
+      "reasoning_effort": "none",
+      "max_turns": 1,
+      "expectations": {
+        "forbid_tool_call": true,
+        "max_llm_rounds": 1,
+        "max_answer_chars": 220,
+        "required_answer_substrings": ["일정", "양해"]
+      }
+    },
+    {
+      "id": "general_creative_reasoning_none",
+      "category": "reasoning_control",
+      "prompt": "비 오는 날 도서관을 찾은 고양이에 관한 따뜻한 두 문장 이야기를 써 주세요.",
+      "enable_tools": false,
+      "reasoning_effort": "none",
+      "max_turns": 1,
+      "expectations": {
+        "forbid_tool_call": true,
+        "max_llm_rounds": 1,
+        "max_answer_chars": 250,
+        "required_answer_substrings": ["고양이", "도서관"]
+      }
+    },
+    {
+      "id": "general_translation_compact_prompt",
+      "category": "prompt_variant",
+      "system_prompt": "You are a concise assistant. Obey the requested output format exactly. For translation, rewriting, arithmetic, and other simple transformations, return only the requested result without explanations, alternatives, headings, or follow-up offers. Keep reasoning minimal.",
+      "prompt": "다음 문장을 자연스러운 영어로만 번역해 주세요: 금요일까지 검토 의견을 보내드리겠습니다.",
+      "enable_tools": false,
+      "max_turns": 1,
+      "expectations": {
+        "forbid_tool_call": true,
+        "max_llm_rounds": 1,
+        "max_answer_chars": 120,
+        "required_answer_substrings": ["Friday"]
+      }
+    },
+    {
+      "id": "general_rewrite_compact_prompt",
+      "category": "prompt_variant",
+      "system_prompt": "You are a concise assistant. Obey the requested output format exactly. For translation, rewriting, arithmetic, and other simple transformations, return only the requested result without explanations, alternatives, headings, or follow-up offers. Keep reasoning minimal.",
+      "prompt": "'일정이 좀 밀릴 것 같으니 양해 바랍니다'를 정중하고 간결한 업무 문장으로 다듬어 주세요.",
+      "enable_tools": false,
+      "max_turns": 1,
+      "expectations": {
+        "forbid_tool_call": true,
+        "max_llm_rounds": 1,
+        "max_answer_chars": 220,
+        "required_answer_substrings": ["일정", "양해"]
+      }
+    }
+  ]
+}

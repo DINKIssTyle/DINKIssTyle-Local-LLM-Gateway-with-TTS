@@ -40,12 +40,19 @@ type SessionReasoningSnapshot struct {
 	CurrentPhaseMS int64  `json:"current_phase_ms,omitempty"`
 }
 
+type SessionSkillSnapshot struct {
+	Namespace   string `json:"namespace"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+}
+
 type SessionTurnSnapshot struct {
 	TurnID           string                   `json:"turn_id"`
 	Status           string                   `json:"status,omitempty"`
 	UserContent      string                   `json:"user_content,omitempty"`
 	AssistantContent string                   `json:"assistant_content,omitempty"`
 	Reasoning        SessionReasoningSnapshot `json:"reasoning,omitempty"`
+	Skills           []SessionSkillSnapshot   `json:"skills,omitempty"`
 	Tool             *SessionToolCardSnapshot `json:"tool,omitempty"`
 }
 
@@ -186,7 +193,7 @@ func shouldUpdateSessionMessageSnapshot(eventType string) bool {
 
 func shouldPersistChatEvent(eventType string) bool {
 	switch strings.TrimSpace(eventType) {
-	case "chat.end", "request.complete", "request.cancelled", "session.cleared", "generation.finished":
+	case "skill.applied", "chat.end", "request.complete", "request.cancelled", "session.cleared", "generation.finished":
 		return true
 	default:
 		return false
@@ -200,7 +207,7 @@ func shouldUpdateSessionToolSnapshot(eventType string) bool {
 
 func shouldPersistSessionUISnapshot(eventType string) bool {
 	switch strings.TrimSpace(eventType) {
-	case "message.created", "chat.end", "request.complete", "request.cancelled", "session.cleared":
+	case "message.created", "skill.applied", "chat.end", "request.complete", "request.cancelled", "session.cleared":
 		return true
 	default:
 		return false
@@ -209,7 +216,7 @@ func shouldPersistSessionUISnapshot(eventType string) bool {
 
 func shouldUpdateSessionTurnSnapshot(eventType string) bool {
 	switch strings.TrimSpace(eventType) {
-	case "message.created", "message.delta", "reasoning.start", "reasoning.delta", "reasoning.end", "tool_call.start", "tool_call.arguments", "tool_call.success", "tool_call.failure", "chat.end", "request.complete", "request.cancelled", "session.cleared":
+	case "message.created", "message.delta", "reasoning.start", "reasoning.delta", "reasoning.end", "skill.applied", "tool_call.start", "tool_call.arguments", "tool_call.success", "tool_call.failure", "chat.end", "request.complete", "request.cancelled", "session.cleared":
 		return true
 	default:
 		return false
@@ -291,6 +298,53 @@ func compactToolSnapshotDetail(toolName string, args interface{}, summary string
 	return compactText(strings.TrimSpace(summary), 220)
 }
 
+func toolArgumentHistoryEntries(toolName string, args interface{}, summary string) []SessionToolHistorySnapshot {
+	argsMap, _ := args.(map[string]interface{})
+	if strings.TrimSpace(toolName) == "search_web_multi" && argsMap != nil {
+		queries, _ := argsMap["queries"].([]interface{})
+		entries := make([]SessionToolHistorySnapshot, 0, len(queries))
+		for _, raw := range queries {
+			query, _ := raw.(string)
+			if query = strings.TrimSpace(query); query != "" {
+				entries = append(entries, SessionToolHistorySnapshot{Tool: "search_web", Detail: compactText(query, 220)})
+			}
+		}
+		if len(entries) > 0 {
+			return entries
+		}
+	}
+	detail := compactToolSnapshotDetail(toolName, args, summary)
+	if detail == "" {
+		return nil
+	}
+	name := strings.TrimSpace(toolName)
+	if name == "" {
+		name = "Tool"
+	}
+	return []SessionToolHistorySnapshot{{Tool: name, Detail: detail}}
+}
+
+func appendUniqueToolHistory(card *SessionToolCardSnapshot, entries []SessionToolHistorySnapshot) {
+	if card == nil {
+		return
+	}
+	for _, entry := range entries {
+		if strings.TrimSpace(entry.Tool) == "" && strings.TrimSpace(entry.Detail) == "" {
+			continue
+		}
+		duplicate := false
+		for _, existing := range card.History {
+			if existing.Tool == entry.Tool && existing.Detail == entry.Detail {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			card.History = append(card.History, entry)
+		}
+	}
+}
+
 func hasMeaningfulToolSnapshot(card SessionToolCardSnapshot) bool {
 	if strings.TrimSpace(card.Summary) != "" {
 		return true
@@ -362,27 +416,42 @@ func updateToolSnapshot(snapshot *SessionUISnapshot, turnID, eventType string, p
 		if strings.TrimSpace(toolName) != "" {
 			card.ToolName = strings.TrimSpace(toolName)
 		}
-		card.Args = args
-		detail := compactToolSnapshotDetail(card.ToolName, args, summary)
-		if detail != "" {
-			entry := SessionToolHistorySnapshot{Tool: strings.TrimSpace(card.ToolName), Detail: detail}
-			if entry.Tool == "" {
-				entry.Tool = "Tool"
-			}
-			last := SessionToolHistorySnapshot{}
-			if len(card.History) > 0 {
-				last = card.History[len(card.History)-1]
-			}
-			if last.Tool != entry.Tool || last.Detail != entry.Detail {
-				card.History = append(card.History, entry)
+		if recovered, _ := payloadMap["recovered"].(bool); recovered {
+			previousEntries := toolArgumentHistoryEntries(card.ToolName, card.Args, card.Summary)
+			for _, previous := range previousEntries {
+				for index := len(card.History) - 1; index >= 0; index-- {
+					if card.History[index] == previous {
+						card.History = append(card.History[:index], card.History[index+1:]...)
+						break
+					}
+				}
 			}
 		}
+		card.Args = args
+		appendUniqueToolHistory(&card, toolArgumentHistoryEntries(card.ToolName, args, summary))
 	case "tool_call.success":
 		card.State = "success"
 		if strings.TrimSpace(toolName) != "" {
 			card.ToolName = strings.TrimSpace(toolName)
 		}
 		card.Summary = ""
+		if evidence, ok := payloadMap["evidence"].([]interface{}); ok {
+			entries := make([]SessionToolHistorySnapshot, 0, len(evidence))
+			for _, raw := range evidence {
+				item, _ := raw.(map[string]interface{})
+				title := strings.TrimSpace(extractStringValue(item, []string{"title"}))
+				url := strings.TrimSpace(extractStringValue(item, []string{"url"}))
+				if url == "" {
+					continue
+				}
+				detail := url
+				if title != "" {
+					detail = title + " — " + url
+				}
+				entries = append(entries, SessionToolHistorySnapshot{Tool: "web_source", Detail: detail})
+			}
+			appendUniqueToolHistory(&card, entries)
+		}
 	case "tool_call.failure":
 		card.State = "failure"
 		if strings.TrimSpace(toolName) != "" {
@@ -750,6 +819,17 @@ func updateTurnSnapshot(snapshot *SessionUISnapshot, turnID, role, eventType str
 		if strings.TrimSpace(turn.Status) == "" {
 			turn.Status = "running"
 		}
+	case "skill.applied":
+		payloadMap, _ := payload.(map[string]interface{})
+		if payloadMap != nil {
+			if bytes, err := json.Marshal(payloadMap["skills"]); err == nil {
+				var skills []SessionSkillSnapshot
+				if json.Unmarshal(bytes, &skills) == nil {
+					turn.Skills = skills
+				}
+			}
+		}
+		turn.Status = "running"
 	case "tool_call.start", "tool_call.arguments":
 		turn.Status = "running"
 	case "tool_call.success":
@@ -770,6 +850,7 @@ func updateTurnSnapshot(snapshot *SessionUISnapshot, turnID, role, eventType str
 		turn.UserContent = ""
 		turn.AssistantContent = ""
 		turn.Reasoning = SessionReasoningSnapshot{}
+		turn.Skills = nil
 		turn.Tool = nil
 	default:
 		if strings.TrimSpace(turn.Status) == "" && (strings.TrimSpace(turn.AssistantContent) != "" || strings.TrimSpace(turn.Reasoning.Content) != "") {

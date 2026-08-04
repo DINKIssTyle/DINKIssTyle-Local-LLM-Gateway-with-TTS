@@ -10,6 +10,8 @@ import (
 	"dinkisstyle-chat/internal/promptkit"
 )
 
+const defaultToolTurnMaxTokens = 4096
+
 type RequestInput struct {
 	Body              []byte
 	EndpointRaw       string
@@ -23,6 +25,7 @@ type RequestInput struct {
 	ActiveContext     string
 	RetrievalInjected bool
 	UserProfileFacts  string
+	SkillInstructions string
 	Tools             []promptkit.ToolDefinition
 }
 
@@ -60,14 +63,17 @@ func PrepareRequest(input RequestInput) (PreparedRequest, error) {
 
 	useNativeTools := input.EnableTools && strings.TrimSpace(strings.ToLower(input.LLMMode)) != "stateful"
 	includeRetrievalMemory := contextStrategy == "retrieval"
-	shouldInjectRuntime := input.EnableTools || includeRetrievalMemory
+	compactTaskInstructions := promptkit.BuildCompactTaskInstructions(prepared.InitialUserInputText)
+	shouldInjectRuntime := input.EnableTools || includeRetrievalMemory || strings.TrimSpace(input.SkillInstructions) != "" || compactTaskInstructions != ""
 
 	if shouldInjectRuntime {
 		if useNativeTools {
 			ensureChatCompletionTools(reqMap, input.Tools)
+			applyToolTurnOutputBudget(reqMap)
 		}
+		extraInstr := compactTaskInstructions + input.SkillInstructions
 		if !prepared.IsStatefulFollowup {
-			extraInstr := promptkit.BuildRuntimeInstructions(promptkit.RuntimeInstructionsInput{
+			extraInstr = promptkit.BuildRuntimeInstructions(promptkit.RuntimeInstructionsInput{
 				EnvironmentInfo:   buildEnvironmentInfo(),
 				ModelID:           extractModelID(reqMap),
 				UseNativeTools:    useNativeTools,
@@ -77,9 +83,9 @@ func PrepareRequest(input RequestInput) (PreparedRequest, error) {
 				ActiveContext:     conditionalContextValue(includeRetrievalMemory, input.ActiveContext),
 				RetrievalInjected: includeRetrievalMemory && input.RetrievalInjected,
 				UserProfileFacts:  input.UserProfileFacts,
-			})
-			prepared.InjectedPrompt = promptkit.InjectPrompt(reqMap, extraInstr)
+			}) + extraInstr
 		}
+		prepared.InjectedPrompt = promptkit.InjectPrompt(reqMap, extraInstr)
 
 		newBody, err := json.Marshal(reqMap)
 		if err != nil {
@@ -97,6 +103,19 @@ func PrepareRequest(input RequestInput) (PreparedRequest, error) {
 	prepared.UpstreamURL = buildUpstreamURL(prepared.Endpoint, input.LLMMode)
 	prepared.ModelID = extractModelID(reqMap)
 	return prepared, nil
+}
+
+func applyToolTurnOutputBudget(reqMap map[string]interface{}) {
+	if reqMap == nil {
+		return
+	}
+	if _, exists := reqMap["max_tokens"]; exists {
+		return
+	}
+	if _, exists := reqMap["max_completion_tokens"]; exists {
+		return
+	}
+	reqMap["max_tokens"] = defaultToolTurnMaxTokens
 }
 
 func sanitizeEndpoint(endpointRaw string) string {

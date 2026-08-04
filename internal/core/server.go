@@ -82,8 +82,8 @@ const (
 	recentContextOlderUserBudget    = 220
 	recentContextOlderAssistBudget  = 300
 	recentContextStatefulBudget     = 900
-	webEvidenceToolBudget           = 3
-	webSearchProviderBudget         = 2
+	webEvidenceToolBudget           = 4
+	webSearchProviderBudget         = 3
 	bufferedSourceReadBudget        = 2
 	deepWebEvidenceToolBudget       = 8
 	deepWebSearchProviderBudget     = 4
@@ -664,6 +664,18 @@ func classifyPromptToolMarkup(raw string, tools []promptkit.ToolDefinition) (rec
 	return false, possiblePrefix
 }
 
+// classifyPromptToolStreamCandidate applies the same quarantine decision to
+// both OpenAI-style deltas and LM Studio's custom message.delta events. JSON
+// wrappers need special handling because their first chunks ("`", "```", or
+// "{") do not yet contain a tool name and cannot be parsed as a complete call.
+func classifyPromptToolStreamCandidate(raw string, tools []promptkit.ToolDefinition) (startBuffering bool, holdPrefix bool) {
+	recognized, possiblePrefix := classifyPromptToolMarkup(raw, tools)
+	if recognized || looksLikeJSONToolCallPrefix(raw) {
+		return true, false
+	}
+	return false, possiblePrefix || looksLikeJSONToolCallPossiblePrefix(raw)
+}
+
 func hasPromptToolClosingTag(raw string, tools []promptkit.ToolDefinition) bool {
 	lower := strings.ToLower(raw)
 	if strings.Contains(lower, "</tool_call>") {
@@ -700,6 +712,12 @@ func isRegisteredPromptTool(name string, tools []promptkit.ToolDefinition) bool 
 
 func parsePromptToolMarkup(raw string) (string, string, interface{}, bool) {
 	trimmed := strings.TrimSpace(raw)
+	if call, ok := chatharness.ParseFunctionParameterToolCall(trimmed); ok {
+		var arguments interface{}
+		if err := json.Unmarshal([]byte(call.Arguments), &arguments); err == nil {
+			return call.Name, call.Arguments, arguments, true
+		}
+	}
 	if name, argumentsJSON, arguments, ok := parseJSONToolCall(trimmed); ok {
 		return name, argumentsJSON, arguments, true
 	}
@@ -724,6 +742,41 @@ func parsePromptToolMarkup(raw string) (string, string, interface{}, bool) {
 		return name, argumentsJSON, arguments, true
 	}
 	return "", "", nil, false
+}
+
+// stripLeadingPromptToolArtifacts is a final defense for an already-completed
+// textual tool wrapper. Streaming paths should quarantine these before they
+// reach the answer, but keeping them out of request.complete and persisted
+// assistant history prevents an upstream format variation from resurfacing as
+// a visible fenced JSON block.
+func stripLeadingPromptToolArtifacts(raw string, tools []promptkit.ToolDefinition) (string, bool) {
+	remaining := strings.TrimSpace(raw)
+	changed := false
+	for remaining != "" {
+		consumed := 0
+		candidate := ""
+		if match := regexp.MustCompile("(?is)^```(?:json)?\\s*([\\s\\S]*?)\\s*```\\s*").FindStringIndex(remaining); len(match) == 2 && match[0] == 0 {
+			candidate = remaining[:match[1]]
+			consumed = match[1]
+		} else if strings.HasPrefix(remaining, "{") {
+			decoder := json.NewDecoder(strings.NewReader(remaining))
+			var value json.RawMessage
+			if err := decoder.Decode(&value); err == nil {
+				consumed = int(decoder.InputOffset())
+				candidate = remaining[:consumed]
+			}
+		}
+		if consumed <= 0 || candidate == "" {
+			break
+		}
+		toolName, _, _, ok := parsePromptToolMarkup(candidate)
+		if !ok || !isRegisteredPromptTool(toolName, tools) {
+			break
+		}
+		remaining = strings.TrimSpace(remaining[consumed:])
+		changed = true
+	}
+	return remaining, changed
 }
 
 func parseToolCodeCall(raw string) (string, string, interface{}, bool) {
@@ -4547,20 +4600,31 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			recentContext = compactRecentTurnContent(recentContext, recentContextStatefulBudget)
 			recentContextSource += "+stateful_compact"
 		} else {
-			memorySnapshotDebug = mcp.GetMemorySnapshotDebug(userID)
-			memorySnapshot = memorySnapshotDebug.Text
-			if messages, ok := reqMap["messages"].([]interface{}); ok && len(messages) > 0 {
-				for i := len(messages) - 1; i >= 0; i-- {
-					if m, ok := messages[i].(map[string]interface{}); ok {
-						if role, ok := m["role"].(string); ok && role == "user" {
-							if content, ok := m["content"].(string); ok {
-								autoContextDebug = mcp.AutoSearchMemoryDebugQuery(userID, content)
-								autoContext = compactText(autoContextDebug.Context, 1200)
-								break
+			preferRecentContext := strings.TrimSpace(recentContext) != "" && chatharness.IsLikelyContextualFollowup(initialUserInputText)
+			if !preferRecentContext {
+				memorySnapshotDebug = mcp.GetMemorySnapshotDebug(userID)
+				memorySnapshot = memorySnapshotDebug.Text
+			}
+			if !preferRecentContext {
+				if messages, ok := reqMap["messages"].([]interface{}); ok && len(messages) > 0 {
+					for i := len(messages) - 1; i >= 0; i-- {
+						if m, ok := messages[i].(map[string]interface{}); ok {
+							if role, ok := m["role"].(string); ok && role == "user" {
+								if content, ok := m["content"].(string); ok {
+									autoContextDebug = mcp.AutoSearchMemoryDebugQuery(userID, content)
+									autoContext = compactText(autoContextDebug.Context, 1200)
+									break
+								}
 							}
 						}
 					}
 				}
+			} else {
+				recentContextSource += "+followup_priority"
+				AddDebugTrace("chat", "context.followup_priority", "Suppressed broad memory retrieval for a contextual follow-up", map[string]interface{}{
+					"user_input":           compactText(initialUserInputText, 180),
+					"recent_context_turns": recentContextTurns,
+				})
 			}
 		}
 	}
@@ -4612,6 +4676,25 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		})
 	}
 
+	skillCompilation := compileActiveSkills(initialUserInputText)
+	selectedSkillNames := make([]string, 0, len(skillCompilation.Selected))
+	selectedSkillEvents := make([]map[string]string, 0, len(skillCompilation.Selected))
+	for _, skill := range skillCompilation.Selected {
+		selectedSkillNames = append(selectedSkillNames, skill.Namespace)
+		selectedSkillEvents = append(selectedSkillEvents, map[string]string{
+			"namespace":    skill.Namespace,
+			"name":         skill.Name,
+			"display_name": skill.DisplayName,
+		})
+	}
+	AddDebugTrace("chat", "skills.selected", "Selected request-relevant skills", map[string]interface{}{
+		"discovered":        skillCompilation.Discovered,
+		"selected":          selectedSkillNames,
+		"selected_count":    len(selectedSkillNames),
+		"diagnostic_count":  len(skillCompilation.Diagnostics),
+		"instruction_chars": len([]rune(skillCompilation.Prompt)),
+	})
+
 	preparedRequest, err := chatharness.PrepareRequest(chatharness.RequestInput{
 		Body:              body,
 		EndpointRaw:       endpointRaw,
@@ -4625,6 +4708,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		ActiveContext:     autoContext,
 		RetrievalInjected: strings.TrimSpace(recentContext) != "" || strings.TrimSpace(memorySnapshot) != "" || strings.TrimSpace(autoContext) != "",
 		UserProfileFacts:  userProfileFacts,
+		SkillInstructions: skillCompilation.Prompt,
 		Tools:             promptTools,
 	})
 	if err != nil {
@@ -4644,6 +4728,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 	body = preparedRequest.Body
 	reqMap = preparedRequest.ReqMap
+	providerTools, _ := reqMap["tools"].([]interface{})
 	initialUserInputText = preparedRequest.InitialUserInputText
 	endpoint := preparedRequest.Endpoint
 	token := preparedRequest.Token
@@ -4658,6 +4743,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		"url":                      llmURL,
 		"body_bytes":               len(body),
 		"injected_prompt":          preparedRequest.InjectedPrompt,
+		"selected_skills":          selectedSkillNames,
 		"stateful_followup":        preparedRequest.IsStatefulFollowup,
 		"memory_snapshot_chars":    len([]rune(strings.TrimSpace(memorySnapshot))),
 		"active_context_chars":     len([]rune(strings.TrimSpace(autoContext))),
@@ -4936,6 +5022,20 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		return
 	}
 	emitter.SetupHeaders()
+	if len(selectedSkillEvents) > 0 {
+		skillEvent := map[string]interface{}{
+			"type":    "skill.applied",
+			"turn_id": clientTurnID,
+			"skills":  selectedSkillEvents,
+		}
+		appendChatEvent("assistant", "skill.applied", skillEvent)
+		if clientStreaming {
+			if writeErr := emitter.EmitDataJSON(skillEvent); writeErr != nil {
+				clientStreaming = false
+				log.Printf("[handleChat] Client stream detached while reporting selected skills for %s: %v", userID, writeErr)
+			}
+		}
+	}
 	emitStreamChunk = func(payload string) {
 		if !clientStreaming {
 			return
@@ -4961,6 +5061,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	reasoningRunawayMessage := ""
 	toolUsageCounts := make(map[string]int)
 	toolSignatureCounts := make(map[string]int)
+	webSearchEvidenceAttempts := 0
+	webEvidenceSources := make([]chatharness.WebEvidenceSource, 0, 6)
+	webEvidenceSourceURLs := make(map[string]bool)
 	executeCommandFamilyCounts := make(map[string]int)
 	webEvidenceBudget := webEvidenceToolBudget
 	webSearchProviderLimit := webSearchProviderBudget
@@ -4977,6 +5080,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		webSearchProviderLimit = 6
 	}
 	previousResponseRetryUsed := false
+	reasoningOnlyFinalRecoveryUsed := false
 	discardStatefulResponseIDForTurn := false
 	generationFirstTokenEmitted := false
 	generationPhase := "queued"
@@ -5340,7 +5444,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 							if content, ok := chunk["content"].(string); ok {
 								if enableTools {
 									candidate := content
-									if isBuffering && toolPattern != nil && toolPattern["format"] == "text-tool" {
+									if isBuffering && toolPattern != nil && (toolPattern["format"] == "text-tool" || toolPattern["format"] == "json-tool") {
 										buffer += content
 										candidate = buffer
 									} else if partialTagBuffer != "" {
@@ -5348,23 +5452,27 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 									}
 
 									if !isBuffering {
-										recognized, possiblePrefix := classifyPromptToolMarkup(candidate, promptTools)
-										if !recognized && possiblePrefix {
+										startBuffering, holdPrefix := classifyPromptToolStreamCandidate(candidate, promptTools)
+										if !startBuffering && holdPrefix {
 											partialTagBuffer = candidate
 											continue
 										}
-										if recognized {
+										if startBuffering {
 											isBuffering = true
 											buffer = candidate
 											partialTagBuffer = ""
-											toolPattern = map[string]string{"format": "text-tool"}
+											format := "text-tool"
+											if looksLikeJSONToolCallPrefix(candidate) {
+												format = "json-tool"
+											}
+											toolPattern = map[string]string{"format": format}
 										} else if partialTagBuffer != "" {
 											content = candidate
 											partialTagBuffer = ""
 										}
 									}
 
-									if isBuffering && toolPattern != nil && toolPattern["format"] == "text-tool" {
+									if isBuffering && toolPattern != nil && (toolPattern["format"] == "text-tool" || toolPattern["format"] == "json-tool") {
 										if parsedTool, parsedArgsJSON, parsedArgs, _ := parsePromptToolMarkup(buffer); isRegisteredPromptTool(parsedTool, promptTools) {
 											toolExecutedThisTurn = true
 											lastToolName = parsedTool
@@ -5388,10 +5496,20 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 											toolPattern = nil
 											continue
 										}
-										if hasPromptToolClosingTag(buffer, promptTools) {
+										if toolPattern["format"] == "text-tool" && hasPromptToolClosingTag(buffer, promptTools) {
 											needsCorrection = true
 											badContentCapture = buffer
 											AddDebugTrace("chat", "tool.quarantine", "Suppressed malformed streamed tool markup", map[string]interface{}{
+												"snippet": compactText(buffer, 220),
+											})
+											buffer = ""
+											isBuffering = false
+											toolPattern = nil
+										}
+										if len(buffer) > bufferingThreshold {
+											needsCorrection = true
+											badContentCapture = buffer
+											AddDebugTrace("chat", "tool.quarantine", "Suppressed oversized streamed tool wrapper", map[string]interface{}{
 												"snippet": compactText(buffer, 220),
 											})
 											buffer = ""
@@ -5671,23 +5789,37 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 									lastResponseID = ""
 									sessionLastResponseID = ""
 									if pendingNativeToolName != "" {
-										toolExecutedThisTurn = true
-										lastToolName = pendingNativeToolName
-										lastToolArgsStr = "{}"
-										lastSavedBufferForTurn = fullResponse
-										argsEvt := map[string]interface{}{
-											"type":      "tool_call.arguments",
-											"tool":      pendingNativeToolName,
-											"arguments": map[string]interface{}{},
+										if repairedArgs, repaired := chatharness.RepairMissingReadWebPageArguments(pendingNativeToolName, "{}", initialUserInputText); repaired {
+											toolExecutedThisTurn = true
+											lastToolName = pendingNativeToolName
+											lastToolArgsStr = repairedArgs
+											lastSavedBufferForTurn = fullResponse
+											var parsedArgs interface{}
+											_ = json.Unmarshal([]byte(repairedArgs), &parsedArgs)
+											argsEvt := map[string]interface{}{
+												"type":      "tool_call.arguments",
+												"tool":      pendingNativeToolName,
+												"arguments": parsedArgs,
+												"recovered": true,
+											}
+											argsBytes, _ := json.Marshal(argsEvt)
+											appendChatEvent("assistant", "tool_call.arguments", argsEvt)
+											emitStreamChunk(fmt.Sprintf("data: %s", string(argsBytes)))
+											AddDebugTrace("chat", "tool.arguments_repaired", "Recovered explicit current-turn URL after native tool format error", map[string]interface{}{
+												"turn":  turn,
+												"tool":  pendingNativeToolName,
+												"args":  compactText(repairedArgs, 240),
+												"error": compactText(errMessage, 180),
+											})
+										} else {
+											needsCorrection = true
+											badContentCapture = fmt.Sprintf("Native tool call parse error for %s: %s", pendingNativeToolName, errMessage)
+											AddDebugTrace("chat", "tool.error", "Native tool format error queued for self-correction instead of executing empty arguments", map[string]interface{}{
+												"turn":  turn,
+												"tool":  pendingNativeToolName,
+												"error": compactText(errMessage, 180),
+											})
 										}
-										argsBytes, _ := json.Marshal(argsEvt)
-										appendChatEvent("assistant", "tool_call.arguments", argsEvt)
-										emitStreamChunk(fmt.Sprintf("data: %s", string(argsBytes)))
-										AddDebugTrace("chat", "tool.error", "Recovered native tool format error by executing named tool with empty arguments", map[string]interface{}{
-											"turn":  turn,
-											"tool":  pendingNativeToolName,
-											"error": compactText(errMessage, 180),
-										})
 									} else {
 										needsCorrection = true
 										badContentCapture = fmt.Sprintf("Native tool call parse error: %s", errMessage)
@@ -6370,11 +6502,47 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		// 🛡️ TOOL EXECUTION & LOOP LOGIC
 		if enableTools && toolExecutedThisTurn {
 			log.Printf("[handleChat] Turn %d detected Tool Call: %s. Executing...", turn, lastToolName)
+			rawToolArgumentsForEvent := lastToolArgsStr
 			AddDebugTrace("chat", "tool.detected", "Tool call detected in assistant output", map[string]interface{}{
 				"turn": turn,
 				"tool": lastToolName,
 				"args": compactText(lastToolArgsStr, 200),
 			})
+			if repairedArgsJSON, repaired := chatharness.RepairMissingReadWebPageArguments(lastToolName, lastToolArgsStr, initialUserInputText); repaired {
+				lastToolArgsStr = repairedArgsJSON
+			}
+			if repairedArgsJSON, repaired := chatharness.RepairMissingSearchToolArguments(lastToolName, lastToolArgsStr, initialUserInputText, recentContext); repaired {
+				lastToolArgsStr = repairedArgsJSON
+			}
+			if refinedArgsJSON, refined := chatharness.RefineFamilySearchToolArguments(lastToolName, lastToolArgsStr, initialUserInputText); refined {
+				lastToolArgsStr = refinedArgsJSON
+			}
+			if refinedArgsJSON, refined := chatharness.RefineExactLookupToolArguments(lastToolName, lastToolArgsStr, initialUserInputText); refined {
+				lastToolArgsStr = refinedArgsJSON
+			}
+			if upgradedName, upgradedArgsJSON, upgraded := chatharness.UpgradeFreshnessSearchToolCall(lastToolName, lastToolArgsStr, initialUserInputText); upgraded {
+				lastToolName = upgradedName
+				lastToolArgsStr = upgradedArgsJSON
+			}
+			if lastToolArgsStr != rawToolArgumentsForEvent {
+				var repairedArgs interface{}
+				_ = json.Unmarshal([]byte(lastToolArgsStr), &repairedArgs)
+				repairEvent := map[string]interface{}{
+					"type":      "tool_call.arguments",
+					"tool":      lastToolName,
+					"arguments": repairedArgs,
+					"recovered": true,
+				}
+				appendChatEvent("assistant", "tool_call.arguments", repairEvent)
+				if repairBytes, marshalErr := json.Marshal(repairEvent); marshalErr == nil {
+					emitStreamChunk(fmt.Sprintf("data: %s", string(repairBytes)))
+				}
+				AddDebugTrace("chat", "tool.arguments_repaired", "Normalized missing or malformed tool arguments against the current request", map[string]interface{}{
+					"turn": turn,
+					"tool": lastToolName,
+					"args": compactText(lastToolArgsStr, 240),
+				})
+			}
 
 			// 1. Execute Tool
 			toolStart := time.Now()
@@ -6400,6 +6568,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 			var result string
 			var err error
+			toolActuallyCalled := false
+			duplicateToolCall := false
 			webEvidenceToolCalls := totalToolUsageFor(toolUsageCounts, isWebEvidenceTool)
 			webSearchProviderCalls := totalToolUsageFor(toolUsageCounts, isWebSearchProviderTool)
 			if isWebEvidenceTool(lastToolName) && webEvidenceToolCalls > webEvidenceBudget {
@@ -6454,6 +6624,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 					"count":   executeCommandFamilyCounts[executeCommandFamily],
 				})
 			} else if toolSignatureCounts[toolSig] > 1 {
+				duplicateToolCall = true
 				result = fmt.Sprintf("Duplicate tool call prevented for %s with near-identical arguments. Use existing buffered evidence and continue answering.", lastToolName)
 				AddDebugTrace("chat", "tool.skipped", "Skipped duplicate tool call with same arguments", map[string]interface{}{
 					"turn":  turn,
@@ -6461,8 +6632,12 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 					"count": toolSignatureCounts[toolSig],
 				})
 			} else {
+				toolActuallyCalled = true
 				toolResult, callErr := toolruntime.Default.Call(chatCtx, toolExecCtx, lastToolName, json.RawMessage(lastToolArgsStr))
 				result, err = toolResult.Content, callErr
+			}
+			if toolActuallyCalled && isWebSearchProviderTool(lastToolName) {
+				webSearchEvidenceAttempts += toolUsageWeight
 			}
 			var toolResultEvt map[string]interface{}
 			if err != nil {
@@ -6496,32 +6671,95 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 					"tool": lastToolName,
 				}
 			}
+			toolEvidenceSourceCount := 0
+			if isWebEvidenceTool(lastToolName) {
+				sources := chatharness.ExtractWebEvidenceSources(result, 6)
+				toolEvidenceSourceCount = len(sources)
+				if len(sources) > 0 {
+					evidence := make([]interface{}, 0, len(sources))
+					for _, source := range sources {
+						evidence = append(evidence, map[string]interface{}{
+							"title": source.Title,
+							"url":   source.URL,
+						})
+						if !webEvidenceSourceURLs[source.URL] {
+							webEvidenceSourceURLs[source.URL] = true
+							webEvidenceSources = append(webEvidenceSources, source)
+						}
+					}
+					toolResultEvt["evidence"] = evidence
+				}
+			}
 			// Emit Result Event to Frontend
 			resBytes, _ := json.Marshal(toolResultEvt)
 			appendChatEvent("assistant", fmt.Sprintf("%v", toolResultEvt["type"]), toolResultEvt)
 			emitStreamChunk(fmt.Sprintf("data: %s", string(resBytes)))
 
+			if chatharness.ShouldFailClosedWebSearch(lastToolName, err, toolEvidenceSourceCount) {
+				failureAnswer := chatharness.BuildWebSearchFailureAnswer(initialUserInputText, err.Error())
+				fullResponse = ""
+				emitCanonicalAssistantDelta(failureAnswer)
+				AddDebugTrace("chat", "web_search.fail_closed", "Stopped generation after web search returned no evidence", map[string]interface{}{
+					"turn":  turn,
+					"tool":  lastToolName,
+					"error": err.Error(),
+				})
+				break
+			}
+
 			if llmMode == "stateful" && lastResponseID == "" {
 				log.Printf("[handleChat] WARNING: No lastResponseID captured for turn %d. Multi-turn might break.", turn)
 			}
+			freshnessSensitive := chatharness.IsFreshnessSensitiveWebRequest(initialUserInputText)
+			requireFreshnessCrossCheck := freshnessSensitive &&
+				isWebSearchProviderTool(lastToolName) &&
+				webSearchEvidenceAttempts < 2 &&
+				!duplicateToolCall &&
+				!isDeepWebResearchRequest(initialUserInputText) &&
+				!bulkToolTestRequest
+			finalAnswerOnly := chatharness.ShouldFinalizeAfterWebSearch(
+				lastToolName,
+				result,
+				isDeepWebResearchRequest(initialUserInputText),
+				bulkToolTestRequest,
+			)
+			if requireFreshnessCrossCheck {
+				finalAnswerOnly = false
+			}
+			if isWebSearchProviderTool(lastToolName) && webSearchEvidenceAttempts >= webSearchProviderLimit {
+				finalAnswerOnly = true
+			}
+			if duplicateToolCall {
+				finalAnswerOnly = true
+			}
+			singleSearchRefinement := strings.Contains(strings.ToLower(result), "evidence quality warning: no_authoritative_or_reputable_source")
+			if finalAnswerOnly {
+				singleSearchRefinement = false
+			}
 			reqMap, body, _ = chatharness.PrepareToolFollowupRequest(chatharness.ToolFollowupInput{
-				LLMMode:             llmMode,
-				ModelID:             modelID,
-				LastResponseID:      lastResponseID,
-				ToolName:            lastToolName,
-				ToolResult:          result,
-				LastAssistantBuffer: lastSavedBufferForTurn,
-				ReqMap:              reqMap,
-				ToolCallID:          lastToolCallID,
-				ToolArguments:       lastToolArgsStr,
-				OriginalUserText:    initialUserInputText,
-				CompletedTools:      completedToolNames(promptTools, toolUsageCounts),
-				AvailableTools:      availableToolNames(promptTools),
+				LLMMode:                    llmMode,
+				ModelID:                    modelID,
+				LastResponseID:             lastResponseID,
+				ToolName:                   lastToolName,
+				ToolResult:                 result,
+				LastAssistantBuffer:        lastSavedBufferForTurn,
+				ReqMap:                     reqMap,
+				ToolCallID:                 lastToolCallID,
+				ToolArguments:              lastToolArgsStr,
+				OriginalUserText:           initialUserInputText,
+				CompletedTools:             completedToolNames(promptTools, toolUsageCounts),
+				AvailableTools:             availableToolNames(promptTools),
+				FinalAnswerOnly:            finalAnswerOnly,
+				RequireFreshnessCrossCheck: requireFreshnessCrossCheck,
+				SingleSearchRefinement:     singleSearchRefinement,
+				ProviderTools:              providerTools,
 			})
 			AddDebugTrace("chat", "turn.followup", "Prepared follow-up turn with tool result", map[string]interface{}{
-				"turn":       turn,
-				"tool":       lastToolName,
-				"body_bytes": len(body),
+				"turn":                  turn,
+				"tool":                  lastToolName,
+				"body_bytes":            len(body),
+				"final_only":            finalAnswerOnly,
+				"freshness_cross_check": requireFreshnessCrossCheck,
 			})
 			continue // Start next turn loop
 		}
@@ -6560,6 +6798,29 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			}
 		}
 
+		if strings.TrimSpace(fullResponse) == "" && strings.TrimSpace(reasoningResponse) != "" && !toolExecutedThisTurn && !reasoningOnlyFinalRecoveryUsed && turn < maxToolTurns-1 {
+			reasoningOnlyFinalRecoveryUsed = true
+			var recoveryErr error
+			reqMap, body, recoveryErr = chatharness.PrepareReasoningOnlyFinalRequest(
+				llmMode, modelID, lastResponseID, initialUserInputText, reasoningResponse, reqMap,
+			)
+			if recoveryErr == nil {
+				if llmMode == "stateful" {
+					llmURL = strings.TrimRight(endpoint, "/") + "/v1/chat/completions"
+				}
+				AddDebugTrace("chat", "final_answer.recovery", "Retrying once after the model emitted reasoning without a final answer", map[string]interface{}{
+					"turn":            turn,
+					"reasoning_chars": len(reasoningResponse),
+					"mode":            llmMode,
+				})
+				continue
+			}
+			AddDebugTrace("chat", "final_answer.recovery_error", "Could not prepare reasoning-only final answer recovery", map[string]interface{}{
+				"turn":  turn,
+				"error": recoveryErr.Error(),
+			})
+		}
+
 		// If no tool executed, we are done with all turns
 		AddDebugTrace("chat", "turn.complete", "Turn completed without additional tool recursion", map[string]interface{}{
 			"turn":           turn,
@@ -6568,6 +6829,15 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		})
 		break
 	} // --- TURN LOOP END ---
+
+	if cleanedResponse, stripped := stripLeadingPromptToolArtifacts(fullResponse, promptTools); stripped {
+		AddDebugTrace("chat", "tool.final_quarantine", "Removed leaked textual tool wrapper from the final assistant answer", map[string]interface{}{
+			"before_chars": len([]rune(fullResponse)),
+			"after_chars":  len([]rune(cleanedResponse)),
+		})
+		fullResponse = cleanedResponse
+	}
+	fullResponse = chatharness.AppendMissingWebEvidenceSources(fullResponse, initialUserInputText, webEvidenceSources)
 
 	// A malformed call that still remains after the bounded retry loop is never
 	// forwarded as assistant content.

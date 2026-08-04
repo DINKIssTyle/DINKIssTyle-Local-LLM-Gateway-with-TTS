@@ -12,6 +12,7 @@ const DEFAULT_STATEFUL_TOKEN_BUDGET = 30000;
 const LM_STUDIO_REPEAT_RECOVERY_PENALTY = 1.15;
 const LM_STUDIO_REPEAT_RECOVERY_TEMPERATURE_DELTA = 0.15;
 const DEFAULT_REASONING_OPTIONS = ['off', 'low', 'medium', 'high', 'on'];
+const STANDARD_REASONING_OPTIONS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
 const STREAM_LOOP_DETECTION_TAIL_CHARS = 1200;
 const MAX_EMPTY_FINAL_ANSWER_RECOVERY_ATTEMPTS = 3;
 
@@ -985,6 +986,9 @@ async function handleStreamEvent(json, ctx) {
         AppState.session.replay.reasoningBuffers.set(elementId, ctx.reasoningBuffer);
         finalizeReasoningStatus(elementId, 'done', ctx.reasoningBuffer, elapsedMs);
     }
+    else if (eventType === 'skill.applied') {
+        renderAppliedSkills(elementId, json.skills);
+    }
     else if (eventType.startsWith('tool_call.')) {
         ctx.hadToolActivity = true;
         ctx.toolEvents.push({
@@ -1000,9 +1004,10 @@ async function handleStreamEvent(json, ctx) {
             ctx.lastToolCallHtml = json.tool_name || json.tool || ctx.lastToolCallHtml || 'Tool';
             setToolCardState(elementId, 'running', '', null, ctx.lastToolCallHtml);
         } else if (eventType === 'tool_call.arguments') {
-            setToolCardState(elementId, 'running', '', json.arguments, json.tool || 'Tool');
+            setToolCardState(elementId, 'running', '', json.arguments, json.tool || 'Tool', json.recovered === true);
         } else if (eventType === 'tool_call.success') {
-            setToolCardState(elementId, 'success', t('tool.executionFinished'));
+            appendToolEvidenceHistory(elementId, json.evidence);
+            setToolCardState(elementId, 'success', getWebEvidenceSummary(elementId) || t('tool.executionFinished'));
         } else if (eventType === 'tool_call.failure') {
             setToolCardState(elementId, 'failure', json.reason || t('tool.unknownError'));
         }
@@ -1211,6 +1216,7 @@ function normalizeSessionTurnSnapshot(turn = {}) {
     const raw = turn && typeof turn === 'object' ? turn : {};
     const reasoningRaw = raw.reasoning && typeof raw.reasoning === 'object' ? raw.reasoning : {};
     const toolRaw = raw.tool && typeof raw.tool === 'object' ? raw.tool : null;
+    const skillsRaw = Array.isArray(raw.skills) ? raw.skills : [];
     return {
         turn_id: String(raw.turn_id || raw.turnId || '').trim(),
         status: String(raw.status || '').trim(),
@@ -1223,6 +1229,11 @@ function normalizeSessionTurnSnapshot(turn = {}) {
             accumulated_ms: Number(reasoningRaw.accumulated_ms || raw.reasoning_accumulated_ms || 0),
             current_phase_ms: Number(reasoningRaw.current_phase_ms || raw.reasoning_current_phase_ms || 0)
         },
+        skills: skillsRaw.map((skill) => ({
+            namespace: String(skill?.namespace || skill?.name || '').trim(),
+            name: String(skill?.name || '').trim(),
+            display_name: String(skill?.display_name || skill?.name || '').trim()
+        })).filter((skill) => skill.namespace),
         tool: toolRaw ? {
             state: String(toolRaw.state || '').trim(),
             summary: String(toolRaw.summary || '').trim(),
@@ -1411,6 +1422,7 @@ document.addEventListener('touchend', (event) => {
 document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
         closeModelPickerModal();
+        closeMermaidDiagramModal();
     }
 });
 
@@ -3999,7 +4011,7 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
     if (snapshotTurns.length === 0) return false;
     const passiveRunningSession = isPassiveServerSession(sessionSnapshot);
     const lastItem = snapshotTurns[snapshotTurns.length - 1];
-    const pendingTurnId = (passiveRunningSession && lastItem && !hasAssistantSnapshotContent(lastItem.assistant_content, lastItem.reasoning.content, lastItem.tool))
+    const pendingTurnId = (passiveRunningSession && lastItem && lastItem.skills.length === 0 && !hasAssistantSnapshotContent(lastItem.assistant_content, lastItem.reasoning.content, lastItem.tool))
         ? String(lastItem.turn_id).trim()
         : '';
 
@@ -4014,7 +4026,7 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
         const assistantId = buildServerAssistantMessageId(turnId, `snapshot-turn-${index + 1}`);
         const snapshotToolState = item.tool || sessionUISnapshot.tool_cards?.[turnId] || null;
         const waitingForRemoteReply = passiveRunningSession && turnId === pendingTurnId;
-        const hasAssistantContent = waitingForRemoteReply || hasAssistantSnapshotContent(item?.assistant_content, item?.reasoning?.content, snapshotToolState);
+        const hasAssistantContent = waitingForRemoteReply || item.skills.length > 0 || hasAssistantSnapshotContent(item?.assistant_content, item?.reasoning?.content, snapshotToolState);
         lastTurnId = turnId;
         if (hasAssistantContent) {
             lastAssistantId = assistantId;
@@ -4076,7 +4088,7 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
             }
         }
 
-        if (!waitingForRemoteReply && !hasAssistantSnapshotContent(assistantText, reasoningText, snapshotToolState)) {
+        if (!waitingForRemoteReply && item.skills.length === 0 && !hasAssistantSnapshotContent(assistantText, reasoningText, snapshotToolState)) {
             return;
         }
 
@@ -4084,6 +4096,7 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
         if (waitingForRemoteReply) {
             ensurePassiveSyncPlaceholder(turnId, sessionSnapshot?.ID || 'default', sessionUISnapshot.last_event_seq || 0);
         }
+        renderAppliedSkills(assistantId, item.skills);
         if (reasoningText && !config.hideThink) {
             AppState.session.replay.reasoningBuffers.set(assistantId, reasoningText);
             const card = ensureReasoningCard(assistantId);
@@ -4420,6 +4433,7 @@ function applyCurrentChatSessionEvent(entry) {
             case 'reasoning.start':
             case 'reasoning.delta':
             case 'reasoning.end':
+            case 'skill.applied':
             case 'tool_call.start':
             case 'tool_call.arguments':
             case 'tool_call.success':
@@ -4439,6 +4453,7 @@ function applyCurrentChatSessionEvent(entry) {
         'reasoning.start',
         'reasoning.delta',
         'reasoning.end',
+        'skill.applied',
         'tool_call.start',
         'tool_call.arguments',
         'tool_call.success',
@@ -4639,6 +4654,20 @@ function applyCurrentChatSessionEvent(entry) {
                 );
             }
             break;
+        case 'skill.applied': {
+            let skillAssistantId = '';
+            if (isLocalActiveTurn) {
+                skillAssistantId = AppState.chat.activeLocalAssistantId || '';
+            } else {
+                const skillTurnId = entryTurnId
+                    || AppState.session.replay.currentTurnId
+                    || `server-turn-${sessionId}-${entry.EventSeq}`;
+                AppState.session.replay.currentTurnId = skillTurnId;
+                skillAssistantId = ensureServerReplayAssistant(skillTurnId, sessionId, entry.EventSeq);
+            }
+            if (skillAssistantId) renderAppliedSkills(skillAssistantId, payload.skills);
+            break;
+        }
         case 'tool_call.start':
             if (!isLocalActiveTurn && !AppState.session.replay.currentAssistantId && (entryTurnId || AppState.session.replay.currentTurnId)) {
                 const nextTurnId = entryTurnId || AppState.session.replay.currentTurnId;
@@ -4658,17 +4687,23 @@ function applyCurrentChatSessionEvent(entry) {
                 AppState.session.replay.currentAssistantId = ensureServerReplayAssistant(nextTurnId, sessionId, entry.EventSeq);
             }
             if (isLocalActiveTurn) {
-                if (AppState.chat.activeLocalAssistantId) setToolCardState(AppState.chat.activeLocalAssistantId, 'running', '', payload.arguments || null, payload.tool || '');
+                if (AppState.chat.activeLocalAssistantId) setToolCardState(AppState.chat.activeLocalAssistantId, 'running', '', payload.arguments || null, payload.tool || '', payload.recovered === true);
                 break;
             }
-            if (AppState.session.replay.currentAssistantId) setToolCardState(AppState.session.replay.currentAssistantId, 'running', '', payload.arguments || null, payload.tool || '');
+            if (AppState.session.replay.currentAssistantId) setToolCardState(AppState.session.replay.currentAssistantId, 'running', '', payload.arguments || null, payload.tool || '', payload.recovered === true);
             break;
         case 'tool_call.success':
             if (isLocalActiveTurn) {
-                if (AppState.chat.activeLocalAssistantId) setToolCardState(AppState.chat.activeLocalAssistantId, 'success', t('tool.executionFinished'), null, payload.tool || '');
+                if (AppState.chat.activeLocalAssistantId) {
+                    appendToolEvidenceHistory(AppState.chat.activeLocalAssistantId, payload.evidence);
+                    setToolCardState(AppState.chat.activeLocalAssistantId, 'success', getWebEvidenceSummary(AppState.chat.activeLocalAssistantId) || t('tool.executionFinished'), null, payload.tool || '');
+                }
                 break;
             }
-            if (AppState.session.replay.currentAssistantId) setToolCardState(AppState.session.replay.currentAssistantId, 'success', t('tool.executionFinished'), null, payload.tool || '');
+            if (AppState.session.replay.currentAssistantId) {
+                appendToolEvidenceHistory(AppState.session.replay.currentAssistantId, payload.evidence);
+                setToolCardState(AppState.session.replay.currentAssistantId, 'success', getWebEvidenceSummary(AppState.session.replay.currentAssistantId) || t('tool.executionFinished'), null, payload.tool || '');
+            }
             break;
         case 'tool_call.failure':
             if (isLocalActiveTurn) {
@@ -5013,6 +5048,7 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
     const reasoningTextById = new Map();
     const reasoningStartedAtById = new Map();
     const reasoningDurationById = new Map();
+    const appliedSkillsById = new Map();
     const toolStateById = new Map();
     const assistantOrder = [];
 
@@ -5097,6 +5133,14 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
                 }
                 break;
             }
+            case 'skill.applied': {
+                if (!currentTurnId) {
+                    currentTurnId = entryTurnId || `server-turn-${currentSessionId}-${entry.EventSeq}`;
+                }
+                currentAssistantId = ensureAssistantId(currentTurnId, entry.EventSeq);
+                appliedSkillsById.set(currentAssistantId, Array.isArray(payload.skills) ? payload.skills : []);
+                break;
+            }
             case 'tool_call.start':
             case 'tool_call.arguments':
             case 'tool_call.success':
@@ -5162,8 +5206,9 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
         const waitingForRemoteReply = passiveRunningSession && user.turnId === pendingTurnId;
         const assistantText = assistantTextById.get(assistantId) || '';
         const reasoningText = reasoningTextById.get(assistantId) || '';
+        const appliedSkills = appliedSkillsById.get(assistantId) || [];
         const toolState = toolStateById.get(assistantId) || sessionUISnapshot.tool_cards?.[user.turnId] || null;
-        if (!waitingForRemoteReply && !hasAssistantSnapshotContent(assistantText, reasoningText, toolState)) continue;
+        if (!waitingForRemoteReply && appliedSkills.length === 0 && !hasAssistantSnapshotContent(assistantText, reasoningText, toolState)) continue;
         if (!document.getElementById(assistantId)) {
             appendMessage({
                 role: 'assistant',
@@ -5184,6 +5229,7 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
         const waitingForRemoteReply = passiveRunningSession && user.turnId === pendingTurnId;
         const assistantText = assistantTextById.get(assistantId) || '';
         const reasoningText = reasoningTextById.get(assistantId) || '';
+        const appliedSkills = appliedSkillsById.get(assistantId) || [];
         const toolState = toolStateById.get(assistantId);
         const snapshotToolState = sessionUISnapshot.tool_cards?.[user.turnId] || null;
         const mergedToolState = toolState || snapshotToolState;
@@ -5191,13 +5237,14 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
             ensurePassiveSyncPlaceholder(user.turnId, sessionSnapshot?.ID || 'default', AppState.session.eventSeq || 0);
             continue;
         }
-        if (!hasAssistantSnapshotContent(assistantText, reasoningText, mergedToolState)) continue;
+        if (appliedSkills.length === 0 && !hasAssistantSnapshotContent(assistantText, reasoningText, mergedToolState)) continue;
         const assistantEl = ensureAssistantMessageElement(assistantId);
         if (!assistantEl) continue;
 
         if (reasoningStartedAtById.has(assistantId)) {
             setReasoningCardStartedAt(assistantId, reasoningStartedAtById.get(assistantId));
         }
+        renderAppliedSkills(assistantId, appliedSkills);
         if (reasoningText && !config.hideThink) {
             AppState.session.replay.reasoningBuffers.set(assistantId, reasoningText);
             showReasoningStatus(assistantId, reasoningText);
@@ -5901,7 +5948,14 @@ function clampNumber(value, min, max) {
 
 function normalizeReasoningValue(value) {
     const normalized = String(value || '').trim().toLowerCase();
-    return DEFAULT_REASONING_OPTIONS.includes(normalized) ? normalized : '';
+    return [...DEFAULT_REASONING_OPTIONS, ...STANDARD_REASONING_OPTIONS].includes(normalized) ? normalized : '';
+}
+
+function normalizeStandardReasoningEffort(value) {
+    const normalized = normalizeReasoningValue(value);
+    if (normalized === 'off') return 'none';
+    if (normalized === 'on') return 'high';
+    return STANDARD_REASONING_OPTIONS.includes(normalized) ? normalized : '';
 }
 
 function updateHeaderModelDisplay() {
@@ -6127,8 +6181,9 @@ function buildChatPayload({ text, currentImage, temperatureOverride = null, repe
         payload.temperature = resolvedTemperature;
     }
 
-    if (reasoningSelection) {
-        payload.reasoning_effort = reasoningSelection;
+    const reasoningEffort = normalizeStandardReasoningEffort(reasoningSelection);
+    if (reasoningEffort) {
+        payload.reasoning_effort = reasoningEffort;
     }
 
     return payload;
@@ -7177,13 +7232,46 @@ function ensureToolCard(elementId, toolName = 'Tool') {
     return card;
 }
 
+function renderAppliedSkills(elementId, skills) {
+    const { msgEl, toolsHost } = getAssistantMessageParts(elementId);
+    if (!msgEl || !toolsHost || !Array.isArray(skills)) return;
+
+    skills.forEach((skill) => {
+        const namespace = String(skill?.namespace || skill?.name || '').trim();
+        if (!namespace) return;
+        const duplicate = Array.from(toolsHost.querySelectorAll('.skill-status-card'))
+            .some((card) => card.dataset.skillNamespace === namespace);
+        if (duplicate) return;
+
+        const displayName = String(skill?.display_name || skill?.name || namespace).trim();
+        const card = document.createElement('section');
+        card.className = 'tool-status-card skill-status-card is-success';
+        card.dataset.skillNamespace = namespace;
+        card.innerHTML = `
+            <div class="reasoning-header tool-strip-header skill-strip-header">
+                <span class="reasoning-chevron skill-status-icon material-icons-round" aria-hidden="true">check_circle</span>
+                <span class="tool-header-group">
+                    <span class="reasoning-title">${escapeHtml(t('skill.label'))}</span>
+                    <span class="tool-header-separator" aria-hidden="true">•</span>
+                    <span class="tool-header-name">${escapeHtml(displayName)}</span>
+                    <span class="tool-header-separator" aria-hidden="true">•</span>
+                    <span class="tool-header-status">${escapeHtml(t('status.applied'))}</span>
+                </span>
+            </div>`;
+        toolsHost.appendChild(card);
+    });
+
+    syncAssistantMessageShellState(msgEl);
+    checkAndTriggerLabelPin();
+}
+
 function getActiveToolCard(elementId) {
     const { msgEl } = getAssistantMessageParts(elementId);
     if (!msgEl || !msgEl.dataset.activeToolCard) return null;
     return document.getElementById(msgEl.dataset.activeToolCard);
 }
 
-function setToolCardState(elementId, state, summary = '', args = null, toolName = '') {
+function setToolCardState(elementId, state, summary = '', args = null, toolName = '', replaceArguments = false) {
     let card = getActiveToolCard(elementId);
     if (!card && state === 'running') {
         card = ensureToolCard(elementId, toolName || 'Tool');
@@ -7255,6 +7343,11 @@ function setToolCardState(elementId, state, summary = '', args = null, toolName 
         headerGroupEl.classList.toggle('is-live', state === 'running');
     }
 
+    if (state === 'running' && replaceArguments && Array.isArray(card._history)) {
+        while (card._history.length > 0 && card._history[card._history.length - 1]?.tool !== 'Web Source') {
+            card._history.pop();
+        }
+    }
     if (state === 'running' && (previewText || activeToolName)) {
         appendToolHistory(card, activeToolName, previewText, args);
     }
@@ -7390,6 +7483,8 @@ function formatToolDisplayName(toolName = '') {
         get_current_location: 'Get Current Location',
         execute_command: 'Execute Command',
         search_web: 'Search Web',
+        search_web_multi: 'Search Web',
+        web_source: 'Web Source',
         namu_wiki: 'Namu Wiki',
         naver_search: 'Naver Search',
         read_web_page: 'Read Web Page',
@@ -7412,6 +7507,15 @@ function appendToolHistory(card, toolName, previewText, args) {
     if (!card) return;
     if (!Array.isArray(card._history)) card._history = [];
 
+    const normalizedTool = String(toolName || '').trim().toLowerCase();
+    if (normalizedTool === 'search_web_multi' && Array.isArray(args?.queries)) {
+        args.queries.forEach(query => {
+            const detail = String(query || '').trim();
+            if (detail) appendToolHistory(card, 'search_web', t('tool.searchQuery').replace('{value}', detail), { query: detail });
+        });
+        return;
+    }
+
     const displayTool = formatToolDisplayName(toolName);
     const detail = (previewText || extractToolPreview(args, '', toolName) || '').trim();
     if (!detail) return;
@@ -7424,6 +7528,29 @@ function appendToolHistory(card, toolName, previewText, args) {
         tool: displayTool,
         detail
     });
+}
+
+function appendToolEvidenceHistory(elementId, evidence) {
+    if (!Array.isArray(evidence) || evidence.length === 0) return;
+    const card = getActiveToolCard(elementId);
+    if (!card) return;
+    evidence.forEach(item => {
+        const title = String(item?.title || '').trim();
+        const url = String(item?.url || '').trim();
+        if (!url) return;
+        appendToolHistory(card, 'web_source', title ? `${title} — ${url}` : url, null);
+    });
+}
+
+function getWebEvidenceSummary(elementId) {
+    const card = getActiveToolCard(elementId);
+    const history = Array.isArray(card?._history) ? card._history : [];
+    const searches = history.filter(entry => ['Search Web', 'Naver Search'].includes(formatToolDisplayName(entry?.tool || ''))).length;
+    const sources = history.filter(entry => formatToolDisplayName(entry?.tool || '') === 'Web Source').length;
+    if (searches === 0 || sources === 0) return '';
+    return t('tool.webEvidenceSummary')
+        .replace('{searches}', String(searches))
+        .replace('{sources}', String(sources));
 }
 
 function renderToolHistory(card, historyEl, state) {
@@ -7822,7 +7949,9 @@ function renderMermaidFallback(wrapper, source, error) {
 
     const status = document.createElement('div');
     status.className = 'mermaid-diagram-status';
-    status.textContent = error?.message || 'Mermaid render failed.';
+    status.textContent = error?.code === 'MERMAID_INVALID_SYNTAX'
+        ? t('mermaid.invalidSyntax')
+        : t('mermaid.renderFailed');
 
     const pre = document.createElement('pre');
     const code = document.createElement('code');
@@ -7830,6 +7959,25 @@ function renderMermaidFallback(wrapper, source, error) {
     code.textContent = source || '';
     pre.appendChild(code);
     wrapper.append(status, pre);
+}
+
+function createMermaidRenderSandbox(wrapper) {
+    const sandbox = document.createElement('div');
+    sandbox.className = 'mermaid-render-sandbox';
+    sandbox.setAttribute('aria-hidden', 'true');
+    wrapper.appendChild(sandbox);
+    return sandbox;
+}
+
+function cleanupMermaidRenderArtifacts(renderId, sandbox) {
+    sandbox?.remove();
+    if (!renderId) return;
+    // Mermaid creates these temporary nodes when a render fails before its own
+    // cleanup completes. Remove only artifacts belonging to this render.
+    [renderId, `d${renderId}`].forEach((id) => {
+        const artifact = document.getElementById(id);
+        if (artifact && !artifact.closest('iframe')) artifact.remove();
+    });
 }
 
 function buildMermaidFrameHtml(svgHtml) {
@@ -7859,19 +8007,129 @@ svg {
 </html>`;
 }
 
-function writeMermaidFrame(wrapper, svgHtml) {
+function getMermaidSvgAspectRatio(svgHtml) {
+    try {
+        const parsed = new DOMParser().parseFromString(String(svgHtml || ''), 'image/svg+xml');
+        const svg = parsed.documentElement?.localName === 'svg'
+            ? parsed.documentElement
+            : parsed.querySelector('svg');
+        if (!svg) return null;
+
+        const viewBox = String(svg.getAttribute('viewBox') || '')
+            .trim()
+            .split(/[\s,]+/)
+            .map(Number);
+        if (viewBox.length === 4 && viewBox.every(Number.isFinite) && viewBox[2] > 0 && viewBox[3] > 0) {
+            const maxWidth = Number.parseFloat(svg.style?.maxWidth || '');
+            return {
+                width: viewBox[2],
+                height: viewBox[3],
+                maxWidth: Number.isFinite(maxWidth) && maxWidth > 0 ? maxWidth : null,
+            };
+        }
+
+        const width = Number.parseFloat(svg.getAttribute('width'));
+        const height = Number.parseFloat(svg.getAttribute('height'));
+        if (Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0) {
+            return { width, height };
+        }
+    } catch (error) {
+        console.warn('[Mermaid] Could not determine SVG dimensions.', error);
+    }
+    return null;
+}
+
+function keepMermaidFrameHeightInSync(frame, wrapper, dimensions) {
+    if (!frame || !wrapper || !dimensions) return;
+    let lastWidth = 0;
+
+    const resize = () => {
+        if (!frame.isConnected) {
+            frame._mermaidResizeObserver?.disconnect();
+            return;
+        }
+        const availableWidth = frame.getBoundingClientRect().width;
+        if (!Number.isFinite(availableWidth) || availableWidth <= 0 || Math.abs(availableWidth - lastWidth) < 0.5) return;
+        lastWidth = availableWidth;
+
+        const renderedWidth = dimensions.maxWidth
+            ? Math.min(availableWidth, dimensions.maxWidth)
+            : availableWidth;
+        const renderedHeight = Math.ceil(renderedWidth * dimensions.height / dimensions.width);
+        frame.style.height = `${Math.max(1, renderedHeight)}px`;
+    };
+
+    resize();
+    requestAnimationFrame(resize);
+    if (typeof ResizeObserver === 'function') {
+        frame._mermaidResizeObserver = new ResizeObserver(resize);
+        frame._mermaidResizeObserver.observe(wrapper);
+    }
+}
+
+function closeMermaidDiagramModal() {
+    const modal = document.getElementById('mermaid-diagram-modal');
+    const body = document.getElementById('mermaid-diagram-modal-body');
+    const frame = body?.querySelector('.mermaid-diagram-frame');
+    frame?._mermaidResizeObserver?.disconnect();
+    if (body) body.innerHTML = '';
+    modal?.classList.remove('active');
+}
+
+function openMermaidDiagramModal(svgHtml) {
+    const modal = document.getElementById('mermaid-diagram-modal');
+    const body = document.getElementById('mermaid-diagram-modal-body');
+    if (!modal || !body) return;
+
+    writeMermaidFrame(body, svgHtml, { autoHeight: true, showExpandButton: false });
+    modal.classList.add('active');
+    modal.querySelector('.modal-close')?.focus({ preventScroll: true });
+}
+
+function createMermaidExpandButton(svgHtml) {
+    const button = document.createElement('button');
+    const label = t('mermaid.expand');
+    button.type = 'button';
+    button.className = 'mermaid-expand-btn';
+    button.title = label;
+    button.setAttribute('aria-label', label);
+
+    const icon = document.createElement('span');
+    icon.className = 'material-icons-round';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent = 'open_in_full';
+    button.appendChild(icon);
+    button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openMermaidDiagramModal(svgHtml);
+    });
+    return button;
+}
+
+function writeMermaidFrame(wrapper, svgHtml, options = {}) {
     wrapper.innerHTML = '';
+    const autoHeight = options.autoHeight === true;
+    const showExpandButton = options.showExpandButton !== false;
 
     const frame = document.createElement('iframe');
     frame.className = 'mermaid-diagram-frame';
     frame.setAttribute('title', 'Mermaid diagram');
     frame.setAttribute('sandbox', '');
     frame.setAttribute('loading', 'lazy');
+    const aspectRatio = getMermaidSvgAspectRatio(svgHtml);
+    if (autoHeight && aspectRatio) {
+        frame.classList.add('is-auto-height');
+    }
     frame.srcdoc = buildMermaidFrameHtml(svgHtml);
+    if (showExpandButton) wrapper.appendChild(createMermaidExpandButton(svgHtml));
     wrapper.appendChild(frame);
+    if (autoHeight) keepMermaidFrameHeightInSync(frame, wrapper, aspectRatio);
 }
 
 async function renderMermaidDiagram(wrapper, source, batchId, index) {
+    let renderId = '';
+    let renderSandbox = null;
     try {
         const mermaid = await getMermaidRenderer();
         if (!mermaid?.render) {
@@ -7879,9 +8137,23 @@ async function renderMermaidDiagram(wrapper, source, batchId, index) {
         }
         if (!isMermaidRenderCurrent(wrapper, batchId)) return;
 
-        const renderId = `dkst-mermaid-${Date.now()}-${++mermaidRenderSequence}-${index}`;
-        const rendered = await mermaid.render(renderId, source);
+        if (typeof mermaid.parse === 'function') {
+            const valid = await mermaid.parse(source, { suppressErrors: true });
+            if (valid === false) {
+                const syntaxError = new Error('Invalid Mermaid syntax.');
+                syntaxError.code = 'MERMAID_INVALID_SYNTAX';
+                throw syntaxError;
+            }
+        }
         if (!isMermaidRenderCurrent(wrapper, batchId)) return;
+
+        renderId = `dkst-mermaid-${Date.now()}-${++mermaidRenderSequence}-${index}`;
+        renderSandbox = createMermaidRenderSandbox(wrapper);
+        const rendered = await mermaid.render(renderId, source, renderSandbox);
+        if (!isMermaidRenderCurrent(wrapper, batchId)) return;
+        if (!String(rendered?.svg || '').trim()) {
+            throw new Error('Mermaid returned an empty diagram.');
+        }
 
         writeMermaidFrame(wrapper, rendered?.svg || '');
         wrapper.classList.remove('is-loading', 'is-error');
@@ -7891,6 +8163,8 @@ async function renderMermaidDiagram(wrapper, source, batchId, index) {
         if (isMermaidRenderCurrent(wrapper, batchId)) {
             renderMermaidFallback(wrapper, source, error);
         }
+    } finally {
+        cleanupMermaidRenderArtifacts(renderId, renderSandbox);
     }
 }
 
@@ -7908,11 +8182,12 @@ function renderMermaidDiagramsInHost(host) {
         const wrapper = document.createElement('div');
         wrapper.className = 'mermaid-diagram is-loading';
         wrapper.dataset.mermaidSource = source;
-        wrapper.setAttribute('role', 'img');
+        wrapper.setAttribute('role', 'group');
+        wrapper.setAttribute('aria-label', t('mermaid.modalTitle'));
 
         const status = document.createElement('div');
         status.className = 'mermaid-diagram-status';
-        status.textContent = 'Rendering diagram...';
+        status.textContent = t('mermaid.rendering');
         wrapper.appendChild(status);
 
         pre.replaceWith(wrapper);

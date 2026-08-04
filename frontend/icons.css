@@ -3,7 +3,7 @@
   font-style: normal;
   font-weight: 100 700;
   font-display: block;
-  src: url('./vendor/fonts/material-icons-round.woff2') format('woff2');
+  src: url('./vendor/fonts/material-icons-round.woff2?v=4') format('woff2');
 }
 
 .material-icons-round {

@@ -79,7 +79,7 @@ skills/user/my-skill/SKILL.md
 
 앱에 포함되는 기본 스킬은 `skills/builtin`에서 읽기 전용으로 관리합니다. 사용자 스킬은 `skills/user`에 보관하며 기본 스킬을 직접 덮어쓰지 않습니다.
 
-현재는 스킬 폴더와 패키징 구조를 먼저 제공합니다. 자동 로딩은 형식 검증, 권한 확인, 중복 이름 처리 기능과 함께 활성화할 예정입니다.
+앱은 각 요청 전에 스킬 형식을 검증하고, 이름과 설명이 현재 요청에 관련된 스킬만 선택해 모델 지침에 추가합니다. 새로 만들거나 수정한 스킬은 다음 채팅 요청부터 반영됩니다. 스킬 지침 자체는 도구 권한이나 파일·네트워크 접근 권한을 부여하지 않습니다.
 <!--/lang-->
 
 <!--lang:en-->
@@ -163,5 +163,5 @@ A skill may also contain `references`, `scripts`, and `assets` directories.
 
 Bundled skills are maintained as read-only content in `skills/builtin`. User skills are stored in `skills/user` and cannot silently replace bundled skills.
 
-The directory and packaging structure are available first. Automatic loading will be enabled together with format validation, permission checks, and duplicate-name handling.
+Before each request, the app validates skills and injects only those whose names and descriptions are relevant to the current request. New or edited skills take effect on the next chat request. Skill instructions do not grant tool, filesystem, or network permissions.
 <!--/lang-->

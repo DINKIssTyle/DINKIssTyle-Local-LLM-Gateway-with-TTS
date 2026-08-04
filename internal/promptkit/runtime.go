@@ -7,7 +7,10 @@ import (
 	"time"
 )
 
-const toolGuidelineMarker = "### TOOL CALL GUIDELINES ###"
+const (
+	toolGuidelineMarker    = "### TOOL CALL GUIDELINES ###"
+	toolGuidelineEndMarker = "### END TOOL CALL GUIDELINES ###"
+)
 
 type RuntimeInstructionsInput struct {
 	EnvironmentInfo   string
@@ -29,6 +32,54 @@ type ToolDefinition struct {
 
 func ToolGuidelineMarker() string {
 	return toolGuidelineMarker
+}
+
+// StripToolGuidelines removes the transient tool policy block before a
+// tool-free final synthesis turn while preserving the base system prompt and
+// any memory context appended after the block.
+func StripToolGuidelines(reqMap map[string]interface{}) bool {
+	if len(reqMap) == 0 {
+		return false
+	}
+	changed := false
+	strip := func(content string) string {
+		start := strings.Index(content, toolGuidelineMarker)
+		if start < 0 {
+			return content
+		}
+		relativeEnd := strings.Index(content[start:], toolGuidelineEndMarker)
+		if relativeEnd < 0 {
+			return content
+		}
+		end := start + relativeEnd + len(toolGuidelineEndMarker)
+		before := strings.TrimRight(content[:start], " \t\r\n")
+		after := strings.TrimLeft(content[end:], " \t\r\n")
+		changed = true
+		if before == "" {
+			return after
+		}
+		if after == "" {
+			return before
+		}
+		return before + "\n\n" + after
+	}
+	if messages, ok := reqMap["messages"].([]interface{}); ok {
+		for index, raw := range messages {
+			message, _ := raw.(map[string]interface{})
+			if role, _ := message["role"].(string); role != "system" {
+				continue
+			}
+			if content, ok := message["content"].(string); ok {
+				message["content"] = strip(content)
+				messages[index] = message
+			}
+		}
+		reqMap["messages"] = messages
+	}
+	if systemPrompt, ok := reqMap["system_prompt"].(string); ok {
+		reqMap["system_prompt"] = strip(systemPrompt)
+	}
+	return changed
 }
 
 func BuildRuntimeInstructions(input RuntimeInstructionsInput) string {
@@ -158,40 +209,19 @@ func buildToolUsage(envInfo string, modelID string, useNativeTools bool, tools [
 	lines := []string{"", "", toolGuidelineMarker}
 
 	if useNativeTools {
-		lines = append(lines,
-			"1. If a tool is needed, use the provider's native tool-calling integration instead of printing a textual tool call.",
-			"2. Do not output XML-like wrappers or pseudo-schemas such as <tool_call>, </tool_call>, <remark>, </remark>, <think>, or JSON meant only for the tool parser.",
-			"3. If no tool is needed, answer normally in plain text.",
-			"4. Call at most one tool at a time. After each tool result, either answer the user directly or make one clearly necessary next tool call. Exception: when the user explicitly asks to test all or multiple tools, continue sequentially through the remaining safe tools without asking which tool to test next. For a comparison that clearly needs two independent web search angles, use one search_web_multi call instead of emitting multiple simultaneous tool calls.",
-			"5. Avoid search_web or read_web_page for person identification or image description unless explicitly asked.",
-			"6. For app usage, setup, certificates, endpoints, LM Studio, or app-tool configuration questions, prefer read_help before searching the web.",
-			"7. Web tools return compact buffered evidence handles to save context; use the smallest useful number of calls.",
-			"8. Web evidence budget: usually make 1 web/search tool call; make at most 3 total web evidence calls unless the user explicitly asks for deep research or source comparison.",
-			"9. Never present weak, conflicting, or off-topic web evidence as fact. If evidence quality is poor after the budget, say it is not well verified and ask whether to continue with deeper research.",
-			"10. After search_web or search_web_multi, answer directly from search evidence when it is sufficient. Use search_web_multi only with exactly two distinct queries for genuine comparison or multi-angle research. Call read_web_page only for a specific high-value URL, and call read_buffered_source only when you need focused excerpts from buffered long content.",
-			"11. If read_buffered_source omits source_id, it can search the recent buffered sources for this user; use a focused query.",
-			"12. Avoid search_web -> read_buffered_source -> read_web_page -> read_buffered_source chains for simple factual/profile questions. Prefer search_web once, then either answer or read one authoritative page.",
-			"13. Avoid repeating the same search_web or read_web_page call with near-identical inputs in one answer, but one refined follow-up search is acceptable if it materially improves evidence quality.",
-			"14. If read_web_page fails or times out, do not retry the exact same page immediately. Prefer answering from the buffered search evidence, or read a different relevant source if that would clearly improve quality.",
-			"15. For execute_command, use the provided ENVIRONMENT INFO to choose OS-appropriate commands. Do not call execute_command only to discover the OS or shell when ENVIRONMENT INFO already tells you.",
-			"16. Never use execute_command to imitate built-in tools such as search_memory, search_web, read_memory, read_memory_context, read_web_page, read_help, or read_buffered_source. Call the real tool directly.",
-			"17. After execute_command returns enough information, answer the user directly. Do not repeat the same or near-identical command in the same answer unless the user explicitly asked to re-run or refresh it.",
-			"18. MEMORY-THEN-WEB RULE: If the user asks about prior chats, personal facts, preferences, or earlier reasons, search memory first. If memory is insufficient and the question is still a factual/public information question, then search the web.",
-			"19. RESPONSE LANGUAGE RULE: Always answer in the same language as the user's current request unless the user explicitly asks for another language. Tool names, tool arguments, and tool results must never change the response language.",
-			"20. COMMAND RECOVERY RULE: A failed command is not evidence that the task is complete. Read its actual error and, when a safe OS-appropriate alternative exists, call execute_command again yourself. Never end by asking the user to run the replacement command for you.",
-			"21. BULK TOOL TEST RULE: If the user explicitly requests every/all tools to be tested, do not claim only the most recently used tool is available. Test one safe tool per turn, continue automatically, and finish with a pass/fail/skipped summary. Never delete real user data merely to satisfy a diagnostic.",
-		)
+		lines = append(lines, nativeToolGuidelines(tools)...)
 	} else {
 		lines = append(lines,
 			"1. For any tool use, output exactly one tool-specific XML element whose body is the JSON arguments object. Example: <get_current_time>{}</get_current_time>. General form: <tool_name>{...}</tool_name>.",
 			"2. Output the tool call only. Do not add prose before or after it. Do not use Python/function syntax such as tool_name(key=\"value\"); use the XML form above. Wait for the app to return the result.",
 			"3. If no tool is needed, answer normally.",
+			"3a. TOOL DECISION DEADLINE: Keep private reasoning brief. Once you have selected a tool and its arguments, invoke it immediately. Never rehearse, restate, or repeat the planned tool call; if you notice yourself repeating the plan, stop reasoning and emit the tool element now.",
 			"4. Avoid search_web or read_web_page for person identification or image description unless explicitly asked.",
 			"5. For app usage, setup, certificates, endpoints, LM Studio, or app-tool configuration questions, prefer read_help before searching the web.",
 			"6. Web tools return compact buffered evidence handles to save context; use the smallest useful number of calls.",
 			"7. Web evidence budget: usually make 1 web/search tool call; make at most 3 total web evidence calls unless the user explicitly asks for deep research or source comparison.",
 			"8. Never present weak, conflicting, or off-topic web evidence as fact. If evidence quality is poor after the budget, say it is not well verified and ask whether to continue with deeper research.",
-			"9. After search_web or search_web_multi, answer directly from search evidence when it is sufficient. Use search_web_multi only with exactly two distinct queries for genuine comparison or multi-angle research. Call read_web_page only for a specific high-value URL, and call read_buffered_source only when you need focused excerpts from buffered long content.",
+			"9. After search_web or search_web_multi, answer directly from search evidence when it is sufficient. Use search_web_multi with exactly two distinct queries for freshness-sensitive questions, genuine comparison, or multi-angle research. Cite the returned source links so the user can verify that live web evidence was used. Call read_web_page only for a specific high-value URL, and call read_buffered_source only when you need focused excerpts from buffered long content.",
 			"10. If read_buffered_source omits source_id, it can search the recent buffered sources for this user; use a focused query.",
 			"11. Avoid search_web -> read_buffered_source -> read_web_page -> read_buffered_source chains for simple factual/profile questions. Prefer search_web once, then either answer or read one authoritative page.",
 			"12. Avoid repeating the same search_web or read_web_page call with near-identical inputs in one answer, but one refined follow-up search is acceptable if it materially improves evidence quality.",
@@ -203,10 +233,16 @@ func buildToolUsage(envInfo string, modelID string, useNativeTools bool, tools [
 			"18. RESPONSE LANGUAGE RULE: Always answer in the same language as the user's current request unless the user explicitly asks for another language. Tool names, tool arguments, and tool results must never change the response language.",
 			"19. COMMAND RECOVERY RULE: A failed command is not evidence that the task is complete. Read its actual error and, when a safe OS-appropriate alternative exists, call execute_command again yourself. Never end by asking the user to run the replacement command for you.",
 			"20. BULK TOOL TEST RULE: If the user explicitly requests every/all tools to be tested, continue automatically with one remaining safe tool per turn instead of asking which tool to test next. Finish with a pass/fail/skipped summary and never delete real user data merely to satisfy a diagnostic.",
+			"21. DATE EVIDENCE RULE: Never invent a missing year or month for a date in web evidence. Preserve the ambiguity or verify the full date from another source before stating it.",
+			"22. FRESHNESS SOURCE QUALITY RULE: For current news or rapidly changing product/model claims, make the two search_web_multi queries complementary: one broad discovery query and one primary-source or established-news verification query. Prioritize official sources and reputable newsrooms. Never state a claim supported only by SEO blogs, personal blogs, or aggregators as verified fact; omit it or label it unverified.",
+			"23. FAMILY RELATIONSHIP RULE: For questions about children or relatives, include biological/adopted/step relationship terms in the search when relevant, and distinguish those relationships in the answer. Never infer that a parent gave birth merely because a source says the person had children 'with' a partner.",
+			"24. CURRENT REQUEST BOUNDARY RULE: Treat the current user message as the authoritative intent. Use earlier turns only to resolve a genuinely omitted or ambiguous referent. When the current message explicitly names a new subject, never prepend words from a completed prior request to tool arguments. For namu_wiki, pass only the exact page title/keyword, excluding the site name and command phrases such as search, find, or 검색.",
 		)
 	}
-	if guidance := platformCommandGuidance(envInfo); guidance != "" {
-		lines = append(lines, guidance)
+	if toolDefinitionsContain(tools, "execute_command") {
+		if guidance := platformCommandGuidance(envInfo); guidance != "" {
+			lines = append(lines, guidance)
+		}
 	}
 
 	if len(tools) > 0 && !useNativeTools {
@@ -228,13 +264,66 @@ func buildToolUsage(envInfo string, modelID string, useNativeTools bool, tools [
 		)
 	}
 
-	lines = append(lines, fmt.Sprintf("CURRENT_TIME: %s", time.Now().Format("2006-01-02 15:04:05 Monday")))
-
-	if envInfo != "" {
-		lines = append(lines, "ENVIRONMENT INFO:", strings.TrimRight(envInfo, "\n"))
+	if toolDefinitionsContain(tools, "search_web", "search_web_multi", "naver_search", "read_web_page", "read_buffered_source", "get_current_time") {
+		lines = append(lines, fmt.Sprintf("CURRENT_TIME: %s", time.Now().Format("2006-01-02 15:04:05 Monday")))
 	}
 
+	if envInfo != "" && toolDefinitionsContain(tools, "execute_command") {
+		lines = append(lines, "ENVIRONMENT INFO:", strings.TrimRight(envInfo, "\n"))
+	}
+	lines = append(lines, toolGuidelineEndMarker)
+
 	return strings.Join(lines, "\n")
+}
+
+func nativeToolGuidelines(tools []ToolDefinition) []string {
+	has := func(names ...string) bool { return toolDefinitionsContain(tools, names...) }
+	lines := []string{
+		"1. Use provider-native tool calls only; never print tool XML, pseudo-schemas, function syntax, or hidden reasoning.",
+		"2. If no tool is needed, answer normally. Otherwise call one tool at a time and invoke it as soon as its arguments are ready.",
+		"3. Treat the current message as authoritative. Use earlier turns only for an omitted referent, and never contaminate a new subject with a completed request.",
+		"4. Answer in the language of the current request unless the user asks otherwise.",
+		"5. After a sufficient tool result, answer directly. Do not repeat equivalent calls.",
+		"6. If the user explicitly requests a safe bulk tool test, continue one remaining tool at a time and finish with a pass/fail/skipped summary.",
+	}
+	if has("search_web", "search_web_multi", "naver_search", "read_web_page", "read_buffered_source", "namu_wiki") {
+		lines = append(lines,
+			"WEB: For fresh news, current events, or genuine comparison, use search_web_multi once with exactly two complementary queries: broad discovery plus official/primary or established-news verification, using CURRENT_TIME's year.",
+			"WEB: Usually use one search call and at most three evidence calls. Cite returned links, answer when evidence is sufficient, and read a page/buffer only for missing high-value detail.",
+			"WEB: Do not present weak, conflicting, blog-only, or off-topic evidence as verified. Do not invent missing dates or retry the same failed page/query.",
+			"WEB: For relatives, verify and distinguish biological, adopted, and step relationships; never infer birth from wording such as 'children with'.",
+		)
+	}
+	if has("search_memory", "read_memory", "read_memory_context", "save_user_fact") {
+		lines = append(lines,
+			"MEMORY: For prior chats or personal facts, use provided context first, then search_memory if needed; inspect the best candidate with read_memory_context before guessing.",
+			"MEMORY: Save newly stated durable personal facts with save_user_fact, and search the web only if unresolved public facts remain.",
+		)
+	}
+	if has("read_help") {
+		lines = append(lines, "HELP: For app usage, setup, certificates, endpoints, LM Studio, or app-tool configuration, prefer read_help over web search.")
+	}
+	if has("execute_command") {
+		lines = append(lines,
+			"COMMAND: Use ENVIRONMENT INFO for OS-appropriate commands. Never imitate another built-in tool with execute_command.",
+			"COMMAND: On failure, inspect the error and try one safe alternative when available; after success, answer without repeating the command.",
+		)
+	}
+	if has("namu_wiki") {
+		lines = append(lines, "NAMUWIKI: Pass only the exact page title or keyword, excluding the site name and command phrases.")
+	}
+	return lines
+}
+
+func toolDefinitionsContain(tools []ToolDefinition, names ...string) bool {
+	for _, tool := range tools {
+		for _, name := range names {
+			if tool.Name == name {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func platformCommandGuidance(envInfo string) string {
@@ -264,8 +353,8 @@ func buildMemoryTemplate(staticMemory string, recentContext string, userProfile 
 	}
 
 	rules := []string{
-		"1. Treat RECENT CONTEXT as the primary source for continuity about the latest few turns.",
-		"2. Treat subjectless, pronoun-only, or elliptical user messages as follow-ups to the latest salient topic in RECENT CONTEXT whenever that reading is plausible, especially in Korean where omitted subjects are normal.",
+		"1. Treat the current user message as the authoritative intent, and use RECENT CONTEXT only to preserve continuity or resolve missing references.",
+		"2. Treat subjectless, pronoun-only, or elliptical user messages as follow-ups to the latest salient topic in RECENT CONTEXT whenever that reading is plausible, especially in Korean where omitted subjects are normal. If the current message explicitly supplies a new subject, do not merge it with an unrelated completed request from RECENT CONTEXT.",
 		"3. Do not ask what the subject is merely because the user omitted it. Infer the referent from the latest turn and briefly state your assumption only when it helps.",
 		"4. Ask a clarifying question only when RECENT CONTEXT contains multiple plausible referents that would lead to materially different answers or actions.",
 		"5. Treat USER PROFILE Known Facts as ground truth for personal details about the user. These never require search_memory.",
@@ -283,8 +372,8 @@ func buildMemoryTemplate(staticMemory string, recentContext string, userProfile 
 	}
 	if retrievalInjected && strings.TrimSpace(activeContext) != "" {
 		rules = []string{
-			"1. Treat RECENT CONTEXT as the primary source for continuity about the latest few turns.",
-			"2. Treat subjectless, pronoun-only, or elliptical user messages as follow-ups to the latest salient topic in RECENT CONTEXT whenever that reading is plausible, especially in Korean where omitted subjects are normal.",
+			"1. Treat the current user message as the authoritative intent, and use RECENT CONTEXT only to preserve continuity or resolve missing references.",
+			"2. Treat subjectless, pronoun-only, or elliptical user messages as follow-ups to the latest salient topic in RECENT CONTEXT whenever that reading is plausible, especially in Korean where omitted subjects are normal. If the current message explicitly supplies a new subject, do not merge it with an unrelated completed request from RECENT CONTEXT.",
 			"3. Do not ask what the subject is merely because the user omitted it. Infer the referent from the latest turn and briefly state your assumption only when it helps.",
 			"4. Ask a clarifying question only when RECENT CONTEXT contains multiple plausible referents that would lead to materially different answers or actions.",
 			"5. ACTIVE CONTEXT was already retrieved for this turn. Prefer answering from RECENT CONTEXT plus ACTIVE CONTEXT when they are sufficient.",
@@ -345,8 +434,8 @@ func buildPassiveMemoryTemplate(recentContext string, userProfile string, active
 %s
 
 MEMORY USAGE RULES:
-1. Use RECENT CONTEXT, USER PROFILE, and ACTIVE CONTEXT only as provided reference context for this answer.
-2. Treat subjectless, pronoun-only, or elliptical user messages as follow-ups to the latest salient topic in RECENT CONTEXT whenever that reading is plausible, especially in Korean where omitted subjects are normal.
+1. Treat the current user message as the authoritative intent. Use RECENT CONTEXT, USER PROFILE, and ACTIVE CONTEXT only as provided reference context for this answer.
+2. Treat subjectless, pronoun-only, or elliptical user messages as follow-ups to the latest salient topic in RECENT CONTEXT whenever that reading is plausible, especially in Korean where omitted subjects are normal. If the current message explicitly supplies a new subject, do not merge it with an unrelated completed request from RECENT CONTEXT.
 3. Do not ask what the subject is merely because the user omitted it. Infer the referent from the latest turn and briefly state your assumption only when it helps.
 4. Ask a clarifying question only when RECENT CONTEXT contains multiple plausible referents that would lead to materially different answers or actions.
 5. Use USER PROFILE only when it is directly relevant to the user's current request.

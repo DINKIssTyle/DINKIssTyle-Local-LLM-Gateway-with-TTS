@@ -1,5 +1,4 @@
 macOS, Mac OS
-dinki, 딩키
 Google, 구글
 Windows, 윈도우스
 Linux, 리눅스

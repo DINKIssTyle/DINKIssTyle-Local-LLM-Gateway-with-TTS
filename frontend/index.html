@@ -18,7 +18,7 @@
     <link rel="icon" type="image/png" sizes="16x16" href="public/favicon-16.png">
     <link rel="manifest" href="site.webmanifest">
     <link rel="stylesheet" href="fonts.css?v=2">
-    <link rel="stylesheet" href="icons.css?v=1">
+    <link rel="stylesheet" href="icons.css?v=4">
     <style>
         :root {
             --bg-color: #0d1117;
@@ -989,6 +989,32 @@
             color: #b42318;
             border-color: rgba(180, 35, 24, 0.35);
             background: rgba(180, 35, 24, 0.08);
+        }
+
+        .managed-model-state-icon {
+            width: 32px;
+            height: 32px;
+            flex: 0 0 32px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+        }
+
+        .managed-model-state-icon .material-icons-round {
+            font-size: 25px;
+        }
+
+        .managed-model-state-icon.ready {
+            color: #65e99a;
+            background: rgba(55, 218, 122, 0.12);
+            box-shadow: inset 0 0 0 1px rgba(101, 233, 154, 0.2);
+        }
+
+        .managed-model-state-icon.not-ready {
+            color: #f2b84b;
+            background: rgba(224, 142, 31, 0.13);
+            box-shadow: inset 0 0 0 1px rgba(242, 184, 75, 0.22);
         }
 
         .managed-model-meta {
@@ -3287,7 +3313,6 @@
 			const installed = !!status?.installed;
 			const downloading = !!status?.downloading;
 			const supported = status?.supported !== false;
-			const chipStatus = downloading ? 'downloading' : (installed ? 'ready' : 'missing');
 			const chipLabel = downloading
 				? t('message.browserDownloading')
 				: (installed ? t('message.browserReady') : t('message.browserMissing'));
@@ -3295,11 +3320,16 @@
 			const version = escapeHtml(String(status?.version || '—'));
 			const installDir = escapeHtml(String(status?.installDir || '—'));
 			const message = escapeHtml(String(status?.message || ''));
+			const ready = installed && !downloading;
+			const statusIcon = ready ? 'check_circle' : 'warning';
+			const statusIconClass = ready ? 'ready' : 'not-ready';
 			return `
 				<div class="managed-model-card" id="browser-asset-manager-card">
 					<div class="managed-model-header">
 						<div class="managed-model-title">Chrome Headless Shell</div>
-						<span class="managed-model-chip ${chipStatus}">${escapeHtml(chipLabel)}</span>
+						<span class="managed-model-state-icon ${statusIconClass}" role="img" aria-label="${escapeHtml(chipLabel)}" title="${escapeHtml(chipLabel)}">
+							<span class="material-icons-round" aria-hidden="true">${statusIcon}</span>
+						</span>
 					</div>
 					<div class="managed-model-meta">
 						<div><strong>${escapeHtml(t('browser.meta.provider'))}:</strong> Google Chrome for Testing</div>
@@ -3368,6 +3398,15 @@
             const buttonLabel = item.installed ? t('models.button.redownload') : t('models.button.download');
             const modelKey = escapeHtml(String(item.key || ''));
             const domKey = managedModelDomKey(String(item.key || ''));
+			const statusLabel = escapeHtml(t(`status.${rawStatus}`));
+			const managerStatusIcon = rawStatus === 'ready' ? 'check_circle' : 'warning';
+			const managerStatusClass = rawStatus === 'ready' ? 'ready' : 'not-ready';
+			const managerStatusHtml = `
+				<span class="managed-model-state-icon ${managerStatusClass}" id="${scope}-managed-model-chip-${domKey}" role="img" aria-label="${statusLabel}" title="${statusLabel}">
+					<span class="material-icons-round" aria-hidden="true">${managerStatusIcon}</span>
+				</span>
+			`;
+			const welcomeStatusHtml = `<span class="managed-model-chip ${status}" id="${scope}-managed-model-chip-${domKey}">${statusLabel}</span>`;
             const metaHtml = simplified
                 ? `
                     <div class="welcome-model-summary">
@@ -3389,7 +3428,7 @@
                 <div class="managed-model-card${simplified ? ' welcome-model-card' : ''}" id="${scope}-managed-model-card-${domKey}">
                     <div class="managed-model-header">
                         <div class="managed-model-title">${displayName}</div>
-                        <span class="managed-model-chip ${status}" id="${scope}-managed-model-chip-${domKey}">${escapeHtml(t(`status.${rawStatus}`))}</span>
+						${scope === 'manager' ? managerStatusHtml : welcomeStatusHtml}
                     </div>
                     ${metaHtml}
                     <div class="managed-model-progress" id="${scope}-managed-model-progress-${domKey}" style="${downloading || progressPct > 0 ? '' : 'display:none;'}">
@@ -3465,8 +3504,17 @@
             const status = active ? 'downloading' : (state?.success ? 'ready' : 'failed');
 
             if (chipEl) {
-                chipEl.className = `managed-model-chip ${status}`;
-                chipEl.textContent = t(`status.${status}`);
+				const statusLabel = t(`status.${status}`);
+				if (scope === 'manager') {
+					const ready = status === 'ready';
+					chipEl.className = `managed-model-state-icon ${ready ? 'ready' : 'not-ready'}`;
+					chipEl.setAttribute('aria-label', statusLabel);
+					chipEl.title = statusLabel;
+					chipEl.innerHTML = `<span class="material-icons-round" aria-hidden="true">${ready ? 'check_circle' : 'warning'}</span>`;
+				} else {
+					chipEl.className = `managed-model-chip ${status}`;
+					chipEl.textContent = statusLabel;
+				}
             }
             if (messageEl) {
                 messageEl.textContent = String(state?.message || '');

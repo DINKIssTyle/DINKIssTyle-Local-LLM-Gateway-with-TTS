@@ -50,6 +50,11 @@
             "library.savedAt": "저장 시각",
             "clipboard.copied": "클립보드에 복사했습니다.",
             "clipboard.copyFailed": "복사하지 못했습니다.",
+            "mermaid.expand": "다이어그램 확대",
+            "mermaid.modalTitle": "다이어그램 전체 보기",
+            "mermaid.rendering": "다이어그램을 렌더링하는 중…",
+            "mermaid.invalidSyntax": "다이어그램 문법이 올바르지 않습니다. 아래 원문을 확인해 주세요.",
+            "mermaid.renderFailed": "다이어그램을 표시하지 못했습니다. 아래 원문을 확인해 주세요.",
             "setting.llmEndpoint.label": "LLM 엔드포인트",
             "setting.model.label": "모델 이름",
             "setting.model.desc": "LLM서버에서 현재 로드되어 있는 모델 이름을 적어주세요.",
@@ -130,6 +135,7 @@
             "status.live": "LIVE",
             "status.running": "실행 중",
             "status.done": "완료",
+            "status.applied": "Applied",
             "status.failed": "실패",
             "status.stopped": "중단됨",
             "status.unexpectedStop": "응답이 예기치 않게 중단되었습니다.",
@@ -139,6 +145,7 @@
             "status.thoughtForMinutes": "{minutes}분 동안 생각함",
             "status.thoughtForMinutesSeconds": "{minutes}분 {seconds}초 동안 생각함",
             "tool.currentTimeChecked": "현재 시간을 확인했습니다.",
+            "skill.label": "Skill",
             "tool.currentLocationChecked": "사용자 위치를 확인했습니다.",
             "tool.fallbackName": "도구",
             "tool.executeCommand": "명령어 실행: {value}",
@@ -149,6 +156,7 @@
             "tool.readMemory": "메모리 읽기: ID {value}",
             "tool.deleteMemory": "메모리 삭제: ID {value}",
             "tool.executionFinished": "도구 실행이 완료되었습니다.",
+            "tool.webEvidenceSummary": "검색 {searches}회 · 출처 {sources}개",
             "tool.noQueryDetails": "상세 쿼리 없음",
             "tool.unknownError": "알 수 없는 오류",
             "progress.processingPrompt": "프롬프트 처리 중",
@@ -306,6 +314,11 @@
             "library.savedAt": "Saved at",
             "clipboard.copied": "Copied to clipboard.",
             "clipboard.copyFailed": "Failed to copy.",
+            "mermaid.expand": "Expand diagram",
+            "mermaid.modalTitle": "Diagram viewer",
+            "mermaid.rendering": "Rendering diagram…",
+            "mermaid.invalidSyntax": "The diagram syntax is invalid. Check the source below.",
+            "mermaid.renderFailed": "The diagram could not be displayed. Check the source below.",
             "setting.llmEndpoint.label": "LLM Endpoint",
             "setting.model.label": "Model Name",
             "setting.model.desc": "Enter the model name loaded on your LLM server.",
@@ -386,6 +399,7 @@
             "status.live": "Live",
             "status.running": "Running",
             "status.done": "Done",
+            "status.applied": "Applied",
             "status.failed": "Failed",
             "status.stopped": "Stopped",
             "status.unexpectedStop": "The response stopped unexpectedly.",
@@ -395,6 +409,7 @@
             "status.thoughtForMinutes": "Thought for {minutes}m",
             "status.thoughtForMinutesSeconds": "Thought for {minutes}m {seconds}s",
             "tool.currentTimeChecked": "Checked the current time.",
+            "skill.label": "Skill",
             "tool.currentLocationChecked": "Checked the user location.",
             "tool.fallbackName": "Tool",
             "tool.executeCommand": "Command: {value}",
@@ -405,6 +420,7 @@
             "tool.readMemory": "Read memory: ID {value}",
             "tool.deleteMemory": "Delete memory: ID {value}",
             "tool.executionFinished": "Tool execution finished.",
+            "tool.webEvidenceSummary": "{searches} searches · {sources} sources",
             "tool.noQueryDetails": "No query details",
             "tool.unknownError": "Unknown error",
             "progress.processingPrompt": "Processing Prompt",
@@ -532,6 +548,13 @@
             const key = el.getAttribute('data-i18n-placeholder');
             if (translations[language]?.[key]) {
                 el.placeholder = translations[language][key];
+            }
+        });
+        root.querySelectorAll('[data-i18n-title]').forEach((el) => {
+            const key = el.getAttribute('data-i18n-title');
+            if (translations[language]?.[key]) {
+                el.title = translations[language][key];
+                el.setAttribute('aria-label', translations[language][key]);
             }
         });
     }

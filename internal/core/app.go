@@ -1906,7 +1906,7 @@ func (a *App) GetTTSDictionary(lang string) map[string]string {
 		// Provide basic defaults for ko/en if creating from scratch
 		var defaultContent string
 		if lang == "ko" {
-			defaultContent = "macOS, Mac OS\ndinki, 딩키\n"
+			defaultContent = "macOS, Mac OS\n"
 		} else if lang == "en" {
 			defaultContent = "macOS, Mac O S\nGUI, G U I\n"
 		} else {

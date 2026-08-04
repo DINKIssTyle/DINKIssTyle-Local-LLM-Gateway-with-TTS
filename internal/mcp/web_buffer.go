@@ -349,6 +349,9 @@ func formatBufferedSourceHandle(source *BufferedWebSource) string {
 	if source == nil {
 		return "Buffered web source unavailable."
 	}
+	if isBufferedSearchTool(source.ToolName) {
+		return formatBufferedSearchEvidence(source)
+	}
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "Buffered Web Source Saved\n")
@@ -365,6 +368,134 @@ func formatBufferedSourceHandle(source *BufferedWebSource) string {
 	fmt.Fprintf(&b, "Summary: %s\n", source.Summary)
 	fmt.Fprintf(&b, "Full content is buffered server-side for this user. Use read_buffered_source with source_id and a focused query before answering in detail.")
 	return b.String()
+}
+
+func isBufferedSearchTool(toolName string) bool {
+	switch strings.TrimSpace(toolName) {
+	case "search_web", "search_web_multi", "naver_search":
+		return true
+	default:
+		return false
+	}
+}
+
+type bufferedSearchPreviewResult struct {
+	Title       string
+	Link        string
+	Snippet     string
+	Publisher   string
+	SourceURL   string
+	PublishedAt string
+	Quality     string
+}
+
+func formatBufferedSearchEvidence(source *BufferedWebSource) string {
+	sections := strings.Split(source.Content, "=== Query ")
+	if len(sections) == 1 {
+		sections = []string{source.Content}
+	} else {
+		sections = sections[1:]
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Live Web Search Evidence\n")
+	fmt.Fprintf(&b, "Source ID: %s\n", source.SourceID)
+	fmt.Fprintf(&b, "Retrieved At: %s\n", source.FetchedAt.Format(time.RFC3339))
+	if strings.Contains(source.Content, "Recommended Next Action: refine_search_for_authoritative_source") {
+		fmt.Fprintf(&b, "Recommended Next Action: refine_search_for_authoritative_source\n")
+		fmt.Fprintf(&b, "Evidence Quality Warning: no_authoritative_or_reputable_source\n")
+	} else if strings.Contains(source.Content, "Recommended Next Action: read_top_result_if_more_detail_is_needed") {
+		fmt.Fprintf(&b, "Recommended Next Action: read_top_result_if_more_detail_is_needed\n")
+	}
+	perSection := 4
+	if len(sections) > 1 {
+		perSection = 2
+	}
+	for index, section := range sections {
+		query, provider, retrievedAt, results := parseBufferedSearchSection(section)
+		if query == "" && len(sections) == 1 {
+			query = source.Query
+		}
+		if len(sections) > 1 {
+			fmt.Fprintf(&b, "\nSearch %d\n", index+1)
+		}
+		if query != "" {
+			fmt.Fprintf(&b, "Query: %s\n", compactMemoryText(query, 140))
+		}
+		if provider != "" {
+			fmt.Fprintf(&b, "Provider: %s\n", provider)
+		}
+		if retrievedAt != "" {
+			fmt.Fprintf(&b, "Provider Retrieved At: %s\n", retrievedAt)
+		}
+		for resultIndex, result := range results {
+			if resultIndex >= perSection {
+				break
+			}
+			fmt.Fprintf(&b, "Title: %s\n", compactMemoryText(result.Title, 160))
+			fmt.Fprintf(&b, "Link: %s\n", result.Link)
+			if result.Publisher != "" {
+				fmt.Fprintf(&b, "Publisher: %s\n", compactMemoryText(result.Publisher, 100))
+			}
+			if result.SourceURL != "" {
+				fmt.Fprintf(&b, "Publisher URL: %s\n", result.SourceURL)
+			}
+			if result.PublishedAt != "" {
+				fmt.Fprintf(&b, "Published At: %s\n", result.PublishedAt)
+			}
+			if result.Quality != "" {
+				fmt.Fprintf(&b, "Source Quality: %s\n", result.Quality)
+			}
+			if result.Snippet != "" {
+				fmt.Fprintf(&b, "Snippet: %s\n", compactMemoryText(result.Snippet, 180))
+			}
+		}
+	}
+	fmt.Fprintf(&b, "\nUse these live search results to answer with source links. Use read_buffered_source with source_id only if more detail is genuinely needed.")
+	return strings.TrimSpace(b.String())
+}
+
+func parseBufferedSearchSection(section string) (string, string, string, []bufferedSearchPreviewResult) {
+	query := ""
+	provider := ""
+	retrievedAt := ""
+	var results []bufferedSearchPreviewResult
+	current := bufferedSearchPreviewResult{}
+	flush := func() {
+		if strings.TrimSpace(current.Link) != "" {
+			results = append(results, current)
+		}
+		current = bufferedSearchPreviewResult{}
+	}
+
+	for _, rawLine := range strings.Split(section, "\n") {
+		line := strings.TrimSpace(rawLine)
+		switch {
+		case strings.HasPrefix(line, "Query: ") && query == "":
+			query = strings.TrimSpace(strings.TrimPrefix(line, "Query: "))
+		case strings.HasPrefix(line, "Search Provider: ") && provider == "":
+			provider = strings.TrimSpace(strings.TrimPrefix(line, "Search Provider: "))
+		case strings.HasPrefix(line, "Retrieved At: ") && retrievedAt == "":
+			retrievedAt = strings.TrimSpace(strings.TrimPrefix(line, "Retrieved At: "))
+		case strings.HasPrefix(line, "Title: "):
+			flush()
+			current.Title = strings.TrimSpace(strings.TrimPrefix(line, "Title: "))
+		case strings.HasPrefix(line, "Link: "):
+			current.Link = strings.TrimSpace(strings.TrimPrefix(line, "Link: "))
+		case strings.HasPrefix(line, "Publisher: "):
+			current.Publisher = strings.TrimSpace(strings.TrimPrefix(line, "Publisher: "))
+		case strings.HasPrefix(line, "Publisher URL: "):
+			current.SourceURL = strings.TrimSpace(strings.TrimPrefix(line, "Publisher URL: "))
+		case strings.HasPrefix(line, "Published At: "):
+			current.PublishedAt = strings.TrimSpace(strings.TrimPrefix(line, "Published At: "))
+		case strings.HasPrefix(line, "Source Quality: "):
+			current.Quality = strings.TrimSpace(strings.TrimPrefix(line, "Source Quality: "))
+		case strings.HasPrefix(line, "Snippet: "):
+			current.Snippet = strings.TrimSpace(strings.TrimPrefix(line, "Snippet: "))
+		}
+	}
+	flush()
+	return query, provider, retrievedAt, results
 }
 
 func readBufferedSource(userID, sourceID, query string, maxChunks int) (string, error) {

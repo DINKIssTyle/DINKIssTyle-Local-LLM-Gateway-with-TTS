@@ -50,6 +50,14 @@ opens the writable user directory and creates a short guide on first use.
 
 ## Loader plan
 
+The baseline loader is implemented: it discovers the separate bundled and user
+roots for every request, rejects unsafe or invalid packages, selects relevant
+skills by metadata or explicit `$skill-name`, enforces count and prompt-size
+budgets, and injects namespaced instructions at the shared request-preparation
+boundary. Selection and validation counts are available in the debug trace.
+Caching with last-known-good fallback and a dedicated status UI remain future
+enhancements.
+
 1. **Discovery:** scan only one directory level, reject symlink escapes, hidden
    directories, duplicate IDs, oversized files, and missing `SKILL.md`.
 2. **Validation:** parse a small frontmatter schema (`id`, `name`, `description`,
