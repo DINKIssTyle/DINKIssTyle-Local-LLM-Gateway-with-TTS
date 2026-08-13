@@ -187,7 +187,7 @@ Open the MSN current weather page directly and read the 현재 날씨 section.
 		BuiltinSkillsDir: builtin,
 	}, Client: client}
 	report := runner.Run(context.Background(), Scenario{
-		ID: "weather-skill", Prompt: "부산의 현재 날씨를 알려주세요", MaxTurns: 1,
+		ID: "weather-skill", Prompt: "요청한 지역의 현재 날씨를 알려주세요", MaxTurns: 1,
 		Expectations: Expectations{RequiredSkills: []string{"builtin:msn-weather-current"}},
 	})
 	if !report.Passed || report.SkillPromptChars == 0 || len(report.SelectedSkills) != 1 {
@@ -197,7 +197,7 @@ Open the MSN current weather page directly and read the 현재 날씨 section.
 
 func TestRunnerRecoversQwenTextualToolCall(t *testing.T) {
 	responses := []string{
-		`{"choices":[{"message":{"role":"assistant","content":"<tool_call><function=get_current_time><parameter=timezone>Asia/Seoul</parameter></function></tool_call>"}}]}`,
+		`{"choices":[{"message":{"role":"assistant","content":"<tool_call><function=get_current_time><parameter=timezone>UTC</parameter></function></tool_call>"}}]}`,
 		`{"choices":[{"message":{"role":"assistant","content":"현재 시간을 도구로 확인했습니다."}}]}`,
 	}
 	requestCount := 0

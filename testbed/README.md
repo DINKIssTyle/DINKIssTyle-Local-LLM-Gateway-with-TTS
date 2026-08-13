@@ -33,12 +33,6 @@ Run the primary regression scenario:
 go run ./cmd/tool-eval -scenario latest_migration_news
 ```
 
-Verify the MSN current-weather skill selection, prompt injection, web execution, and MSN evidence URL:
-
-```bash
-go run ./cmd/tool-eval -scenario skill_msn_weather_busan
-```
-
 Run all scenarios:
 
 ```bash

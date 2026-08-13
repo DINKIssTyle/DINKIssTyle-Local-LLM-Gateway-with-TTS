@@ -84,12 +84,9 @@ func RegisterStartup() error {
 		return fmt.Errorf("failed to write plist file: %w", err)
 	}
 
-	// Load the launch agent
-	cmd := exec.Command("launchctl", "load", plistPath)
-	if err := cmd.Run(); err != nil {
-		// Ignore error if already loaded
-		fmt.Printf("Note: launchctl load returned: %v\n", err)
-	}
+	// Do not load the agent in the current login session. Since RunAtLoad is
+	// enabled, loading it here would immediately launch a second app instance.
+	// launchd will discover the plist and start the app on the next login.
 
 	fmt.Println("Startup registration complete (macOS)")
 	return nil

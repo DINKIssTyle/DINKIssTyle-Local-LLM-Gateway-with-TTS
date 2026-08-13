@@ -26,7 +26,7 @@ Malformed output:
 %s
 
 Valid example:
-<search_web>{"query":"weather in Seoul"}</search_web>
+<search_web>{"query":"current weather for the requested location"}</search_web>
 `, badContent[:min(len(badContent), 100)])
 }
 

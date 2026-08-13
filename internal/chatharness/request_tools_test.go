@@ -215,7 +215,7 @@ func TestPrepareRequestDoesNotInjectCompactPolicyForOrdinaryConversation(t *test
 
 func TestPrepareRequestInjectsNewSkillOnStatefulFollowup(t *testing.T) {
 	prepared, err := PrepareRequest(RequestInput{
-		Body:              []byte(`{"model":"test","input":"서울 날씨","system_prompt":"Base","previous_response_id":"resp_123","stream":true}`),
+		Body:              []byte(`{"model":"test","input":"현재 날씨","system_prompt":"Base","previous_response_id":"resp_123","stream":true}`),
 		LLMMode:           "stateful",
 		ContextStrategy:   "stateful",
 		EnableTools:       true,
@@ -366,7 +366,7 @@ func TestContextualFollowupAndMissingSearchQueryRecovery(t *testing.T) {
 }
 
 func TestMissingReadWebPageURLRecoveryUsesOnlyCurrentRequest(t *testing.T) {
-	request := "이 페이지를 읽어주세요: https://www.msn.com/ko-kr/weather/forecast/in-Chungcheongnam-do,Nonsan"
+	request := "이 페이지를 읽어주세요: https://example.com/weather/current"
 	repaired, ok := RepairMissingReadWebPageArguments("read_web_page", `{}`, request)
 	if !ok {
 		t.Fatal("missing read_web_page URL was not recovered")
@@ -375,7 +375,7 @@ func TestMissingReadWebPageURLRecoveryUsesOnlyCurrentRequest(t *testing.T) {
 	if err := json.Unmarshal([]byte(repaired), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload["url"] != "https://www.msn.com/ko-kr/weather/forecast/in-Chungcheongnam-do,Nonsan" {
+	if payload["url"] != "https://example.com/weather/current" {
 		t.Fatalf("unexpected recovered URL: %#v", payload["url"])
 	}
 

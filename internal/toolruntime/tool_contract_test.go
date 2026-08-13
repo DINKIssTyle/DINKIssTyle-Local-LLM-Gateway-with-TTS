@@ -38,7 +38,7 @@ func TestDefaultRegistryNonNetworkToolContracts(t *testing.T) {
 		RequestID:    "tool-contract-request",
 		UserID:       userID,
 		EnableMemory: true,
-		LocationInfo: "Seoul, South Korea",
+		LocationInfo: "Test location",
 	}
 
 	if got := callToolForContract(t, execCtx, "get_current_time", `{}`); !strings.Contains(got, "Current Local Time:") {

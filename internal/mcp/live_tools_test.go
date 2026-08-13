@@ -40,7 +40,7 @@ func TestLiveSearchWebMulti(t *testing.T) {
 
 func TestLiveSearchNaver(t *testing.T) {
 	requireLiveToolTests(t)
-	result, err := SearchNaver("서울 오늘 날씨")
+	result, err := SearchNaver("오늘 주요 뉴스")
 	if err != nil {
 		t.Fatal(err)
 	}

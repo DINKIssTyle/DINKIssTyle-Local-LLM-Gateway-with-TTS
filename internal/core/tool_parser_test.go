@@ -217,7 +217,7 @@ func TestParseFunctionLikeToolCall(t *testing.T) {
 }
 
 func TestLooksLikeToolMarkupRejectsOrphanedClosingTags(t *testing.T) {
-	raw := `{"query":"논산 오늘 저녁 날씨","source_id":null}</read_buffered_source>
+	raw := `{"query":" 오늘 저녁 날씨","source_id":null}</read_buffered_source>
 {"memory_id":216,"chunk_index":0}</read_memory_context>
 {"memory_id":215}</read_memory>`
 	if !looksLikeToolMarkup(raw) {

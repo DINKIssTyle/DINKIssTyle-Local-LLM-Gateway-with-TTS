@@ -14,9 +14,6 @@ description: Check the current weather for a requested location on the Korean MS
 
    Preserve the comma between `지역` and `도시`. URL-encode the path when the browsing tool requires it.
 
-   Verified location mapping:
-
-   - 대전 / 대전광역시: `https://www.msn.com/ko-kr/weather/forecast/in-Daejeon,Daejeon`
 3. **The first web tool call MUST be `read_web_page` with that direct MSN URL.** Do not call `search_web`, `search_web_multi`, `naver_search`, or a general search provider for this request.
 4. Find the page's **현재 날씨** section and verify that its displayed location matches the request. If the page is buffered, use `read_buffered_source` only after the direct page read.
 5. Report the current condition and temperature. Include feels-like temperature, precipitation, humidity, wind, or observation time only when the page exposes them.

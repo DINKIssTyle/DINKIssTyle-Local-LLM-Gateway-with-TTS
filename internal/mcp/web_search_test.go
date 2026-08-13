@@ -186,7 +186,7 @@ func TestClassifySearchResultQualityUsesDomainBoundaries(t *testing.T) {
 }
 
 func TestSearchCacheTTLReflectsFreshness(t *testing.T) {
-	if got := searchCacheTTLForQuery("서울 오늘 날씨"); got != time.Minute {
+	if got := searchCacheTTLForQuery("오늘 날씨"); got != time.Minute {
 		t.Fatalf("volatile query TTL = %s", got)
 	}
 	if got := searchCacheTTLForQuery("Go 공식 문서"); got != 30*time.Minute {
@@ -382,7 +382,7 @@ func TestDynamicSitesPreferBrowserPageRead(t *testing.T) {
 }
 
 func TestMSNPageReadinessWaitsForWeatherFields(t *testing.T) {
-	msnExpression := pageReadinessExpression("https://www.msn.com/ko-kr/weather/forecast/in-Busan,Busan")
+	msnExpression := pageReadinessExpression("https://www.msn.com/ko-kr/weather/forecast/in-Region,City")
 	for _, marker := range []string{"hasTemperature", "hasWeatherField"} {
 		if !strings.Contains(msnExpression, marker) {
 			t.Fatalf("MSN readiness expression omitted %q", marker)
