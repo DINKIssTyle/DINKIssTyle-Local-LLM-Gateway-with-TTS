@@ -4042,7 +4042,6 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
             }
         }
         AppState.session.replay.messageBuffers.set(assistantId, assistantText);
-        updateSyncedMessageContent(assistantId, assistantText, { animate: false });
         finalizeMessageContent(assistantId, assistantText);
         finalizeAssistantStatusCards(assistantId, 'done');
         setAssistantActionBarReady(assistantId);
@@ -6604,7 +6603,7 @@ function createMessageElement(msg) {
         div.innerHTML = `
             <div class="message-inner">
                 <div class="message-label">You</div>
-                ${msg.image ? `<img src="${msg.image}" class="message-image">` : ''}
+                ${msg.image ? `<img src="${escapeAttr(msg.image)}" class="message-image">` : ''}
                 ${textContent ? `<div class="message-bubble">${escapeHtml(textContent)}</div>` : ''}
             </div>`;
     } else if (msg.role === 'system') {
@@ -6658,7 +6657,6 @@ function createMessageElement(msg) {
                 </div>
             </div>`;
     } else {
-        const assistantMarkdown = renderInitialAssistantMarkdown(textContent);
         div.innerHTML = `
             <div class="message-inner">
                 <div class="message-label">Assistant</div>
@@ -6667,8 +6665,11 @@ function createMessageElement(msg) {
                     <div class="assistant-tools"></div>
                     <section class="assistant-response-card" ${textContent.trim() ? '' : 'hidden'}>
                         <div class="message-bubble plain-assistant-bubble">
-                            ${msg.image ? `<img src="${msg.image}" class="message-image">` : ''}
-                            <div class="markdown-body">${assistantMarkdown}</div>
+                            ${msg.image ? `<img src="${escapeAttr(msg.image)}" class="message-image">` : ''}
+                            <div class="markdown-body">
+                                <div class="markdown-committed"></div>
+                                <div class="markdown-pending"></div>
+                            </div>
                         </div>
                     </section>
                 </div>
@@ -6800,19 +6801,17 @@ function isAssistantMessageVisiblyEmpty(msgEl) {
     const markdownHost = msgEl.querySelector('.assistant-response-card .markdown-body');
     const markdownSource = String(markdownHost?.dataset?.markdownSource || '').trim();
     const markdownText = String(markdownHost?.textContent || '').trim();
-    // Also check the committed host's markdownSource and the element's stream render state,
-    // because after finalizeMessageContent the content lives in .markdown-committed and _streamRenderState.
     const committedHost = msgEl.querySelector('.assistant-response-card .markdown-committed');
     const committedSource = String(committedHost?.dataset?.markdownSource || '').trim();
-    const streamStateText = String(msgEl._streamRenderState?.committedText || '').trim();
+    const pendingHost = msgEl.querySelector('.assistant-response-card .markdown-pending');
+    const pendingSource = String(pendingHost?.dataset?.markdownSource || pendingHost?.textContent || '').trim();
+    const streamStateCommitted = String(msgEl._streamRenderState?.committedText || '').trim();
+    const streamStatePending = String(msgEl._streamRenderState?.pendingText || '').trim();
     const reasoningText = String(msgEl.querySelector('.assistant-reasoning')?.textContent || '').trim();
-    // Corrected selector from .tool-card to .tool-status-card
     const hasToolCards = msgEl.querySelectorAll('.assistant-tools .tool-status-card').length > 0;
     const hasImage = !!msgEl.querySelector('.message-image');
     const responseCard = msgEl.querySelector('.assistant-response-card');
-    // If the response card is NOT hidden and has content, it's not empty.
-    // Also, if it has an image (which is inside the response card but might be shown even if text is empty), it's not empty.
-    const hasVisibleResponse = (!responseCard?.hidden && (!!markdownSource || !!markdownText || !!committedSource || !!streamStateText)) || hasImage;
+    const hasVisibleResponse = (!responseCard?.hidden && (!!markdownSource || !!markdownText || !!committedSource || !!pendingSource || !!streamStateCommitted || !!streamStatePending)) || hasImage;
     const hasVisibleReasoning = !!reasoningText;
     return !hasVisibleResponse && !hasVisibleReasoning && !hasToolCards;
 }

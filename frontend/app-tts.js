@@ -32,6 +32,7 @@
         let streamingCommittedIndex = 0;
         let streamingChunks = [];
         let isStreamingPlaying = false;
+        let streamingElementId = null;
 
         function normalizeTTSSynthesisSpeed(speed) {
             return Math.max(0.7, Math.min(2.0, Number(speed) || 0.9));
@@ -114,6 +115,7 @@
             streamingChunks = [];
             isStreamingPlaying = false;
             streamingCommittedIndex = 0;
+            streamingElementId = null;
 
             if (global.DKSTSupertonic3?.cancelSupertonic3Speech) {
                 global.DKSTSupertonic3.cancelSupertonic3Speech();
@@ -156,12 +158,14 @@
             if (sessionId && sessionId !== state.ttsSessionId && sessionId !== activeTTSSessionId) {
                 return;
             }
-            if (btn) {
-                const icon = btn.querySelector('.material-icons-round');
+            const targetBtn = btn || state.currentAudioBtn;
+            if (targetBtn) {
+                const icon = targetBtn.querySelector('.material-icons-round');
                 if (icon) icon.textContent = 'volume_up';
-                btn.classList.remove('btn-danger', 'playing', 'loading');
-                btn.disabled = false;
+                targetBtn.classList.remove('btn-danger', 'playing', 'loading');
+                targetBtn.disabled = false;
             }
+            streamingElementId = null;
             setPlaybackState?.({
                 currentAudioBtn: null,
                 isPlayingQueue: false,
@@ -249,16 +253,18 @@
             await speakWithServerSupertonic(cleanText, btn, sessionId);
         }
 
-        async function speakWithOnDeviceSupertonic(cleanText, btn, sessionId) {
+        async function speakWithOnDeviceSupertonic(cleanText, btn, sessionId, options = {}) {
+            const isStreamingChunk = !!options.isStreaming;
+            const targetBtn = btn || (getPlaybackState?.() || {}).currentAudioBtn;
             try {
                 const chunks = global.DKSTSupertonic3?.chunkSpeechText
                     ? global.DKSTSupertonic3.chunkSpeechText(cleanText)
                     : [cleanText];
 
-                if (btn) {
-                    btn.classList.remove('loading');
-                    btn.classList.add('playing', 'btn-danger');
-                    const icon = btn.querySelector('.material-icons-round');
+                if (targetBtn) {
+                    targetBtn.classList.remove('loading');
+                    targetBtn.classList.add('playing', 'btn-danger');
+                    const icon = targetBtn.querySelector('.material-icons-round');
                     if (icon) icon.textContent = 'stop';
                 }
 
@@ -270,27 +276,31 @@
                     onPreparationProgress: showPreparationToast
                 });
 
-                if (sessionId === activeTTSSessionId) {
-                    endTTS(btn, sessionId);
+                if (!isStreamingChunk && sessionId === activeTTSSessionId) {
+                    endTTS(targetBtn, sessionId);
                 }
             } catch (err) {
                 if (sessionId === activeTTSSessionId) {
                     console.error('[On-device TTS] Supertonic synthesis error:', err);
-                    endTTS(btn, sessionId);
+                    if (!isStreamingChunk) {
+                        endTTS(targetBtn, sessionId);
+                    }
                 }
             }
         }
 
-        async function speakWithServerSupertonic(cleanText, btn, sessionId) {
+        async function speakWithServerSupertonic(cleanText, btn, sessionId, options = {}) {
+            const isStreamingChunk = !!options.isStreaming;
+            const targetBtn = btn || (getPlaybackState?.() || {}).currentAudioBtn;
             try {
                 const chunks = global.DKSTSupertonic3?.chunkSpeechText
                     ? global.DKSTSupertonic3.chunkSpeechText(cleanText, 300)
                     : [cleanText];
 
-                if (btn) {
-                    btn.classList.remove('loading');
-                    btn.classList.add('playing', 'btn-danger');
-                    const icon = btn.querySelector('.material-icons-round');
+                if (targetBtn) {
+                    targetBtn.classList.remove('loading');
+                    targetBtn.classList.add('playing', 'btn-danger');
+                    const icon = targetBtn.querySelector('.material-icons-round');
                     if (icon) icon.textContent = 'stop';
                 }
 
@@ -340,21 +350,25 @@
 
                 await finalPlayback;
 
-                if (sessionId === activeTTSSessionId) {
-                    endTTS(btn, sessionId);
+                if (!isStreamingChunk && sessionId === activeTTSSessionId) {
+                    endTTS(targetBtn, sessionId);
                 }
             } catch (err) {
                 if (sessionId === activeTTSSessionId) {
                     console.error('[Server TTS] synthesis error:', err);
-                    endTTS(btn, sessionId);
+                    if (!isStreamingChunk) {
+                        endTTS(targetBtn, sessionId);
+                    }
                 }
             }
         }
 
-        async function speakWithOSTTS(text, btn, sessionId) {
+        async function speakWithOSTTS(text, btn, sessionId, options = {}) {
+            const isStreamingChunk = !!options.isStreaming;
+            const targetBtn = btn || (getPlaybackState?.() || {}).currentAudioBtn;
             if (!supportsOSTTS()) {
-                if (btn) global.alert?.(t('setting.osVoice.unavailable') || 'OS TTS unavailable');
-                endTTS(btn, sessionId);
+                if (targetBtn) global.alert?.(t('setting.osVoice.unavailable') || 'OS TTS unavailable');
+                if (!isStreamingChunk) endTTS(targetBtn, sessionId);
                 return;
             }
 
@@ -362,10 +376,10 @@
                 ? global.DKSTSupertonic3.chunkSpeechText(text, 200)
                 : [text];
 
-            if (btn) {
-                btn.classList.remove('loading');
-                btn.classList.add('playing', 'btn-danger');
-                const icon = btn.querySelector('.material-icons-round');
+            if (targetBtn) {
+                targetBtn.classList.remove('loading');
+                targetBtn.classList.add('playing', 'btn-danger');
+                const icon = targetBtn.querySelector('.material-icons-round');
                 if (icon) icon.textContent = 'stop';
             }
 
@@ -389,8 +403,8 @@
                 });
             }
 
-            if (sessionId === activeTTSSessionId) {
-                endTTS(btn, sessionId);
+            if (!isStreamingChunk && sessionId === activeTTSSessionId) {
+                endTTS(targetBtn, sessionId);
             }
         }
 
@@ -403,20 +417,47 @@
         }
 
         // Streaming TTS support
-        function initStreamingTTS() {
+        function initStreamingTTS(elementId = null) {
             stopAllAudio();
             streamingChunks = [];
             isStreamingPlaying = false;
             streamingCommittedIndex = 0;
             const sessionId = ++activeTTSSessionId;
+            streamingElementId = elementId || getActiveStreamingMessageId?.() || null;
+
+            let btn = null;
+            if (streamingElementId) {
+                const el = global.document.getElementById(streamingElementId);
+                btn = el?.querySelector('.speak-btn') || null;
+            }
+
             setPlaybackState?.({
+                currentAudioBtn: btn,
                 streamingTTSActive: true,
                 streamingTTSBuffer: '',
                 streamingTTSCommittedIndex: 0,
                 ttsSessionId: sessionId,
                 isPlayingQueue: true
             });
+            syncCurrentAudioButtonUI();
             onSyncWakeLock?.();
+        }
+
+        function attachStreamingAudioButtonToMessage(msgEl) {
+            if (!msgEl) return;
+            const state = getPlaybackState?.() || {};
+            if (!state.streamingTTSActive && !state.isPlayingQueue) return;
+
+            const targetId = streamingElementId || getActiveStreamingMessageId?.();
+            if (targetId && msgEl.id && msgEl.id !== targetId) return;
+
+            const btn = msgEl.querySelector('.speak-btn');
+            if (btn && (!state.currentAudioBtn || state.currentAudioBtn !== btn)) {
+                setPlaybackState?.({
+                    currentAudioBtn: btn
+                });
+                syncCurrentAudioButtonUI();
+            }
         }
 
         function feedStreamingTTS(fullDisplayText) {
@@ -463,6 +504,8 @@
             isStreamingPlaying = true;
             const sessionId = activeTTSSessionId;
 
+            syncCurrentAudioButtonUI();
+
             while (true) {
                 if (sessionId !== activeTTSSessionId) break;
                 if (streamingChunks.length === 0) {
@@ -481,18 +524,18 @@
 
                 const engine = getCurrentTTSEngine();
                 if (engine === 'os') {
-                    await speakWithOSTTS(chunk, null, sessionId);
+                    await speakWithOSTTS(chunk, null, sessionId, { isStreaming: true });
                 } else if (engine === 'supertonic-ondevice') {
-                    await speakWithOnDeviceSupertonic(chunk, null, sessionId);
+                    await speakWithOnDeviceSupertonic(chunk, null, sessionId, { isStreaming: true });
                 } else {
-                    await speakWithServerSupertonic(chunk, null, sessionId);
+                    await speakWithServerSupertonic(chunk, null, sessionId, { isStreaming: true });
                 }
             }
 
             isStreamingPlaying = false;
             const finalState = getPlaybackState?.() || {};
             if (sessionId === activeTTSSessionId && !finalState.streamingTTSActive) {
-                endTTS(null, sessionId);
+                endTTS(finalState.currentAudioBtn, sessionId);
             }
         }
 
@@ -602,21 +645,9 @@
 
         function updateTTSSettingsVisibility() {
             const engine = getCurrentTTSEngine();
-            const supertonicIds = [
-                'container-tts-supertonic-voice',
-                'container-tts-supertonic-speed',
-                'container-tts-lang',
-                'container-tts-supertonic-steps'
-            ];
-            const osIds = [
-                'container-tts-os-voice',
-                'container-tts-os-rate',
-                'container-tts-os-pitch'
-            ];
-            const serverOnlyIds = [
-                'container-tts-supertonic-threads',
-                'container-tts-supertonic-format'
-            ];
+            const supertonicIds = ['row-tts-voice', 'row-tts-speed', 'row-tts-format', 'row-tts-steps'];
+            const osIds = ['row-os-voice', 'row-os-rate', 'row-os-pitch'];
+            const serverOnlyIds = ['row-tts-format'];
 
             supertonicIds.forEach((id) => {
                 const el = global.document.getElementById(id);
@@ -636,7 +667,17 @@
 
         function syncCurrentAudioButtonUI() {
             const state = getPlaybackState?.() || {};
-            const btn = state.currentAudioBtn;
+            let btn = state.currentAudioBtn;
+            if (!btn && (state.isPlayingQueue || state.streamingTTSActive)) {
+                const targetId = streamingElementId || getActiveStreamingMessageId?.();
+                if (targetId) {
+                    const el = global.document.getElementById(targetId);
+                    btn = el?.querySelector('.speak-btn') || null;
+                    if (btn) {
+                        setPlaybackState?.({ currentAudioBtn: btn });
+                    }
+                }
+            }
             if (!btn) return;
             const icon = btn.querySelector('.material-icons-round');
             if (state.isPlayingQueue || state.streamingTTSActive) {
@@ -650,7 +691,7 @@
         }
 
         return {
-            attachStreamingAudioButtonToMessage: () => {},
+            attachStreamingAudioButtonToMessage,
             clearMediaSessionMetadata,
             cleanTextForTTS,
             combinePlayableChunks: (chunks) => chunks,
