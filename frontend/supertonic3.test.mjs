@@ -40,3 +40,42 @@ test('chunkSpeechText breaks text into sentences under max length', () => {
     assert.ok(chunks.length >= 1);
     assert.equal(chunks.join(' '), text);
 });
+
+test('streaming boundary extractor extracts complete sentences without cumulative repetition', () => {
+    const tokens = ['안', '녕하', '세요! ', '오늘 ', '날씨가 ', '좋네요. ', '좋은 ', '하루 ', '되세요.'];
+    let cumulative = '';
+    let committedIndex = 0;
+    const extractedChunks = [];
+
+    const sentenceRegex = /([\s\S]+?[.!?。！？\n])(?:\s+|$)/g;
+
+    for (const token of tokens) {
+        cumulative += token;
+        if (cumulative.length <= committedIndex) continue;
+
+        const uncommitted = cumulative.slice(committedIndex);
+        sentenceRegex.lastIndex = 0;
+        let match;
+        let lastMatchedEnd = 0;
+
+        while ((match = sentenceRegex.exec(uncommitted)) !== null) {
+            extractedChunks.push(match[1].trim());
+            lastMatchedEnd = sentenceRegex.lastIndex;
+        }
+
+        if (lastMatchedEnd > 0) {
+            committedIndex += lastMatchedEnd;
+        }
+    }
+
+    // After stream finishes:
+    if (cumulative.length > committedIndex) {
+        extractedChunks.push(cumulative.slice(committedIndex).trim());
+    }
+
+    assert.deepEqual(extractedChunks, [
+        '안녕하세요!',
+        '오늘 날씨가 좋네요.',
+        '좋은 하루 되세요.'
+    ]);
+});

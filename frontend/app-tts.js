@@ -29,6 +29,9 @@
         let osTTSVoicesReady = false;
         let activeTTSSessionId = 0;
         let lastSupertonicToastAt = 0;
+        let streamingCommittedIndex = 0;
+        let streamingChunks = [];
+        let isStreamingPlaying = false;
 
         function normalizeTTSSynthesisSpeed(speed) {
             return Math.max(0.7, Math.min(2.0, Number(speed) || 0.9));
@@ -108,6 +111,9 @@
 
         function stopAllAudio() {
             activeTTSSessionId += 1;
+            streamingChunks = [];
+            isStreamingPlaying = false;
+            streamingCommittedIndex = 0;
 
             if (global.DKSTSupertonic3?.cancelSupertonic3Speech) {
                 global.DKSTSupertonic3.cancelSupertonic3Speech();
@@ -135,6 +141,7 @@
                 isPlayingQueue: false,
                 streamingTTSActive: false,
                 streamingTTSBuffer: '',
+                streamingTTSCommittedIndex: 0,
                 activeTTSSessionLabel: '',
                 ttsQueue: []
             });
@@ -396,38 +403,51 @@
         }
 
         // Streaming TTS support
-        let streamingChunks = [];
-        let isStreamingPlaying = false;
-
         function initStreamingTTS() {
             stopAllAudio();
             streamingChunks = [];
             isStreamingPlaying = false;
+            streamingCommittedIndex = 0;
+            const sessionId = ++activeTTSSessionId;
             setPlaybackState?.({
                 streamingTTSActive: true,
                 streamingTTSBuffer: '',
                 streamingTTSCommittedIndex: 0,
-                ttsSessionId: ++activeTTSSessionId
+                ttsSessionId: sessionId,
+                isPlayingQueue: true
             });
             onSyncWakeLock?.();
         }
 
-        function feedStreamingTTS(newTextDelta) {
+        function feedStreamingTTS(fullDisplayText) {
             const state = getPlaybackState?.() || {};
             if (!state.streamingTTSActive) return;
 
-            const buffer = (state.streamingTTSBuffer || '') + (newTextDelta || '');
-            const cleaned = cleanTextForTTS(buffer);
+            const rawText = String(fullDisplayText || '');
+            if (rawText.length <= streamingCommittedIndex) return;
 
-            // Sentence boundary detection for smooth streaming
-            const match = cleaned.match(/^([\s\S]+?[.!?。！？\n])\s*([\s\S]*)$/);
-            if (match && match[1].trim()) {
-                const completeSentence = match[1].trim();
-                const remainder = match[2] || '';
-                setPlaybackState?.({ streamingTTSBuffer: remainder });
-                pushStreamingChunk(completeSentence);
-            } else {
-                setPlaybackState?.({ streamingTTSBuffer: buffer });
+            const uncommitted = rawText.slice(streamingCommittedIndex);
+
+            // Find all complete sentences in uncommitted text
+            // Regex matches sentence ending with ., !, ?, 。, ！, ？, or \n followed by whitespace or string end
+            const sentenceBoundaryRegex = /([\s\S]+?[.!?。！？\n])(?:\s+|$)/g;
+            let match;
+            let lastMatchedEnd = 0;
+
+            while ((match = sentenceBoundaryRegex.exec(uncommitted)) !== null) {
+                const rawSentence = match[1];
+                const clean = cleanTextForTTS(rawSentence);
+                if (clean) {
+                    pushStreamingChunk(clean);
+                }
+                lastMatchedEnd = sentenceBoundaryRegex.lastIndex;
+            }
+
+            if (lastMatchedEnd > 0) {
+                streamingCommittedIndex += lastMatchedEnd;
+                setPlaybackState?.({
+                    streamingTTSCommittedIndex: streamingCommittedIndex
+                });
             }
         }
 
@@ -443,8 +463,19 @@
             isStreamingPlaying = true;
             const sessionId = activeTTSSessionId;
 
-            while (streamingChunks.length > 0) {
+            while (true) {
                 if (sessionId !== activeTTSSessionId) break;
+                if (streamingChunks.length === 0) {
+                    const state = getPlaybackState?.() || {};
+                    if (state.streamingTTSActive) {
+                        // Wait briefly for more tokens from the live stream
+                        await new Promise((resolve) => global.setTimeout(resolve, 80));
+                        continue;
+                    }
+                    // Streaming ended and all chunks played
+                    break;
+                }
+
                 const chunk = streamingChunks.shift();
                 if (!chunk) continue;
 
@@ -457,16 +488,23 @@
                     await speakWithServerSupertonic(chunk, null, sessionId);
                 }
             }
+
             isStreamingPlaying = false;
+            const finalState = getPlaybackState?.() || {};
+            if (sessionId === activeTTSSessionId && !finalState.streamingTTSActive) {
+                endTTS(null, sessionId);
+            }
         }
 
-        function finalizeStreamingTTS() {
-            const state = getPlaybackState?.() || {};
-            if (state.streamingTTSBuffer?.trim()) {
-                const remaining = cleanTextForTTS(state.streamingTTSBuffer);
-                if (remaining) {
-                    pushStreamingChunk(remaining);
+        function finalizeStreamingTTS(finalDisplayText) {
+            const rawText = String(finalDisplayText || '');
+            if (rawText.length > streamingCommittedIndex) {
+                const remaining = rawText.slice(streamingCommittedIndex);
+                const clean = cleanTextForTTS(remaining);
+                if (clean) {
+                    pushStreamingChunk(clean);
                 }
+                streamingCommittedIndex = rawText.length;
             }
             setPlaybackState?.({
                 streamingTTSActive: false,
