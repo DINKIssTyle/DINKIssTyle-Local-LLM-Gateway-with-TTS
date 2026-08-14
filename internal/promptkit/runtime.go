@@ -224,7 +224,7 @@ func buildToolUsage(envInfo string, modelID string, useNativeTools bool, tools [
 			"3. If no tool is needed, answer normally.",
 			"3a. TOOL DECISION DEADLINE: Keep private reasoning brief. Once you have selected a tool and its arguments, invoke it immediately. Never rehearse, restate, or repeat the planned tool call; if you notice yourself repeating the plan, stop reasoning and emit the tool element now.",
 			"4. RESPONSE LANGUAGE RULE: Always answer in the same language as the user's current request unless the user explicitly asks for another language. Tool names, tool arguments, and tool results must never change the response language.",
-			"5. CURRENT REQUEST BOUNDARY RULE: Treat the current user message as the authoritative intent. Use earlier turns only to resolve a genuinely omitted or ambiguous referent. When the current message explicitly names a new subject, never prepend words from a completed prior request to tool arguments. For namu_wiki, pass only the exact page title/keyword, excluding the site name and command phrases such as search, find, or 검색.",
+			"5. CURRENT REQUEST BOUNDARY RULE: Treat the current user message as authoritative. When formulating search queries (search_web, naver_search, namu_wiki) in follow-up turns, ALWAYS include the core subject (person, event, entity) from earlier turns if the user omitted it (e.g. if the prior topic is '타이타닉' and the user asks '생존자로 검색하면?' or '총 몇명이 탑승했는데요?', the search query MUST be '타이타닉 생존자' or '타이타닉 탑승 인원', NEVER '생존자' or '탑승 인원' alone). When the user introduces a genuinely new independent subject, do not prepend prior subjects. For namu_wiki, pass only the exact page title/keyword, excluding the site name.",
 			"6. BULK TOOL TEST RULE: If the user explicitly requests every/all tools to be tested, continue automatically with one remaining safe tool per turn instead of asking which tool to test next. Finish with a pass/fail/skipped summary and never delete real user data merely to satisfy a diagnostic.",
 		)
 
@@ -302,7 +302,7 @@ func nativeToolGuidelines(tools []ToolDefinition) []string {
 	lines := []string{
 		"1. Use provider-native tool calls only; never print tool XML, pseudo-schemas, function syntax, or hidden reasoning.",
 		"2. If no tool is needed, answer normally. Otherwise call one tool at a time and invoke it as soon as its arguments are ready.",
-		"3. Treat the current message as authoritative. Use earlier turns only for an omitted referent, and never contaminate a new subject with a completed request.",
+		"3. STANDALONE SEARCH QUERY: When searching for follow-up questions, include the omitted core subject from earlier turns (e.g. prior topic '타이타닉' + '생존자는?' -> query '타이타닉 생존자'). Never search vague single words like '생존자' or '탑승 인원' without their subject. Never contaminate a genuinely new subject.",
 		"4. Answer in the language of the current request unless the user asks otherwise.",
 		"5. After a sufficient tool result, answer directly. Do not repeat equivalent calls.",
 		"6. If the user explicitly requests a safe bulk tool test, continue one remaining tool at a time and finish with a pass/fail/skipped summary.",

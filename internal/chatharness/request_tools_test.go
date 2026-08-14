@@ -375,6 +375,28 @@ func TestContextualFollowupAndMissingSearchQueryRecovery(t *testing.T) {
 	}
 }
 
+func TestRefineContextualFollowupSearchQuery(t *testing.T) {
+	titanicRecent := "Recent Turn 1\nUser: 타이타닉에서 구출 된 총 인원은 몇명입니까?\nAssistant: 타이타닉호 구출 인원 정보..."
+
+	// Case 1: Short follow-up without subject -> Enriched with "타이타닉"
+	repaired, ok := RefineContextualFollowupSearchQuery("search_web", `{"query":"생존자"}`, "생존자로 검색하면 나오지 않을까요?", titanicRecent)
+	if !ok || !strings.Contains(repaired, "타이타닉") || !strings.Contains(repaired, "생존자") {
+		t.Fatalf("follow-up query was not enriched: %q (ok=%v)", repaired, ok)
+	}
+
+	// Case 2: Short follow-up without subject -> Enriched with "타이타닉"
+	repaired2, ok2 := RefineContextualFollowupSearchQuery("search_web", `{"query":"총 몇명이 탑승"}`, "총 몇명이 탑승했는데요?", titanicRecent)
+	if !ok2 || !strings.Contains(repaired2, "타이타닉") || !strings.Contains(repaired2, "총 몇명이 탑승") {
+		t.Fatalf("follow-up query was not enriched: %q (ok=%v)", repaired2, ok2)
+	}
+
+	// Case 3: Topic Shift / Independent query -> Must NOT be contaminated!
+	independent, ok3 := RefineContextualFollowupSearchQuery("search_web", `{"query":"오늘 서울 날씨"}`, "오늘 서울 날씨 알려줘", titanicRecent)
+	if ok3 || strings.Contains(independent, "타이타닉") {
+		t.Fatalf("independent query was contaminated: %q (ok=%v)", independent, ok3)
+	}
+}
+
 func TestMissingReadWebPageURLRecoveryUsesOnlyCurrentRequest(t *testing.T) {
 	request := "이 페이지를 읽어주세요: https://example.com/weather/current"
 	repaired, ok := RepairMissingReadWebPageArguments("read_web_page", `{}`, request)
@@ -682,6 +704,21 @@ func TestSummarizeReasoningEvidenceExtractsConclusionsAndDrafts(t *testing.T) {
 	}
 	if len(summary) >= len(longReasoning) {
 		t.Fatalf("reasoning summary was not compacted: %d >= %d", len(summary), len(longReasoning))
+	}
+}
+
+func TestHarvestFinalAnswerFromReasoning(t *testing.T) {
+	reasoningOutput := `This meets all requirements. Output matches. Proceeds.
+Final Output Generation.
+[Output] -> 제공된 검색 결과에 따르면, 타이타닉호 침몰 사고 당시 최연소 생존자는 **밀비나 딘(Millvina Dean)**입니다. 그녀는 배가 침몰하던 당시 생후 9주밖에 되지 않은 영아였으며, 2009년에 세상을 떠난 마지막 생존자 중 한 명으로 기록되어 있습니다.
+출처: [Maestrovirtuale.com](https://example.com)`
+
+	harvested, ok := HarvestFinalAnswerFromReasoning(reasoningOutput)
+	if !ok {
+		t.Fatalf("expected successful harvesting from reasoning text")
+	}
+	if !strings.Contains(harvested, "밀비나 딘(Millvina Dean)") || !strings.Contains(harvested, "Maestrovirtuale.com") {
+		t.Fatalf("harvested content was missing vital content: %q", harvested)
 	}
 }
 

@@ -6549,6 +6549,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			if repairedArgsJSON, repaired := chatharness.RepairMissingSearchToolArguments(lastToolName, lastToolArgsStr, initialUserInputText, recentContext); repaired {
 				lastToolArgsStr = repairedArgsJSON
 			}
+			if refinedArgsJSON, refined := chatharness.RefineContextualFollowupSearchQuery(lastToolName, lastToolArgsStr, initialUserInputText, recentContext); refined {
+				lastToolArgsStr = refinedArgsJSON
+			}
 			if refinedArgsJSON, refined := chatharness.RefineFamilySearchToolArguments(lastToolName, lastToolArgsStr, initialUserInputText); refined {
 				lastToolArgsStr = refinedArgsJSON
 			}
@@ -6830,6 +6833,33 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				needsCorrection = false
 				badContentCapture = ""
 				continue
+			}
+		}
+
+		if strings.TrimSpace(fullResponse) == "" && strings.TrimSpace(reasoningResponse) != "" && !toolExecutedThisTurn {
+			if harvested, ok := chatharness.HarvestFinalAnswerFromReasoning(reasoningResponse); ok {
+				fullResponse = harvested
+				AddDebugTrace("chat", "final_answer.harvested", "Harvested complete final answer directly from reasoning output", map[string]interface{}{
+					"turn":            turn,
+					"harvested_chars": len([]rune(harvested)),
+				})
+				payload := map[string]interface{}{
+					"choices": []interface{}{
+						map[string]interface{}{
+							"delta": map[string]string{
+								"content": harvested,
+							},
+						},
+					},
+				}
+				if jsonBytes, err := json.Marshal(payload); err == nil {
+					emitStreamChunk(fmt.Sprintf("data: %s", string(jsonBytes)))
+				}
+				appendChatEvent("assistant", "message.delta", map[string]interface{}{
+					"type":         "message.delta",
+					"content":      harvested,
+					"full_content": fullResponse,
+				})
 			}
 		}
 

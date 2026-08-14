@@ -144,13 +144,93 @@ func IsLikelyContextualFollowup(text string) bool {
 	}
 	for _, signal := range []string{
 		"자녀", "아이", "가족", "배우자", "아내", "남편", "부모", "형제", "정보", "더 알려", "그 사람", "그 배우", "그 모델", "그 회사", "는요", "은요", "자녀요",
-		"their children", "his children", "her children", "what about", "and the children", "more about",
+		"생존자", "탑승", "인원", "사망자", "몇명", "몇 명", "나오지", "않을까요", "결말", "줄거리", "원인", "이유", "가격", "비용", "출시일", "스펙",
+		"their children", "his children", "her children", "what about", "and the children", "more about", "how many", "survivor", "passengers",
 	} {
 		if strings.Contains(normalized, signal) {
 			return true
 		}
 	}
 	return false
+}
+
+// extractPreviousTopic extracts the prominent entity or subject from the immediate prior turn.
+func extractPreviousTopic(recentContext string) string {
+	lines := strings.Split(strings.TrimSpace(recentContext), "\n")
+	previousUser := ""
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(line, "User: ") {
+			previousUser = strings.TrimSpace(strings.TrimPrefix(line, "User: "))
+			if previousUser != "" {
+				break
+			}
+		}
+	}
+	if previousUser == "" {
+		return ""
+	}
+
+	// Remove common question endings/particles to isolate the core subject
+	cleaned := regexp.MustCompile(`(?i)(?:에서|의|에 대해|에 대한|은|는|이|가|을|를)\s+.*$`).ReplaceAllString(previousUser, "")
+	cleaned = strings.TrimSpace(cleaned)
+	if cleaned != "" && len([]rune(cleaned)) <= 30 {
+		return cleaned
+	}
+	// Fallback to the first 2-3 words of previous user prompt
+	fields := strings.Fields(previousUser)
+	if len(fields) > 0 {
+		return fields[0]
+	}
+	return ""
+}
+
+// RefineContextualFollowupSearchQuery ensures that short follow-up search queries
+// (e.g. '생존자', '총 몇명이 탑승') retain the core subject from the immediately preceding turn.
+func RefineContextualFollowupSearchQuery(toolName, arguments, currentUserText, recentContext string) (string, bool) {
+	toolName = strings.TrimSpace(toolName)
+	if toolName != "search_web" && toolName != "naver_search" && toolName != "namu_wiki" {
+		return arguments, false
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(arguments)), &payload); err != nil || payload == nil {
+		return arguments, false
+	}
+
+	queryKey := "query"
+	if toolName == "namu_wiki" {
+		queryKey = "keyword"
+	}
+
+	query, _ := payload[queryKey].(string)
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return arguments, false
+	}
+
+	// Only refine when the user text is a clear short follow-up and the query is short/fragmented
+	if !IsLikelyContextualFollowup(currentUserText) || len([]rune(query)) > 25 {
+		return arguments, false
+	}
+
+	topic := extractPreviousTopic(recentContext)
+	if topic == "" {
+		return arguments, false
+	}
+
+	// If the query already mentions the prior topic, do not duplicate
+	if strings.Contains(strings.ToLower(query), strings.ToLower(topic)) {
+		return arguments, false
+	}
+
+	refinedQuery := strings.TrimSpace(topic + " " + query)
+	payload[queryKey] = refinedQuery
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return arguments, false
+	}
+	return string(encoded), true
 }
 
 // UpgradeFreshnessSearchToolCall converts a single generic web search into the
@@ -805,6 +885,37 @@ func PrepareToolFollowupRequest(input ToolFollowupInput) (map[string]interface{}
 
 	body, err := json.Marshal(reqMap)
 	return reqMap, body, err
+}
+
+// HarvestFinalAnswerFromReasoning extracts a complete final user-visible answer
+// if the model finished writing the output inside the reasoning channel but omitted
+// outputting it to the standard content channel.
+func HarvestFinalAnswerFromReasoning(reasoningText string) (string, bool) {
+	trimmed := strings.TrimSpace(reasoningText)
+	if len(trimmed) < 40 {
+		return "", false
+	}
+
+	// Markers where models transition to final output within reasoning
+	harvestPatterns := []*regexp.Regexp{
+		regexp.MustCompile(`(?s)(?:Final Output Generation\.?\s*)?(?:\[Output\]\s*->|\[최종\s*답변\]\s*->?|답변\s*출력:?|최종\s*출력:?)\s*(.+)`),
+		regexp.MustCompile(`(?s)(?:Let's refine the Korean response:?|Korean response:?|Final answer draft:?|최종 답변:)\s*(.+)`),
+		regexp.MustCompile(`(?s)"(제공된 검색 결과에 따르면[\s\S]+?)"`),
+	}
+
+	for _, re := range harvestPatterns {
+		matches := re.FindStringSubmatch(trimmed)
+		if len(matches) > 1 {
+			candidate := strings.TrimSpace(matches[1])
+			// Clean any leading/trailing quotes or markdown boundary artifacts
+			candidate = strings.Trim(candidate, "\"` ")
+			if len([]rune(candidate)) >= 30 {
+				return candidate, true
+			}
+		}
+	}
+
+	return "", false
 }
 
 // SummarizeReasoningEvidence extracts key conclusions, draft passages, and
