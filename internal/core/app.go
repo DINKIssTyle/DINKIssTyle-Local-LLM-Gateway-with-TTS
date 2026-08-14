@@ -260,35 +260,6 @@ func (a *App) CheckAndSetupPaths() {
 		filepath.Join(assetsDirName, runtimeDirName, onnxRuntimeDirName),
 		filepath.Join("onnxruntime"),
 	)
-	copyIfMissing(filepath.Join(dictionaryDirName, "Dictionary_editor.py"),
-		filepath.Join(resourceDir, dictionaryDirName, "Dictionary_editor.py"),
-		filepath.Join(bundleDir, dictionaryDirName, "Dictionary_editor.py"),
-		filepath.Join("bundle", dictionaryDirName, "Dictionary_editor.py"),
-		filepath.Join(dictionaryDirName, "Dictionary_editor.py"),
-		filepath.Join("bundle", "Dictionary_editor.py"),
-	)
-
-	dictPatterns := []string{
-		filepath.Join(resourceDir, dictionaryDirName, "dictionary_*.txt"),
-		filepath.Join(bundleDir, dictionaryDirName, "dictionary_*.txt"),
-		filepath.Join("bundle", dictionaryDirName, "dictionary_*.txt"),
-		filepath.Join(dictionaryDirName, "dictionary_*.txt"),
-		filepath.Join("bundle", "dictionary_*.txt"),
-	}
-	for _, pattern := range dictPatterns {
-		matches, _ := filepath.Glob(pattern)
-		for _, srcPath := range matches {
-			filename := filepath.Base(srcPath)
-			destPath := filepath.Join(appDataDir, dictionaryDirName, filename)
-			if pathExists(destPath) {
-				continue
-			}
-			fmt.Printf("Setup: Copying dictionary %s to %s\n", filename, destPath)
-			if err := copyRecursive(srcPath, destPath); err != nil {
-				fmt.Printf("Setup: failed to copy dictionary %s: %v\n", filename, err)
-			}
-		}
-	}
 }
 
 func copyRecursive(src, dst string) error {
@@ -1891,64 +1862,6 @@ func (a *App) GetLicenseText() string {
 	}
 
 	return builder.String()
-}
-
-// GetTTSDictionary returns the dictionary for the specified language
-func (a *App) GetTTSDictionary(lang string) map[string]string {
-	if lang == "" {
-		lang = "ko"
-	}
-	filename := getDictionaryFilename(lang)
-	dictFile := getWritableDictionaryFilePath(lang)
-
-	// Create default if missing (only for ko/en as examples, or empty for others)
-	if _, err := os.Stat(dictFile); os.IsNotExist(err) {
-		// Provide basic defaults for ko/en if creating from scratch
-		var defaultContent string
-		if lang == "ko" {
-			defaultContent = "macOS, Mac OS\n"
-		} else if lang == "en" {
-			defaultContent = "macOS, Mac O S\nGUI, G U I\n"
-		} else {
-			defaultContent = "" // Empty for others by default
-		}
-		if defaultContent != "" {
-			_ = os.MkdirAll(filepath.Dir(dictFile), 0755)
-			os.WriteFile(dictFile, []byte(defaultContent), 0644)
-		}
-	}
-
-	if !fileExists(dictFile) {
-		dictFile = getDictionarySourcePath(lang)
-	}
-
-	result := make(map[string]string)
-	content, err := os.ReadFile(dictFile)
-	if err != nil {
-		// fmt.Printf("Failed to read dictionary %s: %v\n", filename, err)
-		return result
-	}
-
-	lines := strings.Split(string(content), "\n")
-	for i, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		parts := strings.SplitN(line, ",", 2)
-		if len(parts) == 2 {
-			key := strings.TrimSpace(parts[0])
-			val := strings.TrimSpace(parts[1])
-			if key != "" {
-				result[key] = val
-			} else {
-				fmt.Printf("[Dictionary] Warning: Empty key in %s line %d\n", filename, i+1)
-			}
-		} else {
-			fmt.Printf("[Dictionary] Warning: Malformed line in %s line %d (missing comma)\n", filename, i+1)
-		}
-	}
-	return result
 }
 
 // ShowAbout triggers the about modal in the frontend

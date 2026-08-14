@@ -424,8 +424,7 @@
                         <p class="setting-desc" data-i18n="setting.ttsEngine.desc">Supertonic 3 또는 운영체제 기본 음성을 선택합니다.
                         </p>
                         <select id="cfg-tts-engine">
-                            <option value="supertonic" data-i18n="setting.ttsEngine.option.supertonic">Supertonic 3
-                            </option>
+                            <option value="supertonic" data-i18n="setting.ttsEngine.option.supertonic">Supertonic 3 (Server)</option>
                             <option value="supertonic-ondevice" data-i18n="setting.ttsEngine.option.supertonicOnDevice">Supertonic 3 (On Device)</option>
                             <option value="os" data-i18n="setting.ttsEngine.option.os">OS TTS</option>
                         </select>
@@ -578,7 +577,7 @@
                         <span data-i18n="action.cancel">취소</span>
                     </button>
                     <button class="btn btn-secondary btn-lg" onclick="reloadExternalFiles()"
-                        title="Reload prompts and dictionary">
+                        title="Reload prompts">
                         <span class="material-icons-round">refresh</span>
                         <span data-i18n="action.reload">새로고침</span>
                     </button>
@@ -923,7 +922,8 @@
     <script src="app-i18n.js?v=9"></script>
     <script src="app-saved-library.js?v=1"></script>
     <script src="app-models.js?v=1"></script>
-    <script src="app-tts.js?v=10"></script>
+    <script src="supertonic3.js?v=2"></script>
+    <script src="app-tts.js?v=12"></script>
     <script src="app-session.js?v=2"></script>
     <script src="app-stream-protocol.js?v=1"></script>
     <script src="app-chat-streaming.js?v=1"></script>

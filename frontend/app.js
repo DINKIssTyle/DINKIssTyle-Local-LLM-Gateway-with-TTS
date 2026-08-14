@@ -112,11 +112,7 @@ let AppState = {
         streamingTTSBuffer: '',
         streamingTTSProcessor: null,
         ttsSessionId: 0,
-        ttsSynthesisSpeed: 0.9,
-        dictionary: {},
-        dictionaryRegex: null,
-        dictionaryLang: '',
-        dictionaryLoadPromise: null
+        ttsSynthesisSpeed: 0.9
     },
     input: {
         pendingVoiceInputAutoTTS: false,
@@ -2295,7 +2291,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     await loadVoiceStyles(); // Fetch voice styles
     initOSTTSVoiceLoading();
-    await syncServerConfig({ log: true, forceDictionaryReload: true }); // Sync with server
+    await syncServerConfig({ log: true }); // Sync with server
     sessionController.setupSyncListeners();
     setupEventListeners();
     initServerControl();
@@ -2676,7 +2672,7 @@ async function recoverAfterServerReconnect() {
             await checkAuth();
             if (!AppState.session.currentUser) return;
 
-            await syncServerConfig({ forceDictionaryReload: true });
+            await syncServerConfig();
             restartChatSessionEventStream();
 
             if (hasUserMessagesWithoutAssistantMessages()) {
@@ -3292,8 +3288,7 @@ function loadConfig() {
     // Initialize System Prompt Presets (loads from external file)
     loadSystemPrompts();
 
-    // Load TTS Dictionary
-    loadTTSDictionary(getEffectiveTTSDictionaryLang());
+    // Initialize App Config Snapshots
 
     // Setup settings listeners
     setupSettingsListeners();
@@ -3436,85 +3431,6 @@ function setupSettingsListeners() {
     }
 }
 
-// Global Dictionary State
-
-function buildServerConfigSignature(serverCfg) {
-    try {
-        return JSON.stringify({
-            llm_endpoint: serverCfg?.llm_endpoint || '',
-            llm_mode: serverCfg?.llm_mode || '',
-            context_strategy: serverCfg?.context_strategy || '',
-            secondary_model: serverCfg?.secondary_model || '',
-            enable_tools: serverCfg?.enable_tools === true,
-            enable_tts: serverCfg?.enable_tts === true,
-            enable_memory: serverCfg?.enable_memory === true,
-            stateful_turn_limit: Number(serverCfg?.stateful_turn_limit || 0),
-            stateful_char_budget: Number(serverCfg?.stateful_char_budget || 0),
-            stateful_token_budget: Number(serverCfg?.stateful_token_budget || 0),
-            embedding_config: serverCfg?.embedding_config || null
-        });
-    } catch (_) {
-        return '';
-    }
-}
-
-async function loadTTSDictionary(lang, options = {}) {
-    // Default to config language or 'ko' if undefined
-    const targetLang = lang || config.ttsLang || 'ko';
-    const forceReload = options.forceReload === true;
-    const log = options.log !== false;
-
-    if (!forceReload && AppState.audio.dictionaryLang === targetLang && (AppState.audio.dictionaryRegex || Object.keys(AppState.audio.dictionary).length > 0)) {
-        return AppState.audio.dictionary;
-    }
-    if (!forceReload && AppState.audio.dictionaryLoadPromise && AppState.audio.dictionaryLang === targetLang) {
-        return AppState.audio.dictionaryLoadPromise;
-    }
-
-    let rawDict = {};
-
-    AppState.audio.dictionaryLoadPromise = (async () => {
-        try {
-            if (window.go && window.go.main && window.go.core.App) {
-                rawDict = await window.go.core.App.GetTTSDictionary(targetLang);
-            } else {
-                const res = await fetch(`/api/dictionary?lang=${targetLang}`);
-                if (res.ok) rawDict = await res.json();
-            }
-
-            // Normalize keys to lowercase for case-insensitive lookup
-            AppState.audio.dictionary = {};
-            if (rawDict) {
-                for (const [k, v] of Object.entries(rawDict)) {
-                    AppState.audio.dictionary[k.toLowerCase()] = v;
-                }
-            }
-
-            // Build optimized regex for performance (O(N) replacement)
-            const keys = Object.keys(AppState.audio.dictionary);
-            if (keys.length > 0) {
-                const escapedKeys = keys.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-                AppState.audio.dictionaryRegex = new RegExp(`\\b(${escapedKeys.join('|')})\\b`, 'gi');
-            } else {
-                AppState.audio.dictionaryRegex = null;
-            }
-            AppState.audio.dictionaryLang = targetLang;
-
-            if (log) {
-                console.log(`[TTS] Dictionary loaded with ${keys.length} entries. (lang=${targetLang})`);
-            }
-            return AppState.audio.dictionary;
-        } catch (e) {
-            console.error("Failed to load dictionary:", e);
-            throw e;
-        } finally {
-            AppState.audio.dictionaryLoadPromise = null;
-        }
-    })();
-
-    return AppState.audio.dictionaryLoadPromise;
-}
-
 // 시스템 프롬프트 프리셋 (외부 파일에서 로드)
 
 async function loadSystemPrompts() {
@@ -3557,11 +3473,10 @@ function initSystemPromptPresets() {
     }
 }
 
-// 외부 파일(system_prompts.json, dictionary/dictionary_*.txt) 새로고침
+// 외부 파일(system_prompts.json) 새로고침
 async function reloadExternalFiles() {
     try {
         await loadSystemPrompts();
-        await loadTTSDictionary(getEffectiveTTSDictionaryLang());
         await fetchModels(); // Reload models
         showToast(t('action.reload') + ' ✓');
     } catch (e) {
@@ -3573,7 +3488,6 @@ async function reloadExternalFiles() {
 function saveConfig(closeModal = true) {
     const previousVoice = config.ttsVoice;
     const previousEngine = config.ttsEngine;
-    const previousDictionaryLang = getEffectiveTTSDictionaryLang();
     const cfgApiEl = document.getElementById('cfg-api');
     // Sanitize Endpoint: Trim whitespace and trailing slash
     let endpoint = cfgApiEl ? cfgApiEl.value.trim() : config.apiEndpoint;
@@ -3668,11 +3582,6 @@ function saveConfig(closeModal = true) {
     }
 
     persistClientConfig();
-
-    const nextDictionaryLang = getEffectiveTTSDictionaryLang();
-    if (nextDictionaryLang !== previousDictionaryLang) {
-        loadTTSDictionary(nextDictionaryLang, { log: true });
-    }
 
     // Sync configs to server
     if (window.go && window.go.main && window.go.core.App) {
@@ -5355,7 +5264,6 @@ function adjustChatFontSize(delta) {
 
 async function syncServerConfig(options = {}) {
     const forceApply = options.forceApply === true;
-    const forceDictionaryReload = options.forceDictionaryReload === true;
     const log = options.log === true;
     try {
         const response = await fetch('/api/config', { credentials: 'include' }); // Fetch current server config
@@ -5440,10 +5348,6 @@ async function syncServerConfig(options = {}) {
 
             // Save to localStorage so next reload uses these
             persistAppConfigSnapshot();
-            await loadTTSDictionary(getEffectiveTTSDictionaryLang(), {
-                forceReload: forceDictionaryReload,
-                log
-            });
             return true;
         }
     } catch (e) {
@@ -5462,23 +5366,6 @@ function supportsOSTTS() {
 
 function getCurrentTTSEngine() {
     return ttsController.getCurrentTTSEngine();
-}
-
-function mapVoiceLangToDictionaryLang(lang = '') {
-    const normalized = String(lang || '').toLowerCase();
-    if (normalized.startsWith('ko')) return 'ko';
-    if (normalized.startsWith('en')) return 'en';
-    if (normalized.startsWith('es')) return 'es';
-    if (normalized.startsWith('fr')) return 'fr';
-    if (normalized.startsWith('pt')) return 'pt';
-    return config.ttsLang || 'ko';
-}
-
-function getEffectiveTTSDictionaryLang() {
-    if (getCurrentTTSEngine() === 'os' && config.osTtsVoiceLang) {
-        return mapVoiceLangToDictionaryLang(config.osTtsVoiceLang);
-    }
-    return config.ttsLang || 'ko';
 }
 
 function getSelectedOSTTSVoice() {

@@ -83,7 +83,6 @@ if exist "build\bin\DKST LLM Chat Server.exe" (
     )
     
     rem Other resources
-    if exist "bundle\dictionary" xcopy /E /I /Y "bundle\dictionary" "build\bin\dictionary" >nul
     if not exist "build\bin\users.json" copy /Y "bundle\users.json" "build\bin\" >nul
     if not exist "build\bin\config.json" copy /Y "bundle\config.json" "build\bin\" 2>nul
     copy /Y "bundle\system_prompts.json" "build\bin\" >nul

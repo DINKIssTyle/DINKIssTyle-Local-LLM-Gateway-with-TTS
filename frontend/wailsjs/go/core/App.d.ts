@@ -79,8 +79,6 @@ export function GetSystemPrompts():Promise<Array<promptkit.SystemPrompt>>;
 
 export function GetTTSConfig():Promise<core.ServerTTSConfig>;
 
-export function GetTTSDictionary(arg1:string):Promise<Record<string, string>>;
-
 export function GetUserApiToken(arg1:string):Promise<string>;
 
 export function GetUserDetail(arg1:string):Promise<Record<string, any>>;

@@ -2987,6 +2987,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	mux.HandleFunc("/api/tts", AuthMiddleware(authMgr, handleTTS))
 	mux.HandleFunc("/api/tts/on-device/status", AuthMiddleware(authMgr, handleOnDeviceTTSStatus(app)))
 	mux.HandleFunc("/api/tts/on-device/assets/", AuthMiddleware(authMgr, handleOnDeviceTTSAsset()))
+	mux.HandleFunc("/__tts-model/supertonic-3/", handleOnDeviceTTSAsset())
 	mux.HandleFunc("/api/last-session", AuthMiddleware(authMgr, handleLastSession()))
 	mux.HandleFunc("/api/saved-turns", AuthMiddleware(authMgr, handleSavedTurns()))
 	mux.HandleFunc("/api/saved-turns/title-refresh", AuthMiddleware(authMgr, handleSavedTurnTitleRefresh()))
@@ -3226,11 +3227,6 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	}))
 	mux.HandleFunc("/api/models/unload", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
 		handleModelUnload(w, r, app, authMgr)
-	}))
-	mux.HandleFunc("/api/dictionary", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
-		lang := r.URL.Query().Get("lang")
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(app.GetTTSDictionary(lang))
 	}))
 	mux.HandleFunc("/api/prompts", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -7225,6 +7221,7 @@ func handleOnDeviceTTSAsset() http.HandlerFunc {
 			return
 		}
 		name := strings.TrimPrefix(r.URL.Path, "/api/tts/on-device/assets/")
+		name = strings.TrimPrefix(name, "/__tts-model/supertonic-3/")
 		relPath, ok := onDeviceTTSFiles[name]
 		if !ok {
 			http.NotFound(w, r)
@@ -7242,8 +7239,17 @@ func handleOnDeviceTTSAsset() http.HandlerFunc {
 			http.Error(w, "Failed to inspect TTS asset", http.StatusInternalServerError)
 			return
 		}
-		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+		contentType := "application/octet-stream"
+		if strings.HasSuffix(filePath, ".json") {
+			contentType = "application/json"
+		} else if strings.HasSuffix(filePath, ".wasm") {
+			contentType = "application/wasm"
+		}
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", info.Size()))
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-DKST-Model-Cache", "hit")
 		http.ServeContent(w, r, filepath.Base(filePath), info.ModTime(), file)
 	}
 }

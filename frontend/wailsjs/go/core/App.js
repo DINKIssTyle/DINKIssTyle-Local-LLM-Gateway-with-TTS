@@ -150,10 +150,6 @@ export function GetTTSConfig() {
   return window['go']['core']['App']['GetTTSConfig']();
 }
 
-export function GetTTSDictionary(arg1) {
-  return window['go']['core']['App']['GetTTSDictionary'](arg1);
-}
-
 export function GetUserApiToken(arg1) {
   return window['go']['core']['App']['GetUserApiToken'](arg1);
 }

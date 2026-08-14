@@ -63,7 +63,6 @@ DKST LLM Chat Server는 강력한 지능형 기능을 결합한 차세대 로컬
 3.  저장 폴더 구조는 공통으로 다음처럼 사용합니다.
     *   인증서는 `cert/`
     *   SQLite 메모리 데이터베이스는 `memory/memory.db`
-    *   발음 사전과 편집기는 `dictionary/`
     *   Supertonic 3 자산은 `assets/tts/supertonic3/`
     *   임베딩 모델은 `assets/embeddings/multilingual-e5-small/`
     *   ONNX Runtime은 `assets/runtime/onnxruntime/`

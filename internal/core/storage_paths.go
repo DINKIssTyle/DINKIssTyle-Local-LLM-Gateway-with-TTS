@@ -11,7 +11,6 @@ import (
 
 const (
 	certDirName               = "cert"
-	dictionaryDirName         = "dictionary"
 	assetsDirName             = "assets"
 	ttsDirName                = "tts"
 	supertonic2DirName        = "supertonic2"
@@ -63,10 +62,6 @@ func getWritableCertDir() string {
 	return joinAppDataPath(certDirName)
 }
 
-func getWritableDictionaryDir() string {
-	return joinAppDataPath(dictionaryDirName)
-}
-
 func getManagedAssetsRootDir() string {
 	return joinAppDataPath(assetsDirName)
 }
@@ -109,50 +104,6 @@ func getEmbeddingModelInstallDir(modelID string) string {
 		modelID = "multilingual-e5-small"
 	}
 	return filepath.Join(getWritableEmbeddingRootDir(), modelID)
-}
-
-func getDictionaryFilename(lang string) string {
-	if lang == "" {
-		lang = "ko"
-	}
-	return fmt.Sprintf("dictionary_%s.txt", lang)
-}
-
-func getWritableDictionaryFilePath(lang string) string {
-	return filepath.Join(getWritableDictionaryDir(), getDictionaryFilename(lang))
-}
-
-func getDictionarySourcePath(lang string) string {
-	filename := getDictionaryFilename(lang)
-	candidates := []string{
-		getWritableDictionaryFilePath(lang),
-		GetResourcePath(filepath.Join(dictionaryDirName, filename)),
-		GetResourcePath(filename),
-		filepath.Join("bundle", dictionaryDirName, filename),
-		filepath.Join("bundle", filename),
-	}
-	for _, candidate := range candidates {
-		if fileExists(candidate) {
-			return candidate
-		}
-	}
-	return candidates[0]
-}
-
-func getDictionaryEditorSourcePath() string {
-	candidates := []string{
-		filepath.Join(getWritableDictionaryDir(), "Dictionary_editor.py"),
-		GetResourcePath(filepath.Join(dictionaryDirName, "Dictionary_editor.py")),
-		GetResourcePath("Dictionary_editor.py"),
-		filepath.Join("bundle", dictionaryDirName, "Dictionary_editor.py"),
-		filepath.Join("bundle", "Dictionary_editor.py"),
-	}
-	for _, candidate := range candidates {
-		if fileExists(candidate) {
-			return candidate
-		}
-	}
-	return candidates[0]
 }
 
 func getTTSAssetsDir() string {

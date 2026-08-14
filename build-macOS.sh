@@ -151,7 +151,6 @@ if [ -d "build/bin/DKST LLM Chat Server.app" ]; then
     cp bundle/assets/runtime/onnxruntime/LICENSE.txt "$APP_RESOURCE_DIR/assets/runtime/onnxruntime/" 2>/dev/null || true
     cp bundle/assets/runtime/onnxruntime/README.md "$APP_RESOURCE_DIR/assets/runtime/onnxruntime/" 2>/dev/null || true
     cp bundle/assets/runtime/onnxruntime/ThirdPartyNotices.txt "$APP_RESOURCE_DIR/assets/runtime/onnxruntime/" 2>/dev/null || true
-    cp -R bundle/dictionary "$APP_RESOURCE_DIR"
     cp bundle/users.json "$APP_RESOURCE_DIR" 2>/dev/null || echo "{}" > "$APP_RESOURCE_DIR/users.json"
     cp bundle/config.json "$APP_RESOURCE_DIR" 2>/dev/null || true
     cp bundle/system_prompts.json "$APP_RESOURCE_DIR" 2>/dev/null || true

@@ -138,25 +138,6 @@ func migrateLegacyDatabase(root string, report *storageMigrationReport) error {
 	return nil
 }
 
-func migrateLegacyDictionaryFiles(root string, report *storageMigrationReport) error {
-	destDir := filepath.Join(root, dictionaryDirName)
-	if err := movePathIfNeeded(filepath.Join(root, "Dictionary_editor.py"), filepath.Join(destDir, "Dictionary_editor.py"), report); err != nil {
-		return err
-	}
-
-	pattern := filepath.Join(root, "dictionary_*.txt")
-	matches, err := filepath.Glob(pattern)
-	if err != nil {
-		return err
-	}
-	for _, match := range matches {
-		if err := movePathIfNeeded(match, filepath.Join(destDir, filepath.Base(match)), report); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func migrateLegacyTTSAssets(root string, report *storageMigrationReport) error {
 	legacyAssetsRoot := filepath.Join(root, assetsDirName)
 	destRoot := filepath.Join(root, assetsDirName, ttsDirName, supertonic2DirName)
@@ -196,7 +177,6 @@ func migrateStorageRoot(root string, report *storageMigrationReport) error {
 	steps := []func(string, *storageMigrationReport) error{
 		moveLegacyCertificates,
 		migrateLegacyDatabase,
-		migrateLegacyDictionaryFiles,
 		migrateLegacyTTSAssets,
 		migrateLegacyEmbeddingAssets,
 		migrateLegacyONNXRuntime,
@@ -225,8 +205,6 @@ func detectLegacyStorageNeedsMigration(root string) (bool, string) {
 		{filepath.Join(root, "memory", legacyMemoryUserDirName, defaultMemoryDatabaseName), "A legacy SQLite database is still stored under memory/default."},
 		{filepath.Join(root, legacyModelsDirName, embeddingsDirName), "Legacy embedding files were found in the old models folder."},
 		{filepath.Join(root, onnxRuntimeDirName), "Legacy ONNX Runtime files were found in the old root onnxruntime folder."},
-		{filepath.Join(root, "Dictionary_editor.py"), "Legacy dictionary files are still stored in the root folder."},
-		{filepath.Join(root, "dictionary_ko.txt"), "Legacy dictionary files are still stored in the root folder."},
 		{filepath.Join(root, assetsDirName, legacyTTSOnnxDirName), "Legacy TTS assets are still stored in the old assets folder layout."},
 		{filepath.Join(root, assetsDirName, legacyTTSVoiceStylesDir), "Legacy TTS voice styles are still stored in the old assets folder layout."},
 	}
@@ -346,7 +324,7 @@ func (a *App) ConfirmAndRunStorageMigration() (string, error) {
 	selection, err := wruntime.MessageDialog(a.ctx, wruntime.MessageDialogOptions{
 		Type:          wruntime.QuestionDialog,
 		Title:         "Run Storage Migration",
-		Message:       "Move legacy files into the new cert, memory, dictionary, and assets folders now?",
+		Message:       "Move legacy files into the new cert, memory, and assets folders now?",
 		Buttons:       []string{"Run Migration", "Cancel"},
 		DefaultButton: "Run Migration",
 		CancelButton:  "Cancel",

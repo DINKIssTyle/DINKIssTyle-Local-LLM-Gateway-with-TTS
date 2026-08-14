@@ -165,10 +165,6 @@ if [ -f "$APP_CONTENT_DIR/DKST LLM Chat Server" ]; then
         cp "bundle/assets/runtime/onnxruntime/libonnxruntime.so" "$APP_CONTENT_DIR/assets/runtime/onnxruntime/"
     fi
 
-    if [ -d "bundle/dictionary" ]; then
-        cp -R bundle/dictionary "$APP_CONTENT_DIR"
-    fi
-
     cp bundle/users.json "$APP_CONTENT_DIR" 2>/dev/null || echo "{}" > "$APP_CONTENT_DIR/users.json"
     cp -f bundle/config.json "$APP_CONTENT_DIR"
     cp bundle/system_prompts.json "$APP_CONTENT_DIR" 2>/dev/null || true
