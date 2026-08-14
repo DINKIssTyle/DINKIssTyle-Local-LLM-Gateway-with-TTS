@@ -258,7 +258,7 @@
             const targetBtn = btn || (getPlaybackState?.() || {}).currentAudioBtn;
             try {
                 const chunks = global.DKSTSupertonic3?.chunkSpeechText
-                    ? global.DKSTSupertonic3.chunkSpeechText(cleanText)
+                    ? global.DKSTSupertonic3.chunkSpeechText(cleanText, config.ttsLang || 'ko')
                     : [cleanText];
 
                 if (targetBtn) {
@@ -655,9 +655,7 @@
                 'container-tts-supertonic-speed',
                 'row-tts-speed',
                 'container-tts-supertonic-steps',
-                'row-tts-steps',
-                'container-tts-chunk-size',
-                'row-tts-chunk-size'
+                'row-tts-steps'
             ];
 
             const serverOnlyIds = [

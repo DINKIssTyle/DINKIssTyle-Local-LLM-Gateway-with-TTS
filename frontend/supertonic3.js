@@ -322,7 +322,19 @@
         return parts;
     }
 
-    function chunkSpeechText(value, maxLength = 600) {
+    function resolveMaxChunkLength(languageOrLength) {
+        if (typeof languageOrLength === 'number' && Number.isFinite(languageOrLength) && languageOrLength > 0) {
+            return languageOrLength;
+        }
+        const lang = String(languageOrLength || '').toLowerCase().trim();
+        if (['ko', 'ja', 'zh', 'korean', 'japanese', 'chinese'].includes(lang) || lang.startsWith('ko') || lang.startsWith('ja') || lang.startsWith('zh')) {
+            return 120;
+        }
+        return 300;
+    }
+
+    function chunkSpeechText(value, languageOrLength) {
+        const maxLength = resolveMaxChunkLength(languageOrLength);
         const normalized = String(value || '').trim();
         if (!normalized) return [];
 

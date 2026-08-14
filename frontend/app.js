@@ -3228,7 +3228,8 @@ function loadConfig() {
     document.getElementById('cfg-tts-lang').value = config.ttsLang;
     document.getElementById('cfg-enable-embeddings').checked = config.enableEmbeddings || false;
     document.getElementById('cfg-embedding-model').value = config.embeddingModelId || 'multilingual-e5-small';
-    document.getElementById('cfg-chunk-size').value = config.chunkSize || 300;
+    const chunkSizeEl = document.getElementById('cfg-chunk-size');
+    if (chunkSizeEl) chunkSizeEl.value = config.chunkSize || 300;
     document.getElementById('cfg-system-prompt').value = config.systemPrompt || 'You are a helpful AI assistant.';
     if (config.ttsVoice) document.getElementById('cfg-tts-voice').value = String(config.ttsVoice).replace(/\.json$/i, '');
     document.getElementById('cfg-tts-speed').value = config.ttsSpeed || 0.9;
@@ -3549,7 +3550,8 @@ function saveConfig(closeModal = true) {
     config.hapticsEnabled = document.getElementById('cfg-enable-haptics')?.checked !== false;
     config.chatFontSize = Math.max(12, Math.min(24, parseInt(config.chatFontSize, 10) || 16));
 
-    config.chunkSize = parseInt(document.getElementById('cfg-chunk-size').value) || 300;
+    const chunkSizeEl = document.getElementById('cfg-chunk-size');
+    if (chunkSizeEl) config.chunkSize = parseInt(chunkSizeEl.value, 10) || 300;
     config.systemPrompt = document.getElementById('cfg-system-prompt').value.trim() || 'You are a helpful AI assistant.';
     config.ttsVoice = document.getElementById('cfg-tts-voice').value;
     config.ttsSpeed = Math.max(0.7, Math.min(2.0, parseFloat(document.getElementById('cfg-tts-speed').value) || 0.9));

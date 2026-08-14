@@ -34,11 +34,20 @@ test('cleanSpeechText strips URLs, citations, and extra whitespace', () => {
     assert.ok(!cleaned.includes('[출처 필요]'));
 });
 
-test('chunkSpeechText breaks text into sentences under max length', () => {
+test('chunkSpeechText breaks text into sentences under max length and language defaults', () => {
     const text = '첫 번째 문장입니다. 두 번째 문장입니다! 세 번째 질문인가요?';
     const chunks = chunkSpeechText(text, 100);
     assert.ok(chunks.length >= 1);
     assert.equal(chunks.join(' '), text);
+
+    const koChunks = chunkSpeechText(text, 'ko');
+    assert.ok(koChunks.length >= 1);
+    assert.ok(koChunks.every(c => c.length <= 120));
+
+    const enText = 'This is the first sentence. This is the second sentence. Is this the third sentence?';
+    const enChunks = chunkSpeechText(enText, 'en');
+    assert.ok(enChunks.length >= 1);
+    assert.ok(enChunks.every(c => c.length <= 300));
 });
 
 test('streaming boundary extractor extracts complete sentences without cumulative repetition', () => {
