@@ -363,6 +363,16 @@ func TestContextualFollowupAndMissingSearchQueryRecovery(t *testing.T) {
 	if !repairedStandalone || strings.Contains(standalone, "탐크루즈") {
 		t.Fatalf("standalone request was contaminated by the prior subject: %q", standalone)
 	}
+
+	memRepaired, memOk := RepairMissingSearchToolArguments("search_memory", `{}`, "당신의 이름 확인", recent)
+	if !memOk || !strings.Contains(memRepaired, `"query":"당신의 이름 확인"`) {
+		t.Fatalf("search_memory missing query was not repaired: %q", memRepaired)
+	}
+
+	factRepaired, factOk := RepairMissingSearchToolArguments("save_user_fact", `{}`, "나를 주인님이라고 부르기로 한거", recent)
+	if !factOk || !strings.Contains(factRepaired, `"fact_value":"나를 주인님이라고 부르기로 한거"`) || !strings.Contains(factRepaired, `"fact_key":"user_fact"`) {
+		t.Fatalf("save_user_fact missing arguments were not repaired: %q", factRepaired)
+	}
 }
 
 func TestMissingReadWebPageURLRecoveryUsesOnlyCurrentRequest(t *testing.T) {

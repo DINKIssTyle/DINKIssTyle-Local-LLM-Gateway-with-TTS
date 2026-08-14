@@ -187,15 +187,34 @@ func RepairMissingSearchToolArguments(toolName, arguments, currentUserText, rece
 	toolName = strings.TrimSpace(toolName)
 	var payload map[string]interface{}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(arguments)), &payload); err != nil || payload == nil {
-		return arguments, false
+		payload = map[string]interface{}{}
 	}
 
 	queryKey := ""
 	switch toolName {
-	case "search_web", "naver_search":
+	case "search_web", "naver_search", "search_memory", "read_help":
 		queryKey = "query"
 	case "namu_wiki":
 		queryKey = "keyword"
+	case "save_user_fact":
+		if value, _ := payload["fact_value"].(string); strings.TrimSpace(value) == "" {
+			query := contextualSearchQuery(currentUserText, recentContext)
+			if query == "" {
+				return arguments, false
+			}
+			payload["fact_value"] = query
+			if key, _ := payload["fact_key"].(string); strings.TrimSpace(key) == "" {
+				payload["fact_key"] = "user_fact"
+			}
+			encoded, err := json.Marshal(payload)
+			return string(encoded), err == nil
+		}
+		if key, _ := payload["fact_key"].(string); strings.TrimSpace(key) == "" {
+			payload["fact_key"] = "user_fact"
+			encoded, err := json.Marshal(payload)
+			return string(encoded), err == nil
+		}
+		return arguments, false
 	case "search_web_multi":
 		if queries, ok := payload["queries"].([]interface{}); ok && len(queries) > 0 {
 			return arguments, false
