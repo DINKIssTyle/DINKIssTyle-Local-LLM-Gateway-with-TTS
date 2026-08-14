@@ -134,7 +134,7 @@
             if (btn) {
                 const icon = btn.querySelector('.material-icons-round');
                 if (icon) icon.textContent = 'volume_up';
-                btn.classList.remove('btn-danger', 'playing', 'loading');
+                btn.classList.remove('playing', 'loading');
                 btn.disabled = false;
             }
 
@@ -162,7 +162,7 @@
             if (targetBtn) {
                 const icon = targetBtn.querySelector('.material-icons-round');
                 if (icon) icon.textContent = 'volume_up';
-                targetBtn.classList.remove('btn-danger', 'playing', 'loading');
+                targetBtn.classList.remove('playing', 'loading');
                 targetBtn.disabled = false;
             }
             streamingElementId = null;
@@ -263,7 +263,7 @@
 
                 if (targetBtn) {
                     targetBtn.classList.remove('loading');
-                    targetBtn.classList.add('playing', 'btn-danger');
+                    targetBtn.classList.add('playing');
                     const icon = targetBtn.querySelector('.material-icons-round');
                     if (icon) icon.textContent = 'stop';
                 }
@@ -299,7 +299,7 @@
 
                 if (targetBtn) {
                     targetBtn.classList.remove('loading');
-                    targetBtn.classList.add('playing', 'btn-danger');
+                    targetBtn.classList.add('playing');
                     const icon = targetBtn.querySelector('.material-icons-round');
                     if (icon) icon.textContent = 'stop';
                 }
@@ -378,7 +378,7 @@
 
             if (targetBtn) {
                 targetBtn.classList.remove('loading');
-                targetBtn.classList.add('playing', 'btn-danger');
+                targetBtn.classList.add('playing');
                 const icon = targetBtn.querySelector('.material-icons-round');
                 if (icon) icon.textContent = 'stop';
             }
@@ -682,11 +682,11 @@
             const icon = btn.querySelector('.material-icons-round');
             if (state.isPlayingQueue || state.streamingTTSActive) {
                 if (icon) icon.textContent = 'stop';
-                btn.classList.add('playing', 'btn-danger');
+                btn.classList.add('playing');
                 btn.classList.remove('loading');
             } else {
                 if (icon) icon.textContent = 'volume_up';
-                btn.classList.remove('playing', 'btn-danger', 'loading');
+                btn.classList.remove('playing', 'loading');
             }
         }
 

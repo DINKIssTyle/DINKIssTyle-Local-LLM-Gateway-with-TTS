@@ -1050,6 +1050,33 @@ body.keyboard-open #chat-header {
   margin-top: 0;
 }
 
+.message-actions .icon-btn.speak-btn.playing,
+.speak-btn.playing {
+  color: #ff7b72 !important;
+  background: rgba(248, 81, 73, 0.12) !important;
+  border-radius: 8px;
+  box-shadow: 0 0 10px rgba(248, 81, 73, 0.15);
+}
+
+.message-actions .icon-btn.speak-btn.playing:hover,
+.speak-btn.playing:hover {
+  color: #ffa198 !important;
+  background: rgba(248, 81, 73, 0.2) !important;
+}
+
+html[data-theme="light"] .message-actions .icon-btn.speak-btn.playing,
+html[data-theme="light"] .speak-btn.playing {
+  color: #cf222e !important;
+  background: rgba(207, 34, 46, 0.1) !important;
+  box-shadow: 0 0 8px rgba(207, 34, 46, 0.12);
+}
+
+html[data-theme="light"] .message-actions .icon-btn.speak-btn.playing:hover,
+html[data-theme="light"] .speak-btn.playing:hover {
+  color: #a40e26 !important;
+  background: rgba(207, 34, 46, 0.16) !important;
+}
+
 .message-image {
   max-width: 100%;
   border-radius: 8px;

@@ -6212,10 +6212,12 @@ async function sendMessage(options = {}) {
     };
 
     const isLabelTop = getStreamingScrollMode() === 'label-top';
-    appendMessage(userMsg, { forceScroll: true });
+    appendMessage(userMsg, { forceScroll: !isLabelTop, skipScroll: isLabelTop });
     if (!isLabelTop) {
         chatUIController.setFollowLatest(true);
         holdAutoScrollAtBottom(600);
+    } else {
+        chatUIController.setFollowLatest(false);
     }
     upsertChatMessageState(userMsg);
     if (usesStatefulConversationContext()) {

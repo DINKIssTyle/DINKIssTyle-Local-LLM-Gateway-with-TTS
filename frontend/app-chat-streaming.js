@@ -173,7 +173,9 @@
                 renderStreamingPreviewIntoHost(committedHost, cleanText);
                 renderStreamingPreviewIntoHost(pendingHost, '');
                 syncAssistantMessageShellState(el);
-                scrollToBottom(wasNearBottom);
+                if (getStreamingScrollMode() !== 'label-top') {
+                    scrollToBottom(wasNearBottom);
+                }
                 if (cleanText.trim()) checkAndTriggerLabelPin();
                 return;
             }
@@ -325,7 +327,9 @@
                 const hasVisibleContent = !!cleanText.trim();
                 if (responseCard) responseCard.hidden = !hasVisibleContent;
                 syncAssistantMessageShellState(el);
-                scrollToBottom(wasNearBottom);
+                if (getStreamingScrollMode() !== 'label-top') {
+                    scrollToBottom(wasNearBottom);
+                }
                 if (cleanText.trim()) checkAndTriggerLabelPin();
                 return;
             }

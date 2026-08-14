@@ -353,15 +353,22 @@
 
         function scrollToBottom(force = false) {
             if (!chatMessages) return;
+            const isManualStreamingMode = getStreamingScrollMode?.() === 'label-top';
+            if (isManualStreamingMode && !lockScrollToLatest && !force) return;
             if (!force && !shouldAutoScroll && !lockScrollToLatest) return;
-            if (chatMessages.classList.contains('is-label-top-streaming') && !lockScrollToLatest) return;
+            if (chatMessages.classList.contains('is-label-top-streaming') && !lockScrollToLatest && !force) return;
             clearTurnFocusSpacer();
             scheduleChatScrollToBottom();
-            shouldAutoScroll = true;
+            if (!isManualStreamingMode) {
+                shouldAutoScroll = true;
+            } else {
+                shouldAutoScroll = false;
+            }
         }
 
         function holdAutoScrollAtBottom(durationMs = 700, force = false) {
             if (!chatMessages) return;
+            if (getStreamingScrollMode?.() === 'label-top' && !lockScrollToLatest) return;
             if (!force && !shouldAutoScroll && !lockScrollToLatest) return;
             if (chatMessages.classList.contains('is-label-top-streaming') && !lockScrollToLatest) return;
             clearTurnFocusSpacer();
@@ -394,14 +401,14 @@
                 const currentMetrics = refreshChatScrollMetrics?.() || chatScrollMetrics;
                 const isManualStreamingMode = getStreamingScrollMode?.() === 'label-top';
 
-                if (shouldAutoScroll || lockScrollToLatest) {
-                    scheduleChatScrollToBottom();
-                } else if (isManualStreamingMode) {
+                if (isManualStreamingMode && !lockScrollToLatest) {
                     ensureTurnFocusSpacer();
                     if (!turnFocusApplied) scheduleActiveTurnFocus();
                     chatScrollMetrics = refreshChatScrollMetrics?.() || currentMetrics;
                     commitChatScrollMetrics?.(chatScrollMetrics);
                     updateScrollToBottomButton();
+                } else if (shouldAutoScroll || lockScrollToLatest) {
+                    scheduleChatScrollToBottom();
                 } else {
                     // The user left the live edge. Content normally grows below the
                     // viewport, so changing scrollTop here steals their reading
