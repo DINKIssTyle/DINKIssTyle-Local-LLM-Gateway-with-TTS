@@ -672,6 +672,19 @@ func TestReasoningOnlyFinalRecoveryDisablesReasoningAndTools(t *testing.T) {
 	}
 }
 
+func TestSummarizeReasoningEvidenceExtractsConclusionsAndDrafts(t *testing.T) {
+	longReasoning := strings.Repeat("분석 단계 1: 사용자의 요청에 대해 여러 가능성을 고민합니다. ", 100) +
+		"\nLet's refine the Korean response:\n쿠시 왕국은 고대 아프리카의 번성했던 왕국입니다.\n결론적으로 이집트를 정복한 역사적 사실이 있습니다."
+
+	summary := SummarizeReasoningEvidence(longReasoning)
+	if !strings.Contains(summary, "쿠시 왕국은 고대 아프리카의 번성했던 왕국입니다") {
+		t.Fatalf("reasoning summary lost the vital conclusion draft: %s", summary)
+	}
+	if len(summary) >= len(longReasoning) {
+		t.Fatalf("reasoning summary was not compacted: %d >= %d", len(summary), len(longReasoning))
+	}
+}
+
 func TestSingleSearchRefinementForcesThenResetsNativeToolChoice(t *testing.T) {
 	providerTools := []interface{}{
 		map[string]interface{}{"type": "function", "function": map[string]interface{}{"name": "search_web"}},

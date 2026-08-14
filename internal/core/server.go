@@ -6372,6 +6372,10 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				if strings.HasPrefix(line, "{") && strings.Contains(line, "\"error\"") {
 					log.Printf("[handleChat] Detected Raw JSON Error in stream: %s", line)
 					if strings.Contains(line, "Context size has been exceeded") || strings.Contains(line, "context_length_exceeded") {
+						if strings.TrimSpace(reasoningResponse) != "" && !reasoningOnlyFinalRecoveryUsed && turn < maxToolTurns-1 {
+							log.Printf("[handleChat] Context exceeded during reasoning. Attempting recovery from summarized reasoning...")
+							break
+						}
 						// Send explicit known error event
 						// We use a custom event type or just an error field that app.js will pick up
 						emitStreamChunk("data: {\"error\": \"LM_STUDIO_CONTEXT_ERROR: Context size exceeded.\"}")
@@ -6829,7 +6833,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			}
 		}
 
-		if strings.TrimSpace(fullResponse) == "" && strings.TrimSpace(reasoningResponse) != "" && !toolExecutedThisTurn && !reasoningOnlyFinalRecoveryUsed && turn < maxToolTurns-1 {
+		shouldRecoverReasoning := strings.TrimSpace(reasoningResponse) != "" && !toolExecutedThisTurn && !reasoningOnlyFinalRecoveryUsed && turn < maxToolTurns-1 && (strings.TrimSpace(fullResponse) == "" || (len([]rune(fullResponse)) < 40 && len([]rune(reasoningResponse)) > 400))
+		if shouldRecoverReasoning {
 			reasoningOnlyFinalRecoveryUsed = true
 			var recoveryErr error
 			reqMap, body, recoveryErr = chatharness.PrepareReasoningOnlyFinalRequest(

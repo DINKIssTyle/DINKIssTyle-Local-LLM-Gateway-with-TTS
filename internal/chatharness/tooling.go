@@ -807,21 +807,73 @@ func PrepareToolFollowupRequest(input ToolFollowupInput) (map[string]interface{}
 	return reqMap, body, err
 }
 
+// SummarizeReasoningEvidence extracts key conclusions, draft passages, and
+// verified facts from a long thinking trace to prevent context overflow while
+// retaining all the cognitive progress made by the model.
+func SummarizeReasoningEvidence(reasoningText string) string {
+	trimmed := strings.TrimSpace(reasoningText)
+	if len(trimmed) <= 2000 {
+		return trimmed
+	}
+
+	// Look for explicit draft or conclusion sections near the end
+	draftMarkers := []string{
+		"Let's refine the Korean response:",
+		"Let's write the response:",
+		"Draft response:",
+		"Final answer draft:",
+		"Korean response:",
+		"Draft:",
+		"답변 초안:",
+		"최종 답변:",
+		"결론:",
+	}
+
+	lower := strings.ToLower(trimmed)
+	var bestDraft string
+	for _, marker := range draftMarkers {
+		if idx := strings.LastIndex(lower, strings.ToLower(marker)); idx >= 0 {
+			candidate := strings.TrimSpace(trimmed[idx:])
+			if len(candidate) > len(bestDraft) {
+				bestDraft = candidate
+			}
+		}
+	}
+
+	if bestDraft != "" && len(bestDraft) <= 3000 {
+		// Include intro evidence context + the explicit draft
+		head := compactText(trimmed, 800)
+		return fmt.Sprintf("%s\n\n[DRAFT & CONCLUSION FROM REASONING]\n%s", head, bestDraft)
+	}
+
+	// If no explicit marker or too long, combine key head premises with the vital tail conclusions
+	headLength := 800
+	tailLength := 2400
+	if len(trimmed) > headLength+tailLength {
+		head := strings.TrimSpace(trimmed[:headLength])
+		tail := strings.TrimSpace(trimmed[len(trimmed)-tailLength:])
+		return fmt.Sprintf("%s\n\n[...中間思考省略・PROGRESSION SUMMARY...]\n\n%s", head, tail)
+	}
+
+	return compactText(trimmed, 3500)
+}
+
 // PrepareReasoningOnlyFinalRequest performs one bounded recovery when a local
 // model spends the entire response budget in reasoning_content and emits no
 // user-visible answer. Reasoning and tools are disabled for the recovery turn.
 func PrepareReasoningOnlyFinalRequest(llmMode, modelID, lastResponseID, originalUserText, reasoningText string, reqMap map[string]interface{}) (map[string]interface{}, []byte, error) {
+	summarizedEvidence := SummarizeReasoningEvidence(reasoningText)
 	correction := fmt.Sprintf(`[APP FINAL-ANSWER RECOVERY — NOT A USER MESSAGE]
-Your previous attempt emitted hidden reasoning but no final answer.
-Return only the concise final answer to the original user request below.
-Do not include analysis, a draft, self-checks, tool calls, or commentary about this recovery.
-Use only evidence already gathered in the conversation. If it is insufficient, say so directly.
+Your previous attempt emitted hidden reasoning but was cut off before outputting the final visible answer.
+Return ONLY the clear, complete final answer to the original user request below.
+Do not include hidden thinking, meta-commentary, or tool calls.
+Use all facts and conclusions already derived in the reasoning summary below.
 
 Original user request:
 %s
 
-Evidence notes from the interrupted hidden reasoning:
-%s`, compactText(originalUserText, 600), compactText(reasoningText, 7000))
+Summary of derived facts and conclusions from reasoning:
+%s`, compactText(originalUserText, 600), summarizedEvidence)
 
 	if strings.EqualFold(strings.TrimSpace(llmMode), "stateful") {
 		// Some LM Studio stateful models expose reasoning_content but reject a
