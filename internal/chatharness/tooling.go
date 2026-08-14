@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"dinkisstyle-chat/internal/promptkit"
 )
@@ -887,31 +888,94 @@ func PrepareToolFollowupRequest(input ToolFollowupInput) (map[string]interface{}
 	return reqMap, body, err
 }
 
+func cleanHarvestedAnswer(candidate string) string {
+	candidate = strings.TrimSpace(candidate)
+	metaLeading := regexp.MustCompile(`^(?:\[Output\]\s*->?|Final Output Generation\.?|\[최종\s*답변\]\s*->?|최종\s*답변:?|답변:?|Output:?|Result:?|Answer:?)\s*`)
+	for metaLeading.MatchString(candidate) {
+		candidate = strings.TrimSpace(metaLeading.ReplaceAllString(candidate, ""))
+	}
+	if (strings.HasPrefix(candidate, "\"") && strings.HasSuffix(candidate, "\"")) ||
+		(strings.HasPrefix(candidate, "“") && strings.HasSuffix(candidate, "”")) ||
+		(strings.HasPrefix(candidate, "`") && strings.HasSuffix(candidate, "`")) {
+		candidate = strings.Trim(candidate, "\"`“” \t\n")
+	}
+	return strings.TrimSpace(candidate)
+}
+
+func containsKorean(s string) bool {
+	for _, r := range s {
+		if unicode.Is(unicode.Hangul, r) {
+			return true
+		}
+	}
+	return false
+}
+
 // HarvestFinalAnswerFromReasoning extracts a complete final user-visible answer
 // if the model finished writing the output inside the reasoning channel but omitted
 // outputting it to the standard content channel.
 func HarvestFinalAnswerFromReasoning(reasoningText string) (string, bool) {
 	trimmed := strings.TrimSpace(reasoningText)
-	if len(trimmed) < 40 {
+	if len(trimmed) < 25 {
 		return "", false
 	}
 
-	// Markers where models transition to final output within reasoning
+	// 1. Explicit Transition Markers
 	harvestPatterns := []*regexp.Regexp{
-		regexp.MustCompile(`(?s)(?:Final Output Generation\.?\s*)?(?:\[Output\]\s*->|\[최종\s*답변\]\s*->?|답변\s*출력:?|최종\s*출력:?)\s*(.+)`),
-		regexp.MustCompile(`(?s)(?:Let's refine the Korean response:?|Korean response:?|Final answer draft:?|최종 답변:)\s*(.+)`),
+		regexp.MustCompile(`(?s)(?:Final Output Generation\.?\s*(?:\*Proceeds\*)?\s*)?(?:\[Output\]\s*->|\[최종\s*답변\]\s*->?|답변\s*출력:?|최종\s*출력:?|최종\s*답변:?)\s*(.+)`),
+		regexp.MustCompile(`(?s)(?:Let's refine the Korean response:?|Korean response:?|Final answer draft:?|Here is the response:?|Here's the final response:?|Draft response:?)\s*(.+)`),
 		regexp.MustCompile(`(?s)"(제공된 검색 결과에 따르면[\s\S]+?)"`),
+		regexp.MustCompile("(?s)```(?:markdown)?\\s*([\\s\\S]+?)```"),
 	}
 
 	for _, re := range harvestPatterns {
 		matches := re.FindStringSubmatch(trimmed)
 		if len(matches) > 1 {
-			candidate := strings.TrimSpace(matches[1])
-			// Clean any leading/trailing quotes or markdown boundary artifacts
-			candidate = strings.Trim(candidate, "\"` ")
-			if len([]rune(candidate)) >= 30 {
+			candidate := cleanHarvestedAnswer(matches[1])
+			if len([]rune(candidate)) >= 20 {
 				return candidate, true
 			}
+		}
+	}
+
+	// 2. Reverse Paragraph Search for Trailing Answer Block
+	paragraphs := strings.Split(trimmed, "\n\n")
+	var trailingAnswerParts []string
+	for i := len(paragraphs) - 1; i >= 0; i-- {
+		p := strings.TrimSpace(paragraphs[i])
+		if p == "" {
+			continue
+		}
+		isMetaEnglish := strings.HasPrefix(p, "I should") ||
+			strings.HasPrefix(p, "I will") ||
+			strings.HasPrefix(p, "Let me") ||
+			strings.HasPrefix(p, "The prompt says") ||
+			strings.HasPrefix(p, "This meets") ||
+			strings.HasPrefix(p, "All constraints") ||
+			strings.HasPrefix(p, "*Self-Correction") ||
+			strings.HasPrefix(p, "Check:") ||
+			strings.HasPrefix(p, "Checked:")
+
+		if isMetaEnglish {
+			if len(trailingAnswerParts) > 0 {
+				break
+			}
+			continue
+		}
+
+		if containsKorean(p) || strings.Contains(p, "출처:") || strings.Contains(p, "Source:") || strings.HasSuffix(p, ".") || strings.HasSuffix(p, "!") || strings.HasSuffix(p, "?") {
+			trailingAnswerParts = append([]string{p}, trailingAnswerParts...)
+		} else {
+			if len(trailingAnswerParts) > 0 {
+				break
+			}
+		}
+	}
+
+	if len(trailingAnswerParts) > 0 {
+		candidate := cleanHarvestedAnswer(strings.Join(trailingAnswerParts, "\n\n"))
+		if len([]rune(candidate)) >= 25 {
+			return candidate, true
 		}
 	}
 

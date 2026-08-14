@@ -32,6 +32,20 @@ test('cleanSpeechText strips URLs, citations, and extra whitespace', () => {
     assert.ok(!cleaned.includes('https://example.com/docs'));
     assert.ok(!cleaned.includes('[1]'));
     assert.ok(!cleaned.includes('[출처 필요]'));
+
+    // Parenthesized URL and percent-encoded URL
+    const encodedInput = '출처: [Maestrovirtuale.com](https://maestrovirtuale.com/ko/%ED%83%80%EC%9D%B4%ED%83%80%EB%8B%89) 및 (https://namu.wiki/w/%ED%83%80%EC%9D%B4%ED%83%80%EB%8B%89)';
+    const encodedCleaned = cleanSpeechText(encodedInput);
+    assert.ok(!encodedCleaned.includes('https://'));
+    assert.ok(!encodedCleaned.includes('%ED%83%80'));
+    assert.ok(!encodedCleaned.includes('maestrovirtuale.com'));
+    assert.ok(!encodedCleaned.includes('namu.wiki'));
+
+    // Standalone domain and www address
+    const domainInput = '자세한 내용은 www.example.org/news 또는 test.co.kr/info 에서 확인하세요.';
+    const domainCleaned = cleanSpeechText(domainInput);
+    assert.ok(!domainCleaned.includes('www.example.org'));
+    assert.ok(!domainCleaned.includes('test.co.kr'));
 });
 
 test('chunkSpeechText breaks text into sentences under max length and language defaults', () => {

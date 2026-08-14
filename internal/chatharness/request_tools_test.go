@@ -708,17 +708,28 @@ func TestSummarizeReasoningEvidenceExtractsConclusionsAndDrafts(t *testing.T) {
 }
 
 func TestHarvestFinalAnswerFromReasoning(t *testing.T) {
-	reasoningOutput := `This meets all requirements. Output matches. Proceeds.
+	// Case 1: [Output] -> marker with meta preamble
+	reasoningOutput1 := `This meets all requirements. Output matches. Proceeds.
 Final Output Generation.
 [Output] -> 제공된 검색 결과에 따르면, 타이타닉호 침몰 사고 당시 최연소 생존자는 **밀비나 딘(Millvina Dean)**입니다. 그녀는 배가 침몰하던 당시 생후 9주밖에 되지 않은 영아였으며, 2009년에 세상을 떠난 마지막 생존자 중 한 명으로 기록되어 있습니다.
 출처: [Maestrovirtuale.com](https://example.com)`
 
-	harvested, ok := HarvestFinalAnswerFromReasoning(reasoningOutput)
-	if !ok {
-		t.Fatalf("expected successful harvesting from reasoning text")
+	harvested1, ok1 := HarvestFinalAnswerFromReasoning(reasoningOutput1)
+	if !ok1 || !strings.Contains(harvested1, "밀비나 딘(Millvina Dean)") || strings.HasPrefix(harvested1, "[Output]") {
+		t.Fatalf("harvested content failed: %q (ok=%v)", harvested1, ok1)
 	}
-	if !strings.Contains(harvested, "밀비나 딘(Millvina Dean)") || !strings.Contains(harvested, "Maestrovirtuale.com") {
-		t.Fatalf("harvested content was missing vital content: %q", harvested)
+
+	// Case 2: No explicit [Output] marker, but trailing Korean answer after English meta thoughts
+	reasoningOutput2 := `I should double check the dates.
+Let me check the query result.
+The user asked about the youngest survivor.
+All constraints met. Checked: Yes.
+
+타이타닉호 침몰 사고의 최연소 생존자는 생후 2개월이었던 밀비나 딘입니다. 그녀는 2009년 5월 31일 97세의 나이로 사망했습니다.`
+
+	harvested2, ok2 := HarvestFinalAnswerFromReasoning(reasoningOutput2)
+	if !ok2 || !strings.Contains(harvested2, "밀비나 딘") || strings.Contains(harvested2, "All constraints met") {
+		t.Fatalf("reverse-paragraph harvesting failed: %q (ok=%v)", harvested2, ok2)
 	}
 }
 

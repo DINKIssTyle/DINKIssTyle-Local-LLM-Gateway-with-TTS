@@ -293,10 +293,21 @@
 
     function cleanSpeechText(value) {
         return String(value || '')
-            .replace(/(?:https?|ftp):\/\/[^\s<>()]+/giu, (match) => /[.,!?。！？]$/u.test(match) ? ` ${match[match.length - 1]} ` : ' ')
-            .replace(/\bwww\.[^\s<>()]+/giu, (match) => /[.,!?。！？]$/u.test(match) ? ` ${match[match.length - 1]} ` : ' ')
+            .replace(/\[([^\]]+)\]\((?:https?|ftp):\/\/[^)]*\)/giu, (match, label) => {
+                if (/^(?:https?:\/\/|www\.|[a-zA-Z0-9-]+\.(?:com|org|net|io|co\.kr|go\.kr|kr|wiki|me))\S*$/i.test(label.trim())) {
+                    return ' ';
+                }
+                return ` ${label} `;
+            })
+            .replace(/\((?:https?|ftp):\/\/[^)]+\)/giu, ' ')
+            .replace(/(?:https?|ftp):\/\/[^\s<>"'\)\]}]+/giu, ' ')
+            .replace(/\bwww\.[^\s<>"'\)\]}]+/giu, ' ')
+            .replace(/\b[a-zA-Z0-9-]+\.(?:com|org|net|io|co\.kr|go\.kr|ac\.kr|kr|me|tv|wiki|dev|xyz|cc)(?:\/[^\s<>"'\)\]}]+)?/giu, ' ')
+            .replace(/(?:\b|[/?#&])(?:%[0-9a-fA-F]{2}){2,}[^\s<>"'\)\]}]*/gu, ' ')
             .replace(/[\[［【]\s*\d+(?:\s*[-–—,]\s*\d+)*\s*[\]］】]/gu, ' ')
             .replace(/\[(?:citation needed|출처 필요)\]/giu, ' ')
+            .replace(/\(\s*\)/g, ' ')
+            .replace(/\[\s*\]/g, ' ')
             .replace(/\s+/g, ' ')
             .replace(/\s+([,.;:!?。！？])/g, '$1')
             .trim();

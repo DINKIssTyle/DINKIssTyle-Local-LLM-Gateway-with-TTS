@@ -69,6 +69,12 @@
             cleaned = cleaned.replace(/`([^`]+)`/g, '$1');
             // Remove markdown images and links
             cleaned = cleaned.replace(/!\[([^\]]*)\]\([^)]*\)/g, ' ');
+            cleaned = cleaned.replace(/\[([^\]]+)\]\((?:https?|ftp):\/\/[^)]*\)/gi, (match, label) => {
+                if (/^(?:https?:\/\/|www\.|[a-zA-Z0-9-]+\.(?:com|org|net|io|co\.kr|go\.kr|kr|wiki|me))\S*$/i.test(label.trim())) {
+                    return ' ';
+                }
+                return label;
+            });
             cleaned = cleaned.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');
             // Remove headers, bold, italics, strikethrough, blockquotes
             cleaned = cleaned.replace(/^[#>\s*+-]+/gm, ' ');

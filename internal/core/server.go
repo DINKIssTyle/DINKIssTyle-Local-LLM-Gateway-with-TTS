@@ -6896,6 +6896,32 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		break
 	} // --- TURN LOOP END ---
 
+	if strings.TrimSpace(fullResponse) == "" && strings.TrimSpace(reasoningResponse) != "" {
+		if harvested, ok := chatharness.HarvestFinalAnswerFromReasoning(reasoningResponse); ok {
+			fullResponse = harvested
+			AddDebugTrace("chat", "final_answer.harvested_post_loop", "Harvested final answer from reasoning after turn loop ended", map[string]interface{}{
+				"harvested_chars": len([]rune(harvested)),
+			})
+			payload := map[string]interface{}{
+				"choices": []interface{}{
+					map[string]interface{}{
+						"delta": map[string]string{
+							"content": harvested,
+						},
+					},
+				},
+			}
+			if jsonBytes, err := json.Marshal(payload); err == nil {
+				emitStreamChunk(fmt.Sprintf("data: %s", string(jsonBytes)))
+			}
+			appendChatEvent("assistant", "message.delta", map[string]interface{}{
+				"type":         "message.delta",
+				"content":      harvested,
+				"full_content": fullResponse,
+			})
+		}
+	}
+
 	if cleanedResponse, stripped := stripLeadingPromptToolArtifacts(fullResponse, promptTools); stripped {
 		AddDebugTrace("chat", "tool.final_quarantine", "Removed leaked textual tool wrapper from the final assistant answer", map[string]interface{}{
 			"before_chars": len([]rune(fullResponse)),
