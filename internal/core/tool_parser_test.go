@@ -133,6 +133,18 @@ func TestParseXMLLikeToolCallAcceptsEmptyNoArgumentElement(t *testing.T) {
 	}
 }
 
+func TestParseXMLLikeToolCallAcceptsRawTextBody(t *testing.T) {
+	name, argumentsJSON, arguments, ok := parseXMLLikeToolCall(`<search_memory>나를 주인님이라고 부르기로 한거</search_memory>`)
+	if !ok || name != "search_memory" || argumentsJSON != `{"query":"나를 주인님이라고 부르기로 한거"}` || arguments == nil {
+		t.Fatalf("unexpected raw-text XML tool parse: name=%q args=%q ok=%v", name, argumentsJSON, ok)
+	}
+
+	name, argumentsJSON, _, ok = parseXMLLikeToolCall(`<save_user_fact>나를 주인님이라고 부르기로 한거</save_user_fact>`)
+	if !ok || name != "save_user_fact" || argumentsJSON != `{"fact_key":"user_fact","fact_value":"나를 주인님이라고 부르기로 한거"}` {
+		t.Fatalf("unexpected raw-text save_user_fact parse: name=%q args=%q ok=%v", name, argumentsJSON, ok)
+	}
+}
+
 func TestCompletedToolNamesFollowAdvertisedCatalogOrder(t *testing.T) {
 	tools := []promptkit.ToolDefinition{{Name: "get_current_time"}, {Name: "get_current_location"}, {Name: "read_help"}}
 	completed := completedToolNames(tools, map[string]int{"read_help": 1, "get_current_time": 2})

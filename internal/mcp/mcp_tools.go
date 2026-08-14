@@ -905,7 +905,26 @@ func normalizeToolArguments(toolName string, argumentsJSON []byte) (string, []by
 	}
 	var raw map[string]interface{}
 	if err := json.Unmarshal(argumentsJSON, &raw); err != nil || raw == nil {
-		return toolName, argumentsJSON
+		var singleString string
+		if jsonErr := json.Unmarshal(argumentsJSON, &singleString); jsonErr == nil && strings.TrimSpace(singleString) != "" {
+			singleString = strings.TrimSpace(singleString)
+			switch toolName {
+			case "search_memory", "search_web", "naver_search", "read_help":
+				raw = map[string]interface{}{"query": singleString}
+			case "namu_wiki":
+				raw = map[string]interface{}{"keyword": singleString}
+			case "read_web_page":
+				raw = map[string]interface{}{"url": singleString}
+			case "save_user_fact":
+				raw = map[string]interface{}{"fact_key": "user_fact", "fact_value": singleString}
+			case "delete_user_fact":
+				raw = map[string]interface{}{"fact_key": singleString}
+			default:
+				return toolName, argumentsJSON
+			}
+		} else {
+			return toolName, argumentsJSON
+		}
 	}
 
 	readString := func(keys ...string) string {
@@ -945,10 +964,18 @@ func normalizeToolArguments(toolName string, argumentsJSON []byte) (string, []by
 
 	switch toolName {
 	case "search_web", "naver_search", "search_memory":
-		copyStringAlias("query", "question", "text", "keyword")
+		copyStringAlias("query", "question", "text", "keyword", "search_query", "search_text", "q", "content", "prompt", "input", "k", "target", "message", "memory_query", "mem_query", "search", "term")
+		if readString("query") == "" && len(raw) == 1 {
+			for _, val := range raw {
+				if s, ok := val.(string); ok && strings.TrimSpace(s) != "" {
+					raw["query"] = strings.TrimSpace(s)
+					break
+				}
+			}
+		}
 	case "search_web_multi":
 		if _, ok := raw["queries"]; !ok {
-			if combined := readString("query", "question", "text"); combined != "" {
+			if combined := readString("query", "question", "text", "search_query", "q"); combined != "" {
 				parts := strings.FieldsFunc(combined, func(r rune) bool { return r == '|' || r == '\n' || r == ';' })
 				queries := make([]string, 0, len(parts))
 				for _, part := range parts {
@@ -956,21 +983,23 @@ func normalizeToolArguments(toolName string, argumentsJSON []byte) (string, []by
 						queries = append(queries, part)
 					}
 				}
-				if len(queries) == 2 {
+				if len(queries) >= 1 && len(queries) <= 3 {
 					raw["queries"] = queries
 				}
 			}
 		}
 	case "read_web_page":
-		copyStringAlias("url", "link", "page_url")
+		copyStringAlias("url", "link", "page_url", "target_url", "address")
 	case "read_buffered_source":
-		copyStringAlias("query", "question", "text")
+		copyStringAlias("query", "question", "text", "search_query", "q")
+		copyStringAlias("source_id", "id", "src_id")
 		coerceIntegerString("max_chunks")
 	case "read_help":
-		copyStringAlias("query", "question", "text", "topic")
+		copyStringAlias("query", "question", "text", "topic", "subject", "keyword", "q")
 	case "read_memory", "read_memory_context":
+		copyStringAlias("memory_id", "id", "mid", "target_id", "item_id")
 		if _, ok := raw["memory_id"]; !ok {
-			if query := readString("query", "question", "text"); query != "" {
+			if query := readString("query", "question", "text", "search_query", "keyword", "q"); query != "" {
 				fallback := map[string]interface{}{"query": query}
 				if bytes, err := json.Marshal(fallback); err == nil {
 					return "search_memory", bytes
@@ -980,16 +1009,36 @@ func normalizeToolArguments(toolName string, argumentsJSON []byte) (string, []by
 		coerceIntegerString("memory_id")
 		coerceIntegerString("chunk_index")
 	case "delete_memory":
+		copyStringAlias("memory_id", "id", "mid", "target_id", "item_id")
 		coerceIntegerString("memory_id")
 	case "save_user_fact":
-		copyStringAlias("fact_key", "key", "name")
-		copyStringAlias("fact_value", "value")
+		copyStringAlias("fact_key", "key", "name", "fact_name", "fact_title", "topic", "item", "title", "property", "field", "type", "subject", "category_key")
+		copyStringAlias("fact_value", "value", "content", "fact", "val", "detail", "description", "text", "data", "info", "answer")
+		if readString("fact_key") == "" {
+			if readString("fact_value") != "" {
+				if cat := readString("category"); cat != "" {
+					raw["fact_key"] = cat
+				} else {
+					raw["fact_key"] = "user_fact"
+				}
+			} else if fact := readString("fact", "content", "text", "detail", "data"); fact != "" {
+				raw["fact_key"] = "user_fact"
+				raw["fact_value"] = fact
+			}
+		}
+		if readString("fact_value") == "" && readString("fact_key") != "" {
+			keyVal := readString("fact_key")
+			if strings.Contains(keyVal, " ") || len([]rune(keyVal)) > 15 {
+				raw["fact_value"] = keyVal
+				raw["fact_key"] = "user_fact"
+			}
+		}
 	case "delete_user_fact":
-		copyStringAlias("fact_key", "key", "name")
+		copyStringAlias("fact_key", "key", "name", "fact", "topic", "item", "title", "property", "field", "subject")
 	case "namu_wiki":
-		copyStringAlias("keyword", "query", "question", "text")
+		copyStringAlias("keyword", "query", "question", "text", "title", "page", "search_query", "q")
 	case "execute_command":
-		copyStringAlias("command", "cmd")
+		copyStringAlias("command", "cmd", "exec", "shell", "run")
 	}
 
 	if bytes, err := json.Marshal(raw); err == nil {

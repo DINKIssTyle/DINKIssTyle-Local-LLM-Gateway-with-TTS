@@ -645,23 +645,50 @@
 
         function updateTTSSettingsVisibility() {
             const engine = getCurrentTTSEngine();
-            const supertonicIds = ['row-tts-voice', 'row-tts-speed', 'row-tts-format', 'row-tts-steps'];
-            const osIds = ['row-os-voice', 'row-os-rate', 'row-os-pitch'];
-            const serverOnlyIds = ['row-tts-format'];
+            const isOS = engine === 'os';
+            const isServerSupertonic = engine === 'supertonic';
+            const isSupertonic = engine === 'supertonic' || engine === 'supertonic-ondevice';
 
-            supertonicIds.forEach((id) => {
-                const el = global.document.getElementById(id);
-                if (el) el.style.display = engine !== 'os' ? 'block' : 'none';
-            });
+            const supertonicCommonIds = [
+                'container-tts-supertonic-voice',
+                'row-tts-voice',
+                'container-tts-supertonic-speed',
+                'row-tts-speed',
+                'container-tts-supertonic-steps',
+                'row-tts-steps',
+                'container-tts-chunk-size',
+                'row-tts-chunk-size'
+            ];
 
-            osIds.forEach((id) => {
+            const serverOnlyIds = [
+                'container-tts-supertonic-threads',
+                'row-tts-threads',
+                'container-tts-supertonic-format',
+                'row-tts-format'
+            ];
+
+            const osIds = [
+                'container-tts-os-voice',
+                'row-os-voice',
+                'container-tts-os-rate',
+                'row-os-rate',
+                'container-tts-os-pitch',
+                'row-os-pitch'
+            ];
+
+            supertonicCommonIds.forEach((id) => {
                 const el = global.document.getElementById(id);
-                if (el) el.style.display = engine === 'os' ? 'block' : 'none';
+                if (el) el.style.display = isSupertonic ? 'block' : 'none';
             });
 
             serverOnlyIds.forEach((id) => {
                 const el = global.document.getElementById(id);
-                if (el) el.style.display = engine === 'supertonic' ? 'block' : 'none';
+                if (el) el.style.display = isServerSupertonic ? 'block' : 'none';
+            });
+
+            osIds.forEach((id) => {
+                const el = global.document.getElementById(id);
+                if (el) el.style.display = isOS ? 'block' : 'none';
             });
         }
 

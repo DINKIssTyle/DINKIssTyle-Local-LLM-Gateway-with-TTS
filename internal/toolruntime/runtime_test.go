@@ -99,11 +99,16 @@ func TestRegistryNormalizesCommonLocalModelArgumentAliases(t *testing.T) {
 		{name: "namu_wiki", arguments: `{"query":"대한민국"}`, wantName: "namu_wiki", wantJSON: `"keyword":"대한민국"`},
 		{name: "read_memory", arguments: `{"memory_id":"216"}`, wantName: "read_memory", wantJSON: `"memory_id":216`},
 		{name: "execute_command", arguments: `{"cmd":"pwd"}`, wantName: "execute_command", wantJSON: `"command":"pwd"`},
+		{name: "search_memory", arguments: `{"search_query":"주인님"}`, wantName: "search_memory", wantJSON: `"query":"주인님"`},
+		{name: "search_memory", arguments: `"나를 주인님이라고 부르기로 한거"`, wantName: "search_memory", wantJSON: `"query":"나를 주인님이라고 부르기로 한거"`},
+		{name: "save_user_fact", arguments: `{"fact":"사용자를 주인님이라고 부르기로 함"}`, wantName: "save_user_fact", wantJSON: `"fact_key":"user_fact"`},
+		{name: "save_user_fact", arguments: `{"key":"호칭","value":"주인님"}`, wantName: "save_user_fact", wantJSON: `"fact_key":"호칭"`},
+		{name: "save_user_fact", arguments: `"나를 주인님이라고 부르기로 한거"`, wantName: "save_user_fact", wantJSON: `"fact_key":"user_fact"`},
 	}
 	for _, test := range tests {
 		gotName, gotArguments := mcp.NormalizeToolCall(test.name, []byte(test.arguments))
 		if gotName != test.wantName || !strings.Contains(string(gotArguments), test.wantJSON) {
-			t.Fatalf("NormalizeToolCall(%s) = %s %s", test.name, gotName, gotArguments)
+			t.Fatalf("NormalizeToolCall(%s, %s) = %s %s (want %s)", test.name, test.arguments, gotName, gotArguments, test.wantJSON)
 		}
 	}
 }

@@ -121,7 +121,7 @@ func getEmbeddingModelStatus(cfg EmbeddingModelConfig) ManagedModelStatus {
 }
 
 func getTTSModelStatus() ManagedModelStatus {
-	assetsDir := getWritableTTSAssetsDir()
+	assetsDir := getTTSAssetsDir()
 	installed := hasRequiredTTSAssets(assetsDir)
 	status := "missing"
 	message := "TTS assets are not installed yet."

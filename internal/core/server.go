@@ -491,6 +491,11 @@ func parseXMLLikeToolCall(raw string) (string, string, interface{}, bool) {
 		}
 	}
 	if len(args) == 0 {
+		if !strings.Contains(body, "<") && !strings.Contains(body, ">") {
+			if argsJSON, implicitArgs, ok := buildImplicitToolArgs(toolName, body, ""); ok {
+				return toolName, argsJSON, implicitArgs, true
+			}
+		}
 		return "", "", nil, false
 	}
 
@@ -514,6 +519,36 @@ func buildImplicitToolArgs(toolName string, explicitText string, userText string
 			return "", nil, false
 		}
 		args := map[string]interface{}{"query": queryText}
+		argBytes, err := json.Marshal(args)
+		if err != nil {
+			return "", nil, false
+		}
+		return string(argBytes), args, true
+	case "save_user_fact":
+		if queryText == "" {
+			return "", nil, false
+		}
+		args := map[string]interface{}{"fact_key": "user_fact", "fact_value": queryText}
+		argBytes, err := json.Marshal(args)
+		if err != nil {
+			return "", nil, false
+		}
+		return string(argBytes), args, true
+	case "delete_user_fact":
+		if queryText == "" {
+			return "", nil, false
+		}
+		args := map[string]interface{}{"fact_key": queryText}
+		argBytes, err := json.Marshal(args)
+		if err != nil {
+			return "", nil, false
+		}
+		return string(argBytes), args, true
+	case "read_web_page":
+		if queryText == "" {
+			return "", nil, false
+		}
+		args := map[string]interface{}{"url": queryText}
 		argBytes, err := json.Marshal(args)
 		if err != nil {
 			return "", nil, false
