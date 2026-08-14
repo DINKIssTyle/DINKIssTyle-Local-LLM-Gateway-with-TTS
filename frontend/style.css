@@ -525,6 +525,19 @@ body.keyboard-open #chat-header {
   transform: translate3d(-50%, 0, 0) scale(1);
 }
 
+.scroll-to-bottom-btn.is-touch-pressed,
+.scroll-to-bottom-btn:active {
+  transform: translate3d(-50%, 0, 0) scale(0.92) !important;
+  filter: brightness(0.85) !important;
+  transition: transform 60ms cubic-bezier(0.4, 0, 0.2, 1), filter 60ms ease !important;
+}
+
+.scroll-to-bottom-btn.is-touch-releasing {
+  transform: translate3d(-50%, 0, 0) scale(1) !important;
+  filter: brightness(1) !important;
+  transition: transform 340ms cubic-bezier(0.34, 1.56, 0.64, 1), filter 300ms ease !important;
+}
+
 .scroll-to-bottom-btn:hover,
 .scroll-to-bottom-btn:focus-visible {
   box-shadow:
@@ -4001,29 +4014,53 @@ html[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
   background: #8994a6;
 }
 
+/* ==========================================================================
+   Touch Display UX Optimization & Press & Bounce Animations
+   ========================================================================== */
+
+:is(button, a[href], [role="button"], .icon-btn, .btn, .nav-btn, .tab-item, .settings-action-btn, .theme-swatch-btn, .modal-close, #giant-mic-btn, .model-picker-main, .composer-tool-btn, .startup-action-btn, .saved-turn-inline-title-btn, .saved-turn-close-btn, .saved-library-search-clear, .speak-btn) {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  will-change: transform;
+}
+
+/* 1. Touch Pressed: Quickly scales down (scale 0.92, brightness 0.85) in 60ms */
+.is-touch-pressed {
+  transform: scale(0.92) !important;
+  filter: brightness(0.85) !important;
+  transition: transform 60ms cubic-bezier(0.4, 0, 0.2, 1), filter 60ms ease !important;
+}
+
+/* 2. Touch Released: Bounces back with elastic spring curve in 340ms */
+.is-touch-releasing {
+  transform: scale(1) !important;
+  filter: brightness(1) !important;
+  transition: transform 340ms cubic-bezier(0.34, 1.56, 0.64, 1), filter 300ms ease !important;
+}
+
 @media (hover: none),
 (pointer: coarse) {
 
-  button:not(.scroll-to-bottom-btn):hover,
-  .btn:hover,
-  .icon-btn:hover,
-  .settings-action-btn:hover,
-  .model-picker-main:hover,
-  .theme-swatch-btn:hover,
-  .startup-action-btn:hover,
-  .message-actions .icon-btn:hover,
-  .reasoning-control-select:hover,
-  .speak-btn:hover,
-  .saved-library-search-clear:hover,
-  .saved-turn-inline-title-view:hover,
-  .saved-turn-inline-title-view-header:hover,
-  .saved-turn-inline-title-btn:hover:not(:disabled),
-  .saved-turn-inline-title-btn.primary:hover:not(:disabled),
-  .saved-turn-close-btn:hover,
-  .modal-close:hover,
-  a:hover,
-  #mic-layout-container:hover,
-  #mic-layout-container:hover #giant-mic-btn {
+  button:not(.scroll-to-bottom-btn):hover:not(.is-touch-pressed):not(.active),
+  .btn:hover:not(.is-touch-pressed):not(.active),
+  .icon-btn:hover:not(.is-touch-pressed):not(.active),
+  .settings-action-btn:hover:not(.is-touch-pressed):not(.active),
+  .model-picker-main:hover:not(.is-touch-pressed):not(.active),
+  .theme-swatch-btn:hover:not(.is-touch-pressed):not(.active),
+  .startup-action-btn:hover:not(.is-touch-pressed):not(.active),
+  .message-actions .icon-btn:hover:not(.is-touch-pressed):not(.active),
+  .reasoning-control-select:hover:not(.is-touch-pressed):not(.active),
+  .speak-btn:hover:not(.is-touch-pressed):not(.active),
+  .saved-library-search-clear:hover:not(.is-touch-pressed):not(.active),
+  .saved-turn-inline-title-view:hover:not(.is-touch-pressed):not(.active),
+  .saved-turn-inline-title-view-header:hover:not(.is-touch-pressed):not(.active),
+  .saved-turn-inline-title-btn:hover:not(:disabled):not(.is-touch-pressed):not(.active),
+  .saved-turn-inline-title-btn.primary:hover:not(:disabled):not(.is-touch-pressed):not(.active),
+  .saved-turn-close-btn:hover:not(.is-touch-pressed):not(.active),
+  .modal-close:hover:not(.is-touch-pressed):not(.active),
+  a:hover:not(.is-touch-pressed):not(.active),
+  #mic-layout-container:hover:not(.is-touch-pressed):not(.active),
+  #mic-layout-container:hover #giant-mic-btn:not(.is-touch-pressed):not(.active) {
     color: inherit;
     border-color: inherit;
     box-shadow: none;
@@ -4044,30 +4081,30 @@ html[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
     filter: none;
   }
 
-  .btn-primary:hover,
-  .btn.btn-primary:hover {
+  .btn-primary:hover:not(.is-touch-pressed),
+  .btn.btn-primary:hover:not(.is-touch-pressed) {
     background: var(--send-btn-gradient);
     color: var(--send-btn-text-color);
   }
 
-  .btn-secondary:hover,
-  .btn.btn-secondary:hover,
-  .settings-action-btn:hover {
+  .btn-secondary:hover:not(.is-touch-pressed),
+  .btn.btn-secondary:hover:not(.is-touch-pressed),
+  .settings-action-btn:hover:not(.is-touch-pressed) {
     background: rgba(255, 255, 255, 0.04);
     color: var(--text-color);
   }
 
-  .btn-danger:hover {
+  .btn-danger:hover:not(.is-touch-pressed) {
     background: var(--danger-color);
     color: #fff;
   }
 
-  .modal-close:hover {
+  .modal-close:hover:not(.is-touch-pressed) {
     background: transparent;
     color: #8b949e;
   }
 
-  #mic-layout-container:hover #giant-mic-btn {
+  #mic-layout-container:hover #giant-mic-btn:not(.is-touch-pressed) {
     background-color: var(--ai-bubble-bg);
   }
 }

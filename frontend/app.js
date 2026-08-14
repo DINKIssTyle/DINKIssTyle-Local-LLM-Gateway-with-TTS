@@ -5405,7 +5405,73 @@ function insertPlainTextAtCursor(text) {
     messageInput.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
+function initTouchUXInteractions() {
+    const TOUCH_INTERACTIVE_SELECTOR = 'button, a[href], [role="button"], .icon-btn, .btn, .nav-btn, .tab-item, .settings-action-btn, .theme-swatch-btn, .modal-close, #giant-mic-btn, .model-picker-main, .composer-tool-btn, .startup-action-btn, .saved-turn-inline-title-btn, .saved-turn-close-btn, .saved-library-search-clear, .speak-btn';
+
+    let activePressedEl = null;
+    let releaseTimeoutId = null;
+
+    function clearTouchPressed(el, bounce = true) {
+        if (!el) return;
+        el.classList.remove('is-touch-pressed');
+        if (bounce) {
+            el.classList.remove('is-touch-releasing');
+            void el.offsetWidth;
+            el.classList.add('is-touch-releasing');
+            if (releaseTimeoutId) window.clearTimeout(releaseTimeoutId);
+            releaseTimeoutId = window.setTimeout(() => {
+                el.classList.remove('is-touch-releasing');
+                releaseTimeoutId = null;
+            }, 340);
+        } else {
+            el.classList.remove('is-touch-releasing');
+        }
+    }
+
+    document.addEventListener('pointerdown', (e) => {
+        const target = e.target instanceof Element ? e.target.closest(TOUCH_INTERACTIVE_SELECTOR) : null;
+        if (!target || target.disabled || target.getAttribute('aria-disabled') === 'true') return;
+
+        if (activePressedEl && activePressedEl !== target) {
+            clearTouchPressed(activePressedEl, false);
+        }
+
+        activePressedEl = target;
+        target.classList.remove('is-touch-releasing');
+        target.classList.add('is-touch-pressed');
+
+        if (e.pointerType === 'touch' && window.DKSTHaptics?.isEnabled?.()) {
+            window.DKSTHaptics.trigger('nudge');
+        }
+    }, { passive: true });
+
+    document.addEventListener('pointerup', () => {
+        if (activePressedEl) {
+            const el = activePressedEl;
+            activePressedEl = null;
+            clearTouchPressed(el, true);
+        }
+    }, { passive: true });
+
+    document.addEventListener('pointercancel', () => {
+        if (activePressedEl) {
+            const el = activePressedEl;
+            activePressedEl = null;
+            clearTouchPressed(el, false);
+        }
+    }, { passive: true });
+
+    window.addEventListener('scroll', () => {
+        if (activePressedEl) {
+            const el = activePressedEl;
+            activePressedEl = null;
+            clearTouchPressed(el, false);
+        }
+    }, { passive: true });
+}
+
 function setupEventListeners() {
+    initTouchUXInteractions();
     document.getElementById('save-cfg-btn').addEventListener('click', saveConfig);
 
     if (inputContainer) {
