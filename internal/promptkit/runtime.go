@@ -207,38 +207,50 @@ func truncateMessages(messages []interface{}) []interface{} {
 func buildToolUsage(envInfo string, modelID string, useNativeTools bool, tools []ToolDefinition) string {
 	lowerModelID := strings.ToLower(strings.TrimSpace(modelID))
 	lines := []string{"", "", toolGuidelineMarker}
+	has := func(names ...string) bool { return toolDefinitionsContain(tools, names...) }
 
 	if useNativeTools {
 		lines = append(lines, nativeToolGuidelines(tools)...)
 	} else {
+		sampleTool := "tool_name"
+		sampleArgs := "{...}"
+		if len(tools) > 0 {
+			sampleTool = tools[0].Name
+			sampleArgs = "{}"
+		}
 		lines = append(lines,
-			"1. For any tool use, output exactly one tool-specific XML element whose body is the JSON arguments object. Example: <get_current_time>{}</get_current_time>. General form: <tool_name>{...}</tool_name>.",
+			fmt.Sprintf("1. For any tool use, output exactly one tool-specific XML element whose body is the JSON arguments object. Example: <%s>%s</%s>. General form: <tool_name>{...}</tool_name>.", sampleTool, sampleArgs, sampleTool),
 			"2. Output the tool call only. Do not add prose before or after it. Do not use Python/function syntax such as tool_name(key=\"value\"); use the XML form above. Wait for the app to return the result.",
 			"3. If no tool is needed, answer normally.",
 			"3a. TOOL DECISION DEADLINE: Keep private reasoning brief. Once you have selected a tool and its arguments, invoke it immediately. Never rehearse, restate, or repeat the planned tool call; if you notice yourself repeating the plan, stop reasoning and emit the tool element now.",
-			"4. Avoid search_web or read_web_page for person identification or image description unless explicitly asked.",
-			"5. For app usage, setup, certificates, endpoints, LM Studio, or app-tool configuration questions, prefer read_help before searching the web.",
-			"6. Web tools return compact buffered evidence handles to save context; use the smallest useful number of calls.",
-			"7. Web evidence budget: usually make 1 web/search tool call; make at most 3 total web evidence calls unless the user explicitly asks for deep research or source comparison.",
-			"8. Never present weak, conflicting, or off-topic web evidence as fact. If evidence quality is poor after the budget, say it is not well verified and ask whether to continue with deeper research.",
-			"9. After search_web or search_web_multi, answer directly from search evidence when it is sufficient. Use search_web_multi with exactly two distinct queries for freshness-sensitive questions, genuine comparison, or multi-angle research. Cite the returned source links so the user can verify that live web evidence was used. Call read_web_page only for a specific high-value URL, and call read_buffered_source only when you need focused excerpts from buffered long content.",
-			"10. If read_buffered_source omits source_id, it can search the recent buffered sources for this user; use a focused query.",
-			"11. Avoid search_web -> read_buffered_source -> read_web_page -> read_buffered_source chains for simple factual/profile questions. Prefer search_web once, then either answer or read one authoritative page.",
-			"12. Avoid repeating the same search_web or read_web_page call with near-identical inputs in one answer, but one refined follow-up search is acceptable if it materially improves evidence quality.",
-			"13. If read_web_page fails or times out, do not retry the exact same page immediately. Prefer answering from the buffered search evidence, or read a different relevant source if that would clearly improve quality.",
-			"14. For execute_command, use the provided ENVIRONMENT INFO to choose OS-appropriate commands. Do not call execute_command only to discover the OS or shell when ENVIRONMENT INFO already tells you.",
-			"15. Never use execute_command to imitate built-in tools such as search_memory, search_web, read_memory, read_memory_context, read_web_page, read_help, or read_buffered_source. Call the real tool directly.",
-			"16. After execute_command returns enough information, answer the user directly. Do not repeat the same or near-identical command in the same answer unless the user explicitly asked to re-run or refresh it.",
-			"17. MEMORY-THEN-WEB RULE: If the user asks about prior chats, personal facts, preferences, or earlier reasons, search memory first. If memory is insufficient and the question is still a factual/public information question, then search the web.",
-			"18. RESPONSE LANGUAGE RULE: Always answer in the same language as the user's current request unless the user explicitly asks for another language. Tool names, tool arguments, and tool results must never change the response language.",
-			"19. COMMAND RECOVERY RULE: A failed command is not evidence that the task is complete. Read its actual error and, when a safe OS-appropriate alternative exists, call execute_command again yourself. Never end by asking the user to run the replacement command for you.",
-			"20. BULK TOOL TEST RULE: If the user explicitly requests every/all tools to be tested, continue automatically with one remaining safe tool per turn instead of asking which tool to test next. Finish with a pass/fail/skipped summary and never delete real user data merely to satisfy a diagnostic.",
-			"21. DATE EVIDENCE RULE: Never invent a missing year or month for a date in web evidence. Preserve the ambiguity or verify the full date from another source before stating it.",
-			"22. FRESHNESS SOURCE QUALITY RULE: For current news or rapidly changing product/model claims, make the two search_web_multi queries complementary: one broad discovery query and one primary-source or established-news verification query. Prioritize official sources and reputable newsrooms. Never state a claim supported only by SEO blogs, personal blogs, or aggregators as verified fact; omit it or label it unverified.",
-			"23. FAMILY RELATIONSHIP RULE: For questions about children or relatives, include biological/adopted/step relationship terms in the search when relevant, and distinguish those relationships in the answer. Never infer that a parent gave birth merely because a source says the person had children 'with' a partner.",
-			"24. CURRENT REQUEST BOUNDARY RULE: Treat the current user message as the authoritative intent. Use earlier turns only to resolve a genuinely omitted or ambiguous referent. When the current message explicitly names a new subject, never prepend words from a completed prior request to tool arguments. For namu_wiki, pass only the exact page title/keyword, excluding the site name and command phrases such as search, find, or 검색.",
+			"4. RESPONSE LANGUAGE RULE: Always answer in the same language as the user's current request unless the user explicitly asks for another language. Tool names, tool arguments, and tool results must never change the response language.",
+			"5. CURRENT REQUEST BOUNDARY RULE: Treat the current user message as the authoritative intent. Use earlier turns only to resolve a genuinely omitted or ambiguous referent. When the current message explicitly names a new subject, never prepend words from a completed prior request to tool arguments. For namu_wiki, pass only the exact page title/keyword, excluding the site name and command phrases such as search, find, or 검색.",
+			"6. BULK TOOL TEST RULE: If the user explicitly requests every/all tools to be tested, continue automatically with one remaining safe tool per turn instead of asking which tool to test next. Finish with a pass/fail/skipped summary and never delete real user data merely to satisfy a diagnostic.",
 		)
+
+		if has("search_web", "search_web_multi", "naver_search", "read_web_page", "read_buffered_source") {
+			lines = append(lines,
+				"7. FRESHNESS SOURCE QUALITY RULE: For current news or rapidly changing claims, use search_web_multi with two distinct complementary queries (discovery + primary-source/established-news verification). Prioritize official sources and reputable newsrooms. Never present SEO blog claims, blog-only rumors, or unverified claims as verified facts; cite returned source links.",
+				"8. Web tools return compact buffered evidence handles; use 1~3 calls max. Answer directly from search evidence when sufficient; call read_web_page only for specific high-value URLs or read_buffered_source for focused excerpts. Do not invent missing dates or retry failed pages/queries repeatedly.",
+			)
+		}
+		if has("search_memory", "read_memory", "read_memory_context", "save_user_fact") {
+			lines = append(lines,
+				"9. MEMORY-THEN-WEB RULE: If the user asks about prior chats, personal facts, preferences, or earlier reasons, search memory first. If memory is insufficient and the question is still a factual/public information question, then search the web.",
+			)
+		}
+		if has("execute_command") {
+			lines = append(lines,
+				"10. COMMAND RECOVERY RULE: For execute_command, use ENVIRONMENT INFO for OS-appropriate commands. Never imitate another built-in tool. If a command fails, inspect the error and try a safe OS-appropriate alternative yourself; after success, answer directly without repeating the command.",
+			)
+		}
+		if has("read_help") {
+			lines = append(lines,
+				"11. For app usage, setup, certificates, endpoints, LM Studio, or app-tool configuration questions, prefer read_help before searching the web.",
+			)
+		}
 	}
+
 	if toolDefinitionsContain(tools, "execute_command") {
 		if guidance := platformCommandGuidance(envInfo); guidance != "" {
 			lines = append(lines, guidance)
@@ -248,19 +260,14 @@ func buildToolUsage(envInfo string, modelID string, useNativeTools bool, tools [
 	if len(tools) > 0 && !useNativeTools {
 		lines = append(lines, "AVAILABLE APP TOOLS:")
 		for _, tool := range tools {
-			schema := strings.TrimSpace(string(tool.InputSchema))
-			if schema == "" {
-				schema = `{"type":"object","properties":{}}`
-			}
-			lines = append(lines, fmt.Sprintf("- %s: %s Input JSON Schema: %s", tool.Name, strings.TrimSpace(tool.Description), schema))
+			schemaStr := compactSchemaJSON(tool.InputSchema)
+			lines = append(lines, fmt.Sprintf("- %s: %s Input JSON Schema: %s", tool.Name, strings.TrimSpace(tool.Description), schemaStr))
 		}
 	}
 
 	if strings.Contains(lowerModelID, "gemma-4") {
 		lines = append(lines,
-			"13. GEMMA-4 RULE: Prefer the smallest useful number of tool calls.",
-			"14. GEMMA-4 RULE: For memory, path, time, or other simple system checks, make one tool call first and wait for the result before deciding on any second tool call.",
-			"15. GEMMA-4 RULE: Once a tool result already answers the user's request well enough, stop calling tools and answer immediately.",
+			"GEMMA-4 RULE: Prefer the smallest useful number of tool calls. Once a tool result already answers the user's request well enough, stop calling tools and answer immediately.",
 		)
 	}
 
@@ -274,6 +281,20 @@ func buildToolUsage(envInfo string, modelID string, useNativeTools bool, tools [
 	lines = append(lines, toolGuidelineEndMarker)
 
 	return strings.Join(lines, "\n")
+}
+
+func compactSchemaJSON(raw json.RawMessage) string {
+	schema := strings.TrimSpace(string(raw))
+	if schema == "" {
+		return `{"type":"object","properties":{}}`
+	}
+	var obj interface{}
+	if err := json.Unmarshal([]byte(schema), &obj); err == nil {
+		if b, err := json.Marshal(obj); err == nil {
+			return string(b)
+		}
+	}
+	return schema
 }
 
 func nativeToolGuidelines(tools []ToolDefinition) []string {
@@ -341,7 +362,6 @@ func platformCommandGuidance(envInfo string) string {
 }
 
 func buildMemoryTemplate(staticMemory string, recentContext string, userProfile string, activeContext string, retrievalInjected bool, userProfileFacts string) string {
-	// If we have structured profile facts, prepend them to the USER PROFILE section
 	combinedProfile := ""
 	if strings.TrimSpace(userProfileFacts) != "" {
 		combinedProfile = "## Known Facts (always available, no search needed):\n" + userProfileFacts
@@ -352,62 +372,36 @@ func buildMemoryTemplate(staticMemory string, recentContext string, userProfile 
 		combinedProfile = userProfile
 	}
 
+	var sections []string
+	sections = append(sections, "### MEMORY CONTEXT ###")
+	if s := strings.TrimSpace(staticMemory); s != "" {
+		sections = append(sections, "#### STATIC MEMORY\n"+s)
+	}
+	if s := strings.TrimSpace(recentContext); s != "" {
+		sections = append(sections, "#### RECENT CONTEXT\n"+s)
+	}
+	if s := strings.TrimSpace(combinedProfile); s != "" {
+		sections = append(sections, "#### USER PROFILE\n"+s)
+	}
+	if s := strings.TrimSpace(activeContext); s != "" {
+		sections = append(sections, "#### ACTIVE CONTEXT\n"+s)
+	}
+
 	rules := []string{
-		"1. Treat the current user message as the authoritative intent, and use RECENT CONTEXT only to preserve continuity or resolve missing references.",
-		"2. Treat subjectless, pronoun-only, or elliptical user messages as follow-ups to the latest salient topic in RECENT CONTEXT whenever that reading is plausible, especially in Korean where omitted subjects are normal. If the current message explicitly supplies a new subject, do not merge it with an unrelated completed request from RECENT CONTEXT.",
-		"3. Do not ask what the subject is merely because the user omitted it. Infer the referent from the latest turn and briefly state your assumption only when it helps.",
-		"4. Ask a clarifying question only when RECENT CONTEXT contains multiple plausible referents that would lead to materially different answers or actions.",
-		"5. Treat USER PROFILE Known Facts as ground truth for personal details about the user. These never require search_memory.",
-		"6. Use USER PROFILE only when it is directly relevant to the user's current request.",
-		"7. Mention only the minimum profile details needed for the answer. Do not list or volunteer unrelated profile facts.",
-		"8. If the user explicitly asks you to search memory, recall prior chats, or find what was said before, you MUST use 'search_memory' before answering.",
-		"9. If past details are missing or uncertain, use 'search_memory' instead of saying you do not know.",
-		"10. After 'search_memory', prefer 'read_memory_context' for the best candidate before relying on it. Use 'read_memory' only when you need the full original text.",
-		"11. 'read_memory' and 'read_memory_context' require 'memory_id'. Never use 'source_id', 'query', or 'question' with memory tools.",
-		"12. If memory search still does not answer the question and the remaining question is about factual/public knowledge, use web search next instead of stopping at 'I do not know'.",
-		"13. Only 'read_buffered_source' uses 'source_id' for web evidence.",
-		"14. Try alternative names, relationships, or synonyms if the first search fails.",
-		"15. Do not guess past details.",
-		"16. When the user tells you personal facts (name, birthday, preferences, etc.), proactively use 'save_user_fact' to save them to their permanent profile.",
+		"1. Current user message is authoritative; use RECENT CONTEXT to resolve omitted subjects/referents (especially in Korean).",
+		"2. USER PROFILE Known Facts are ground truth for personal details; they never require search_memory.",
+		"3. For missing/uncertain past chats or facts, use 'search_memory' (then 'read_memory_context'). Do not guess.",
+		"4. Proactively use 'save_user_fact' to permanently save newly stated user facts (name, birthday, preferences, etc.).",
+		"5. Mention only relevant profile facts. If memory is insufficient for public facts, search the web.",
 	}
 	if retrievalInjected && strings.TrimSpace(activeContext) != "" {
-		rules = []string{
-			"1. Treat the current user message as the authoritative intent, and use RECENT CONTEXT only to preserve continuity or resolve missing references.",
-			"2. Treat subjectless, pronoun-only, or elliptical user messages as follow-ups to the latest salient topic in RECENT CONTEXT whenever that reading is plausible, especially in Korean where omitted subjects are normal. If the current message explicitly supplies a new subject, do not merge it with an unrelated completed request from RECENT CONTEXT.",
-			"3. Do not ask what the subject is merely because the user omitted it. Infer the referent from the latest turn and briefly state your assumption only when it helps.",
-			"4. Ask a clarifying question only when RECENT CONTEXT contains multiple plausible referents that would lead to materially different answers or actions.",
-			"5. ACTIVE CONTEXT was already retrieved for this turn. Prefer answering from RECENT CONTEXT plus ACTIVE CONTEXT when they are sufficient.",
-			"6. Treat USER PROFILE Known Facts as ground truth for personal details about the user. These never require search_memory.",
-			"7. Use USER PROFILE only when it is directly relevant to the user's current request.",
-			"8. Mention only the minimum profile details needed for the answer. Do not list or volunteer unrelated profile facts.",
-			"9. If the user explicitly asks you to search memory, recall prior chats, or find what was said before, you MUST use 'search_memory' before answering.",
-			"10. Use 'search_memory' whenever RECENT CONTEXT and ACTIVE CONTEXT are clearly insufficient or contradictory. Do not simply say you do not know without trying memory search first.",
-			"11. If you must inspect memory further, prefer 'read_memory_context' after 'search_memory'. Use 'read_memory' only for the full original text.",
-			"12. 'read_memory' and 'read_memory_context' require 'memory_id'. Never use 'source_id', 'query', or 'question' with memory tools.",
-			"13. If memory search still does not answer the question and the remaining question is about factual/public knowledge, use web search next instead of stopping at 'I do not know'.",
-			"14. Only 'read_buffered_source' uses 'source_id' for web evidence.",
-			"15. Do not guess past details.",
-			"16. When the user tells you personal facts (name, birthday, preferences, etc.), proactively use 'save_user_fact' to save them to their permanent profile.",
-		}
+		rules = append([]string{
+			"0. ACTIVE CONTEXT was already retrieved for this turn; prefer answering from RECENT CONTEXT plus ACTIVE CONTEXT when sufficient.",
+		}, rules...)
 	}
-	return fmt.Sprintf(`
-### MEMORY CONTEXT ###
 
-#### STATIC MEMORY
-%s
-
-#### RECENT CONTEXT
-%s
-
-#### USER PROFILE
-%s
-
-#### ACTIVE CONTEXT
-%s
-
-MEMORY & SEARCH RULES:
-%s
-`, staticMemory, recentContext, combinedProfile, activeContext, strings.Join(rules, "\n"))
+	sections = append(sections, "MEMORY & SEARCH RULES:\n"+strings.Join(rules, "\n"))
+	return "\n\n" + strings.Join(sections, "\n\n") + "\n"
 }
 
 func buildPassiveMemoryTemplate(recentContext string, userProfile string, activeContext string, userProfileFacts string) string {
@@ -421,27 +415,25 @@ func buildPassiveMemoryTemplate(recentContext string, userProfile string, active
 		combinedProfile = userProfile
 	}
 
-	return fmt.Sprintf(`
-### MEMORY CONTEXT ###
+	var sections []string
+	sections = append(sections, "### MEMORY CONTEXT ###")
+	if s := strings.TrimSpace(recentContext); s != "" {
+		sections = append(sections, "#### RECENT CONTEXT\n"+s)
+	}
+	if s := strings.TrimSpace(combinedProfile); s != "" {
+		sections = append(sections, "#### USER PROFILE\n"+s)
+	}
+	if s := strings.TrimSpace(activeContext); s != "" {
+		sections = append(sections, "#### ACTIVE CONTEXT\n"+s)
+	}
 
-#### RECENT CONTEXT
-%s
+	sections = append(sections, "MEMORY USAGE RULES:\n"+strings.Join([]string{
+		"1. Current message is authoritative; use RECENT CONTEXT, USER PROFILE, and ACTIVE CONTEXT as reference.",
+		"2. Resolve omitted subjects/referents from RECENT CONTEXT without asking unnecessary clarifying questions.",
+		"3. USER PROFILE Known Facts are ground truth for personal details; use them when directly relevant without listing unrelated facts.",
+		"4. Do not mention tools, integrations, or hidden retrieval steps.",
+		"5. If provided memory context is insufficient, answer normally from model knowledge without guessing.",
+	}, "\n"))
 
-#### USER PROFILE
-%s
-
-#### ACTIVE CONTEXT
-%s
-
-MEMORY USAGE RULES:
-1. Treat the current user message as the authoritative intent. Use RECENT CONTEXT, USER PROFILE, and ACTIVE CONTEXT only as provided reference context for this answer.
-2. Treat subjectless, pronoun-only, or elliptical user messages as follow-ups to the latest salient topic in RECENT CONTEXT whenever that reading is plausible, especially in Korean where omitted subjects are normal. If the current message explicitly supplies a new subject, do not merge it with an unrelated completed request from RECENT CONTEXT.
-3. Do not ask what the subject is merely because the user omitted it. Infer the referent from the latest turn and briefly state your assumption only when it helps.
-4. Ask a clarifying question only when RECENT CONTEXT contains multiple plausible referents that would lead to materially different answers or actions.
-5. Use USER PROFILE only when it is directly relevant to the user's current request.
-6. Mention only the minimum profile details needed for the answer. Do not list or volunteer unrelated profile facts.
-7. Do not mention tools, integrations, MCP, or hidden retrieval steps.
-8. If the provided memory context is insufficient, answer normally from the visible conversation and your model knowledge.
-9. Do not invent or claim to have searched additional memory when no tool access is available.
-`, recentContext, combinedProfile, activeContext)
+	return "\n\n" + strings.Join(sections, "\n\n") + "\n"
 }

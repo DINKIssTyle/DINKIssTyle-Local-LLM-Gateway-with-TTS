@@ -8,11 +8,18 @@ import (
 
 func TestStatefulFallbackUsesToolSpecificXML(t *testing.T) {
 	prompt := BuildRuntimeInstructions(RuntimeInstructionsInput{
-		Tools: []ToolDefinition{{
-			Name:        "get_current_time",
-			Description: "Get current time",
-			InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
-		}},
+		Tools: []ToolDefinition{
+			{
+				Name:        "get_current_time",
+				Description: "Get current time",
+				InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
+			},
+			{
+				Name:        "search_web",
+				Description: "Search web",
+				InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}}}`),
+			},
+		},
 	})
 
 	if !strings.Contains(prompt, `<get_current_time>{}</get_current_time>`) {
@@ -35,6 +42,23 @@ func TestStatefulFallbackUsesToolSpecificXML(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "CURRENT REQUEST BOUNDARY RULE") || !strings.Contains(prompt, "exact page title/keyword") {
 		t.Fatalf("current-turn context boundary rule missing: %s", prompt)
+	}
+
+	// Verify token savings when web tools are absent
+	timeOnlyPrompt := BuildRuntimeInstructions(RuntimeInstructionsInput{
+		Tools: []ToolDefinition{
+			{
+				Name:        "get_current_time",
+				Description: "Get current time",
+				InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
+			},
+		},
+	})
+	if strings.Contains(timeOnlyPrompt, "FRESHNESS SOURCE QUALITY RULE") {
+		t.Fatalf("unnecessary web freshness rule was included in time-only prompt: %s", timeOnlyPrompt)
+	}
+	if len(timeOnlyPrompt) >= len(prompt) {
+		t.Fatalf("conditional rule pack did not reduce prompt size: timeOnly=%d full=%d", len(timeOnlyPrompt), len(prompt))
 	}
 }
 
@@ -115,5 +139,33 @@ func TestStripToolGuidelinesPreservesBasePromptAndMemory(t *testing.T) {
 	}
 	if strings.Contains(stripped, toolGuidelineMarker) || strings.Contains(stripped, "transient tool rules") {
 		t.Fatalf("tool block survived stripping: %s", stripped)
+	}
+}
+
+func TestMemoryTemplateTokenOptimization(t *testing.T) {
+	// Test empty sections are not rendered as empty headers
+	prompt := BuildRuntimeInstructions(RuntimeInstructionsInput{
+		RecentContext:    "User: Hello\nAssistant: Hi",
+		UserProfileFacts: "- Name: Alice\n- Birthday: May 1",
+	})
+
+	if !strings.Contains(prompt, "### MEMORY CONTEXT ###") {
+		t.Fatalf("memory header missing: %s", prompt)
+	}
+	if !strings.Contains(prompt, "#### RECENT CONTEXT") || !strings.Contains(prompt, "#### USER PROFILE") {
+		t.Fatalf("active sections missing: %s", prompt)
+	}
+	if strings.Contains(prompt, "#### STATIC MEMORY") {
+		t.Fatalf("empty static memory header should be omitted: %s", prompt)
+	}
+	if strings.Contains(prompt, "#### ACTIVE CONTEXT") {
+		t.Fatalf("empty active context header should be omitted: %s", prompt)
+	}
+	if !strings.Contains(prompt, "Known Facts are ground truth") {
+		t.Fatalf("core memory rule missing: %s", prompt)
+	}
+	// Verify memory prompt is compact (under 1200 characters)
+	if len(prompt) > 1200 {
+		t.Fatalf("memory prompt exceeds compact budget: chars=%d", len(prompt))
 	}
 }
