@@ -70,6 +70,45 @@
         global.DKSTHaptics?.trigger(type);
     }
 
+    function selectRetrievalConversationContext(messages) {
+        const source = Array.isArray(messages) ? messages : [];
+        let currentUserIndex = -1;
+        for (let index = source.length - 1; index >= 0; index -= 1) {
+            if (source[index]?.role === 'user') {
+                currentUserIndex = index;
+                break;
+            }
+        }
+        if (currentUserIndex < 0) return source.slice(-1);
+
+        const currentUser = source[currentUserIndex];
+        let previousAssistantIndex = -1;
+        for (let index = currentUserIndex - 1; index >= 0; index -= 1) {
+            const message = source[index];
+            if (message?.role !== 'assistant') continue;
+            if (!String(message.content || '').trim()) continue;
+            previousAssistantIndex = index;
+            break;
+        }
+        if (previousAssistantIndex < 0) return [currentUser];
+
+        const previousAssistant = source[previousAssistantIndex];
+        const assistantTurnID = String(previousAssistant.turnId || '').trim();
+        let previousUserIndex = -1;
+        for (let index = previousAssistantIndex - 1; index >= 0; index -= 1) {
+            const message = source[index];
+            if (message?.role !== 'user') continue;
+            const messageTurnID = String(message.turnId || '').trim();
+            if (!assistantTurnID || !messageTurnID || messageTurnID === assistantTurnID) {
+                previousUserIndex = index;
+                break;
+            }
+        }
+
+        if (previousUserIndex < 0) return [currentUser];
+        return [source[previousUserIndex], previousAssistant, currentUser];
+    }
+
     function renderLooseInlineMarkdown(text) {
         let html = escapeHtml(text);
         html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
@@ -618,6 +657,7 @@
         normalizeMarkdownForRender,
         renderLooseMarkdownToHtml,
         sanitizeRenderedMarkdownHtml,
+        selectRetrievalConversationContext,
         shouldFallbackToLooseMarkdown,
         syncHapticsPreference,
         triggerHaptic

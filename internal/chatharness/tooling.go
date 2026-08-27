@@ -135,105 +135,6 @@ func IsFreshnessSensitiveWebRequest(text string) bool {
 	return false
 }
 
-// IsLikelyContextualFollowup recognizes short follow-ups whose omitted subject
-// should be resolved from the immediately preceding conversation instead of
-// broad long-term memory retrieval.
-func IsLikelyContextualFollowup(text string) bool {
-	normalized := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(text)), " "))
-	if normalized == "" || len([]rune(normalized)) > 48 {
-		return false
-	}
-	for _, signal := range []string{
-		"자녀", "아이", "가족", "배우자", "아내", "남편", "부모", "형제", "정보", "더 알려", "그 사람", "그 배우", "그 모델", "그 회사", "는요", "은요", "자녀요",
-		"생존자", "탑승", "인원", "사망자", "몇명", "몇 명", "나오지", "않을까요", "결말", "줄거리", "원인", "이유", "가격", "비용", "출시일", "스펙",
-		"their children", "his children", "her children", "what about", "and the children", "more about", "how many", "survivor", "passengers",
-	} {
-		if strings.Contains(normalized, signal) {
-			return true
-		}
-	}
-	return false
-}
-
-// extractPreviousTopic extracts the prominent entity or subject from the immediate prior turn.
-func extractPreviousTopic(recentContext string) string {
-	lines := strings.Split(strings.TrimSpace(recentContext), "\n")
-	previousUser := ""
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(line, "User: ") {
-			previousUser = strings.TrimSpace(strings.TrimPrefix(line, "User: "))
-			if previousUser != "" {
-				break
-			}
-		}
-	}
-	if previousUser == "" {
-		return ""
-	}
-
-	// Remove common question endings/particles to isolate the core subject
-	cleaned := regexp.MustCompile(`(?i)(?:에서|의|에 대해|에 대한|은|는|이|가|을|를)\s+.*$`).ReplaceAllString(previousUser, "")
-	cleaned = strings.TrimSpace(cleaned)
-	if cleaned != "" && len([]rune(cleaned)) <= 30 {
-		return cleaned
-	}
-	// Fallback to the first 2-3 words of previous user prompt
-	fields := strings.Fields(previousUser)
-	if len(fields) > 0 {
-		return fields[0]
-	}
-	return ""
-}
-
-// RefineContextualFollowupSearchQuery ensures that short follow-up search queries
-// (e.g. '생존자', '총 몇명이 탑승') retain the core subject from the immediately preceding turn.
-func RefineContextualFollowupSearchQuery(toolName, arguments, currentUserText, recentContext string) (string, bool) {
-	toolName = strings.TrimSpace(toolName)
-	if toolName != "search_web" && toolName != "naver_search" && toolName != "namu_wiki" {
-		return arguments, false
-	}
-
-	var payload map[string]interface{}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(arguments)), &payload); err != nil || payload == nil {
-		return arguments, false
-	}
-
-	queryKey := "query"
-	if toolName == "namu_wiki" {
-		queryKey = "keyword"
-	}
-
-	query, _ := payload[queryKey].(string)
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return arguments, false
-	}
-
-	// Only refine when the user text is a clear short follow-up and the query is short/fragmented
-	if !IsLikelyContextualFollowup(currentUserText) || len([]rune(query)) > 25 {
-		return arguments, false
-	}
-
-	topic := extractPreviousTopic(recentContext)
-	if topic == "" {
-		return arguments, false
-	}
-
-	// If the query already mentions the prior topic, do not duplicate
-	if strings.Contains(strings.ToLower(query), strings.ToLower(topic)) {
-		return arguments, false
-	}
-
-	refinedQuery := strings.TrimSpace(topic + " " + query)
-	payload[queryKey] = refinedQuery
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		return arguments, false
-	}
-	return string(encoded), true
-}
-
 // UpgradeFreshnessSearchToolCall converts a single generic web search into the
 // app's parallel two-angle search for freshness-sensitive requests. This makes
 // the cross-check deterministic and avoids spending another LLM round asking
@@ -262,9 +163,10 @@ func UpgradeFreshnessSearchToolCall(toolName, arguments, currentUserText string)
 }
 
 // RepairMissingSearchToolArguments gives malformed local-model calls one
-// bounded recovery using the current request and the latest conversational
-// subject. It never overwrites a non-empty argument supplied by the model.
-func RepairMissingSearchToolArguments(toolName, arguments, currentUserText, recentContext string) (string, bool) {
+// bounded structural recovery using only the current request. Conversational
+// subject resolution remains the model's responsibility, and a non-empty
+// model-supplied argument is never overwritten.
+func RepairMissingSearchToolArguments(toolName, arguments, currentUserText string) (string, bool) {
 	toolName = strings.TrimSpace(toolName)
 	var payload map[string]interface{}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(arguments)), &payload); err != nil || payload == nil {
@@ -279,7 +181,7 @@ func RepairMissingSearchToolArguments(toolName, arguments, currentUserText, rece
 		queryKey = "keyword"
 	case "save_user_fact":
 		if value, _ := payload["fact_value"].(string); strings.TrimSpace(value) == "" {
-			query := contextualSearchQuery(currentUserText, recentContext)
+			query := currentRequestQuery(currentUserText)
 			if query == "" {
 				return arguments, false
 			}
@@ -300,7 +202,7 @@ func RepairMissingSearchToolArguments(toolName, arguments, currentUserText, rece
 		if queries, ok := payload["queries"].([]interface{}); ok && len(queries) > 0 {
 			return arguments, false
 		}
-		query := contextualSearchQuery(currentUserText, recentContext)
+		query := currentRequestQuery(currentUserText)
 		if query == "" {
 			return arguments, false
 		}
@@ -314,7 +216,7 @@ func RepairMissingSearchToolArguments(toolName, arguments, currentUserText, rece
 	if value, _ := payload[queryKey].(string); strings.TrimSpace(value) != "" {
 		return arguments, false
 	}
-	query := contextualSearchQuery(currentUserText, recentContext)
+	query := currentRequestQuery(currentUserText)
 	if query == "" {
 		return arguments, false
 	}
@@ -531,20 +433,8 @@ func cleanExactLookupTitle(candidate string) string {
 	return strings.TrimSpace(candidate)
 }
 
-func contextualSearchQuery(currentUserText, recentContext string) string {
-	current := strings.TrimSpace(currentUserText)
-	previousUser := ""
-	for _, line := range strings.Split(recentContext, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "User: ") {
-			previousUser = strings.TrimSpace(strings.TrimPrefix(line, "User: "))
-		}
-	}
-	query := current
-	if previousUser != "" && IsLikelyContextualFollowup(current) && !strings.Contains(strings.ToLower(current), strings.ToLower(previousUser)) {
-		query = strings.TrimSpace(previousUser + " " + current)
-	}
-	return compactText(query, 300)
+func currentRequestQuery(currentUserText string) string {
+	return compactText(strings.TrimSpace(currentUserText), 300)
 }
 
 type WebEvidenceSource struct {

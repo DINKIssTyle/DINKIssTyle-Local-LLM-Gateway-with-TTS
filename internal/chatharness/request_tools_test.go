@@ -213,6 +213,29 @@ func TestPrepareRequestDoesNotInjectCompactPolicyForOrdinaryConversation(t *test
 	}
 }
 
+func TestPrepareRequestInjectsRecentConversationWithoutLongTermMemory(t *testing.T) {
+	recent := "Turn -1\nUser: 네팔 홍수\nAssistant: 네팔 라수와 지역의 홍수 현황입니다."
+	prepared, err := PrepareRequest(RequestInput{
+		Body:            []byte(`{"model":"test","messages":[{"role":"user","content":"각국의 반응은?"}],"stream":true}`),
+		LLMMode:         "standard",
+		ContextStrategy: "retrieval",
+		EnableMemory:    false,
+		RecentContext:   recent,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages, _ := prepared.ReqMap["messages"].([]interface{})
+	systemContent := ""
+	if len(messages) > 0 {
+		message, _ := messages[0].(map[string]interface{})
+		systemContent, _ = message["content"].(string)
+	}
+	if !prepared.InjectedPrompt || !strings.Contains(systemContent, recent) {
+		t.Fatalf("recent conversation was not injected independently of long-term memory: %s", prepared.Body)
+	}
+}
+
 func TestPrepareRequestInjectsNewSkillOnStatefulFollowup(t *testing.T) {
 	prepared, err := PrepareRequest(RequestInput{
 		Body:              []byte(`{"model":"test","input":"현재 날씨","system_prompt":"Base","previous_response_id":"resp_123","stream":true}`),
@@ -325,18 +348,8 @@ func TestFailedWebSearchWithoutEvidenceIsFailClosed(t *testing.T) {
 	}
 }
 
-func TestContextualFollowupAndMissingSearchQueryRecovery(t *testing.T) {
-	for _, input := range []string{"자녀들 정보", "탐크루즈 자녀요", "What about his children?"} {
-		if !IsLikelyContextualFollowup(input) {
-			t.Fatalf("contextual follow-up was not recognized: %q", input)
-		}
-	}
-	if IsLikelyContextualFollowup("스페인 난민 사태의 최신 뉴스를 자세히 조사해 주세요") {
-		t.Fatal("standalone research request was classified as an elliptical follow-up")
-	}
-
-	recent := "Recent Turn 1\nUser: 탐크루즈 생년월일\nAssistant: 톰 크루즈는 1962년 7월 3일생입니다."
-	repaired, ok := RepairMissingSearchToolArguments("search_web", `{}`, "자녀들 정보", recent)
+func TestMissingSearchQueryRecoveryUsesOnlyCurrentRequest(t *testing.T) {
+	repaired, ok := RepairMissingSearchToolArguments("search_web", `{}`, "자녀들 정보")
 	if !ok {
 		t.Fatal("missing search query was not repaired")
 	}
@@ -345,10 +358,10 @@ func TestContextualFollowupAndMissingSearchQueryRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	query, _ := payload["query"].(string)
-	if !strings.Contains(query, "탐크루즈 생년월일") || !strings.Contains(query, "자녀들 정보") {
-		t.Fatalf("repaired query lost conversational subject: %q", query)
+	if query != "자녀들 정보" || strings.Contains(query, "탐크루즈") {
+		t.Fatalf("repaired query should use only the current request: %q", query)
 	}
-	unchanged, repairedExisting := RepairMissingSearchToolArguments("search_web", `{"query":"Tom Cruise children"}`, "자녀들 정보", recent)
+	unchanged, repairedExisting := RepairMissingSearchToolArguments("search_web", `{"query":"Tom Cruise children"}`, "자녀들 정보")
 	if repairedExisting || unchanged != `{"query":"Tom Cruise children"}` {
 		t.Fatalf("valid model arguments were overwritten: %q", unchanged)
 	}
@@ -359,41 +372,19 @@ func TestContextualFollowupAndMissingSearchQueryRecovery(t *testing.T) {
 	if secondPass, changed := RefineFamilySearchToolArguments("search_web", refined, "자녀들 정보"); changed || secondPass != refined {
 		t.Fatalf("family search refinement was not idempotent: %q", secondPass)
 	}
-	standalone, repairedStandalone := RepairMissingSearchToolArguments("search_web", `{}`, "훈민정음의 창제 원리 검색", recent)
+	standalone, repairedStandalone := RepairMissingSearchToolArguments("search_web", `{}`, "훈민정음의 창제 원리 검색")
 	if !repairedStandalone || strings.Contains(standalone, "탐크루즈") {
 		t.Fatalf("standalone request was contaminated by the prior subject: %q", standalone)
 	}
 
-	memRepaired, memOk := RepairMissingSearchToolArguments("search_memory", `{}`, "당신의 이름 확인", recent)
+	memRepaired, memOk := RepairMissingSearchToolArguments("search_memory", `{}`, "당신의 이름 확인")
 	if !memOk || !strings.Contains(memRepaired, `"query":"당신의 이름 확인"`) {
 		t.Fatalf("search_memory missing query was not repaired: %q", memRepaired)
 	}
 
-	factRepaired, factOk := RepairMissingSearchToolArguments("save_user_fact", `{}`, "나를 주인님이라고 부르기로 한거", recent)
+	factRepaired, factOk := RepairMissingSearchToolArguments("save_user_fact", `{}`, "나를 주인님이라고 부르기로 한거")
 	if !factOk || !strings.Contains(factRepaired, `"fact_value":"나를 주인님이라고 부르기로 한거"`) || !strings.Contains(factRepaired, `"fact_key":"user_fact"`) {
 		t.Fatalf("save_user_fact missing arguments were not repaired: %q", factRepaired)
-	}
-}
-
-func TestRefineContextualFollowupSearchQuery(t *testing.T) {
-	titanicRecent := "Recent Turn 1\nUser: 타이타닉에서 구출 된 총 인원은 몇명입니까?\nAssistant: 타이타닉호 구출 인원 정보..."
-
-	// Case 1: Short follow-up without subject -> Enriched with "타이타닉"
-	repaired, ok := RefineContextualFollowupSearchQuery("search_web", `{"query":"생존자"}`, "생존자로 검색하면 나오지 않을까요?", titanicRecent)
-	if !ok || !strings.Contains(repaired, "타이타닉") || !strings.Contains(repaired, "생존자") {
-		t.Fatalf("follow-up query was not enriched: %q (ok=%v)", repaired, ok)
-	}
-
-	// Case 2: Short follow-up without subject -> Enriched with "타이타닉"
-	repaired2, ok2 := RefineContextualFollowupSearchQuery("search_web", `{"query":"총 몇명이 탑승"}`, "총 몇명이 탑승했는데요?", titanicRecent)
-	if !ok2 || !strings.Contains(repaired2, "타이타닉") || !strings.Contains(repaired2, "총 몇명이 탑승") {
-		t.Fatalf("follow-up query was not enriched: %q (ok=%v)", repaired2, ok2)
-	}
-
-	// Case 3: Topic Shift / Independent query -> Must NOT be contaminated!
-	independent, ok3 := RefineContextualFollowupSearchQuery("search_web", `{"query":"오늘 서울 날씨"}`, "오늘 서울 날씨 알려줘", titanicRecent)
-	if ok3 || strings.Contains(independent, "타이타닉") {
-		t.Fatalf("independent query was contaminated: %q (ok=%v)", independent, ok3)
 	}
 }
 
@@ -456,8 +447,7 @@ func TestNamuwikiExactTitleUsesCurrentTurnInsteadOfPriorRequest(t *testing.T) {
 		t.Fatalf("elliptical request unexpectedly overwrote the model-resolved title: %q", unchanged)
 	}
 
-	recent := "Turn -1\nUser: 오늘 날짜\nAssistant: 오늘은 2026년 8월 4일입니다."
-	repaired, ok := RepairMissingSearchToolArguments("namu_wiki", `{}`, "나무위키에서 훈민정음 검색", recent)
+	repaired, ok := RepairMissingSearchToolArguments("namu_wiki", `{}`, "나무위키에서 훈민정음 검색")
 	if !ok {
 		t.Fatal("missing Namuwiki keyword was not repaired")
 	}

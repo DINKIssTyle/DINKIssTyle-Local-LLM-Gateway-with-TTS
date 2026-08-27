@@ -4625,38 +4625,11 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	recentContextSource := ""
 	memorySnapshotDebug := mcp.MemorySnapshotDebug{}
 	autoContextDebug := mcp.AutoSearchMemoryDebug{}
-	if enableMemory && contextStrategy == "retrieval" {
+	if contextStrategy == "retrieval" {
 		recentContext, recentContextTurns, recentContextSource = getRecentConversationContext(userID)
 		if hasPreviousResponseID {
 			recentContext = compactRecentTurnContent(recentContext, recentContextStatefulBudget)
 			recentContextSource += "+stateful_compact"
-		} else {
-			preferRecentContext := strings.TrimSpace(recentContext) != "" && chatharness.IsLikelyContextualFollowup(initialUserInputText)
-			if !preferRecentContext {
-				memorySnapshotDebug = mcp.GetMemorySnapshotDebug(userID)
-				memorySnapshot = memorySnapshotDebug.Text
-			}
-			if !preferRecentContext {
-				if messages, ok := reqMap["messages"].([]interface{}); ok && len(messages) > 0 {
-					for i := len(messages) - 1; i >= 0; i-- {
-						if m, ok := messages[i].(map[string]interface{}); ok {
-							if role, ok := m["role"].(string); ok && role == "user" {
-								if content, ok := m["content"].(string); ok {
-									autoContextDebug = mcp.AutoSearchMemoryDebugQuery(userID, content)
-									autoContext = compactText(autoContextDebug.Context, 1200)
-									break
-								}
-							}
-						}
-					}
-				}
-			} else {
-				recentContextSource += "+followup_priority"
-				AddDebugTrace("chat", "context.followup_priority", "Suppressed broad memory retrieval for a contextual follow-up", map[string]interface{}{
-					"user_input":           compactText(initialUserInputText, 180),
-					"recent_context_turns": recentContextTurns,
-				})
-			}
 		}
 	}
 
@@ -6546,11 +6519,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			if repairedArgsJSON, repaired := chatharness.RepairMissingReadWebPageArguments(lastToolName, lastToolArgsStr, initialUserInputText); repaired {
 				lastToolArgsStr = repairedArgsJSON
 			}
-			if repairedArgsJSON, repaired := chatharness.RepairMissingSearchToolArguments(lastToolName, lastToolArgsStr, initialUserInputText, recentContext); repaired {
+			if repairedArgsJSON, repaired := chatharness.RepairMissingSearchToolArguments(lastToolName, lastToolArgsStr, initialUserInputText); repaired {
 				lastToolArgsStr = repairedArgsJSON
-			}
-			if refinedArgsJSON, refined := chatharness.RefineContextualFollowupSearchQuery(lastToolName, lastToolArgsStr, initialUserInputText, recentContext); refined {
-				lastToolArgsStr = refinedArgsJSON
 			}
 			if refinedArgsJSON, refined := chatharness.RefineFamilySearchToolArguments(lastToolName, lastToolArgsStr, initialUserInputText); refined {
 				lastToolArgsStr = refinedArgsJSON

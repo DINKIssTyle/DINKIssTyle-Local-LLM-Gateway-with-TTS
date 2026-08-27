@@ -312,6 +312,7 @@ const {
     normalizeMarkdownForRender,
     renderLooseMarkdownToHtml,
     sanitizeRenderedMarkdownHtml,
+    selectRetrievalConversationContext,
     shouldFallbackToLooseMarkdown
 } = appUtils;
 
@@ -6090,7 +6091,9 @@ function buildChatPayload({ text, currentImage, temperatureOverride = null, repe
 
     const messageSource = contextStrategy === 'history'
         ? AppState.chat.messages.slice(-((parseInt(config.historyCount, 10) || 10) * 2))
-        : AppState.chat.messages.slice(-1);
+        : contextStrategy === 'retrieval'
+            ? selectRetrievalConversationContext(AppState.chat.messages)
+            : AppState.chat.messages.slice(-1);
 
     const payloadHistory = messageSource.map(m => {
         if (m.image) {

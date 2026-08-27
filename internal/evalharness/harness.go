@@ -412,10 +412,6 @@ func (r Runner) Run(ctx context.Context, scenario Scenario) Report {
 	}
 	memorySnapshot := scenario.MemorySnapshot
 	activeContext := scenario.ActiveContext
-	if strings.TrimSpace(scenario.RecentContext) != "" && chatharness.IsLikelyContextualFollowup(scenario.Prompt) {
-		memorySnapshot = ""
-		activeContext = ""
-	}
 	prepared, err := chatharness.PrepareRequest(chatharness.RequestInput{
 		Body: requestBody, EndpointRaw: r.Config.Endpoint, TokenRaw: r.Config.APIKey,
 		LLMMode: "standard", ContextStrategy: contextStrategy, EnableTools: toolsEnabled, Tools: tools,
@@ -510,7 +506,7 @@ func (r Runner) Run(ctx context.Context, scenario Scenario) Report {
 			arguments = "{}"
 		}
 		repairedArguments := false
-		if repaired, ok := chatharness.RepairMissingSearchToolArguments(name, arguments, scenario.Prompt, scenario.RecentContext); ok {
+		if repaired, ok := chatharness.RepairMissingSearchToolArguments(name, arguments, scenario.Prompt); ok {
 			arguments = repaired
 			repairedArguments = true
 		}
