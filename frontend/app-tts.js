@@ -63,6 +63,10 @@
             if (!text) return '';
             let cleaned = String(text);
 
+            // Remove reasoning before HTML stripping destroys its delimiters.
+            // An unfinished reasoning block must stay silent during streaming.
+            cleaned = cleaned.replace(/<think\b[^>]*>[\s\S]*?(?:<\/think\s*>|$)/gi, ' ');
+
             // Remove markdown code blocks
             cleaned = cleaned.replace(/```[\s\S]*?```/g, ' ');
             // Remove inline code
@@ -81,8 +85,6 @@
             cleaned = cleaned.replace(/[*_~]{1,3}([^*_~]+)[*_~]{1,3}/g, '$1');
             // Remove HTML tags
             cleaned = cleaned.replace(/<[^>]*>/g, ' ');
-            // Remove thinking blocks
-            cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, ' ');
             // Use Supertonic speech cleaner
             if (global.DKSTSupertonic3?.cleanSpeechText) {
                 cleaned = global.DKSTSupertonic3.cleanSpeechText(cleaned);
@@ -466,11 +468,17 @@
             }
         }
 
+        function maskStreamingReasoning(text) {
+            // Keep source offsets stable while suppressing reasoning across sentence chunks.
+            return String(text || '').replace(/<think\b[^>]*>[\s\S]*?(?:<\/think\s*>|$)/gi,
+                (block) => ' '.repeat(block.length));
+        }
+
         function feedStreamingTTS(fullDisplayText) {
             const state = getPlaybackState?.() || {};
             if (!state.streamingTTSActive) return;
 
-            const rawText = String(fullDisplayText || '');
+            const rawText = maskStreamingReasoning(fullDisplayText);
             if (rawText.length <= streamingCommittedIndex) return;
 
             const uncommitted = rawText.slice(streamingCommittedIndex);
@@ -546,7 +554,7 @@
         }
 
         function finalizeStreamingTTS(finalDisplayText) {
-            const rawText = String(finalDisplayText || '');
+            const rawText = maskStreamingReasoning(finalDisplayText);
             if (rawText.length > streamingCommittedIndex) {
                 const remaining = rawText.slice(streamingCommittedIndex);
                 const clean = cleanTextForTTS(remaining);

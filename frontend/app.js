@@ -1011,12 +1011,8 @@ async function handleStreamEvent(json, ctx) {
     }
     else if (eventType === 'chat.end') { handleChatEndEvent(json, ctx); }
     else if (eventType === 'request.complete') {
-        ctx.serverCompleted = true;
-        ctx.lastServerCompletion = json;
-        if (typeof json.final_assistant_content === 'string' && json.final_assistant_content.trim()) {
-            ctx.fullText = json.final_assistant_content;
-            ctx.hadAssistantContent = true;
-        }
+        applyServerCompletion(json, ctx);
+
     }
     else if (eventType === 'prompt_processing.progress') { renderProgressDock(t('progress.processingPrompt'), json.progress * 100, 'prompt-processing', false); }
     else if (eventType.startsWith('model_load.')) { handleModelLoadEvent(json, ctx); }
@@ -1025,6 +1021,19 @@ async function handleStreamEvent(json, ctx) {
     if (contentToAdd) {
         await handleContentAddition(contentToAdd, speechToAdd, ctx);
     }
+}
+
+function applyServerCompletion(payload, ctx) {
+    ctx.serverCompleted = true;
+    ctx.lastServerCompletion = payload;
+    if (typeof payload.final_assistant_content !== 'string') return;
+    // This snapshot is authoritative, including an intentionally empty answer.
+    ctx.fullText = payload.final_assistant_content;
+    ctx.hadAssistantContent = !!ctx.fullText.trim();
+    AppState.session.replay.messageBuffers.set(ctx.elementId, ctx.fullText);
+    finalizeMessageContent(ctx.elementId, ctx.fullText);
+    upsertChatMessageState({ role: 'assistant', content: ctx.fullText, turnId: ctx.turnId });
+    if (ctx.hadAssistantContent) setAssistantActionBarReady(ctx.elementId);
 }
 
 function finalizeStream(ctx, upstreamError = null) {
@@ -2643,7 +2652,7 @@ async function probeServerReachability() {
         : null;
 
     try {
-        const response = await fetch('/api/health', {
+        const response = await fetch('/api/health/live', {
             method: 'GET',
             credentials: 'include',
             cache: 'no-store',
@@ -4312,6 +4321,9 @@ function applyCurrentChatSessionSnapshot(session) {
 
 function applyCurrentChatSessionEvent(entry) {
     if (!entry?.EventType) return;
+    // Polling and SSE can deliver the same persisted event concurrently.
+    const eventSeq = Number(entry.EventSeq || 0);
+    if (eventSeq > 0 && eventSeq <= AppState.session.eventSeq) return;
 
     let payload = {};
     try {
@@ -4441,7 +4453,7 @@ function applyCurrentChatSessionEvent(entry) {
             hideProgressDock();
             const next = typeof payload.full_content === 'string'
                 ? payload.full_content
-                : appendStreamChunkDedup(AppState.session.replay.messageBuffers.get(assistantId) || '', String(payload.content || ''));
+                : appendStreamDelta(AppState.session.replay.messageBuffers.get(assistantId) || '', String(payload.content || ''));
 
             // Deep Sync Rationale: Do not buffer the "Generation in progress..." placeholder text
             // so that it doesn't get treated as final content if the server doesn't send a full_content payload later.
@@ -4523,7 +4535,7 @@ function applyCurrentChatSessionEvent(entry) {
                     : (Number.isFinite(Number(payload.elapsed_ms)) ? Number(payload.elapsed_ms) : null);
                 if (reasoningAssistantId) {
                     const prevReasoning = AppState.session.replay.reasoningBuffers.get(reasoningAssistantId) || '';
-                    const nextReasoning = appendStreamChunkDedup(prevReasoning, reasoningText);
+                    const nextReasoning = appendStreamDelta(prevReasoning, reasoningText);
                     AppState.session.replay.reasoningBuffers.set(reasoningAssistantId, nextReasoning);
                     if (isLocalActiveTurn) {
                         showReasoningStatus(reasoningAssistantId, nextReasoning || '...', false, elapsedMs);
@@ -5005,7 +5017,7 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
                 currentAssistantId = ensureAssistantId(currentTurnId, entry.EventSeq);
                 const next = typeof payload.full_content === 'string'
                     ? payload.full_content
-                    : appendStreamChunkDedup(assistantTextById.get(currentAssistantId) || '', String(payload.content || ''));
+                    : appendStreamDelta(assistantTextById.get(currentAssistantId) || '', String(payload.content || ''));
                 assistantTextById.set(currentAssistantId, next);
                 break;
             }
@@ -5030,7 +5042,7 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
                 if (currentAssistantId) {
                     const prev = reasoningTextById.get(currentAssistantId) || '';
                     const delta = String(payload.content || payload.reasoning_content || payload.text || payload.delta?.content || '');
-                    const next = appendStreamChunkDedup(prev, delta);
+                    const next = appendStreamDelta(prev, delta);
                     reasoningTextById.set(currentAssistantId, next);
                 }
                 break;
@@ -8374,8 +8386,8 @@ function detachCurrentAudioPlaybackListeners() {
     return ttsController.detachCurrentAudioPlaybackListeners();
 }
 
-function appendStreamChunkDedup(existingText, nextChunk) {
-    return chatStreamingController.appendStreamChunkDedup(existingText, nextChunk);
+function appendStreamDelta(existingText, nextChunk) {
+    return chatStreamingController.appendStreamDelta(existingText, nextChunk);
 }
 
 function deduplicateTrailingParagraph(text) {

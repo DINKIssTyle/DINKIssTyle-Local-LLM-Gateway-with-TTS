@@ -811,7 +811,8 @@ func GenerateAudio(audioData []float32, sampleRate int, format string) ([]byte, 
 
 // Helper functions
 func preprocessText(text string, lang string) string {
-	text = norm.NFKD.String(text)
+	// Keep syllables composed while applying language-sensitive punctuation rules.
+	text = norm.NFKC.String(text)
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
 
@@ -825,18 +826,13 @@ func preprocessText(text string, lang string) string {
 	text = regexp.MustCompile(`([^\s.!?])\n`).ReplaceAllString(text, "$1. ")
 	text = regexp.MustCompile(`\n+`).ReplaceAllString(text, ", ")
 
-	// Remove all characters except allowed ones (Letters, Numbers, Basic Punctuation)
-	// We use \p{L} to support accented characters for French, Spanish, Portuguese, etc.
-	// This still excludes symbols like arrows (→) or math symbols.
-	allowedPattern := regexp.MustCompile(`[^\p{L}\p{N}\s.,!?:;'"\(\)\[\]\-]`)
+	// Map punctuation before filtering so contractions and ranges survive.
+	text = strings.NewReplacer(
+		"_", " ", "“", "\"", "”", "\"", "‘", "'", "’", "'",
+		"–", "-", "—", "-", "−", "-", "。", ".", "！", "!", "？", "?",
+	).Replace(text)
+	allowedPattern := regexp.MustCompile(`[^\p{L}\p{M}\p{N}\s.,!?:;'"\(\)\[\]\-]`)
 	text = allowedPattern.ReplaceAllString(text, " ")
-
-	replacements := map[string]string{
-		"_": " ", "\u201C": "\"", "\u201D": "\"", "\u2018": "'", "\u2019": "'",
-	}
-	for old, new := range replacements {
-		text = strings.ReplaceAll(text, old, new)
-	}
 
 	// First normalize all whitespace to single spaces
 	text = regexp.MustCompile(`\s+`).ReplaceAllString(text, " ")
@@ -861,7 +857,8 @@ func preprocessText(text string, lang string) string {
 		lang = "en"
 	}
 
-	text = fmt.Sprintf("<%s>%s</%s>", lang, text, lang)
+	// The model consumes decomposed Unicode, including accent marks and Hangul Jamo.
+	text = fmt.Sprintf("<%s>%s</%s>", lang, norm.NFKD.String(text), lang)
 	return text
 }
 

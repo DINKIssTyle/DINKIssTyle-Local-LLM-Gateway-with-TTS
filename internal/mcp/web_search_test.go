@@ -207,63 +207,35 @@ func TestFormattedSearchResultsExposeProviderAndRetrievalTime(t *testing.T) {
 	}
 }
 
-func TestFreshSearchGuidanceRequiresAuthoritativeRefinementForBlogs(t *testing.T) {
-	formatted := formatSearchResultsWithGuidance("latest AI model news 2026", "duckduckgo", []webSearchResult{{
-		Title: "SEO roundup", Link: "https://example.tistory.com/ai", Snippet: "Unverified claims.",
-	}})
-	for _, expected := range []string{"refine_search_for_authoritative_source", "no_authoritative_or_reputable_source", "Do not present these results as verified facts"} {
-		if !strings.Contains(formatted, expected) {
-			t.Fatalf("weak-source guidance omitted %q:\n%s", expected, formatted)
+func TestSearchEvidencePreservesProviderOrderWithoutDomainJudgment(t *testing.T) {
+	results := []webSearchResult{
+		{Title: "Apple", Link: "https://apple.com/newsroom/update", Snippet: "Release details", PublishedAt: "2026-09-10"},
+		{Title: "Google", Link: "https://store.google.com/product/fold", Snippet: "Price details"},
+		{Title: "Independent report", Link: "https://example.tistory.com/report", Snippet: "Firsthand details"},
+		{Title: "News", Link: "https://reuters.com/report", Snippet: "Reporting"},
+	}
+	content := formatSearchResultsWithGuidance("latest news", "test", results)
+	last := -1
+	for _, result := range results {
+		pos := strings.Index(content, "Title: "+result.Title)
+		if pos <= last {
+			t.Fatalf("provider order changed: %s", content)
+		}
+		last = pos
+		if !strings.Contains(content, result.Snippet) {
+			t.Fatal("lost evidence")
 		}
 	}
-
-	official := formatSearchResultsWithGuidance("latest AI model news 2026", "duckduckgo", []webSearchResult{{
-		Title: "Official update", Link: "https://openai.com/news/update", Snippet: "Primary-source details.",
-	}})
-	if strings.Contains(official, "no_authoritative_or_reputable_source") {
-		t.Fatalf("official source was classified as weak:\n%s", official)
+	handle := formatBufferedSourceHandle(&BufferedWebSource{SourceID: "test", ToolName: "search_web", Content: content, FetchedAt: time.Now()})
+	for _, output := range []string{content, handle} {
+		for _, forbidden := range []string{"Source Quality:", "Top Result Quality:", "Evidence Quality Warning:", "refine_search_for_authoritative_source", "weak buffer"} {
+			if strings.Contains(output, forbidden) {
+				t.Fatalf("domain verdict leaked: %s", output)
+			}
+		}
 	}
-	if got := classifySearchResultQuality("https://www.reuters.com/technology/ai/"); got != "reputable_news" {
-		t.Fatalf("Reuters quality=%s", got)
-	}
-}
-
-func TestSearchFormattingRanksHighQualityEvidenceFirst(t *testing.T) {
-	formatted := formatSearchResultsWithGuidance("latest AI news 2026", "duckduckgo", []webSearchResult{
-		{Title: "Blog", Link: "https://example.tistory.com/post", Snippet: "Discovery lead."},
-		{Title: "Official", Link: "https://openai.com/index/release", Snippet: "Primary evidence."},
-	})
-	if strings.Index(formatted, "Title: Official") > strings.Index(formatted, "Title: Blog") {
-		t.Fatalf("official evidence was not ranked ahead of a blog:\n%s", formatted)
-	}
-	if !strings.Contains(formatted, "Top Result Quality: authoritative") {
-		t.Fatalf("ranked top-result quality was not updated:\n%s", formatted)
-	}
-}
-
-func TestBufferedSearchHandleCarriesWeakSourceWarning(t *testing.T) {
-	content := formatSearchResultsWithGuidance("latest AI model news 2026", "duckduckgo", []webSearchResult{{
-		Title: "SEO roundup", Link: "https://example.tistory.com/ai", Snippet: "Unverified claims.",
-	}})
-	handle := formatBufferedSourceHandle(&BufferedWebSource{
-		SourceID: "src_weak", ToolName: "search_web", Query: "latest AI model news 2026",
-		Content: content, FetchedAt: time.Now(),
-	})
-	if !strings.Contains(handle, "refine_search_for_authoritative_source") || !strings.Contains(handle, "no_authoritative_or_reputable_source") {
-		t.Fatalf("buffered preview lost weak-source guidance:\n%s", handle)
-	}
-}
-
-func TestBufferedSearchHandleCarriesPageReadGuidance(t *testing.T) {
-	content := formatSearchResultsWithGuidance("Go 1.25 official release notes", "duckduckgo", []webSearchResult{{
-		Title: "Go 1.25 Release Notes", Link: "https://go.dev/doc/go1.25", Snippet: strings.Repeat("Official release note details. ", 12),
-	}})
-	handle := formatBufferedSourceHandle(&BufferedWebSource{
-		SourceID: "src_official", ToolName: "search_web", Query: "Go 1.25 official release notes",
-		Content: content, FetchedAt: time.Now(),
-	})
-	if !strings.Contains(handle, "read_top_result_if_more_detail_is_needed") {
-		t.Fatalf("buffered preview lost page-read guidance:\n%s", handle)
+	if !strings.Contains(content, "Published At: 2026-09-10") {
+		t.Fatal("publication date lost")
 	}
 }
 

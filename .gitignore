@@ -19,6 +19,7 @@ all_funcs.txt
 !internal/core/tray_test.go
 !internal/mcp/web_search_test.go
 !internal/mcp/live_tools_test.go
+!internal/skillkit/loader_test.go
 !internal/promptkit/runtime_tools_test.go
 !internal/toolruntime/runtime_test.go
 !internal/toolruntime/tool_contract_test.go

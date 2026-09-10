@@ -82,31 +82,17 @@
         if (currentUserIndex < 0) return source.slice(-1);
 
         const currentUser = source[currentUserIndex];
-        let previousAssistantIndex = -1;
-        for (let index = currentUserIndex - 1; index >= 0; index -= 1) {
-            const message = source[index];
-            if (message?.role !== 'assistant') continue;
-            if (!String(message.content || '').trim()) continue;
-            previousAssistantIndex = index;
-            break;
-        }
-        if (previousAssistantIndex < 0) return [currentUser];
-
-        const previousAssistant = source[previousAssistantIndex];
-        const assistantTurnID = String(previousAssistant.turnId || '').trim();
-        let previousUserIndex = -1;
-        for (let index = previousAssistantIndex - 1; index >= 0; index -= 1) {
-            const message = source[index];
-            if (message?.role !== 'user') continue;
-            const messageTurnID = String(message.turnId || '').trim();
-            if (!assistantTurnID || !messageTurnID || messageTurnID === assistantTurnID) {
-                previousUserIndex = index;
-                break;
-            }
-        }
-
+        // Resolve follow-ups against the immediately preceding request, even
+        // when that request failed before an assistant message was saved.
+        let previousUserIndex = currentUserIndex - 1;
+        while (previousUserIndex >= 0 && source[previousUserIndex]?.role !== 'user') previousUserIndex -= 1;
         if (previousUserIndex < 0) return [currentUser];
-        return [source[previousUserIndex], previousAssistant, currentUser];
+        const previousUser = source[previousUserIndex];
+        const previousAssistant = source.slice(previousUserIndex + 1, currentUserIndex).find(message =>
+            message?.role === 'assistant' && String(message.content || '').trim()
+            && (!message.turnId || !previousUser.turnId || message.turnId === previousUser.turnId));
+        return previousAssistant ? [previousUser, previousAssistant, currentUser] : [previousUser, currentUser];
+
     }
 
     function renderLooseInlineMarkdown(text) {
@@ -256,6 +242,17 @@
         }).join('');
     }
 
+    function protectMarkdownLinks(text) {
+        const placeholders = [];
+        const protectedText = normalizeMarkdownOutsideCode(text, segment =>
+            segment.replace(/!?\[(?:\\.|[^\]\\])*\]\((?:\\.|[^()\\]|\([^()]*\))*\)/g, value => {
+                const token = `DKSTPROTECTEDLINK${placeholders.length}END`;
+                placeholders.push({ token, value });
+                return token;
+            }));
+        return { protectedText, placeholders };
+    }
+
     function protectMathSegments(text) {
         const placeholders = [];
         let index = 0;
@@ -401,6 +398,8 @@
 
         let normalized = String(text);
         normalized = closeUnbalancedCodeFences(normalized);
+        const protectedLinks = protectMarkdownLinks(normalized);
+        normalized = protectedLinks.protectedText;
         const protectedMath = protectMathSegments(normalized);
         normalized = protectedMath.protectedText;
 
@@ -463,7 +462,7 @@
         );
 
         normalized = restoreProtectedSegments(normalized, protectedTables.placeholders);
-        return restoreProtectedMathSegments(normalized, protectedMath.placeholders);
+        return restoreProtectedSegments(restoreProtectedMathSegments(normalized, protectedMath.placeholders), protectedLinks.placeholders);
     }
 
     function sanitizeRenderedMarkdownHtml(html) {

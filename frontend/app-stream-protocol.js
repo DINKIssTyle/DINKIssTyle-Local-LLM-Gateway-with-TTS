@@ -40,7 +40,7 @@
                 eventName = value.trim() || 'message';
             } else if (field === 'data') {
                 dataLines.push(value);
-            } else if (separator < 0 && line.trimStart().startsWith('{')) {
+            } else if (line.trimStart().startsWith('{')) {
                 // A few OpenAI-compatible servers send raw JSON inside an SSE
                 // response. Keep this compatibility at the protocol boundary.
                 dataLines.push(line.trim());

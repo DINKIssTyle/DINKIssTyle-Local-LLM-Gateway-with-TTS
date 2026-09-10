@@ -53,3 +53,19 @@ test('normalizes a JSON named error event to the canonical error field', () => {
         { type: 'error', message: 'upstream failed', error: { message: 'upstream failed' } }
     ]);
 });
+
+test('accepts raw JSON from compatible servers', () => {
+    const parser = new SSEParser();
+    assert.deepEqual(parser.parse(encoder.encode('{"type":"message.delta","content":"안녕"}\n\n')), [
+        { type: 'message.delta', content: '안녕' }
+    ]);
+});
+
+test('reassembles Korean and emoji across every byte boundary', () => {
+    const bytes = encoder.encode('event: message.delta\r\ndata: {"content":"한글🙂"}\r\n\r\ndata: [DONE]\r\n\r\n');
+    for (let split = 0; split <= bytes.length; split++) {
+        const parser = new SSEParser();
+        const events = [...parser.parse(bytes.slice(0, split)), ...parser.parse(bytes.slice(split)), ...parser.finish()];
+        assert.deepEqual(events, [{ type: 'message.delta', content: '한글🙂' }, { type: 'stream.done' }], `split ${split}`);
+    }
+});

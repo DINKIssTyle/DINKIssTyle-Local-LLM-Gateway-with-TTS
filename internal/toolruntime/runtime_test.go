@@ -3,6 +3,7 @@ package toolruntime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -71,6 +72,33 @@ func TestRegistryHidesMemoryToolsWhenMemoryDisabled(t *testing.T) {
 func TestRegistryValidatesRequiredArguments(t *testing.T) {
 	if _, err := Default.Call(context.Background(), ExecutionContext{}, "search_web", json.RawMessage(`{}`)); err == nil {
 		t.Fatal("missing required argument unexpectedly accepted")
+	}
+}
+
+func TestInvalidPageArgumentsCanBeCorrectedWithoutExecutingHandler(t *testing.T) {
+	r := NewRegistry()
+	calls := 0
+	err := r.Register(Definition{Name: "read_web_page", InputSchema: json.RawMessage(`{"type":"object","required":["url"],"properties":{"url":{"type":"string"}}}`)},
+		func(_ context.Context, _ ExecutionContext, args json.RawMessage) (Result, error) {
+			calls++
+			return Result{Content: "page content"}, nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range []string{`{}`, `{"url":""}`, `{"url":7}`} {
+		result, err := r.Call(context.Background(), ExecutionContext{}, "read_web_page", json.RawMessage(args))
+		var invalid *ArgumentError
+		if !errors.As(err, &invalid) || !result.IsError || calls != 0 {
+			t.Fatalf("invalid call executed or lost its error type: calls=%d result=%+v err=%v", calls, result, err)
+		}
+		if !strings.Contains(result.Content, `"required":["url"]`) || !strings.Contains(result.Content, "not executed") {
+			t.Fatalf("missing actionable schema feedback: %s", result.Content)
+		}
+	}
+	result, err := r.Call(context.Background(), ExecutionContext{}, "read_web_page", json.RawMessage(`{"url":"https://example.com/weather"}`))
+	if err != nil || result.IsError || calls != 1 {
+		t.Fatalf("corrected call failed: %+v %v calls=%d", result, err, calls)
 	}
 }
 

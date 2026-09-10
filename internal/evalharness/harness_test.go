@@ -187,7 +187,7 @@ Open the MSN current weather page directly and read the 현재 날씨 section.
 		BuiltinSkillsDir: builtin,
 	}, Client: client}
 	report := runner.Run(context.Background(), Scenario{
-		ID: "weather-skill", Prompt: "요청한 지역의 현재 날씨를 알려주세요", MaxTurns: 1,
+		ID: "weather-skill", Prompt: "$msn-weather-current 요청한 지역의 현재 날씨를 알려주세요", MaxTurns: 1,
 		Expectations: Expectations{RequiredSkills: []string{"builtin:msn-weather-current"}},
 	})
 	if !report.Passed || report.SkillPromptChars == 0 || len(report.SelectedSkills) != 1 {
@@ -225,10 +225,10 @@ func TestRunnerRecoversQwenTextualToolCall(t *testing.T) {
 	}
 }
 
-func TestRunnerRejectsTextualToolCallAfterFinalAnswerBoundary(t *testing.T) {
+func TestRunnerCanContinueAfterMissingBufferedSource(t *testing.T) {
 	responses := []string{
 		`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_read","type":"function","function":{"name":"read_buffered_source","arguments":"{\"source_id\":\"missing\"}"}}]}}]}`,
-		`{"choices":[{"message":{"role":"assistant","content":"<tool_call><function=search_web><parameter=query>more searching</parameter></function></tool_call>"}}]}`,
+		`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_read_again","type":"function","function":{"name":"read_buffered_source","arguments":"{\"source_id\":\"another-source\"}"}}]}}]}`,
 		`{"choices":[{"message":{"role":"assistant","content":"확보한 근거가 부족하여 확인할 수 없었습니다."}}]}`,
 	}
 	requestCount := 0
@@ -245,12 +245,12 @@ func TestRunnerRejectsTextualToolCallAfterFinalAnswerBoundary(t *testing.T) {
 		}, nil
 	})}
 	runner := Runner{Config: Config{Endpoint: "http://example.invalid", Model: "test-model", APIKey: "test-key"}, Client: client}
-	report := runner.Run(context.Background(), Scenario{ID: "final-boundary", Prompt: "lookup", MaxTurns: 2})
+	report := runner.Run(context.Background(), Scenario{ID: "final-boundary", Prompt: "lookup", MaxTurns: 3})
 	if !report.Passed || report.FinalAnswer == "" {
 		t.Fatalf("protocol correction did not recover a final answer: %#v", report)
 	}
-	if len(report.ToolTrace) != 1 || report.ToolTrace[0].Name != "read_buffered_source" {
-		t.Fatalf("tool intent after final boundary was executed: %#v", report.ToolTrace)
+	if len(report.ToolTrace) != 2 || report.ToolTrace[1].Name != "read_buffered_source" {
+		t.Fatalf("follow-up tool was not available after an unsuccessful read: %#v", report.ToolTrace)
 	}
 }
 

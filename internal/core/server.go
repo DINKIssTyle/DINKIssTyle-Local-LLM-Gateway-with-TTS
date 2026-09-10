@@ -178,117 +178,6 @@ func lastRunes(input string, limit int) string {
 	return strings.TrimSpace(string(runes[len(runes)-limit:]))
 }
 
-var reasoningLoopSentencePattern = regexp.MustCompile(`[^.!?。！？]+[.!?。！？]+`)
-
-func detectReasoningRunawayRepetition(text string) (string, string, bool) {
-	sectionText := text
-	sectionRunes := []rune(sectionText)
-	if len(sectionRunes) > 8000 {
-		sectionText = string(sectionRunes[len(sectionRunes)-8000:])
-	}
-
-	normalized := strings.Join(strings.Fields(text), " ")
-	runes := []rune(normalized)
-	if len(runes) < 140 {
-		return "", "", false
-	}
-	if len(runes) > 6000 {
-		runes = runes[len(runes)-6000:]
-		normalized = string(runes)
-	}
-
-	if snippet, ok := detectRepeatedSuffixRunes(runes, 6, 180, 9); ok {
-		return compactText(snippet, 80), "chunk-loop", true
-	}
-	if snippet, ok := detectRepeatedSuffixRunes(runes, 50, 260, 6); ok {
-		return compactText(snippet, 120), "long-chunk-loop", true
-	}
-	if snippet, ok := detectRepeatedSuffixRunes(runes, 240, 1200, 3); ok {
-		return compactText(snippet, 160), "section-loop", true
-	}
-	if snippet, ok := detectRepeatedReasoningSection(sectionText); ok {
-		return compactText(snippet, 160), "repeated-section", true
-	}
-
-	words := strings.Fields(normalized)
-	if len(words) >= 12 {
-		lastWord := strings.ToLower(words[len(words)-1])
-		if len([]rune(lastWord)) >= 2 && len([]rune(lastWord)) <= 30 {
-			count := 1
-			for i := len(words) - 2; i >= 0; i-- {
-				if strings.ToLower(words[i]) != lastWord {
-					break
-				}
-				count++
-			}
-			if count >= 12 {
-				return lastWord, "word-loop", true
-			}
-		}
-	}
-
-	return "", "", false
-}
-
-func detectRepeatedReasoningSection(text string) (string, bool) {
-	seen := make(map[string]int)
-	addCandidate := func(candidate string) (string, bool) {
-		segment := strings.Join(strings.Fields(candidate), " ")
-		if len([]rune(segment)) < 36 {
-			return "", false
-		}
-		key := strings.ToLower(segment)
-		seen[key]++
-		if seen[key] >= 4 {
-			return segment, true
-		}
-		return "", false
-	}
-
-	for _, line := range strings.Split(text, "\n") {
-		if snippet, ok := addCandidate(line); ok {
-			return snippet, true
-		}
-	}
-
-	for _, sentence := range reasoningLoopSentencePattern.FindAllString(strings.Join(strings.Fields(text), " "), -1) {
-		if snippet, ok := addCandidate(sentence); ok {
-			return snippet, true
-		}
-	}
-
-	return "", false
-}
-
-func detectRepeatedSuffixRunes(runes []rune, minUnit, maxUnit, minRepeats int) (string, bool) {
-	if minUnit <= 0 || maxUnit < minUnit || minRepeats < 2 {
-		return "", false
-	}
-	for unitLen := minUnit; unitLen <= maxUnit && unitLen*minRepeats <= len(runes); unitLen++ {
-		unitStart := len(runes) - unitLen
-		unit := string(runes[unitStart:])
-		repeats := 1
-		for start := unitStart - unitLen; start >= 0; start -= unitLen {
-			if string(runes[start:start+unitLen]) != unit {
-				break
-			}
-			repeats++
-		}
-		if repeats >= minRepeats {
-			return unit, true
-		}
-	}
-	return "", false
-}
-
-func detectReasoningPayloadRunawayRepetition(payloadMap map[string]interface{}) (string, string, bool) {
-	reasoningContent := extractReasoningContent(payloadMap)
-	if strings.TrimSpace(reasoningContent) == "" {
-		return "", "", false
-	}
-	return detectReasoningRunawayRepetition(reasoningContent)
-}
-
 func normalizeRelaxedToolArgsJSON(raw string) (string, bool) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -1949,7 +1838,7 @@ func webEvidenceBudgetMessage(total int) string {
 	if total <= 0 {
 		total = webEvidenceToolBudget
 	}
-	return fmt.Sprintf("Web evidence budget reached after %d tool calls. Stop searching or reading more sources in this answer. If the evidence already returned is strong enough, answer from it. If it is weak, conflicting, or off-topic, say that you could not verify the answer well enough and ask whether to continue with deeper research.", total)
+	return fmt.Sprintf("Web evidence budget reached after %d tool calls. Stop searching or reading more sources in this answer. If the evidence already returned is strong enough, answer from it. If it is weak, conflicting, or off-topic, say that you could not verify the answer well enough and identify the specific missing information.", total)
 }
 
 func isDeepWebResearchRequest(text string) bool {
@@ -3005,6 +2894,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	mux.HandleFunc("/api/logout", handleLogout(authMgr))
 	mux.HandleFunc("/api/logout-all-sessions", AuthMiddleware(authMgr, handleLogoutAllSessions(authMgr)))
 	mux.HandleFunc("/api/auth/check", handleAuthCheck(authMgr))
+	mux.HandleFunc("/api/health/live", handleServerLiveness)
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(app.CheckHealth())
@@ -3284,6 +3174,10 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 
 	// Serve web.html at root (Chat UI for web)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// App entrypoints have stable filenames; always revalidate after a dev rebuild.
+		if r.URL.Path == "/" || r.URL.Path == "/index.html" || r.URL.Path == "/web.html" || strings.HasPrefix(r.URL.Path, "/app") {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
 		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
 			// Serve web.html from embedded FS
 			f, err := frontendFS.Open("web.html")
@@ -5061,8 +4955,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	reasoningStartedAt := time.Time{}
 	reasoningAccumulatedMs := int64(0)
 	reasoningResponse := ""
-	reasoningRunawayDetected := false
-	reasoningRunawayMessage := ""
 	toolUsageCounts := make(map[string]int)
 	toolSignatureCounts := make(map[string]int)
 	webSearchEvidenceAttempts := 0
@@ -5121,46 +5013,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		}
 	}
 
-	emitReasoningRunaway := func(snippet, source string) bool {
-		if strings.TrimSpace(snippet) == "" {
-			return false
-		}
-		reasoningRunawayDetected = true
-		reasoningRunawayMessage = fmt.Sprintf("LMSTUDIO_RUNAWAY_REPETITION: repetitive reasoning detected (%s)", source)
-		appendChatEvent("assistant", "error", map[string]interface{}{
-			"type":             "error",
-			"error":            reasoningRunawayMessage,
-			"code":             "LMSTUDIO_RUNAWAY_REPETITION",
-			"phase":            "reasoning",
-			"snippet":          snippet,
-			"total_elapsed_ms": requestElapsedMs(),
-		})
-		if jsonBytes, err := json.Marshal(map[string]interface{}{
-			"error":   reasoningRunawayMessage,
-			"code":    "LMSTUDIO_RUNAWAY_REPETITION",
-			"phase":   "reasoning",
-			"snippet": snippet,
-		}); err == nil {
-			emitStreamChunk(fmt.Sprintf("data: %s", string(jsonBytes)))
-		}
-		AddDebugTrace("chat", "reasoning.loop", "Stopped stream due to repetitive reasoning", map[string]interface{}{
-			"snippet": compactText(snippet, 160),
-			"source":  source,
-		})
-		return true
-	}
-
-	recordReasoningDeltaAndCheckLoop := func(content string) bool {
-		if content == "" {
-			return false
-		}
-		reasoningResponse += content
-		if snippet, source, ok := detectReasoningRunawayRepetition(reasoningResponse); ok {
-			return emitReasoningRunaway(snippet, source)
-		}
-		return false
-	}
-
 	// --- TURN LOOP START ---
 	maxToolTurns := 10
 	if bulkToolTestRequest {
@@ -5172,8 +5024,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		nativeToolLoopDetected := false
 		nativeToolLoopMessage := ""
 		reasoningResponse = ""
-		reasoningRunawayDetected = false
-		reasoningRunawayMessage = ""
 		pendingNativeToolName := ""
 		nativeExecuteCommandCount := 0
 		nativeExecuteCommandFamilyCounts := make(map[string]int)
@@ -5608,9 +5458,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 								if reasoningDeltaText == "" {
 									reasoningDeltaText, _ = eventPayload["text"].(string)
 								}
-								if recordReasoningDeltaAndCheckLoop(reasoningDeltaText) {
-									break streamScanLoop
-								}
+								reasoningResponse += reasoningDeltaText
 							case "reasoning.end":
 								if !reasoningActive {
 									reasoningActive = true
@@ -5706,10 +5554,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 							continue
 						} else if msgType == "chat.end" || msgType == "message.end" {
 							log.Printf("[handleChat-DEBUG] Custom End Signal Received: %s", msgType)
-							if snippet, source, ok := detectReasoningPayloadRunawayRepetition(chunk); ok {
-								emitReasoningRunaway(snippet, source)
-								break streamScanLoop
-							}
 
 							// Capture response_id for chaining in stateful mode.
 							if strings.TrimSpace(dataStr) != "" {
@@ -6135,9 +5979,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 											"total_elapsed_ms": requestElapsedMs(),
 										})
 									}
-									if recordReasoningDeltaAndCheckLoop(reasoningText) {
-										break streamScanLoop
-									}
+									reasoningResponse += reasoningText
 									appendChatEvent("assistant", "reasoning.delta", map[string]interface{}{
 										"type":             "reasoning.delta",
 										"content":          reasoningText,
@@ -6415,16 +6257,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			break
 		}
 
-		if reasoningRunawayDetected {
-			AddDebugTrace("chat", "turn.complete", "Turn stopped due to repetitive reasoning", map[string]interface{}{
-				"turn":           turn,
-				"elapsed_ms":     time.Since(turnStart).Milliseconds(),
-				"reason":         compactText(reasoningRunawayMessage, 200),
-				"response_chars": len(fullResponse),
-			})
-			break
-		}
-
 		// Recover local models that print a JSON tool wrapper as assistant text
 		// instead of using the provider's native function-call field.
 		if enableTools && isBuffering {
@@ -6522,16 +6354,11 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			if repairedArgsJSON, repaired := chatharness.RepairMissingSearchToolArguments(lastToolName, lastToolArgsStr, initialUserInputText); repaired {
 				lastToolArgsStr = repairedArgsJSON
 			}
-			if refinedArgsJSON, refined := chatharness.RefineFamilySearchToolArguments(lastToolName, lastToolArgsStr, initialUserInputText); refined {
-				lastToolArgsStr = refinedArgsJSON
-			}
+
 			if refinedArgsJSON, refined := chatharness.RefineExactLookupToolArguments(lastToolName, lastToolArgsStr, initialUserInputText); refined {
 				lastToolArgsStr = refinedArgsJSON
 			}
-			if upgradedName, upgradedArgsJSON, upgraded := chatharness.UpgradeFreshnessSearchToolCall(lastToolName, lastToolArgsStr, initialUserInputText); upgraded {
-				lastToolName = upgradedName
-				lastToolArgsStr = upgradedArgsJSON
-			}
+
 			if lastToolArgsStr != rawToolArgumentsForEvent {
 				var repairedArgs interface{}
 				_ = json.Unmarshal([]byte(lastToolArgsStr), &repairedArgs)
@@ -6577,7 +6404,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			var result string
 			var err error
 			toolActuallyCalled := false
-			duplicateToolCall := false
 			webEvidenceToolCalls := totalToolUsageFor(toolUsageCounts, isWebEvidenceTool)
 			webSearchProviderCalls := totalToolUsageFor(toolUsageCounts, isWebSearchProviderTool)
 			if isWebEvidenceTool(lastToolName) && webEvidenceToolCalls > webEvidenceBudget {
@@ -6588,28 +6414,28 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 					"count": webEvidenceToolCalls,
 				})
 			} else if isWebSearchProviderTool(lastToolName) && webSearchProviderCalls > webSearchProviderLimit {
-				result = fmt.Sprintf("Web search provider budget reached after %d searches. Do not search another provider in this answer. If the evidence already buffered is strong enough, answer from it. If it is weak, conflicting, or off-topic, say you could not verify the answer well enough and ask whether to continue with deeper research.", webSearchProviderCalls-1)
+				result = fmt.Sprintf("Web search provider budget reached after %d searches. Do not search another provider in this answer. If the evidence already buffered is strong enough, answer from it. If it is weak, conflicting, or off-topic, say you could not verify the answer well enough and identify the specific missing information.", webSearchProviderCalls-1)
 				AddDebugTrace("chat", "tool.skipped", "Skipped web search provider due to combined per-request budget", map[string]interface{}{
 					"turn":  turn,
 					"tool":  lastToolName,
 					"count": webSearchProviderCalls,
 				})
 			} else if lastToolName == "read_buffered_source" && toolUsageCounts[lastToolName] > bufferedSourceReadLimit {
-				result = "read_buffered_source already ran multiple times in this answer. Stop reading more buffered excerpts. If the evidence already returned is strong enough, answer from it; otherwise say the evidence is insufficient and ask whether to continue with deeper research."
+				result = "read_buffered_source already ran multiple times in this answer. Stop reading more buffered excerpts. If the evidence already returned is strong enough, answer from it; otherwise say the evidence is insufficient and identify the specific missing information."
 				AddDebugTrace("chat", "tool.skipped", "Skipped repeated buffered source read due to per-request budget", map[string]interface{}{
 					"turn":  turn,
 					"tool":  lastToolName,
 					"count": toolUsageCounts[lastToolName],
 				})
 			} else if (lastToolName == "search_web" || lastToolName == "naver_search") && toolUsageCounts[lastToolName] > webSearchProviderLimit {
-				result = fmt.Sprintf("Tool budget reached for %s. Do not search again in this answer. If the evidence already buffered is strong enough, answer from it; otherwise say the evidence is insufficient and ask whether to continue with deeper research.", lastToolName)
+				result = fmt.Sprintf("Tool budget reached for %s. Do not search again in this answer. If the evidence already buffered is strong enough, answer from it; otherwise say the evidence is insufficient and identify the specific missing information.", lastToolName)
 				AddDebugTrace("chat", "tool.skipped", "Skipped repeated web search due to per-request budget", map[string]interface{}{
 					"turn":  turn,
 					"tool":  lastToolName,
 					"count": toolUsageCounts[lastToolName],
 				})
 			} else if lastToolName == "read_web_page" && toolUsageCounts[lastToolName] > 2 {
-				result = "read_web_page already ran multiple times in this answer. Avoid more page reads unless the user explicitly asks to retry. If buffered evidence is strong enough, answer from it; otherwise say the evidence is insufficient and ask whether to continue with deeper research."
+				result = "read_web_page already ran multiple times in this answer. Avoid more page reads unless the user explicitly asks to retry. If buffered evidence is strong enough, answer from it; otherwise say the evidence is insufficient and identify the specific missing information."
 				AddDebugTrace("chat", "tool.skipped", "Skipped repeated page read due to per-request budget", map[string]interface{}{
 					"turn":  turn,
 					"tool":  lastToolName,
@@ -6632,7 +6458,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 					"count":   executeCommandFamilyCounts[executeCommandFamily],
 				})
 			} else if toolSignatureCounts[toolSig] > 1 {
-				duplicateToolCall = true
 				result = fmt.Sprintf("Duplicate tool call prevented for %s with near-identical arguments. Use existing buffered evidence and continue answering.", lastToolName)
 				AddDebugTrace("chat", "tool.skipped", "Skipped duplicate tool call with same arguments", map[string]interface{}{
 					"turn":  turn,
@@ -6644,7 +6469,18 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				toolResult, callErr := toolruntime.Default.Call(chatCtx, toolExecCtx, lastToolName, json.RawMessage(lastToolArgsStr))
 				result, err = toolResult.Content, callErr
 			}
-			if toolActuallyCalled && isWebSearchProviderTool(lastToolName) {
+			// Validation failures have not executed a tool. Let the model repair
+			// the call without consuming execution or duplicate-call budgets.
+			var argumentError *toolruntime.ArgumentError
+			invalidArguments := errors.As(err, &argumentError)
+			if invalidArguments {
+				toolUsageCounts[lastToolName] -= toolUsageWeight
+				toolSignatureCounts[toolSig]--
+				if executeCommandFamily != "" {
+					executeCommandFamilyCounts[executeCommandFamily]--
+				}
+			}
+			if toolActuallyCalled && !invalidArguments && isWebSearchProviderTool(lastToolName) {
 				webSearchEvidenceAttempts += toolUsageWeight
 			}
 			var toolResultEvt map[string]interface{}
@@ -6680,7 +6516,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				}
 			}
 			toolEvidenceSourceCount := 0
-			if isWebEvidenceTool(lastToolName) {
+			if !invalidArguments && isWebEvidenceTool(lastToolName) {
 				sources := chatharness.ExtractWebEvidenceSources(result, 6)
 				toolEvidenceSourceCount = len(sources)
 				if len(sources) > 0 {
@@ -6703,7 +6539,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			appendChatEvent("assistant", fmt.Sprintf("%v", toolResultEvt["type"]), toolResultEvt)
 			emitStreamChunk(fmt.Sprintf("data: %s", string(resBytes)))
 
-			if chatharness.ShouldFailClosedWebSearch(lastToolName, err, toolEvidenceSourceCount) {
+			if !invalidArguments && chatharness.ShouldFailClosedWebSearch(lastToolName, err, toolEvidenceSourceCount) {
 				failureAnswer := chatharness.BuildWebSearchFailureAnswer(initialUserInputText, err.Error())
 				fullResponse = ""
 				emitCanonicalAssistantDelta(failureAnswer)
@@ -6718,32 +6554,11 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			if llmMode == "stateful" && lastResponseID == "" {
 				log.Printf("[handleChat] WARNING: No lastResponseID captured for turn %d. Multi-turn might break.", turn)
 			}
-			freshnessSensitive := chatharness.IsFreshnessSensitiveWebRequest(initialUserInputText)
-			requireFreshnessCrossCheck := freshnessSensitive &&
-				isWebSearchProviderTool(lastToolName) &&
-				webSearchEvidenceAttempts < 2 &&
-				!duplicateToolCall &&
-				!isDeepWebResearchRequest(initialUserInputText) &&
-				!bulkToolTestRequest
-			finalAnswerOnly := chatharness.ShouldFinalizeAfterWebSearch(
-				lastToolName,
-				result,
-				isDeepWebResearchRequest(initialUserInputText),
-				bulkToolTestRequest,
-			)
-			if requireFreshnessCrossCheck {
-				finalAnswerOnly = false
-			}
-			if isWebSearchProviderTool(lastToolName) && webSearchEvidenceAttempts >= webSearchProviderLimit {
-				finalAnswerOnly = true
-			}
-			if duplicateToolCall {
-				finalAnswerOnly = true
-			}
-			singleSearchRefinement := strings.Contains(strings.ToLower(result), "evidence quality warning: no_authoritative_or_reputable_source")
-			if finalAnswerOnly {
-				singleSearchRefinement = false
-			}
+			// The model decides whether the evidence answers the question. A search
+			// provider budget does not prevent reading pages already discovered.
+			finalAnswerOnly := false
+			requireFreshnessCrossCheck := false
+			singleSearchRefinement := false
 			reqMap, body, _ = chatharness.PrepareToolFollowupRequest(chatharness.ToolFollowupInput{
 				LLMMode:                    llmMode,
 				ModelID:                    modelID,
@@ -6806,34 +6621,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			}
 		}
 
-		if strings.TrimSpace(fullResponse) == "" && strings.TrimSpace(reasoningResponse) != "" && !toolExecutedThisTurn {
-			if harvested, ok := chatharness.HarvestFinalAnswerFromReasoning(reasoningResponse); ok {
-				fullResponse = harvested
-				AddDebugTrace("chat", "final_answer.harvested", "Harvested complete final answer directly from reasoning output", map[string]interface{}{
-					"turn":            turn,
-					"harvested_chars": len([]rune(harvested)),
-				})
-				payload := map[string]interface{}{
-					"choices": []interface{}{
-						map[string]interface{}{
-							"delta": map[string]string{
-								"content": harvested,
-							},
-						},
-					},
-				}
-				if jsonBytes, err := json.Marshal(payload); err == nil {
-					emitStreamChunk(fmt.Sprintf("data: %s", string(jsonBytes)))
-				}
-				appendChatEvent("assistant", "message.delta", map[string]interface{}{
-					"type":         "message.delta",
-					"content":      harvested,
-					"full_content": fullResponse,
-				})
-			}
-		}
-
-		shouldRecoverReasoning := strings.TrimSpace(reasoningResponse) != "" && !toolExecutedThisTurn && !reasoningOnlyFinalRecoveryUsed && turn < maxToolTurns-1 && (strings.TrimSpace(fullResponse) == "" || (len([]rune(fullResponse)) < 40 && len([]rune(reasoningResponse)) > 400))
+		shouldRecoverReasoning := strings.TrimSpace(reasoningResponse) != "" && !toolExecutedThisTurn && !reasoningOnlyFinalRecoveryUsed && turn < maxToolTurns-1 && strings.TrimSpace(fullResponse) == ""
 		if shouldRecoverReasoning {
 			reasoningOnlyFinalRecoveryUsed = true
 			var recoveryErr error
@@ -6865,32 +6653,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		})
 		break
 	} // --- TURN LOOP END ---
-
-	if strings.TrimSpace(fullResponse) == "" && strings.TrimSpace(reasoningResponse) != "" {
-		if harvested, ok := chatharness.HarvestFinalAnswerFromReasoning(reasoningResponse); ok {
-			fullResponse = harvested
-			AddDebugTrace("chat", "final_answer.harvested_post_loop", "Harvested final answer from reasoning after turn loop ended", map[string]interface{}{
-				"harvested_chars": len([]rune(harvested)),
-			})
-			payload := map[string]interface{}{
-				"choices": []interface{}{
-					map[string]interface{}{
-						"delta": map[string]string{
-							"content": harvested,
-						},
-					},
-				},
-			}
-			if jsonBytes, err := json.Marshal(payload); err == nil {
-				emitStreamChunk(fmt.Sprintf("data: %s", string(jsonBytes)))
-			}
-			appendChatEvent("assistant", "message.delta", map[string]interface{}{
-				"type":         "message.delta",
-				"content":      harvested,
-				"full_content": fullResponse,
-			})
-		}
-	}
 
 	if cleanedResponse, stripped := stripLeadingPromptToolArtifacts(fullResponse, promptTools); stripped {
 		AddDebugTrace("chat", "tool.final_quarantine", "Removed leaked textual tool wrapper from the final assistant answer", map[string]interface{}{

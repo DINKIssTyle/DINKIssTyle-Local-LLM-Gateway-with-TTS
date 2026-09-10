@@ -43,6 +43,18 @@ type Result struct {
 	Meta    map[string]interface{} `json:"meta,omitempty"`
 }
 
+// ArgumentError means validation rejected the call before its handler ran.
+type ArgumentError struct {
+	Tool  string
+	Cause error
+}
+
+func (e *ArgumentError) Error() string {
+	return fmt.Sprintf("invalid arguments for %s: %v", e.Tool, e.Cause)
+}
+
+func (e *ArgumentError) Unwrap() error { return e.Cause }
+
 type Handler func(context.Context, ExecutionContext, json.RawMessage) (Result, error)
 
 type registeredTool struct {
@@ -124,7 +136,8 @@ func (r *Registry) Call(ctx context.Context, execCtx ExecutionContext, name stri
 		arguments = json.RawMessage(`{}`)
 	}
 	if err := validateRequiredArguments(tool.definition.InputSchema, arguments); err != nil {
-		return Result{IsError: true}, fmt.Errorf("invalid arguments for %s: %w", name, err)
+		feedback := fmt.Sprintf("The tool was not executed. Correct the arguments using this input schema and call the tool again if needed: %s\nUse values supported by the conversation or previous tool results. Do not invent missing values; search for them or ask the user when necessary. This is an argument validation failure, not evidence that the service is unavailable.", tool.definition.InputSchema)
+		return Result{IsError: true, Content: feedback}, &ArgumentError{Tool: name, Cause: err}
 	}
 	if err := ctx.Err(); err != nil {
 		return Result{IsError: true}, err

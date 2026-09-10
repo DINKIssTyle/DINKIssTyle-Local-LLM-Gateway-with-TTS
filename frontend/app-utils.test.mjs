@@ -40,7 +40,7 @@ test('does not inject an incomplete assistant placeholder into retrieval context
         currentUser
     ];
 
-    assert.deepEqual(selectRetrievalConversationContext(messages), [currentUser]);
+    assert.deepEqual(selectRetrievalConversationContext(messages), [messages[0], currentUser]);
 });
 
 test('uses only the immediately preceding completed turn in retrieval context', () => {
@@ -66,4 +66,23 @@ test('does not emit an orphan assistant message when its user turn is unavailabl
     ];
 
     assert.deepEqual(selectRetrievalConversationContext(messages), [currentUser]);
+});
+
+test('retry context never jumps over the most recent failed request', () => {
+    const messages = [
+        { role: 'user', content: '미국 뉴스', turnId: 'a' },
+        { role: 'assistant', content: '뉴스 답변', turnId: 'a' },
+        { role: 'user', content: '루멘텀 회사 설명', turnId: 'b' },
+        { role: 'assistant', content: '', turnId: 'b' },
+        { role: 'user', content: '다시 시도', turnId: 'c' }
+    ];
+    assert.deepEqual(selectRetrievalConversationContext(messages).map(m => m.content), ['루멘텀 회사 설명', '다시 시도']);
+});
+
+test('keeps article title pipes, brackets and URL punctuation inside markdown links', () => {
+    for (const source of [
+        '- [LG·SKT·업스테이지 독파모 3파전 | 연합뉴스](https://example.com/a)',
+        '- [보고서 1. - 최신](https://example.com/a?q=1#section)',
+        '- [\\[특징주\\] 뉴스 | 매체](https://example.com/a_(b))'
+    ]) assert.equal(normalizeMarkdownForRender(source), source);
 });

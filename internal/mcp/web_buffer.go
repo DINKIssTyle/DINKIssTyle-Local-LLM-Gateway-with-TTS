@@ -401,12 +401,6 @@ func formatBufferedSearchEvidence(source *BufferedWebSource) string {
 	fmt.Fprintf(&b, "Live Web Search Evidence\n")
 	fmt.Fprintf(&b, "Source ID: %s\n", source.SourceID)
 	fmt.Fprintf(&b, "Retrieved At: %s\n", source.FetchedAt.Format(time.RFC3339))
-	if strings.Contains(source.Content, "Recommended Next Action: refine_search_for_authoritative_source") {
-		fmt.Fprintf(&b, "Recommended Next Action: refine_search_for_authoritative_source\n")
-		fmt.Fprintf(&b, "Evidence Quality Warning: no_authoritative_or_reputable_source\n")
-	} else if strings.Contains(source.Content, "Recommended Next Action: read_top_result_if_more_detail_is_needed") {
-		fmt.Fprintf(&b, "Recommended Next Action: read_top_result_if_more_detail_is_needed\n")
-	}
 	perSection := 4
 	if len(sections) > 1 {
 		perSection = 2
@@ -442,9 +436,6 @@ func formatBufferedSearchEvidence(source *BufferedWebSource) string {
 			}
 			if result.PublishedAt != "" {
 				fmt.Fprintf(&b, "Published At: %s\n", result.PublishedAt)
-			}
-			if result.Quality != "" {
-				fmt.Fprintf(&b, "Source Quality: %s\n", result.Quality)
 			}
 			if result.Snippet != "" {
 				fmt.Fprintf(&b, "Snippet: %s\n", compactMemoryText(result.Snippet, 180))

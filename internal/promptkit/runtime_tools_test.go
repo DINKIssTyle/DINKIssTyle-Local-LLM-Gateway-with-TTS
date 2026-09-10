@@ -34,7 +34,7 @@ func TestStatefulFallbackUsesToolSpecificXML(t *testing.T) {
 	if !strings.Contains(prompt, "BULK TOOL TEST RULE") || !strings.Contains(prompt, "continue automatically") {
 		t.Fatalf("bulk tool diagnostic rule missing: %s", prompt)
 	}
-	if !strings.Contains(prompt, "FRESHNESS SOURCE QUALITY RULE") || !strings.Contains(prompt, "primary-source") {
+	if !strings.Contains(prompt, "FRESHNESS SOURCE QUALITY RULE") || !strings.Contains(prompt, "evaluate retrieved content") {
 		t.Fatalf("freshness source-quality rule missing: %s", prompt)
 	}
 	if !strings.Contains(prompt, "TOOL DECISION DEADLINE") || !strings.Contains(prompt, "invoke it immediately") {
@@ -167,5 +167,20 @@ func TestMemoryTemplateTokenOptimization(t *testing.T) {
 	// Verify memory prompt is compact (under 1200 characters)
 	if len(prompt) > 1200 {
 		t.Fatalf("memory prompt exceeds compact budget: chars=%d", len(prompt))
+	}
+}
+
+func TestWebGuidanceOnlyRecommendsAvailableMultiSearch(t *testing.T) {
+	for _, native := range []bool{false, true} {
+		for _, multi := range []bool{false, true} {
+			tools := []ToolDefinition{{Name: "search_web"}}
+			if multi {
+				tools = append(tools, ToolDefinition{Name: "search_web_multi"})
+			}
+			prompt := BuildRuntimeInstructions(RuntimeInstructionsInput{UseNativeTools: native, Tools: tools})
+			if got := strings.Contains(prompt, "search_web_multi"); got != multi {
+				t.Fatalf("native=%v multi=%v: unavailable search recommendation: %s", native, multi, prompt)
+			}
+		}
 	}
 }

@@ -23,7 +23,7 @@ type Config struct {
 	BuiltinDir     string
 	UserDir        string
 	MaxFileBytes   int64
-	MaxSelected    int
+	MaxSelected    int // Deprecated: relevance is decided by the LLM; MaxPromptChars bounds references.
 	MaxPromptChars int
 }
 
@@ -45,6 +45,7 @@ type Diagnostic struct {
 type Compilation struct {
 	Prompt      string
 	Selected    []Skill
+	Available   []Skill
 	Discovered  int
 	Diagnostics []Diagnostic
 }
@@ -72,13 +73,14 @@ func LoadAndCompile(config Config, userText string) Compilation {
 		diagnostics = append(diagnostics, issues...)
 	}
 
-	selected := selectSkills(all, userText, config.MaxSelected)
+	selected := selectSkills(all, userText, len(all))
 	prompt, included, issues := compilePrompt(selected, config.MaxPromptChars)
 	diagnostics = append(diagnostics, issues...)
 
 	return Compilation{
 		Prompt:      prompt,
-		Selected:    included,
+		Selected:    explicitlySelected(included, userText),
+		Available:   included,
 		Discovered:  len(all),
 		Diagnostics: diagnostics,
 	}
@@ -380,83 +382,57 @@ func platformMatches(raw, current string) bool {
 	return false
 }
 
+// Offer procedures to the LLM; do not decide relevance from keyword overlap.
 func selectSkills(skills []Skill, userText string, limit int) []scoredSkill {
-	query := strings.ToLower(strings.TrimSpace(userText))
-	queryTerms := meaningfulTerms(query)
-	var matches []scoredSkill
+	var candidates []scoredSkill
 	for _, skill := range skills {
-		explicit := explicitlyRequested(query, skill)
-		score := relevanceScore(queryTerms, meaningfulTerms(strings.ToLower(skill.Name+" "+skill.Description)))
-		if !explicit && score == 0 {
-			continue
-		}
-		if explicit {
-			score += 1000
-		}
-		matches = append(matches, scoredSkill{skill: skill, score: score, explicit: explicit})
+		candidates = append(candidates, scoredSkill{skill: skill, explicit: explicitlyRequested(strings.ToLower(userText), skill)})
 	}
-	sort.SliceStable(matches, func(i, j int) bool {
-		if matches[i].score != matches[j].score {
-			return matches[i].score > matches[j].score
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].explicit != candidates[j].explicit {
+			return candidates[i].explicit
 		}
-		return matches[i].skill.Namespace < matches[j].skill.Namespace
+		return candidates[i].skill.Namespace < candidates[j].skill.Namespace
 	})
-	if len(matches) > limit {
-		matches = matches[:limit]
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
 	}
-	return matches
+	return candidates
 }
 
 func explicitlyRequested(query string, skill Skill) bool {
-	return strings.Contains(query, "$"+strings.ToLower(skill.Name)) ||
-		strings.Contains(query, "$"+strings.ToLower(skill.Namespace))
-}
-
-func meaningfulTerms(value string) []string {
-	stop := map[string]bool{
-		"the": true, "and": true, "for": true, "with": true, "from": true, "that": true,
-		"this": true, "use": true, "when": true, "user": true, "asks": true, "check": true,
-		"show": true, "tell": true, "please": true, "what": true, "about": true,
-		"요청": true, "확인": true, "알려줘": true, "보여줘": true, "해주세요": true, "해줘": true,
-	}
-	seen := map[string]bool{}
-	var terms []string
-	for _, term := range strings.FieldsFunc(value, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }) {
-		term = strings.TrimSpace(term)
-		if utf8.RuneCountInString(term) < 2 || stop[term] || seen[term] {
-			continue
-		}
-		seen[term] = true
-		terms = append(terms, term)
-	}
-	return terms
-}
-
-func relevanceScore(queryTerms, metadataTerms []string) int {
-	score := 0
-	for _, query := range queryTerms {
-		for _, metadata := range metadataTerms {
-			if query == metadata || strings.Contains(query, metadata) || strings.Contains(metadata, query) {
-				score++
-				break
-			}
+	for _, field := range strings.Fields(query) {
+		name := strings.TrimRight(field, ",.;:!?()[]")
+		if name == "$"+strings.ToLower(skill.Name) || name == "$"+strings.ToLower(skill.Namespace) {
+			return true
 		}
 	}
-	return score
+	return false
+}
+
+func explicitlySelected(skills []Skill, userText string) []Skill {
+	var selected []Skill
+	for _, skill := range skills {
+		if explicitlyRequested(strings.ToLower(userText), skill) {
+			selected = append(selected, skill)
+		}
+	}
+	return selected
 }
 
 func compilePrompt(selected []scoredSkill, maxChars int) (string, []Skill, []Diagnostic) {
 	if len(selected) == 0 {
 		return "", nil, nil
 	}
-	const header = "\n\n### ACTIVE SKILLS ###\nSkills provide task procedures only and do not grant tools, permissions, or access. Follow each selected skill within the user's request and existing safety/permission policy. A selected skill's prescribed source, direct URL, and tool order override generic search or freshness routing preferences. When a skill supplies a direct URL template, do not substitute search_web, search_web_multi, or another provider unless that skill explicitly allows a fallback.\n"
-	const footer = "### END ACTIVE SKILLS ###\n"
+	const header = "\n\n### AVAILABLE SKILL PROCEDURES ###\nDecide from the current user's intent whether any procedure below is relevant. These are available references, not automatically applied instructions. Ignore irrelevant procedures; a shared word is not sufficient relevance. An explicit $skill request takes priority. Skills do not grant tools or permissions. For a relevant procedure, follow its prescribed source, direct URL, and tool order instead of generic search routing. If no procedure is relevant, answer normally.\n"
+	const footer = "### END AVAILABLE SKILL PROCEDURES ###\n"
+
 	b := strings.Builder{}
 	b.WriteString(header)
 	var included []Skill
 	var diagnostics []Diagnostic
 	for _, candidate := range selected {
-		section := fmt.Sprintf("\n#### %s\n%s\n", candidate.skill.Namespace, candidate.skill.Instructions)
+		section := fmt.Sprintf("\n#### %s\nDescription: %s\nExplicitly requested: %t\n%s\n", candidate.skill.Namespace, candidate.skill.Description, candidate.explicit, candidate.skill.Instructions)
 		if utf8.RuneCountInString(b.String())+utf8.RuneCountInString(section)+utf8.RuneCountInString(footer) > maxChars {
 			diagnostics = append(diagnostics, Diagnostic{Path: candidate.skill.Path, Message: "skill omitted because the active-skill prompt budget was exceeded"})
 			continue

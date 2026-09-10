@@ -580,7 +580,7 @@ func (a *App) GetServerStatus() map[string]interface{} {
 
 func isLocalServerHealthy(port string) bool {
 	client := &http.Client{Timeout: 1200 * time.Millisecond}
-	resp, err := client.Get("http://127.0.0.1:" + port + "/api/health")
+	resp, err := client.Get("http://127.0.0.1:" + port + "/api/health/live")
 	if err != nil {
 		return false
 	}

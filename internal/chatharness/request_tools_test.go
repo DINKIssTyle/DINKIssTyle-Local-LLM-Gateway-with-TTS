@@ -295,31 +295,12 @@ func TestCompactToolResultPreservesOriginalKoreanLanguage(t *testing.T) {
 }
 
 func TestShouldFinalizeAfterWebSearch(t *testing.T) {
-	directResult := "Search Guidance\nRecommended Next Action: answer_from_search_if_sufficient\n---\nTitle: News"
-	if !ShouldFinalizeAfterWebSearch("search_web", directResult, false, false) {
-		t.Fatal("ordinary successful web search did not request a final answer")
-	}
-	pageReadResult := "Search Guidance\nRecommended Next Action: read_top_result_if_more_detail_is_needed"
-	if ShouldFinalizeAfterWebSearch("search_web", pageReadResult, false, false) {
-		t.Fatal("search result that recommends a page read was finalized too early")
-	}
-	if ShouldFinalizeAfterWebSearch("search_web", directResult, true, false) {
-		t.Fatal("deep research was finalized after its first search")
-	}
-	if !ShouldFinalizeAfterWebSearch("search_web", "No results found or parsing failed.", false, false) {
-		t.Fatal("ordinary failed search was allowed to repeat instead of reporting insufficient evidence")
-	}
-	if !ShouldFinalizeAfterWebSearch("read_buffered_source", "Relevant Excerpts:\nverified details", false, false) {
-		t.Fatal("focused buffered-source read did not force the final answer")
-	}
-	if ShouldFinalizeAfterWebSearch("read_buffered_source", "Evidence Quality Warning: no_authoritative_or_reputable_source", false, false) {
-		t.Fatal("weak buffered evidence prevented an authoritative refinement search")
-	}
-	if ShouldFinalizeAfterWebSearch("search_web", "Recommended Next Action: refine_search_for_authoritative_source", false, false) {
-		t.Fatal("weak search evidence was finalized before authoritative refinement")
-	}
-	if ShouldFinalizeAfterWebSearch("read_web_page", "Buffered Web Source Saved", false, false) {
-		t.Fatal("page buffering was finalized before the focused source read")
+	for _, tool := range []string{"search_web", "read_web_page", "read_buffered_source"} {
+		for _, result := range []string{"Snippet: facts", "No results", "Evidence Quality Warning: no_authoritative_or_reputable_source"} {
+			if ShouldFinalizeAfterWebSearch(tool, result, false, false) {
+				t.Fatalf("premature finalization for %s", tool)
+			}
+		}
 	}
 }
 
@@ -364,13 +345,6 @@ func TestMissingSearchQueryRecoveryUsesOnlyCurrentRequest(t *testing.T) {
 	unchanged, repairedExisting := RepairMissingSearchToolArguments("search_web", `{"query":"Tom Cruise children"}`, "자녀들 정보")
 	if repairedExisting || unchanged != `{"query":"Tom Cruise children"}` {
 		t.Fatalf("valid model arguments were overwritten: %q", unchanged)
-	}
-	refined, refinedFamily := RefineFamilySearchToolArguments("search_web", unchanged, "자녀들 정보")
-	if !refinedFamily || !strings.Contains(refined, "adopted biological children relationship") {
-		t.Fatalf("family search did not verify relationship type: %q", refined)
-	}
-	if secondPass, changed := RefineFamilySearchToolArguments("search_web", refined, "자녀들 정보"); changed || secondPass != refined {
-		t.Fatalf("family search refinement was not idempotent: %q", secondPass)
 	}
 	standalone, repairedStandalone := RepairMissingSearchToolArguments("search_web", `{}`, "훈민정음의 창제 원리 검색")
 	if !repairedStandalone || strings.Contains(standalone, "탐크루즈") {
@@ -487,46 +461,22 @@ func TestFreshnessSensitiveWebRequestAndCrossCheckPrompt(t *testing.T) {
 	}
 	messages := req["messages"].([]interface{})
 	content, _ := messages[len(messages)-1].(map[string]interface{})["content"].(string)
-	for _, expected := range []string{"freshness-sensitive request", "exactly one additional web search", "Do not repeat the previous query", "source links"} {
+	for _, expected := range []string{"Evaluate each claim", "source links"} {
 		if !strings.Contains(content, expected) {
 			t.Fatalf("freshness cross-check prompt omitted %q:\n%s", expected, content)
 		}
 	}
 }
 
-func TestFreshnessSingleSearchUpgradesToParallelCrossCheck(t *testing.T) {
-	name, arguments, upgraded := UpgradeFreshnessSearchToolCall(
-		"search_web",
-		`{"query":"2026 AI model news"}`,
-		"오늘 최신 AI 모델 뉴스를 알려 주세요",
-	)
-	if !upgraded || name != "search_web_multi" {
-		t.Fatalf("fresh search was not upgraded: name=%q arguments=%s", name, arguments)
-	}
-	var payload struct {
-		Queries []string `json:"queries"`
-	}
-	if err := json.Unmarshal([]byte(arguments), &payload); err != nil {
-		t.Fatal(err)
-	}
-	if len(payload.Queries) != 2 || payload.Queries[0] == payload.Queries[1] || !strings.Contains(payload.Queries[1], "official primary source") {
-		t.Fatalf("upgraded queries are not complementary: %#v", payload.Queries)
-	}
-	if stableName, stableArgs, changed := UpgradeFreshnessSearchToolCall("search_web", `{"query":"Go interfaces"}`, "Go 인터페이스를 설명해 주세요"); changed || stableName != "search_web" || stableArgs == "" {
-		t.Fatalf("stable request was unexpectedly upgraded: %q %s", stableName, stableArgs)
-	}
-}
-
-func TestWeakWebEvidenceRequestsOneSingleAuthoritativeRefinement(t *testing.T) {
-	result := CompactToolResult(
-		"search_web_multi",
-		"Recommended Next Action: refine_search_for_authoritative_source\nEvidence Quality Warning: no_authoritative_or_reputable_source",
-		"오늘 최신 AI 모델 뉴스를 알려 주세요",
-	)
-	for _, expected := range []string{"exactly one refined search_web call", "not search_web_multi", "current year shown by CURRENT_TIME", "Do not read or summarize this buffered source"} {
-		if !strings.Contains(result, expected) {
-			t.Fatalf("weak-evidence refinement prompt omitted %q:\n%s", expected, result)
+func TestWebEvidenceLetsModelAssessUnfamiliarSources(t *testing.T) {
+	result := CompactToolResult("search_web", "Title: Official release\nLink: https://apple.com/newsroom/update\nSnippet: Product released today.", "오늘 소식")
+	for _, unwanted := range []string{"Do not read or summarize", "exactly one refined", "rejected as evidence", "ask whether to continue"} {
+		if strings.Contains(result, unwanted) {
+			t.Fatalf("forced distrust: %s", result)
 		}
+	}
+	if !strings.Contains(result, "unfamiliar domain is not a reason to reject") {
+		t.Fatal(result)
 	}
 }
 
@@ -570,8 +520,8 @@ func TestFreshnessSourceAppendPrefersHighConfidenceEvidence(t *testing.T) {
 	if !strings.Contains(answer, "https://openai.com/index/release") {
 		t.Fatalf("official evidence was omitted:\n%s", answer)
 	}
-	if strings.Contains(answer, "example.tistory.com") {
-		t.Fatalf("weak discovery lead was appended beside official evidence:\n%s", answer)
+	if !strings.Contains(answer, "example.tistory.com") {
+		t.Fatalf("retrieved source was removed by domain:\n%s", answer)
 	}
 }
 
@@ -649,7 +599,7 @@ func TestFinalAnswerOnlyFollowupRemovesNativeTools(t *testing.T) {
 	messages := req["messages"].([]interface{})
 	toolMessage := messages[len(messages)-1].(map[string]interface{})
 	content, _ := toolMessage["content"].(string)
-	for _, expected := range []string{"CURRENT APPLICATION DATE:", "later date is future", "evidence-gathering phase is complete", "Do not call, print, or describe any tool", "using only the supplied evidence", "could not be verified", "한국어로 답하세요"} {
+	for _, expected := range []string{"CURRENT APPLICATION DATE:", "later date is future", "evidence-gathering phase is complete", "Do not call, print, or describe any tool", "using only the supplied evidence", "specific remaining gaps", "한국어로 답하세요"} {
 		if !strings.Contains(content, expected) {
 			t.Fatalf("final-answer guard omitted %q:\n%s", expected, content)
 		}
@@ -681,45 +631,6 @@ func TestReasoningOnlyFinalRecoveryDisablesReasoningAndTools(t *testing.T) {
 	}
 	if _, exists := standard["tools"]; exists {
 		t.Fatalf("standard recovery retained tools: %#v", standard)
-	}
-}
-
-func TestSummarizeReasoningEvidenceExtractsConclusionsAndDrafts(t *testing.T) {
-	longReasoning := strings.Repeat("분석 단계 1: 사용자의 요청에 대해 여러 가능성을 고민합니다. ", 100) +
-		"\nLet's refine the Korean response:\n쿠시 왕국은 고대 아프리카의 번성했던 왕국입니다.\n결론적으로 이집트를 정복한 역사적 사실이 있습니다."
-
-	summary := SummarizeReasoningEvidence(longReasoning)
-	if !strings.Contains(summary, "쿠시 왕국은 고대 아프리카의 번성했던 왕국입니다") {
-		t.Fatalf("reasoning summary lost the vital conclusion draft: %s", summary)
-	}
-	if len(summary) >= len(longReasoning) {
-		t.Fatalf("reasoning summary was not compacted: %d >= %d", len(summary), len(longReasoning))
-	}
-}
-
-func TestHarvestFinalAnswerFromReasoning(t *testing.T) {
-	// Case 1: [Output] -> marker with meta preamble
-	reasoningOutput1 := `This meets all requirements. Output matches. Proceeds.
-Final Output Generation.
-[Output] -> 제공된 검색 결과에 따르면, 타이타닉호 침몰 사고 당시 최연소 생존자는 **밀비나 딘(Millvina Dean)**입니다. 그녀는 배가 침몰하던 당시 생후 9주밖에 되지 않은 영아였으며, 2009년에 세상을 떠난 마지막 생존자 중 한 명으로 기록되어 있습니다.
-출처: [Maestrovirtuale.com](https://example.com)`
-
-	harvested1, ok1 := HarvestFinalAnswerFromReasoning(reasoningOutput1)
-	if !ok1 || !strings.Contains(harvested1, "밀비나 딘(Millvina Dean)") || strings.HasPrefix(harvested1, "[Output]") {
-		t.Fatalf("harvested content failed: %q (ok=%v)", harvested1, ok1)
-	}
-
-	// Case 2: No explicit [Output] marker, but trailing Korean answer after English meta thoughts
-	reasoningOutput2 := `I should double check the dates.
-Let me check the query result.
-The user asked about the youngest survivor.
-All constraints met. Checked: Yes.
-
-타이타닉호 침몰 사고의 최연소 생존자는 생후 2개월이었던 밀비나 딘입니다. 그녀는 2009년 5월 31일 97세의 나이로 사망했습니다.`
-
-	harvested2, ok2 := HarvestFinalAnswerFromReasoning(reasoningOutput2)
-	if !ok2 || !strings.Contains(harvested2, "밀비나 딘") || strings.Contains(harvested2, "All constraints met") {
-		t.Fatalf("reverse-paragraph harvesting failed: %q (ok=%v)", harvested2, ok2)
 	}
 }
 
@@ -800,5 +711,24 @@ func TestBulkToolTestRequestKeepsFollowupRunning(t *testing.T) {
 		if !strings.Contains(content, expected) {
 			t.Fatalf("bulk progress instruction omitted %q:\n%s", expected, content)
 		}
+	}
+}
+
+func TestWebSourceTitleIsSingleLine(t *testing.T) {
+	got := AppendMissingWebEvidenceSources("답변", "설명", []WebEvidenceSource{{Title: "기사\n- 다른 항목\r\n | 매체", URL: "https://example.com/a"}})
+	if !strings.Contains(got, "- [기사 - 다른 항목 | 매체](https://example.com/a)") {
+		t.Fatal(got)
+	}
+}
+
+func TestReasoningContextPreservesUnicodeWithoutClassifyingContent(t *testing.T) {
+	text := strings.Repeat("한글🙂", 2500)
+	got := ReasoningContextForFinalAnswer(text)
+	if !strings.HasPrefix(got, "한글🙂") || !strings.HasSuffix(got, "한글🙂") || strings.ContainsRune(got, '\uFFFD') {
+		t.Fatal("reasoning context corrupted")
+	}
+	short := "Draft Response: this remains context, not a final answer"
+	if ReasoningContextForFinalAnswer(short) != short {
+		t.Fatal("context was rewritten")
 	}
 }

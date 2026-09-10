@@ -230,8 +230,8 @@ func buildToolUsage(envInfo string, modelID string, useNativeTools bool, tools [
 
 		if has("search_web", "search_web_multi", "naver_search", "read_web_page", "read_buffered_source") {
 			lines = append(lines,
-				"7. FRESHNESS SOURCE QUALITY RULE: For current news or rapidly changing claims, use search_web_multi with two distinct complementary queries (discovery + primary-source/established-news verification). Prioritize official sources and reputable newsrooms. Never present SEO blog claims, blog-only rumors, or unverified claims as verified facts; cite returned source links.",
-				"8. Web tools return compact buffered evidence handles; use 1~3 calls max. Answer directly from search evidence when sufficient; call read_web_page only for specific high-value URLs or read_buffered_source for focused excerpts. Do not invent missing dates or retry failed pages/queries repeatedly.",
+				"7. FRESHNESS SOURCE QUALITY RULE: For current claims, evaluate retrieved content, dates, relevance and whether the source directly supports each claim. Prefer original reporting when available. Search or read further when needed, and answer directly with citations when sufficient. Explain specific uncertainty without blanket disclaimers about web evidence.",
+				"8. Web tools return compact buffered evidence handles; decide whether further reading is needed from the evidence. Answer directly from search evidence when sufficient; call read_web_page only for specific high-value URLs or read_buffered_source for focused excerpts. Do not invent missing dates or retry failed pages/queries repeatedly.",
 			)
 		}
 		if has("search_memory", "read_memory", "read_memory_context", "save_user_fact") {
@@ -278,6 +278,9 @@ func buildToolUsage(envInfo string, modelID string, useNativeTools bool, tools [
 	if envInfo != "" && toolDefinitionsContain(tools, "execute_command") {
 		lines = append(lines, "ENVIRONMENT INFO:", strings.TrimRight(envInfo, "\n"))
 	}
+	if has("search_web_multi") {
+		lines = append(lines, "WEB SEARCH BATCHING: Prefer search_web_multi with exactly two complementary queries in one call.")
+	}
 	lines = append(lines, toolGuidelineEndMarker)
 
 	return strings.Join(lines, "\n")
@@ -309,9 +312,9 @@ func nativeToolGuidelines(tools []ToolDefinition) []string {
 	}
 	if has("search_web", "search_web_multi", "naver_search", "read_web_page", "read_buffered_source", "namu_wiki") {
 		lines = append(lines,
-			"WEB: For fresh news, current events, or genuine comparison, use search_web_multi once with exactly two complementary queries: broad discovery plus official/primary or established-news verification, using CURRENT_TIME's year.",
+			"WEB: For fresh news, current events, or genuine comparison, use available search tools with complementary queries: broad discovery plus official/primary or established-news verification, using CURRENT_TIME's year.",
 			"WEB: Usually use one search call and at most three evidence calls. Cite returned links, answer when evidence is sufficient, and read a page/buffer only for missing high-value detail.",
-			"WEB: Do not present weak, conflicting, blog-only, or off-topic evidence as verified. Do not invent missing dates or retry the same failed page/query.",
+			"WEB: Use relevant retrieved evidence and cite it. Resolve material conflicts or missing details with available tools. Qualify only the affected claim; do not invent dates or facts.",
 			"WEB: For relatives, verify and distinguish biological, adopted, and step relationships; never infer birth from wording such as 'children with'.",
 		)
 	}

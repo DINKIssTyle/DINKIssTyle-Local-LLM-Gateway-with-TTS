@@ -75,9 +75,13 @@ func (a *ChatToolAccumulator) AddChunk(chunk map[string]interface{}) bool {
 	choices, _ := chunk["choices"].([]interface{})
 	for _, rawChoice := range choices {
 		choice, _ := rawChoice.(map[string]interface{})
+		// Alternative completions are independent; execute only the primary choice.
+		if numberValue(choice["index"]) != 0 {
+			continue
+		}
 		for _, field := range []string{"delta", "message"} {
 			payload, _ := choice[field].(map[string]interface{})
-			if a.addPayload(payload) {
+			if a.addPayload(payload, field == "message") {
 				found = true
 			}
 		}
@@ -85,36 +89,42 @@ func (a *ChatToolAccumulator) AddChunk(chunk map[string]interface{}) bool {
 	return found
 }
 
-func (a *ChatToolAccumulator) addPayload(payload map[string]interface{}) bool {
+func (a *ChatToolAccumulator) addPayload(payload map[string]interface{}, snapshot bool) bool {
 	if a == nil || payload == nil {
 		return false
 	}
 	found := false
 	toolCalls, _ := payload["tool_calls"].([]interface{})
-	for _, rawCall := range toolCalls {
+	for position, rawCall := range toolCalls {
 		callMap, _ := rawCall.(map[string]interface{})
 		if callMap == nil {
 			continue
 		}
-		index := int(numberValue(callMap["index"]))
-		if a.addFunction(index, callMap["id"], callMap["function"]) {
+		index := position
+		if rawIndex, exists := callMap["index"]; exists {
+			index = int(numberValue(rawIndex))
+		}
+		if a.addFunction(index, callMap["id"], callMap["function"], snapshot) {
 			found = true
 		}
 	}
 
 	// Some OpenAI-compatible servers still emit the pre-tool_calls shape.
 	if function, ok := payload["function_call"].(map[string]interface{}); ok {
-		if a.addFunction(0, nil, function) {
+		if a.addFunction(0, nil, function, snapshot) {
 			found = true
 		}
 	}
 	return found
 }
 
-func (a *ChatToolAccumulator) addFunction(index int, rawID interface{}, rawFunction interface{}) bool {
+func (a *ChatToolAccumulator) addFunction(index int, rawID interface{}, rawFunction interface{}, snapshot bool) bool {
 	function, _ := rawFunction.(map[string]interface{})
 	if function == nil {
 		return false
+	}
+	if a.calls == nil {
+		a.calls = make(map[int]*ProviderToolCall)
 	}
 	call := a.calls[index]
 	if call == nil {
@@ -126,6 +136,9 @@ func (a *ChatToolAccumulator) addFunction(index int, rawID interface{}, rawFunct
 	}
 	if name, _ := function["name"].(string); strings.TrimSpace(name) != "" {
 		call.Name = strings.TrimSpace(name)
+	}
+	if snapshot {
+		call.Arguments = ""
 	}
 	switch arguments := function["arguments"].(type) {
 	case string:

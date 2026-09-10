@@ -29,30 +29,10 @@
         let pendingStreamRenderFrame = 0;
         const pendingStreamRenderUpdates = new Map();
 
-        function appendStreamChunkDedup(existingText, nextChunk) {
-            const prev = String(existingText || '');
-            const chunk = String(nextChunk || '');
-            if (!chunk) return prev;
-            if (!prev) return chunk;
-            if (prev === chunk) return prev;
-            if (prev.endsWith(chunk)) return prev;
-            if (chunk.startsWith(prev)) return chunk;
-            if (chunk.length > prev.length && chunk.includes(prev)) return chunk;
-
-            const maxOverlap = Math.min(prev.length, chunk.length);
-            const minSafeOverlap = 8;
-            for (let overlap = maxOverlap; overlap >= minSafeOverlap; overlap -= 1) {
-                if (prev.slice(-overlap) === chunk.slice(0, overlap)) {
-                    const prevTail = prev.slice(-overlap);
-                    const chunkRemainderFirst = chunk.charAt(overlap);
-                    const prevTailLast = prevTail.charAt(prevTail.length - 1);
-                    if (/\d/.test(prevTailLast) && /\d/.test(chunkRemainderFirst)) {
-                        continue;
-                    }
-                    return prev + chunk.slice(overlap);
-                }
-            }
-            return prev + chunk;
+        function appendStreamDelta(existingText, nextChunk) {
+            // Deltas may legitimately repeat text. Replay deduplication belongs
+            // at the event sequence boundary; snapshots use full_content.
+            return String(existingText || '') + String(nextChunk || '');
         }
 
         function deduplicateTrailingParagraph(text) {
@@ -390,7 +370,7 @@
         }
 
         return {
-            appendStreamChunkDedup,
+            appendStreamDelta,
             deduplicateCommittedPending,
             deduplicateTrailingParagraph,
             finalizeMessageContent,

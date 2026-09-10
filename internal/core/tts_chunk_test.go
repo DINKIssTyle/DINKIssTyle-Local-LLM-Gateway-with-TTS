@@ -254,3 +254,21 @@ func TestTTSScheduleMetaFromAuthenticatedRequest(t *testing.T) {
 		t.Fatalf("unexpected schedule metadata: %+v", meta)
 	}
 }
+
+func TestPreprocessTextPreservesPronunciationAndSentenceBoundaries(t *testing.T) {
+	tests := []struct{ text, lang, want string }{
+		{"café déjà", "fr", "<fr>cafe\u0301 de\u0301ja\u0300.</fr>"},
+		{"l’été", "fr", "<fr>l'e\u0301te\u0301.</fr>"},
+		{"“Hello”", "en", "<en>\"Hello\"</en>"},
+		{"3–5", "en", "<en>3-5.</en>"},
+		{"안녕. 다음", "ko", "<ko>안녕., 다음.</ko>"},
+		{"Hello！ Next？", "en", "<en>Hello!, Next?</en>"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.text, func(t *testing.T) {
+			if got := preprocessText(tt.text, tt.lang); got != tt.want {
+				t.Fatalf("preprocessText = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

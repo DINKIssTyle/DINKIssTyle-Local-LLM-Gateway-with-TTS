@@ -114,3 +114,35 @@ func TestParseProviderToolArgumentsEventMarshalsArgumentObject(t *testing.T) {
 		t.Fatalf("parsed arguments have wrong type: %#v", parsed)
 	}
 }
+
+func TestChatToolAccumulatorKeepsUnindexedSnapshotCallsSeparate(t *testing.T) {
+	var acc ChatToolAccumulator // Zero value must be usable too.
+	chunk := map[string]interface{}{"choices": []interface{}{map[string]interface{}{
+		"message": map[string]interface{}{"tool_calls": []interface{}{
+			map[string]interface{}{"id": "first", "function": map[string]interface{}{"name": "search_web", "arguments": `{"query":"서울"}`}},
+			map[string]interface{}{"id": "second", "function": map[string]interface{}{"name": "get_current_time", "arguments": `{}`}},
+		}},
+	}}}
+	acc.AddChunk(chunk)
+	acc.AddChunk(chunk) // A full snapshot replaces arguments instead of appending them.
+	calls := acc.Calls()
+	if len(calls) != 2 || calls[0].ID != "first" || calls[1].ID != "second" || calls[0].Arguments != `{"query":"서울"}` || calls[1].Arguments != `{}` {
+		t.Fatalf("snapshot calls corrupted: %#v", calls)
+	}
+}
+
+func TestChatToolAccumulatorIgnoresAlternativeChoices(t *testing.T) {
+	acc := NewChatToolAccumulator()
+	for _, index := range []float64{0, 1} {
+		acc.AddChunk(map[string]interface{}{"choices": []interface{}{map[string]interface{}{
+			"index": index,
+			"delta": map[string]interface{}{"tool_calls": []interface{}{map[string]interface{}{
+				"index": float64(0), "function": map[string]interface{}{"name": "read_help", "arguments": `{}`},
+			}}},
+		}}})
+	}
+	calls := acc.Calls()
+	if len(calls) != 1 || calls[0].Arguments != `{}` {
+		t.Fatalf("alternative choice merged into primary: %#v", calls)
+	}
+}

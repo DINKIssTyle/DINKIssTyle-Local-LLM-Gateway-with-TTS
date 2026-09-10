@@ -132,6 +132,7 @@ type Report struct {
 	DurationMS          int64                           `json:"duration_ms"`
 	LLMRounds           int                             `json:"llm_rounds"`
 	ProtocolCorrections int                             `json:"protocol_corrections"`
+	AvailableSkills     []string                        `json:"available_skills,omitempty"`
 	SelectedSkills      []string                        `json:"selected_skills,omitempty"`
 	SkillPromptChars    int                             `json:"skill_prompt_chars,omitempty"`
 	SkillDiagnostics    []skillkit.Diagnostic           `json:"skill_diagnostics,omitempty"`
@@ -395,6 +396,9 @@ func (r Runner) Run(ctx context.Context, scenario Scenario) Report {
 	for _, skill := range skillCompilation.Selected {
 		report.SelectedSkills = append(report.SelectedSkills, skill.Namespace)
 	}
+	for _, skill := range skillCompilation.Available {
+		report.AvailableSkills = append(report.AvailableSkills, skill.Namespace)
+	}
 	report.SkillPromptChars = len([]rune(skillCompilation.Prompt))
 	report.SkillDiagnostics = skillCompilation.Diagnostics
 	requestPayload := map[string]any{
@@ -510,15 +514,7 @@ func (r Runner) Run(ctx context.Context, scenario Scenario) Report {
 			arguments = repaired
 			repairedArguments = true
 		}
-		if refined, ok := chatharness.RefineFamilySearchToolArguments(name, arguments, scenario.Prompt); ok {
-			arguments = refined
-			repairedArguments = true
-		}
-		if upgradedName, upgradedArguments, upgraded := chatharness.UpgradeFreshnessSearchToolCall(name, arguments, scenario.Prompt); upgraded {
-			name = upgradedName
-			arguments = upgradedArguments
-			repairedArguments = true
-		}
+
 		signature := canonicalToolSignature(name, arguments)
 		duplicate := seenSignatures[signature]
 		seenSignatures[signature] = true
