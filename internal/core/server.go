@@ -3064,7 +3064,10 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 							// Global memory toggle is removed, handled per-user
 						}
 						if newCfg.EmbeddingConfig != nil {
-							app.SetEmbeddingModelConfig(*newCfg.EmbeddingConfig)
+							if err := app.SetEmbeddingModelConfig(*newCfg.EmbeddingConfig); err != nil {
+								http.Error(w, err.Error(), http.StatusBadRequest)
+								return
+							}
 						}
 					}
 				}
@@ -3126,7 +3129,10 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 					resp["stateful_token_budget"] = *user.Settings.StatefulTokenBudget
 				}
 				if user.Settings.EmbeddingConfig != nil {
-					resp["embedding_config"] = *user.Settings.EmbeddingConfig
+					userEmbeddingCfg := *user.Settings.EmbeddingConfig
+					userEmbeddingCfg.ModelID = currentEmbeddingModelConfig().ModelID
+					userEmbeddingCfg.Provider = currentEmbeddingModelConfig().Provider
+					resp["embedding_config"] = userEmbeddingCfg
 				}
 				if user.Settings.ApiToken != nil && *user.Settings.ApiToken != "" {
 					resp["has_token"] = true
@@ -4353,6 +4359,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	contextStrategy := defaultContextStrategyForMode(llmMode)
 	enableTools := app.enableTools
 	enableMemory := false // Default to false (Secure by default for unauthenticated)
+	useMemoryVectors := currentEmbeddingModelConfig().Enabled
 
 	var disabledTools []string
 	var locationInfo string
@@ -4411,6 +4418,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				enableMemory = *user.Settings.EnableMemory
 			} else {
 				enableMemory = true // Default to true for authenticated users
+			}
+			if user.Settings.EmbeddingConfig != nil {
+				useMemoryVectors = useMemoryVectors && user.Settings.EmbeddingConfig.Enabled
 			}
 			if user.Settings.DisabledTools != nil {
 				disabledTools = expandDisabledToolAliases(user.Settings.DisabledTools)
@@ -4520,6 +4530,10 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	memorySnapshotDebug := mcp.MemorySnapshotDebug{}
 	autoContextDebug := mcp.AutoSearchMemoryDebug{}
 	if contextStrategy == "retrieval" {
+		if enableMemory && strings.TrimSpace(userID) != "" && chatCtx.Err() == nil {
+			autoContextDebug = mcp.FastMemoryContextWithOptions(userID, initialUserInputText, useMemoryVectors)
+			autoContext = autoContextDebug.Context
+		}
 		recentContext, recentContextTurns, recentContextSource = getRecentConversationContext(userID)
 		if hasPreviousResponseID {
 			recentContext = compactRecentTurnContent(recentContext, recentContextStatefulBudget)
@@ -4558,6 +4572,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			"saved_turn_hits":          autoContextDebug.SavedTurnHits,
 			"chunk_match_count":        autoContextDebug.ChunkMatchCount,
 			"used_synthesis":           autoContextDebug.UsedSynthesis,
+			"memory_search_ms":         autoContextDebug.SearchDurationMs,
 			"__payload": map[string]interface{}{
 				"kind":                  "retrieval_context",
 				"context_strategy":      contextStrategy,

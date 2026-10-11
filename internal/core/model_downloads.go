@@ -217,7 +217,7 @@ func (a *App) getManagedModelDownloadPlan(key string) (ManagedModelStatus, []Dow
 			return nil
 		}, nil
 	case "embedding:multilingual-e5-small":
-		cfg := currentEmbeddingModelConfig()
+		cfg := EmbeddingModelConfig{Provider: "local", ModelID: "multilingual-e5-small", Enabled: true}
 		status := getEmbeddingModelStatus(cfg)
 		installDir := getEmbeddingModelInstallDir("multilingual-e5-small")
 		specs := []DownloadFileSpec{
@@ -231,10 +231,22 @@ func (a *App) getManagedModelDownloadPlan(key string) (ManagedModelStatus, []Dow
 			if _, err := a.ExportEmbeddingModelManifest(); err != nil {
 				return err
 			}
-			cfg := currentEmbeddingModelConfig()
-			cfg.Enabled = true
-			a.SetEmbeddingModelConfig(cfg)
-			return nil
+			return a.SetEmbeddingModelConfig(cfg)
+		}, nil
+	case "embedding:" + jevModelID:
+		cfg := EmbeddingModelConfig{Provider: "local", ModelID: jevModelID, Enabled: true}
+		status := getEmbeddingModelStatus(cfg)
+		installDir := getEmbeddingModelInstallDir(jevModelID)
+		specs := []DownloadFileSpec{{URL: jevModelURL + "/resolve/main/" + jevModelFile, DestPath: filepath.Join(installDir, jevModelFile), Label: jevModelFile}, {URL: jevModelURL + "/resolve/main/README.md", DestPath: filepath.Join(installDir, "README.md"), Label: "README.md"}}
+		return status, specs, func() error {
+			if err := installJevDependencies(); err != nil {
+				return err
+			}
+			if err := a.SetEmbeddingModelConfig(cfg); err != nil {
+				return err
+			}
+			_, err := a.ExportEmbeddingModelManifest()
+			return err
 		}, nil
 	default:
 		return ManagedModelStatus{}, nil, nil, fmt.Errorf("unknown managed model key: %s", key)

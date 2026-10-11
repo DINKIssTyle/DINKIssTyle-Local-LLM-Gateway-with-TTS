@@ -535,6 +535,9 @@ func (a *App) startRetentionMaintenanceLoop() {
 func (a *App) Shutdown(ctx context.Context) {
 	fmt.Println("Shutting down application...")
 	a.StopServer()
+	installEmbeddingProvider(nil)
+	mcp.SetMemoryChoiceProvider(nil)
+	clearEmbeddingRuntime()
 	QuitSystemTray()
 }
 

@@ -198,10 +198,10 @@
 
                         <div class="setting-item">
                             <label data-i18n="setting.embeddingModel.label">임베딩 모델</label>
-                            <p class="setting-desc" data-i18n="setting.embeddingModel.desc">현재는 multilingual-e5-small
-                                기준으로 관리 UI를 준비합니다.</p>
-                            <select id="cfg-embedding-model">
+                            <p class="setting-desc" data-i18n="setting.embeddingModel.desc">로컬 임베딩 모델을 선택하세요.</p>
+                            <select id="cfg-embedding-model" disabled>
                                 <option value="multilingual-e5-small">multilingual-e5-small</option>
+                                <option value="embeddinggemma-2-440m">EmbeddingGemma 2 (local, 256d)</option>
                             </select>
                         </div>
                     </div>

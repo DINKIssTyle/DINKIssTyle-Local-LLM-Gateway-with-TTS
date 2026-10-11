@@ -135,12 +135,21 @@ func InitDB(dbPath string) error {
 	if err = configureSQLiteConnection(db); err != nil {
 		return err
 	}
+	databasePath = dbPath
+	if err = backupBeforeSchemaMigration(); err != nil {
+		CloseDB()
+		return fmt.Errorf("migration cancelled: %w", err)
+	}
 	memoryRetentionSchemaMu.Lock()
 	memoryRetentionSchemaChecked = false
 	memoryRetentionSchemaMu.Unlock()
 
 	// Initialize schema
-	return createSchema()
+	if err := createSchema(); err != nil {
+		CloseDB()
+		return err
+	}
+	return nil
 }
 
 func configureSQLiteConnection(db *sql.DB) error {
@@ -158,6 +167,7 @@ func configureSQLiteConnection(db *sql.DB) error {
 
 // CloseDB closes the database connection.
 func CloseDB() {
+	resetVectorCache()
 	if db != nil {
 		log.Println("[DB] Closing SQLite database.")
 		_ = db.Close()
@@ -486,6 +496,9 @@ func createSchema() error {
 		return err
 	}
 	if err := ensureFTSIndexVersion(); err != nil {
+		return err
+	}
+	if err := migrateRetrievalStorage(); err != nil {
 		return err
 	}
 	if err := runRetentionMaintenance(time.Now().UTC()); err != nil {
@@ -2038,79 +2051,24 @@ func searchSavedTurnChunkMatchesFTS(userID, queryStr string, limit int) ([]Saved
 }
 
 func searchSavedTurnChunkMatchesVector(userID, queryStr string, limit int) ([]SavedTurnChunkMatch, error) {
-	queryVector, queryModel := buildBufferedEmbedding(queryStr, BufferedEmbeddingUsageQuery)
-	if len(queryVector) == 0 {
-		return nil, nil
-	}
-
-	rows, err := db.Query(`
-		SELECT
-			st.id, st.user_id, st.title, st.title_source, st.auto_title_failures, st.prompt_text, st.response_text, st.created_at, st.updated_at,
-			stc.id, stc.chunk_index, stc.chunk_text, e.embedding_json, e.embedding_model
-		FROM saved_turn_chunks stc
-		JOIN saved_turns st ON st.id = stc.saved_turn_id
-		JOIN saved_turn_chunk_embeddings e ON e.chunk_id = stc.id
-		WHERE stc.user_id = ?
-	`, userID)
+	hits, err := rankCachedVectors(userID, queryStr, limit, true)
 	if err != nil {
-		return nil, fmt.Errorf("saved turn chunk vector search failed: %w", err)
-	}
-	defer rows.Close()
-
-	var ranked []SavedTurnChunkMatch
-	for rows.Next() {
-		var match SavedTurnChunkMatch
-		var embeddingJSON string
-		var embeddingModel string
-		if err := rows.Scan(
-			&match.ID,
-			&match.UserID,
-			&match.Title,
-			&match.TitleSource,
-			&match.AutoTitleFailures,
-			&match.PromptText,
-			&match.ResponseText,
-			&match.CreatedAt,
-			&match.UpdatedAt,
-			&match.ChunkID,
-			&match.ChunkIndex,
-			&match.ChunkText,
-			&embeddingJSON,
-			&embeddingModel,
-		); err != nil {
-			return nil, fmt.Errorf("failed to scan saved turn vector match: %w", err)
-		}
-		if strings.TrimSpace(queryModel) != "" && strings.TrimSpace(embeddingModel) != "" && embeddingModel != queryModel {
-			continue
-		}
-		vector, err := parseBufferedEmbeddingJSON(embeddingJSON)
-		if err != nil {
-			continue
-		}
-		score := cosineSimilarity(queryVector, vector)
-		if score <= 0 {
-			continue
-		}
-		match.VectorScore = score
-		ranked = append(ranked, match)
-	}
-	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-
-	sort.SliceStable(ranked, func(i, j int) bool {
-		if math.Abs(ranked[i].VectorScore-ranked[j].VectorScore) < 1e-9 {
-			if ranked[i].CreatedAt.Equal(ranked[j].CreatedAt) {
-				return ranked[i].ChunkIndex < ranked[j].ChunkIndex
-			}
-			return ranked[i].CreatedAt.After(ranked[j].CreatedAt)
+	results := make([]SavedTurnChunkMatch, 0, len(hits))
+	for _, hit := range hits {
+		var match SavedTurnChunkMatch
+		err := db.QueryRow(`SELECT st.id,st.user_id,st.title,st.title_source,st.auto_title_failures,st.prompt_text,st.response_text,st.created_at,st.updated_at,stc.id,stc.chunk_index,stc.chunk_text FROM saved_turn_chunks stc JOIN saved_turns st ON st.id=stc.saved_turn_id WHERE stc.id=? AND stc.user_id=? AND st.user_id=?`, hit.chunkID, userID, userID).Scan(&match.ID, &match.UserID, &match.Title, &match.TitleSource, &match.AutoTitleFailures, &match.PromptText, &match.ResponseText, &match.CreatedAt, &match.UpdatedAt, &match.ChunkID, &match.ChunkIndex, &match.ChunkText)
+		if err == sql.ErrNoRows {
+			continue
+		} // Deleted after the immutable snapshot was taken.
+		if err != nil {
+			return nil, err
 		}
-		return ranked[i].VectorScore > ranked[j].VectorScore
-	})
-	if len(ranked) > limit {
-		ranked = ranked[:limit]
+		match.VectorScore = hit.score
+		results = append(results, match)
 	}
-	return ranked, nil
+	return results, nil
 }
 
 func hybridSearchSavedTurnChunkMatches(userID, queryStr string, limit int) ([]SavedTurnChunkMatch, error) {
@@ -2514,14 +2472,15 @@ func upsertMemoryChunkEmbeddingTx(tx *sql.Tx, chunkID int64, text string) error 
 	}
 	if _, err := tx.Exec(`
 		INSERT INTO memory_chunk_embeddings (
-			chunk_id, embedding_model, embedding_dim, embedding_json, updated_at
-		) VALUES (?, ?, ?, ?, ?)
+			chunk_id, embedding_model, embedding_dim, embedding_json, embedding_blob, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(chunk_id) DO UPDATE SET
 			embedding_model = excluded.embedding_model,
 			embedding_dim = excluded.embedding_dim,
 			embedding_json = excluded.embedding_json,
+			embedding_blob = excluded.embedding_blob,
 			updated_at = excluded.updated_at
-	`, chunkID, modelName, len(vector), string(embeddingJSON), time.Now().UTC()); err != nil {
+	`, chunkID, modelName, len(vector), string(embeddingJSON), encodeEmbeddingBlob(vector), time.Now().UTC()); err != nil {
 		return fmt.Errorf("failed to store memory chunk embedding: %w", err)
 	}
 	return nil
@@ -2541,14 +2500,15 @@ func upsertSavedTurnChunkEmbeddingTx(tx *sql.Tx, chunkID int64, text string) err
 	}
 	if _, err := tx.Exec(`
 		INSERT INTO saved_turn_chunk_embeddings (
-			chunk_id, embedding_model, embedding_dim, embedding_json, updated_at
-		) VALUES (?, ?, ?, ?, ?)
+			chunk_id, embedding_model, embedding_dim, embedding_json, embedding_blob, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(chunk_id) DO UPDATE SET
 			embedding_model = excluded.embedding_model,
 			embedding_dim = excluded.embedding_dim,
 			embedding_json = excluded.embedding_json,
+			embedding_blob = excluded.embedding_blob,
 			updated_at = excluded.updated_at
-	`, chunkID, modelName, len(vector), string(embeddingJSON), time.Now().UTC()); err != nil {
+	`, chunkID, modelName, len(vector), string(embeddingJSON), encodeEmbeddingBlob(vector), time.Now().UTC()); err != nil {
 		return fmt.Errorf("failed to store saved turn chunk embedding: %w", err)
 	}
 	return nil
@@ -2792,76 +2752,24 @@ func searchMemoryChunkMatchesFTS(userID, queryStr string, limit int) ([]MemoryCh
 }
 
 func searchMemoryChunkMatchesVector(userID, queryStr string, limit int) ([]MemoryChunkMatch, error) {
-	queryVector, queryModel := buildBufferedEmbedding(queryStr, BufferedEmbeddingUsageQuery)
-	if len(queryVector) == 0 {
-		return nil, nil
-	}
-
-	rows, err := db.Query(`
-		SELECT
-			m.id, m.user_id, m.full_text, m.hit_count, m.created_at, m.memory_type,
-			mc.id, mc.chunk_index, mc.chunk_text, e.embedding_json, e.embedding_model
-		FROM memory_chunks mc
-		JOIN memories m ON m.id = mc.memory_id
-		JOIN memory_chunk_embeddings e ON e.chunk_id = mc.id
-		WHERE mc.user_id = ?
-	`, userID)
+	hits, err := rankCachedVectors(userID, queryStr, limit, false)
 	if err != nil {
-		return nil, fmt.Errorf("memory chunk vector search failed: %w", err)
-	}
-	defer rows.Close()
-
-	var ranked []MemoryChunkMatch
-	for rows.Next() {
-		var match MemoryChunkMatch
-		var embeddingJSON string
-		var embeddingModel string
-		if err := rows.Scan(
-			&match.ID,
-			&match.UserID,
-			&match.FullText,
-			&match.HitCount,
-			&match.CreatedAt,
-			&match.MemoryType,
-			&match.ChunkID,
-			&match.ChunkIndex,
-			&match.ChunkText,
-			&embeddingJSON,
-			&embeddingModel,
-		); err != nil {
-			return nil, fmt.Errorf("failed to scan memory vector match: %w", err)
-		}
-		if strings.TrimSpace(queryModel) != "" && strings.TrimSpace(embeddingModel) != "" && embeddingModel != queryModel {
-			continue
-		}
-		vector, err := parseBufferedEmbeddingJSON(embeddingJSON)
-		if err != nil {
-			continue
-		}
-		score := cosineSimilarity(queryVector, vector)
-		if score <= 0 {
-			continue
-		}
-		match.VectorScore = score
-		ranked = append(ranked, match)
-	}
-	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-
-	sort.SliceStable(ranked, func(i, j int) bool {
-		if math.Abs(ranked[i].VectorScore-ranked[j].VectorScore) < 1e-9 {
-			if ranked[i].CreatedAt.Equal(ranked[j].CreatedAt) {
-				return ranked[i].ChunkIndex < ranked[j].ChunkIndex
-			}
-			return ranked[i].CreatedAt.After(ranked[j].CreatedAt)
+	results := make([]MemoryChunkMatch, 0, len(hits))
+	for _, hit := range hits {
+		var match MemoryChunkMatch
+		err := db.QueryRow(`SELECT m.id,m.user_id,m.full_text,m.hit_count,m.created_at,m.memory_type,mc.id,mc.chunk_index,mc.chunk_text FROM memory_chunks mc JOIN memories m ON m.id=mc.memory_id WHERE mc.id=? AND mc.user_id=? AND m.user_id=?`, hit.chunkID, userID, userID).Scan(&match.ID, &match.UserID, &match.FullText, &match.HitCount, &match.CreatedAt, &match.MemoryType, &match.ChunkID, &match.ChunkIndex, &match.ChunkText)
+		if err == sql.ErrNoRows {
+			continue
+		} // Deleted after the immutable snapshot was taken.
+		if err != nil {
+			return nil, err
 		}
-		return ranked[i].VectorScore > ranked[j].VectorScore
-	})
-	if len(ranked) > limit {
-		ranked = ranked[:limit]
+		match.VectorScore = hit.score
+		results = append(results, match)
 	}
-	return ranked, nil
+	return results, nil
 }
 
 func hybridSearchMemoryChunkMatches(userID, queryStr string, limit int) ([]MemoryChunkMatch, error) {

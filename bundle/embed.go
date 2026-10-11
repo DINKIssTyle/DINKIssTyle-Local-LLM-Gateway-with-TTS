@@ -12,6 +12,16 @@ import (
 //go:embed skills/builtin
 var builtinSkills embed.FS
 
+//go:embed runtimes/jev_worker.py
+var jevWorker []byte
+
+func MaterializeJevWorker(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, jevWorker, 0644)
+}
+
 // MaterializeBuiltinSkills writes the embedded, app-managed built-in skills to
 // target. User skills live in a separate directory and are never touched.
 func MaterializeBuiltinSkills(target string) error {

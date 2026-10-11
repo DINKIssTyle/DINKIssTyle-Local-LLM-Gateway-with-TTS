@@ -2,15 +2,19 @@ package core
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"dinkisstyle-chat/internal/mcp"
 )
 
 type EmbeddingModelConfig struct {
-	Provider string `json:"provider"`
-	ModelID  string `json:"modelId"`
-	Enabled  bool   `json:"enabled"`
+	Provider        string `json:"provider"`
+	ModelID         string `json:"modelId"`
+	Enabled         bool   `json:"enabled"`
+	UseJevDecisions bool   `json:"useJevDecisions"`
 }
 
 type ManagedModelStatus struct {
@@ -63,6 +67,8 @@ func getEmbeddingModelConfigPath(modelID string) string {
 
 func getEmbeddingModelRequiredFiles(modelID string) []string {
 	switch strings.TrimSpace(modelID) {
+	case jevModelID:
+		return []string{jevModelFile}
 	case "multilingual-e5-small":
 		return []string{"model.onnx", "tokenizer.json", "config.json", "sentencepiece.bpe.model", "special_tokens_map.json"}
 	default:
@@ -88,13 +94,19 @@ func getEmbeddingModelStatus(cfg EmbeddingModelConfig) ManagedModelStatus {
 	status := "missing"
 	message := "Model files are not installed yet."
 	active := false
-	if installed && cfg.Enabled && rtInfo.Ready {
+	rt := getEmbeddingRuntime()
+	selected := rt != nil && rt.modelID == cfg.ModelID
+	configured := currentEmbeddingModelConfig().ModelID == cfg.ModelID
+	if installed && cfg.Enabled && rtInfo.Ready && selected && rt.IsUsable() {
 		status = "ready"
 		message = rtInfo.Message
 		active = true
-	} else if installed && cfg.Enabled {
+	} else if installed && cfg.Enabled && configured {
 		status = "pending"
 		message = rtInfo.Message
+		if selected && !rt.IsUsable() {
+			message = "Local embedding worker stopped. Activate or download the model again."
+		}
 	} else if installed {
 		status = "installed"
 		message = "Model files are installed but not enabled."
@@ -103,19 +115,27 @@ func getEmbeddingModelStatus(cfg EmbeddingModelConfig) ManagedModelStatus {
 		message = "Enabled in settings, but model files are not installed yet."
 	}
 
+	displayName, downloadURL := "Multilingual E5 Small", "https://huggingface.co/intfloat/multilingual-e5-small"
+	if cfg.ModelID == jevModelID {
+		displayName, downloadURL = "EmbeddingGemma 2 + JEV (local)", jevModelURL
+	}
+	backend := ""
+	if selected {
+		backend = rtInfo.Backend
+	}
 	return ManagedModelStatus{
 		Key:         "embedding:" + cfg.ModelID,
 		Kind:        "embedding",
-		DisplayName: "Multilingual E5 Small",
+		DisplayName: displayName,
 		Provider:    cfg.Provider,
 		ModelID:     cfg.ModelID,
-		Backend:     rtInfo.Backend,
+		Backend:     backend,
 		Installed:   installed,
 		Active:      active,
 		Status:      status,
 		Message:     message,
 		InstallDir:  installDir,
-		DownloadURL: "https://huggingface.co/intfloat/multilingual-e5-small",
+		DownloadURL: downloadURL,
 		CanDownload: true,
 	}
 }
@@ -149,48 +169,74 @@ func currentEmbeddingModelConfig() EmbeddingModelConfig {
 	return normalizeEmbeddingConfig(embeddingConfig)
 }
 
-func applyEmbeddingRuntimeConfig() {
+func applyEmbeddingRuntimeConfig() error {
 	cfg := currentEmbeddingModelConfig()
 	status := getEmbeddingModelStatus(cfg)
 	assetsEnabled := globalApp == nil || globalApp.enableTTS
 	if assetsEnabled && status.Installed && cfg.Enabled {
+		if rt := getEmbeddingRuntime(); rt != nil && rt.modelID == cfg.ModelID && getEmbeddingRuntimeInfo().Ready && rt.IsUsable() {
+			installJevChoiceProvider(rt, cfg.UseJevDecisions)
+			return nil
+		}
 		rt, info, err := loadEmbeddingRuntime(cfg)
 		if err == nil {
+			modelName := fmt.Sprintf("%s:%s", rt.modelID, rt.backend)
+			err = mcp.ReindexStoredEmbeddings(modelName, func(text string) ([]float64, string, error) { return rt.Build(text, embeddingUsageDocument) }, embeddingProviderForRuntime(rt))
+			if err != nil {
+				rt.Close()
+				info.Ready = false
+				info.Message = "Previous embeddings preserved: " + err.Error()
+				setEmbeddingRuntimeInfo(info)
+				return err
+			}
 			setEmbeddingRuntime(rt)
 			setEmbeddingRuntimeInfo(info)
-			installEmbeddingProvider(rt)
-			return
+			installJevChoiceProvider(rt, cfg.UseJevDecisions)
+			return nil
 		}
-		clearEmbeddingRuntime()
 		setEmbeddingRuntimeInfo(info)
-		installEmbeddingProvider(nil)
-		return
+		return err
 	}
+	mcp.SetMemoryChoiceProvider(nil)
+	installEmbeddingProvider(nil)
 	clearEmbeddingRuntime()
 	setEmbeddingRuntimeInfo(embeddingRuntimeInfo{
 		Ready:   false,
 		Backend: "",
 		Message: "Embedding runtime is disabled.",
 	})
-	installEmbeddingProvider(nil)
+	return nil
 }
 
 func (a *App) GetEmbeddingModelConfig() EmbeddingModelConfig {
 	return currentEmbeddingModelConfig()
 }
 
-func (a *App) SetEmbeddingModelConfig(cfg EmbeddingModelConfig) {
+func (a *App) SetEmbeddingModelConfig(cfg EmbeddingModelConfig) error {
 	a.serverMux.Lock()
 	defer a.serverMux.Unlock()
-	embeddingConfig = normalizeEmbeddingConfig(cfg)
-	applyEmbeddingRuntimeConfig()
+	cfg = normalizeEmbeddingConfig(cfg)
+	previous := embeddingConfig
+	previousInfo := getEmbeddingRuntimeInfo()
+	embeddingConfig = cfg
+	if cfg.Enabled && !isEmbeddingModelInstalled(cfg.ModelID) {
+		embeddingConfig = previous
+		return fmt.Errorf("download the embedding model in model manager before activating it")
+	}
+	if err := applyEmbeddingRuntimeConfig(); err != nil {
+		embeddingConfig = previous
+		setEmbeddingRuntimeInfo(previousInfo)
+		return err
+	}
 	a.saveConfig()
+	return nil
 }
 
 func (a *App) GetManagedModels() []ManagedModelStatus {
 	items := []ManagedModelStatus{
 		getTTSModelStatus(),
-		getEmbeddingModelStatus(currentEmbeddingModelConfig()),
+		getEmbeddingModelStatus(EmbeddingModelConfig{Provider: "local", ModelID: "multilingual-e5-small", Enabled: currentEmbeddingModelConfig().Enabled}),
+		getEmbeddingModelStatus(EmbeddingModelConfig{Provider: "local", ModelID: jevModelID, Enabled: currentEmbeddingModelConfig().Enabled}),
 	}
 	for i := range items {
 		if state, ok := getManagedDownloadState(items[i].Key); ok {
@@ -248,6 +294,9 @@ func (a *App) ExportEmbeddingModelManifest() (string, error) {
 			"normalize_output":  true,
 			"manifest_filename": embeddingWrapperManifestName,
 		},
+	}
+	if cfg.ModelID == jevModelID {
+		manifest = map[string]interface{}{"provider": "local", "model_id": jevModelID, "download_url": jevModelURL, "required_files": getEmbeddingModelRequiredFiles(jevModelID), "download_files": map[string]string{jevModelFile: jevModelURL + "/resolve/main/" + jevModelFile}, "runtime": "mediapipe==1.1.0, Python 3.12", "dimension": 256, "api_key_required": false}
 	}
 	raw, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {

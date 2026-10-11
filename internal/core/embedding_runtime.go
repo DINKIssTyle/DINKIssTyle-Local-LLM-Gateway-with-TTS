@@ -49,6 +49,7 @@ var embeddingRuntimeState = struct {
 }
 
 type embeddingRuntime struct {
+	mu      sync.Mutex
 	modelID string
 	backend string
 	encoder embeddingEncoder
@@ -180,6 +181,9 @@ func getEmbeddingRuntime() *embeddingRuntime {
 
 func loadEmbeddingRuntime(cfg EmbeddingModelConfig) (*embeddingRuntime, embeddingRuntimeInfo, error) {
 	cfg = normalizeEmbeddingConfig(cfg)
+	if cfg.ModelID == jevModelID {
+		return loadJevRuntime(cfg)
+	}
 	modelDir := getEmbeddingModelInstallDir(cfg.ModelID)
 	if err := InitializeONNXRuntime(); err != nil {
 		info := embeddingRuntimeInfo{
@@ -295,14 +299,40 @@ func loadDirectEmbeddingRuntime(modelID, modelDir string) (*embeddingRuntime, er
 }
 
 func (r *embeddingRuntime) Close() error {
-	if r == nil || r.encoder == nil {
+	if r == nil {
 		return nil
 	}
-	return r.encoder.Close()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.encoder == nil {
+		return nil
+	}
+	err := r.encoder.Close()
+	r.encoder = nil
+	return err
+}
+
+func (r *embeddingRuntime) IsUsable() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if worker, ok := r.encoder.(*jevEncoder); ok {
+		worker.mu.Lock()
+		defer worker.mu.Unlock()
+		return !worker.closed
+	}
+	return r.encoder != nil
 }
 
 func (r *embeddingRuntime) Build(text string, usage embeddingUsage) ([]float64, string, error) {
-	if r == nil || r.encoder == nil {
+	if r == nil {
+		return nil, "", fmt.Errorf("embedding runtime is not loaded")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.encoder == nil {
 		return nil, "", fmt.Errorf("embedding runtime is not loaded")
 	}
 	vector, err := r.encoder.Encode(text, usage)
@@ -647,15 +677,18 @@ func minInt(a, b int) int {
 }
 
 func installEmbeddingProvider(rt *embeddingRuntime) {
+	mcp.SetBufferedEmbeddingProvider(embeddingProviderForRuntime(rt))
+}
+
+func embeddingProviderForRuntime(rt *embeddingRuntime) mcp.BufferedEmbeddingProvider {
 	if rt == nil {
-		mcp.SetBufferedEmbeddingProvider(mcp.BufferedEmbeddingProvider{})
-		return
+		return mcp.BufferedEmbeddingProvider{}
 	}
-	mcp.SetBufferedEmbeddingProvider(mcp.BufferedEmbeddingProvider{
+	return mcp.BufferedEmbeddingProvider{
 		ModelName: rt.modelID,
 		BuildWithUsage: func(text string, usage mcp.BufferedEmbeddingUsage) ([]float64, string, error) {
 			vector, modelName, err := rt.Build(text, embeddingUsage(usage))
 			return vector, modelName, err
 		},
-	})
+	}
 }

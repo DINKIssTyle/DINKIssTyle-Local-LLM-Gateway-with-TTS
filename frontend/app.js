@@ -42,6 +42,7 @@ let config = {
     enableEmbeddings: true,
     embeddingProvider: 'local',
     embeddingModelId: 'multilingual-e5-small',
+    useJevDecisions: false,
     osTtsVoiceURI: '',
     osTtsVoiceName: '',
     osTtsVoiceLang: '',
@@ -3617,7 +3618,8 @@ function saveConfig(closeModal = true) {
         window.go.core.App.SetEmbeddingModelConfig({
             provider: config.embeddingProvider,
             modelId: config.embeddingModelId,
-            enabled: config.enableEmbeddings
+            enabled: config.enableEmbeddings,
+            useJevDecisions: config.useJevDecisions === true
         }).catch(console.error);
 
     }
@@ -3637,7 +3639,8 @@ function saveConfig(closeModal = true) {
         embedding_config: {
             provider: config.embeddingProvider,
             modelId: config.embeddingModelId,
-            enabled: config.enableEmbeddings
+            enabled: config.enableEmbeddings,
+            useJevDecisions: config.useJevDecisions === true
         }
     };
 
@@ -5322,6 +5325,7 @@ async function syncServerConfig(options = {}) {
                 config.embeddingProvider = embeddingCfg.provider || 'local';
                 config.embeddingModelId = embeddingCfg.modelId || 'multilingual-e5-small';
                 config.enableEmbeddings = embeddingCfg.enabled === true;
+                config.useJevDecisions = embeddingCfg.useJevDecisions === true;
                 const enabledEl = document.getElementById('cfg-enable-embeddings');
                 if (enabledEl) enabledEl.checked = config.enableEmbeddings;
                 const modelEl = document.getElementById('cfg-embedding-model');

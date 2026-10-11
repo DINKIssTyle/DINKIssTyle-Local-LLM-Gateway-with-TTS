@@ -13,6 +13,7 @@ import (
 )
 
 type storageMigrationReport struct {
+	backups  []string
 	moved    []string
 	replaced []string
 }
@@ -32,6 +33,10 @@ func (r storageMigrationReport) summary() string {
 
 	lines := []string{
 		fmt.Sprintf("Moved %d item(s).", len(r.moved)),
+	}
+	if len(r.backups) > 0 {
+		lines = append(lines, "", "Verified database backups:")
+		lines = append(lines, r.backups...)
 	}
 	if len(r.replaced) > 0 {
 		lines = append(lines, fmt.Sprintf("Replaced %d existing item(s) at the new location.", len(r.replaced)))
@@ -269,6 +274,21 @@ func (a *App) RunStorageMigration() (string, error) {
 	// The desktop harness opens the destination database before Startup. Close it
 	// before replacing database, WAL, or SHM files so SQLite cannot keep using the
 	// unlinked empty database while the legacy files are moved into place.
+	roots := append([]string{currentRoot}, getLegacyMacAppDataDirs()...)
+	seen := make(map[string]bool)
+	for _, root := range roots {
+		for _, path := range []string{filepath.Join(root, "memory", defaultMemoryDatabaseName), filepath.Join(root, "memory", legacyMemoryUserDirName, defaultMemoryDatabaseName)} {
+			if seen[path] || !fileExists(path) {
+				continue
+			}
+			seen[path] = true
+			backup, err := mcp.BackupSQLiteFile(path, "storage relocation")
+			if err != nil {
+				return "", fmt.Errorf("storage migration cancelled: %w", err)
+			}
+			report.backups = append(report.backups, backup)
+		}
+	}
 	mcp.CloseDB()
 	databaseReady := false
 	defer func() {

@@ -52,6 +52,7 @@ export namespace core {
 	    provider: string;
 	    modelId: string;
 	    enabled: boolean;
+	    useJevDecisions: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new EmbeddingModelConfig(source);
@@ -62,6 +63,7 @@ export namespace core {
 	        this.provider = source["provider"];
 	        this.modelId = source["modelId"];
 	        this.enabled = source["enabled"];
+	        this.useJevDecisions = source["useJevDecisions"];
 	    }
 	}
 	export class HealthCheckResult {

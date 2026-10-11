@@ -3369,6 +3369,11 @@
                     ? 'Supertonic 3는 앱 안에서 자연스러운 TTS 재생을 위해 사용하는 로컬 음성 런타임입니다.'
                     : 'Supertonic 3 is the local speech runtime used for natural text-to-speech playback inside the app.';
             }
+            if (item?.modelId === 'embeddinggemma-2-440m') {
+                return currentServerLanguage === 'ko'
+                    ? 'EmbeddingGemma 2는 API 키 없이 기기에서 메모리를 검색합니다. JEV 후보 재정렬은 모델 관리에서 선택할 수 있습니다.'
+                    : 'EmbeddingGemma 2 searches memories on your device without an API key. Optional JEV reranking is available in model manager.';
+            }
             if (item?.kind === 'embedding') {
                 return currentServerLanguage === 'ko'
                     ? 'Multilingual E5 Small은 메모리 내용의 의미 검색을 담당해 한국어와 다국어 문맥을 더 정확하게 찾도록 도와줍니다.'
@@ -3448,7 +3453,13 @@
                                 ${buttonLabel}
                             </button>
                         ` : ''}
-                        ${!simplified && item.kind === 'embedding' ? `
+                        ${!simplified && item.kind === 'embedding' && item.installed && !item.active ? `
+                            <button class="btn btn-secondary btn-compact" data-model-id="${modelId}" onclick="activateEmbeddingModel(this.dataset.modelId)">${currentServerLanguage === 'ko' ? '사용' : 'Activate'}</button>
+                        ` : ''}
+                        ${!simplified && item.active && item.modelId === 'embeddinggemma-2-440m' ? `
+                            <label><input type="checkbox" id="jev-decision-enabled" onchange="setJevDecisions(this.checked)"> ${currentServerLanguage === 'ko' ? 'JEV 후보 재정렬 (실험 기능)' : 'JEV candidate reranking (experimental)'}</label>
+                        ` : ''}
+                        ${!simplified && item.kind === 'embedding' && item.active ? `
                             <button class="btn btn-secondary btn-compact" onclick="exportEmbeddingManifest()">
                                 <span class="material-icons-round">description</span>
                                 Manifest
@@ -3570,6 +3581,9 @@
                 const items = Array.isArray(managedModels) ? managedModels : [];
 				const modelCards = items.map((item) => renderManagedModelCard(item, { scope: 'manager' })).join('');
 				listEl.innerHTML = modelCards + renderBrowserAssetCard(browserStatus);
+                const embeddingCfg = await window.go.core.App.GetEmbeddingModelConfig();
+                const decisionEl = document.getElementById('jev-decision-enabled');
+                if (decisionEl) decisionEl.checked = embeddingCfg.useJevDecisions === true;
             } catch (e) {
                 if (listEl) {
                     listEl.innerHTML = `<div style="color: var(--danger-color); font-size: 13px;">${escapeHtml(currentServerLanguage === 'ko' ? '모델 상태를 불러오지 못했습니다.' : 'Failed to load model status.')}</div>`;
@@ -3584,6 +3598,21 @@
             } catch (e) {
                 showAlert((currentServerLanguage === 'ko' ? '다운로드 시작 실패: ' : 'Failed to start download: ') + (e?.message || e));
             }
+        }
+
+        async function activateEmbeddingModel(modelId) {
+            try {
+                await window.go.core.App.SetEmbeddingModelConfig({provider: 'local', modelId, enabled: true, useJevDecisions: false});
+                await refreshManagedModels();
+            } catch (e) { showAlert(String(e?.message || e)); }
+        }
+
+        async function setJevDecisions(enabled) {
+            try {
+                const cfg = await window.go.core.App.GetEmbeddingModelConfig();
+                cfg.useJevDecisions = enabled;
+                await window.go.core.App.SetEmbeddingModelConfig(cfg);
+            } catch (e) { showAlert(String(e?.message || e)); }
         }
 
         async function exportEmbeddingManifest() {

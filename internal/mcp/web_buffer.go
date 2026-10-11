@@ -76,6 +76,9 @@ var (
 )
 
 func SetBufferedEmbeddingProvider(provider BufferedEmbeddingProvider) {
+	queryEmbeddings.Lock()
+	defer queryEmbeddings.Unlock()
+	queryEmbeddings.entries = make(map[string]queryEmbeddingValue)
 	bufferedEmbeddingProviderM.Lock()
 	defer bufferedEmbeddingProviderM.Unlock()
 	bufferedEmbeddingProvider = provider
@@ -1383,14 +1386,15 @@ func upsertBufferedChunkEmbeddingTx(tx *sql.Tx, chunkID int64, text string) erro
 	}
 	if _, err := tx.Exec(`
 		INSERT INTO web_chunk_embeddings (
-			chunk_id, embedding_model, embedding_dim, embedding_json, updated_at
-		) VALUES (?, ?, ?, ?, ?)
+			chunk_id, embedding_model, embedding_dim, embedding_json, embedding_blob, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(chunk_id) DO UPDATE SET
 			embedding_model = excluded.embedding_model,
 			embedding_dim = excluded.embedding_dim,
 			embedding_json = excluded.embedding_json,
+			embedding_blob = excluded.embedding_blob,
 			updated_at = excluded.updated_at
-	`, chunkID, modelName, len(vector), string(embeddingJSON), time.Now().UTC()); err != nil {
+	`, chunkID, modelName, len(vector), string(embeddingJSON), encodeEmbeddingBlob(vector), time.Now().UTC()); err != nil {
 		return fmt.Errorf("failed to store buffered chunk embedding: %w", err)
 	}
 	return nil
