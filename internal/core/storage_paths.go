@@ -13,6 +13,7 @@ const (
 	certDirName               = "cert"
 	assetsDirName             = "assets"
 	ttsDirName                = "tts"
+	sttDirName                = "stt"
 	supertonic2DirName        = "supertonic2"
 	supertonic3DirName        = "supertonic3"
 	embeddingsDirName         = "embeddings"
@@ -68,6 +69,13 @@ func getManagedAssetsRootDir() string {
 
 func getWritableTTSAssetsDir() string {
 	return joinAppDataPath(assetsDirName, ttsDirName, supertonic3DirName)
+}
+
+func getWritableSTTAssetsDir(modelID string) string {
+	if modelID == "" {
+		modelID = "whisper-base"
+	}
+	return joinAppDataPath(assetsDirName, sttDirName, modelID)
 }
 
 func getLegacyWritableTTSAssetsDir() string {

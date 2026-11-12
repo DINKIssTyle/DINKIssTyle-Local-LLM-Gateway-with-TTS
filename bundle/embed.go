@@ -15,6 +15,22 @@ var builtinSkills embed.FS
 //go:embed runtimes/jev_worker.py
 var jevWorker []byte
 
+//go:embed runtimes/whisper_worker.py
+var whisperWorker []byte
+
+//go:embed runtimes/Silero-VAD-LICENSE.txt
+var sileroLicense []byte
+
+func MaterializeWhisperWorker(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "Silero-VAD-LICENSE.txt"), sileroLicense, 0644); err != nil {
+		return err
+	}
+	return os.WriteFile(path, whisperWorker, 0644)
+}
+
 func MaterializeJevWorker(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err

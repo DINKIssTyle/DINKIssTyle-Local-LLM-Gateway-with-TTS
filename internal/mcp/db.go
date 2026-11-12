@@ -471,6 +471,19 @@ func createSchema() error {
 		key TEXT PRIMARY KEY,
 		value TEXT NOT NULL
 	);
+	CREATE TABLE IF NOT EXISTS stt_transcripts (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id TEXT NOT NULL,
+		session_id TEXT NOT NULL DEFAULT '',
+		segment_id TEXT NOT NULL DEFAULT '',
+		started_at TEXT NOT NULL,
+		ended_at TEXT NOT NULL,
+		text TEXT NOT NULL,
+		trigger_word TEXT NOT NULL DEFAULT '',
+		triggered INTEGER NOT NULL DEFAULT 0
+	);
+	CREATE INDEX IF NOT EXISTS stt_transcripts_user_time ON stt_transcripts(user_id,started_at);
+	CREATE UNIQUE INDEX IF NOT EXISTS stt_transcripts_segment ON stt_transcripts(user_id,segment_id) WHERE segment_id != '';
 	`
 	_, err := db.Exec(query)
 	if err != nil {

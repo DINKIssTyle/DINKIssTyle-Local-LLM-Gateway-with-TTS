@@ -2913,6 +2913,11 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	mux.HandleFunc("/api/tts/on-device/status", AuthMiddleware(authMgr, handleOnDeviceTTSStatus(app)))
 	mux.HandleFunc("/api/tts/on-device/assets/", AuthMiddleware(authMgr, handleOnDeviceTTSAsset()))
 	mux.HandleFunc("/__tts-model/supertonic-3/", handleOnDeviceTTSAsset())
+	mux.HandleFunc("/api/stt/status", AuthMiddleware(authMgr, handleSTTStatus(app)))
+	mux.HandleFunc("/api/stt/transcribe", AuthMiddleware(authMgr, handleSTTTranscribe(app)))
+	mux.HandleFunc("/api/stt/preview", AuthMiddleware(authMgr, handleSTTPreview(app)))
+	mux.HandleFunc("/api/stt/warmup", AuthMiddleware(authMgr, handleSTTWarmup()))
+	mux.HandleFunc("/api/stt/transcripts", AuthMiddleware(authMgr, handleSTTTranscripts()))
 	mux.HandleFunc("/api/last-session", AuthMiddleware(authMgr, handleLastSession()))
 	mux.HandleFunc("/api/saved-turns", AuthMiddleware(authMgr, handleSavedTurns()))
 	mux.HandleFunc("/api/saved-turns/title-refresh", AuthMiddleware(authMgr, handleSavedTurnTitleRefresh()))
@@ -3168,6 +3173,12 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	mux.HandleFunc("/api/users", AdminMiddleware(authMgr, handleUsers(authMgr)))
 	mux.HandleFunc("/api/users/add", AdminMiddleware(authMgr, handleAddUser(authMgr)))
 	mux.HandleFunc("/api/users/delete", AdminMiddleware(authMgr, handleDeleteUser(authMgr)))
+
+	// Even Realities Plugin endpoint
+	pluginDir := filepath.Join(".", "plugins", "even-realities")
+	if pathExists(pluginDir) {
+		mux.Handle("/plugins/even-realities/", http.StripPrefix("/plugins/even-realities/", http.FileServer(http.Dir(pluginDir))))
+	}
 
 	// Static file server for frontend (embedded)
 	frontendFS, err := fs.Sub(app.assets, "frontend")

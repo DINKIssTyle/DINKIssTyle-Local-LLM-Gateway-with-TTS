@@ -3,6 +3,7 @@ package core
 import (
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -248,6 +249,43 @@ func (a *App) getManagedModelDownloadPlan(key string) (ManagedModelStatus, []Dow
 			_, err := a.ExportEmbeddingModelManifest()
 			return err
 		}, nil
+	case "stt:whisper-base":
+		status := getSTTModelStatusFor(defaultSTTModelID)
+		installDir := getWritableSTTAssetsDir("whisper-base")
+		baseURL := "https://huggingface.co/onnx-community/whisper-base/resolve/main"
+		specs := []DownloadFileSpec{
+			{URL: baseURL + "/config.json", DestPath: filepath.Join(installDir, "config.json"), Label: "config.json"},
+			{URL: baseURL + "/tokenizer.json", DestPath: filepath.Join(installDir, "tokenizer.json"), Label: "tokenizer.json"},
+			{URL: baseURL + "/vocab.json", DestPath: filepath.Join(installDir, "vocab.json"), Label: "vocab.json"},
+			{URL: baseURL + "/onnx/encoder_model.onnx", DestPath: filepath.Join(installDir, "encoder_model.onnx"), Label: "encoder_model.onnx"},
+			{URL: baseURL + "/onnx/decoder_model_merged.onnx", DestPath: filepath.Join(installDir, "decoder_model_merged.onnx"), Label: "decoder_model_merged.onnx"},
+		}
+		for _, name := range []string{"preprocessor_config.json", "tokenizer_config.json", "generation_config.json", "special_tokens_map.json", "merges.txt", "added_tokens.json", "normalizer.json"} {
+			specs = append(specs, DownloadFileSpec{URL: baseURL + "/" + name, DestPath: filepath.Join(installDir, name), Label: name})
+		}
+		specs = append(specs, DownloadFileSpec{URL: "https://raw.githubusercontent.com/snakers4/silero-vad/066409f3d9db45a30d21dfcbf9147826ffdd7052/src/silero_vad/data/silero_vad.onnx", DestPath: filepath.Join(installDir, "silero_vad.onnx"), Label: "Silero VAD speech filter"})
+
+		return status, specs, func() error {
+			if err := installSTTDependencies(); err != nil {
+				return err
+			}
+			if a.ctx != nil {
+				wruntime.EventsEmit(a.ctx, "assets-ready")
+			}
+			return nil
+		}, nil
+	case "stt:whisper-large-v3-turbo-mlx":
+		if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+			return ManagedModelStatus{}, nil, nil, fmt.Errorf("MLX Whisper requires macOS on Apple Silicon")
+		}
+		dir := getWritableSTTAssetsDir(mlxSTTModelID)
+		specs := []DownloadFileSpec{}
+		for _, name := range []string{"config.json", "weights.safetensors"} {
+			specs = append(specs, DownloadFileSpec{URL: mlxSTTModelURL + "/resolve/main/" + name, DestPath: filepath.Join(dir, name), Label: name})
+		}
+		specs = append(specs, DownloadFileSpec{URL: "https://raw.githubusercontent.com/snakers4/silero-vad/066409f3d9db45a30d21dfcbf9147826ffdd7052/src/silero_vad/data/silero_vad.onnx", DestPath: filepath.Join(dir, "silero_vad.onnx"), Label: "Silero VAD speech filter"})
+		return getSTTModelStatusFor(mlxSTTModelID), specs, func() error { return installMLXSTTDependencies() }, nil
+
 	default:
 		return ManagedModelStatus{}, nil, nil, fmt.Errorf("unknown managed model key: %s", key)
 	}

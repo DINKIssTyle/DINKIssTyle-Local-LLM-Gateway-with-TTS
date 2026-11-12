@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+  <title>DKST AI Gateway for Even Realities G2</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="plugin-container">
+    <!-- Header -->
+    <header class="header">
+      <div class="brand">
+        <div class="brand-icon">ER</div>
+        <div>
+          <div class="brand-title">DKST Gateway</div>
+          <div style="font-size: 11px; color: var(--text-secondary);">Even Realities G2</div>
+        </div>
+      </div>
+      <div id="connection-status" class="status-badge disconnected">
+        <span class="status-dot"></span>
+        <span id="connection-text">연결 대기</span>
+      </div>
+    </header>
+
+    <!-- HUD Live Preview -->
+    <div class="hud-card">
+      <div class="hud-label">
+        <span>Glasses Display (576×288)</span>
+        <span id="hud-page-indicator">P 1/1</span>
+      </div>
+      <div class="hud-status" aria-label="현재 시각과 안경 배터리">
+        <span id="hud-notice">대기</span>
+        <span id="hud-status-text">--:-- / --</span>
+      </div>
+      <div id="hud-screen" class="hud-screen">Even Realities G2 대기 중...<br>안경 터치 패드를 탭하거나 음성 버튼을 눌러 말씀하세요.<span class="hud-cursor"></span></div>
+    </div>
+
+    <!-- Voice Control -->
+    <div class="voice-action-box">
+      <button id="voice-btn" class="mic-btn" title="음성 입력 시작">
+        <span class="material-icons-round">●</span>
+      </button>
+      <div id="action-hint" class="action-hint">안경 마이크로 대화하려면 누르세요</div>
+    </div>
+
+    <form id="text-chat-form" class="settings-card">
+      <div class="section-title">텍스트로 AI에게 질문</div>
+      <label for="chat-input">질문 · 호출어 없이 전송할 수 있습니다</label>
+      <textarea id="chat-input" rows="3" maxlength="8000" placeholder="질문을 입력하세요"></textarea>
+      <button id="btn-send-chat" type="submit" class="btn btn-primary">전송</button>
+      <div id="chat-question" class="chat-question"></div>
+      <div id="chat-output" class="chat-output" role="status" aria-live="polite">답변은 여기와 안경 화면에 표시됩니다.</div>
+    </form>
+
+    <!-- Settings Card -->
+    <div class="settings-card">
+      <div class="section-title">
+        <span class="material-icons-round" style="font-size: 18px;">⚙</span>
+        <span>게이트웨이 연동 설정</span>
+      </div>
+
+      <!-- Server Host URL -->
+      <div class="form-group">
+        <label for="server-url">DKST 서버 주소</label>
+        <div class="input-row">
+          <input type="url" id="server-url" placeholder="https://your-server.local:8080" value="">
+          <button id="btn-test-connection" class="btn btn-secondary" style="flex-shrink: 0;">테스트</button>
+        </div>
+      </div>
+
+      <!-- Authentication -->
+      <div class="form-group">
+        <label>계정 로그인</label>
+        <div class="input-row">
+          <input type="text" id="auth-username" placeholder="아이디">
+          <input type="password" id="auth-password" placeholder="비밀번호">
+        </div>
+        <div class="input-row" style="margin-top: 6px;">
+          <button id="btn-login" class="btn btn-primary" style="flex: 1;">
+            <span class="material-icons-round" style="font-size: 16px;">→</span>
+            로그인
+          </button>
+          <span id="login-status-label" style="align-self: center; font-size: 12px; color: var(--text-secondary);">미인증</span>
+        </div>
+      </div>
+
+      <!-- API Key (Optional) -->
+      <div class="form-group">
+        <label for="api-key">API Key (선택)</label>
+        <input type="password" id="api-key" placeholder="Bearer 토큰 또는 사용자 API 키">
+      </div>
+
+      <!-- LLM Model Selection -->
+      <div class="form-group">
+        <label for="model-select">LLM 모델 선택</label>
+        <div class="input-row">
+          <select id="model-select">
+            <option value="">서버에서 모델 목록을 불러오세요</option>
+          </select>
+          <button id="btn-refresh-models" class="btn btn-secondary" style="flex-shrink: 0;" title="모델 목록 새로고침">
+            <span class="material-icons-round" style="font-size: 18px;">↻</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Connection Mode -->
+      <div class="form-group">
+        <label for="connection-mode">커넥션 모드</label>
+        <select id="connection-mode">
+          <option value="sse" selected>SSE 스트리밍 (권장 - 실시간 HUD 표시)</option>
+          
+          <option value="standard">완료 후 일괄 표시</option>
+        </select>
+      </div>
+
+      <!-- Glasses Options -->
+      <div class="form-group">
+        <label for="voice-mode">음성 모드</label>
+        <select id="voice-mode">
+          <option value="manual">수동 · 한 번 녹음 후 AI 답변</option>
+          <option value="continuous">실시간 전사 · 트리거 워드가 나오면 AI 답변</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="trigger-word">AI 호출어 · 쉼표로 여러 개 등록</label>
+        <input id="trigger-word" type="text" value="이븐" maxlength="256" placeholder="웬즈데이, 웬즈 데이, 웸즈 데이">
+        <p style="font-size:12px;color:var(--text-secondary)">최대 8개. 띄어쓰기와 영문 대소문자는 구분하지 않습니다. 최종 전사에서만 AI 호출을 판단합니다.</p>
+        <p style="font-size:12px;color:var(--text-secondary)">연속 모드는 시작 버튼을 누른 동안 전사문을 서버에 저장합니다. 다시 누르면 중지합니다.</p>
+      </div>
+      <div class="form-group">
+        <label for="speech-filter">말소리 감지</label>
+        <select id="speech-filter">
+          <option value="strict">엄격 · 잡음 오인식 줄이기</option>
+          <option value="standard">표준 · 작은 목소리도 감지</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="speaker-scope">전사 대상</label>
+        <select id="speaker-scope">
+          <option value="conversation">대화 음성 · 나와 상대방</option>
+          <option value="self">내 목소리 우선</option>
+        </select>
+        <p style="font-size:12px;color:var(--text-secondary)">내 목소리 우선은 G2가 타인으로 구분한 오디오를 제외합니다. 구분 정보가 없거나 겹쳐 말할 때는 완전히 분리되지 않을 수 있습니다.</p>
+      </div>
+      <div class="form-group">
+        <label for="transcript-date">날짜별 전사 기록</label>
+        <div class="input-row">
+          <input id="transcript-date" type="date">
+          <button id="btn-transcripts" class="btn btn-secondary">기록 보기</button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>스마트 글래스 옵션</label>
+        <div class="toggle-group">
+          <span class="toggle-label">글래스 최적화 요약 답변</span>
+          <input type="checkbox" id="opt-concise-mode" checked style="width: auto;">
+        </div>
+        <div class="toggle-group">
+          <span class="toggle-label">휴대폰/이어폰으로 TTS 음성 출력</span>
+          <input type="checkbox" id="opt-enable-tts" style="width: auto;">
+        </div>
+      </div>
+
+      <!-- Save Button -->
+      <button id="btn-save-settings" class="btn btn-save">
+        <span class="material-icons-round" style="font-size: 18px;">✓</span>
+        설정 저장
+      </button>
+    </div>
+  </div>
+
+  <div id="transcript-modal" class="transcript-modal" role="dialog" aria-modal="true" aria-labelledby="transcript-title" hidden>
+    <div class="transcript-dialog">
+      <div class="transcript-toolbar">
+        <strong id="transcript-title">날짜별 전사 기록</strong>
+        <button id="btn-close-transcripts" type="button" class="btn btn-secondary">닫기</button>
+      </div>
+      <pre id="transcript-log" class="transcript-content" tabindex="0">기록을 불러오는 중...</pre>
+      <button id="btn-export-transcripts" class="btn btn-secondary">TXT 저장</button>
+    </div>
+  </div>
+  <script src="bundle.js"></script>
+</body>
+</html>
+

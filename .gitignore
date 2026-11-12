@@ -15,6 +15,12 @@ all_funcs.txt
 !internal/chatharness/request_tools_test.go
 !internal/core/tool_parser_test.go
 !internal/core/auth_tools_test.go
+!internal/core/evenhub_cors_test.go
+!internal/core/stt_runtime_test.go
+!internal/core/stt_triggers_test.go
+!internal/core/stt_preview_test.go
+!internal/core/stt_test.go
+!internal/mcp/transcripts_test.go
 !internal/core/tool_transport_test.go
 !internal/core/tray_test.go
 !internal/mcp/web_search_test.go

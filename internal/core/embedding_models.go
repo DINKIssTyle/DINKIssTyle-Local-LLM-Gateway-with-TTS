@@ -237,6 +237,8 @@ func (a *App) GetManagedModels() []ManagedModelStatus {
 		getTTSModelStatus(),
 		getEmbeddingModelStatus(EmbeddingModelConfig{Provider: "local", ModelID: "multilingual-e5-small", Enabled: currentEmbeddingModelConfig().Enabled}),
 		getEmbeddingModelStatus(EmbeddingModelConfig{Provider: "local", ModelID: jevModelID, Enabled: currentEmbeddingModelConfig().Enabled}),
+		getSTTModelStatusFor(defaultSTTModelID),
+		getSTTModelStatusFor(mlxSTTModelID),
 	}
 	for i := range items {
 		if state, ok := getManagedDownloadState(items[i].Key); ok {

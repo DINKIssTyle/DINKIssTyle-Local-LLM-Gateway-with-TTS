@@ -1,0 +1,263 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const src = fs.readFileSync('plugin.js','utf8').replace(/^import .*\n/gm, '');
+const elements = new Map();
+function element(id) {
+  if (!elements.has(id)) elements.set(id, {value:'', checked:true, textContent:'', innerHTML:'', style:{}, hidden:true, focus(){}, handlers:{}, options:[], classList:{add(){},remove(){},toggle(){}}, addEventListener(type, fn){this.handlers[type]=fn;}, appendChild(opt){ this.options.push(opt); if(!this.value) this.value=opt.value; }});
+  return elements.get(id);
+}
+let llmMode='standard', chatReply=null;
+let nextTranscript = '테스트';
+let nextRejected = false;
+let holdPreview = false;
+let releasePreview = null;
+let holdChat = false;
+let releaseChat = null;
+let holdWarmup=false, releaseWarmup=null;
+let nativeSaved = '';
+const documentHandlers = {};
+let deviceHandler;
+let handler; const audioCalls=[]; const updates=[]; const requests=[]; let startup; let shutdown;
+const bridge={async getDeviceInfo(){return{model:'g2',sn:'glasses-1',status:{sn:'glasses-1',connectType:'connected',batteryLevel:82}};},onDeviceStatusChanged(fn){deviceHandler=fn;return()=>{};},async getLocalStorage(){return nativeSaved;},async setLocalStorage(key,value){nativeSaved=value;return true;},async createStartUpPageContainer(p){startup=p;return 0;},onEvenHubEvent(fn){handler=fn;},async textContainerUpgrade(p){updates.push(p);return true;},async audioControl(...args){audioCalls.push(args);return true;},async shutDownPageContainer(mode){shutdown=mode;return true;}};
+const chunks=['data: {"choices":[{"delta":{"con','tent":"안녕"}}]}\n\ndata: {"choices":[{"delta":{"content":"하세요"}}]}\n\ndata: [DONE]\n\n'];
+const context={DKST_DEFAULT_SERVER_URL:'https://192.168.1.4:2806',waitForEvenAppBridge:async()=>bridge,AudioInputSource:{Glasses:0},OsEventTypeList:{CLICK_EVENT:0,DOUBLE_CLICK_EVENT:3},console,TextDecoder,Uint8Array,URL,AbortController,setTimeout:(fn,ms)=>{const timer=setTimeout(fn,ms);if(ms>=1000)timer.unref();return timer;},clearTimeout,alert(){},localStorage:{getItem(){return null;},setItem(){}},window:{location:{origin:'https://192.168.1.4:2806',hostname:'192.168.1.4'},btoa:s=>Buffer.from(s,'binary').toString('base64')},document:{body:{style:{overflow:''}},activeElement:{focus(){}},addEventListener(type,fn){documentHandlers[type]=fn;},readyState:'complete',getElementById:element,createElement:()=>({})},fetch:async(url,opts={})=>{
+ requests.push({url,opts});
+ if(url.endsWith('/api/config'))return{ok:true,json:async()=>({llm_mode:llmMode,context_strategy:'retrieval'})};
+ if(url.endsWith('/api/auth/check'))return{ok:true,json:async()=>({authenticated:opts.headers?.Authorization==='Bearer test-session'})};
+ if(url.endsWith('/api/login'))return{ok:true,json:async()=>({token:'test-session'})};
+ if(url.endsWith('/api/models'))return{ok:true,json:async()=>({models:[{key:'test-model',display_name:'Test Model'}]})};
+ if(url.includes('/api/stt/transcripts?'))return{ok:true,json:async()=>({entries:[{startedAt:'2026-11-12T05:00:00Z',endedAt:'2026-11-12T05:00:01Z',text:'긴 전사 기록 '.repeat(10000)}]})};
+ if(url.endsWith('/api/stt/warmup')){const response={ok:true,json:async()=>({ready:true,preview:true})};if(holdWarmup){holdWarmup=false;return await new Promise(resolve=>{releaseWarmup=()=>resolve(response);});}return response;}
+ if(url.endsWith('/api/stt/preview')){
+  const request=JSON.parse(opts.body), text=nextTranscript;
+  const response={ok:true,status:200,json:async()=>({sessionId:request.sessionId,segmentId:request.segmentId,revision:request.revision,stage:'draft',text,saved:false,triggered:false})};
+  if(holdPreview){holdPreview=false;return await new Promise(resolve=>{releasePreview=()=>resolve(response);});}
+  return response;
+ }
+ if(url.endsWith('/api/stt/status'))return{ok:true,json:async()=>({active:true})};
+ if(url.endsWith('/api/stt/transcribe')) { const word=JSON.parse(opts.body).triggerWord; const triggered=!!word && nextTranscript.includes(word); return{ok:true,json:async()=>({text:nextRejected?'':nextTranscript,saved:!nextRejected,rejected:nextRejected,triggered:nextRejected?false:triggered,prompt:triggered ? nextTranscript.split(word).slice(1).join(word).trim() : ''})}; }
+ if(url.endsWith('/api/chat')){if(chatReply){const reply=chatReply;chatReply=null;return reply;}if(holdChat){holdChat=false;await new Promise(resolve=>{releaseChat=resolve;});}let i=0;return{ok:true,body:{getReader:()=>({read:async()=>i<chunks.length?{value:Buffer.from(chunks[i++]),done:false}:{done:true}})}};}
+ throw Error('Unexpected request '+url);
+}};
+const tick=()=>new Promise(r=>setImmediate(r));
+(async()=>{
+ const {normalizeModels} = await import('./model-list.mjs');
+ const {clockText,glassesBatteryText,hudStatusText,hudNoticeText}=await import('./hud-status.mjs');
+ Object.assign(context,{hudStatusText,hudNoticeText});
+ assert.equal(hudNoticeText('전사 저장됨 · AI 호출어: 웬즈데이'),'전사 저장됨 · AI 호출어: 웬즈데이');
+ assert.ok(hudNoticeText('전사 저장됨 · AI 호출어: '+ '긴호출어'.repeat(10)).endsWith('…'));
+ const {LocalAgreement}=await import('./local-agreement.mjs');Object.assign(context,{LocalAgreement});
+ const agreement=new LocalAgreement();
+ assert.equal(agreement.update('오늘 회의는').stable,'');
+ const agreed=agreement.update('오늘 회의는 오후');
+ assert.equal(agreed.stable,'오늘 회의는');
+ assert.equal(agreed.stable+agreed.draft,'오늘 회의는 오후');
+ assert.equal(clockText(new Date(2026,10,12,9,5)), '09:05');
+ assert.equal(hudStatusText(75,new Date(2026,10,12,16,14)),'16:14 / 75%');
+ assert.equal(hudStatusText(100,new Date(2026,10,12,0,0)),'00:00 / 100%');
+ assert.equal(glassesBatteryText(0),'0%');
+ assert.equal(glassesBatteryText(undefined),'--');
+ const {SpeechSegmenter,mergePCM,pcmLevel}=await import('./audio-segments.mjs');
+ Object.assign(context,{SpeechSegmenter,mergePCM,pcmLevel});
+ const vad=new SpeechSegmenter();
+ const voiced=Buffer.alloc(3200);for(let i=0;i<voiced.length;i+=2)voiced.writeInt16LE(5000,i);
+ for(let i=0;i<20;i++)assert.equal(vad.push(Buffer.alloc(3200)),null,'silence must not generate clips');
+ for(let i=0;i<6;i++)assert.equal(vad.push(voiced),null);
+ let segmented=null;for(let i=0;i<9;i++)segmented=vad.push(Buffer.alloc(3200)) || segmented;
+ assert.ok(segmented && segmented.length>=48000,'utterance should include speech and silence boundary');
+ assert.equal(vad.flush(),null,'completed utterance must not be duplicated');
+ vad.push(voiced);for(let i=0;i<9;i++)assert.equal(vad.push(Buffer.alloc(3200)),null,'brief clicks must not trigger speech');
+ const capped=new SpeechSegmenter({maxMs:1000});let cappedClip=null;
+ for(let i=0;i<10;i++)cappedClip=capped.push(voiced)||cappedClip;
+ assert.equal(cappedClip.length,32000,'long speech must be split at the duration limit');
+
+ context.normalizeModels = normalizeModels;
+ assert.deepEqual(normalizeModels({models:[{key:'qwen/test',display_name:'Qwen Test'},{key:'other-model',name:'Other'}]}),[
+   {id:'qwen/test',label:'Qwen Test'},{id:'other-model',label:'Other'}
+ ]);
+ assert.deepEqual(normalizeModels({data:[{id:'openai-model'}]}),[{id:'openai-model',label:'openai-model'}]);
+ assert.deepEqual(normalizeModels(['plain-model',{id:{bad:true},key:'valid-key'},{id:'plain-model'},null,{}]),[
+   {id:'plain-model',label:'plain-model'},{id:'valid-key',label:'valid-key'}
+ ]);
+ assert.deepEqual(normalizeModels({models:[{name:{bad:true}},{id:'[object Object]'}]}),[]);
+ vm.runInNewContext(src,context);
+ await tick();
+ assert.equal(startup.textObject[0].isEventCapture,1);
+ assert.equal(startup.containerTotalNum,3);
+ assert.equal(startup.textObject[0].yPosition,32);
+ assert.equal(startup.textObject[0].height,256);
+ assert.equal(startup.textObject.find(c=>c.containerName==='notice').yPosition,0);
+ assert.ok(startup.textObject.find(c=>c.containerName==='notice').width<=startup.textObject.find(c=>c.containerName==='status').xPosition);
+ assert.equal(startup.textObject.filter(c=>c.isEventCapture===1).length,1);
+ await tick();
+ assert.match(element('hud-status-text').textContent,/^\d{2}:\d{2} \/ 82%$/);
+ deviceHandler({sn:'ring-1',batteryLevel:11});
+ assert.match(element('hud-status-text').textContent,/\/ 82%$/,'ring battery must be ignored');
+ deviceHandler({sn:'glasses-1',batteryLevel:0});
+ assert.match(element('hud-status-text').textContent,/\/ 0%$/);
+ assert.equal(element('login-status-label').textContent,'');
+ assert.equal(element('server-url').value,'https://192.168.1.4:2806');
+ handler({audioEvent:{audioPcm:[1,2]}}); handler({textEvent:{eventType:1}}); await tick();
+ assert.equal(audioCalls.length,0,'audio and scroll must not trigger recording');
+ element('auth-username').value='tester'; element('auth-password').value='password';
+ await element('btn-login').handlers.click();
+ const login=requests.find(r=>r.url.endsWith('/api/login'));
+ assert.deepEqual(JSON.parse(login.opts.body),{id:'tester',password:'password',remember_me:true});
+ assert.equal(element('model-select').options[0].textContent,'Test Model');
+ assert.equal(element('model-select').value,'test-model');
+ assert.equal(JSON.parse(nativeSaved).authToken,'test-session','token must persist in native SDK storage');
+ assert.equal(JSON.parse(nativeSaved).serverUrl,'https://192.168.1.4:2806');
+ handler({sysEvent:{eventSource:1}}); await tick();
+ assert.deepEqual(audioCalls[0],[true,0]);
+ handler({audioEvent:{audioPcm:Array(6400).fill(1)}});
+ handler({sysEvent:{eventType:0}}); await tick();await tick();
+ const stt=requests.find(r=>r.url.endsWith('/api/stt/transcribe'));
+ assert.equal(Buffer.from(JSON.parse(stt.opts.body).audio,'base64').length,6400);
+ assert.equal(stt.opts.headers.Authorization,'Bearer test-session');
+ assert.equal(JSON.parse(requests.find(r=>r.url.endsWith('/api/chat')).opts.body).model,'test-model');
+ assert.match(element('hud-screen').innerHTML,/안녕하세요/,'fragmented SSE must be reassembled');
+
+ await new Promise(r=>setTimeout(r,350));
+ const originalChatCount=requests.filter(r=>r.url.endsWith('/api/chat')).length;
+ element('voice-mode').value='continuous'; element('trigger-word').value='이븐';
+ handler({sysEvent:{eventType:0}}); await tick();await tick();
+ const speech=Buffer.alloc(3200);for(let i=0;i<speech.length;i+=2)speech.writeInt16LE(5000,i);
+ function utterance(){for(let i=0;i<6;i++)handler({audioEvent:{audioPcm:speech}});for(let i=0;i<9;i++)handler({audioEvent:{audioPcm:Buffer.alloc(3200)}});}
+ nextTranscript='오늘 회의는 세 시입니다'; utterance();await tick();await tick();
+ assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,originalChatCount,'ordinary conversation must not call AI');
+ assert.match(element('transcript-log').textContent,/오늘 회의/);
+ nextRejected=true;nextTranscript='여기 '.repeat(100);utterance();await tick();await tick();
+ assert.doesNotMatch(element('transcript-log').textContent,/여기/,'rejected loops must not enter the transcript view');
+ assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,originalChatCount);
+ nextRejected=false;
+ holdChat=true;nextTranscript='이븐 오늘 일정을 요약해줘';utterance();await tick();await tick();await tick();
+ assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,originalChatCount+1,'trigger should call the existing gateway chat');
+ const triggerBody=JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
+ assert.match(triggerBody.messages.at(-1).content,/오늘 회의/);
+ assert.match(triggerBody.messages.at(-1).content,/오늘 일정을 요약해줘/);
+ const finalsBeforeAIWait=requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).length;
+ nextTranscript='AI 응답 중에도 전사할 문장';utterance();await tick();await tick();
+ assert.equal(requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).length,finalsBeforeAIWait+1,'ASR must continue while the LLM is waiting');
+ assert.match(element('transcript-log').textContent,/AI 응답 중에도/);
+ releaseChat();await tick();await tick();
+ const chatCount=requests.filter(r=>r.url.endsWith('/api/chat')).length;
+ const finalsBeforePreview=requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).length;
+ nextTranscript='이븐 임시로 인식한 문장';
+ for(let i=0;i<15;i++)handler({audioEvent:{audioPcm:speech}});
+ await tick();await tick();
+ assert.ok(requests.some(r=>r.url.endsWith('/api/stt/preview')));
+ assert.match(element('hud-screen').innerHTML,/임시로 인식/,'draft must appear before silence/end of utterance');
+ assert.equal(requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).length,finalsBeforePreview);
+ assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,chatCount,'draft trigger must not call AI');
+ assert.doesNotMatch(element('transcript-log').textContent,/임시로 인식/,'draft must not enter saved history');
+ nextTranscript='확정된 실제 문장';
+ for(let i=0;i<10;i++)handler({audioEvent:{audioPcm:speech}});
+ await tick();await tick();
+ const previews=requests.filter(r=>r.url.endsWith('/api/stt/preview')).slice(-2).map(r=>JSON.parse(r.opts.body));
+ assert.equal(previews[0].segmentId,previews[1].segmentId);
+ assert.ok(previews[1].revision>previews[0].revision);
+ for(let i=0;i<9;i++)handler({audioEvent:{audioPcm:Buffer.alloc(3200)}});
+ await tick();await tick();
+ assert.match(element('transcript-log').textContent,/확정된 실제 문장/);
+ assert.match(element('hud-notice').textContent,/전사 저장됨.*AI 호출어/);
+ // An in-flight draft completed after endpointing must not repaint the final.
+ holdPreview=true;nextTranscript='늦게 도착한 가짜 초안';
+ for(let i=0;i<15;i++)handler({audioEvent:{audioPcm:speech}});
+ await tick();
+ nextTranscript='마지막 확정 문장';
+ for(let i=0;i<9;i++)handler({audioEvent:{audioPcm:Buffer.alloc(3200)}});
+ await tick();assert.ok(releasePreview);
+ releasePreview();await tick();await tick();
+ assert.doesNotMatch(element('hud-screen').innerHTML,/늦게 도착한 가짜/);
+ assert.match(element('transcript-log').textContent,/마지막 확정 문장/);
+
+ handler({sysEvent:{eventType:0}});await tick();await tick();
+ handler({sysEvent:{eventType:3}}); await tick();await tick(); assert.equal(shutdown,1);
+ await new Promise(r=>setTimeout(r,400));
+ assert.ok(updates.some(update=>update.containerID===1 && update.content.includes('안녕하세요')));
+ element('btn-transcripts').handlers.click();await tick();
+ assert.equal(element('transcript-modal').hidden,false);
+ assert.equal(context.document.body.style.overflow,'hidden');
+ assert.ok(element('transcript-log').textContent.length>50000);
+ element('btn-close-transcripts').handlers.click();
+ assert.equal(element('transcript-modal').hidden,true);
+ assert.equal(context.document.body.style.overflow,'');
+
+ // A stop during engine warmup cancels the intent; delayed warmup cannot open MIC.
+ element('voice-mode').value='manual';
+ const opensBeforeWarmup=audioCalls.filter(call=>call[0]).length;
+ holdWarmup=true;handler({sysEvent:{eventType:0}});await tick();await tick();
+ assert.ok(releaseWarmup);
+ handler({sysEvent:{eventType:0}});await tick();await tick();
+ assert.match(element('hud-notice').textContent,/녹음 정지/);
+ releaseWarmup();await tick();await tick();
+ assert.equal(audioCalls.filter(call=>call[0]).length,opensBeforeWarmup);
+ const normalAudioControl=bridge.audioControl;
+ let releaseOpen;
+ bridge.audioControl=(open,...args)=>{audioCalls.push([open,...args]);return open?new Promise(resolve=>{releaseOpen=resolve;}):Promise.resolve(true);};
+ handler({sysEvent:{eventType:0}});await tick();await tick();
+ assert.ok(releaseOpen);
+ handler({sysEvent:{eventType:0}});await tick();await tick();
+ assert.equal(audioCalls.at(-1)[0],false,'stop must reach native MIC before open reply arrives');
+ releaseOpen(true);await tick();await tick();await tick();
+ assert.equal(audioCalls.at(-1)[0],false,'delayed MIC open must be closed again');
+ assert.match(element('hud-notice').textContent,/녹음 정지/);
+ // Stop must bypass any pending preview inference.
+ bridge.audioControl=normalAudioControl;element('voice-mode').value='continuous';
+ handler({sysEvent:{eventType:0}});await tick();await tick();
+ holdPreview=true;nextTranscript='정지 전에 도착하지 않은 자막';
+ for(let i=0;i<15;i++)handler({audioEvent:{audioPcm:speech}});
+ await tick();
+ const opensBeforeStop=audioCalls.filter(call=>call[0]).length;
+ handler({sysEvent:{eventType:0}});await tick();await tick();
+ assert.equal(audioCalls.at(-1)[0],false,'MIC stop must not wait for inference');
+ assert.match(element('hud-notice').textContent,/녹음 정지/);
+ releasePreview();await tick();await tick();
+ assert.equal(audioCalls.filter(call=>call[0]).length,opensBeforeStop);
+ // A failed close is visible; the next tap retries close instead of reopening.
+ let rejectClose=true;
+ bridge.audioControl=async(open,...args)=>{audioCalls.push([open,...args]);return open || !rejectClose;};
+ element('voice-mode').value='manual';
+ handler({textEvent:{eventType:0}});await tick();await tick();
+ const opensBeforeRetry=audioCalls.filter(call=>call[0]).length;
+ handler({textEvent:{eventType:0}});await tick();await tick();
+ assert.match(element('hud-notice').textContent,/종료 확인 실패/);
+ rejectClose=false;handler({sysEvent:{eventType:0}});await tick();await tick();
+ assert.equal(audioCalls.filter(call=>call[0]).length,opensBeforeRetry);
+ assert.match(element('hud-notice').textContent,/녹음 정지/);
+ bridge.audioControl=normalAudioControl;
+ // Text entry uses the same AI queue and chooses the effective account protocol.
+ llmMode='stateful';
+ function sseReply(text){let sent=false;return{ok:true,body:{getReader:()=>({read:async()=>sent?{done:true}:(sent=true,{done:false,value:Buffer.from(text)})})}};}
+ chatReply=sseReply('event: message.delta\r\ndata: {"type":"message.delta","content":"임시 답변"}\r\n\r\ndata: {"type":"reasoning.delta","content":"비공개 추론"}\n\ndata: {"type":"chat.end","result":{"output":[{"type":"message","content":"최종 답변"}]}}\n\ndata: {"type":"request.complete","final_assistant_content":"최종 답변"}\n\n');
+ element('chat-input').value='텍스트 질문';
+ element('text-chat-form').handlers.submit({preventDefault(){}});await tick();await tick();await tick();
+ let textRequest=JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
+ assert.equal(textRequest.input,'텍스트 질문');assert.equal(textRequest.store,false);assert.equal(textRequest.messages,undefined);
+ assert.match(textRequest.system_prompt,/HUD/);
+ assert.equal(element('chat-input').value,'');
+ assert.equal(element('chat-output').textContent,'최종 답변','terminal answer must replace drafts without duplicating content or revealing reasoning');
+ chatReply=sseReply('data: {"choices":[{"delta":{"content":"오류 전 텍스트"}}]}\n\nevent: error\ndata: LLM error: input is required\n\n');
+ element('chat-input').value='오류 확인';element('text-chat-form').handlers.submit({preventDefault(){}});await tick();await tick();await tick();
+ assert.match(element('chat-output').textContent,/AI 오류: LLM error: input is required/,'plain SSE errors must preserve the original cause');
+ llmMode='standard';
+ chatReply={ok:false,status:401,text:async()=>'LM_STUDIO_AUTH_ERROR: invalid API key'};
+ element('chat-input').value='인증 확인';element('text-chat-form').handlers.submit({preventDefault(){}});await tick();await tick();await tick();
+ assert.match(element('chat-output').textContent,/HTTP 401.*invalid API key/);
+ textRequest=JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
+ assert.equal(textRequest.messages.at(-1).content,'인증 확인');assert.equal(textRequest.input,undefined);
+ chatReply=sseReply('data: {"type":"reasoning.delta","content":"생각만"}\n\n');
+ element('chat-input').value='빈 응답';element('text-chat-form').handlers.submit({preventDefault(){}});await tick();await tick();await tick();
+ assert.match(element('chat-output').textContent,/답변 본문을 받지 못했습니다/);
+ elements.clear();
+ vm.runInNewContext(src,context);await tick();await tick();
+ assert.equal(element('server-url').value,'https://192.168.1.4:2806');
+ assert.match(element('login-status-label').textContent,/인증됨/,'new WebView with empty browser storage must restore native login');
+ assert.equal(element('auth-password').value,'');
+ nativeSaved=JSON.stringify({...JSON.parse(nativeSaved),authToken:'expired-session'});
+ elements.clear();vm.runInNewContext(src,context);await tick();await tick();
+ assert.match(element('login-status-label').textContent,/세션 만료/);
+ assert.equal(JSON.parse(nativeSaved).authToken,'','expired tokens must be removed from native storage');
+ console.log('PASS: text chat/account protocol/LM Studio SSE/error details, MIC stop during warmup/open/preview, close retry, native settings/login restore, long transcript modal, incremental drafts/local agreement/stale rejection/AI independence, continuous capture/trigger/transcript queue, model formats/labels/chat model ID, startup, auth, tap/scroll/audio events, PCM/STT, fragmented SSE, serialized HUD, exit confirmation');
+})().catch(e=>{console.error(e);process.exitCode=1;});

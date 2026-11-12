@@ -535,6 +535,7 @@ func (a *App) startRetentionMaintenanceLoop() {
 func (a *App) Shutdown(ctx context.Context) {
 	fmt.Println("Shutting down application...")
 	a.StopServer()
+	closeSTTRuntime()
 	installEmbeddingProvider(nil)
 	mcp.SetMemoryChoiceProvider(nil)
 	clearEmbeddingRuntime()
@@ -1043,6 +1044,7 @@ func (a *App) StartServer(port string) error {
 
 	a.port = port
 	mux := createServerMux(a, a.authMgr)
+	apiHandler := evenHubCORS(mux)
 
 	// Wrap mux with logging middleware
 	loggingMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1051,7 +1053,7 @@ func (a *App) StartServer(port string) error {
 		if !isChatSessionPoll {
 			log.Printf("[HTTP] %s %s from %s", r.Method, path, r.RemoteAddr)
 		}
-		mux.ServeHTTP(w, r)
+		apiHandler.ServeHTTP(w, r)
 	})
 
 	a.server = &http.Server{
