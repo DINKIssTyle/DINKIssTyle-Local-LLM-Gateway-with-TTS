@@ -394,6 +394,21 @@
                             <option value="inline" data-i18n="setting.micLayout.option.inline">In Message Input</option>
                         </select>
                     </div>
+                    <div class="setting-item">
+                        <label for="cfg-stt-method" data-i18n="setting.sttMethod.label">STT 방식</label>
+                        <select id="cfg-stt-method">
+                            <option value="browser" data-i18n="setting.sttMethod.browser">브라우저 음성 인식</option>
+                            <option value="local" data-i18n="setting.sttMethod.local">서버 Whisper (로컬 STT)</option>
+                        </select>
+                        <p class="setting-desc" data-i18n="setting.sttMethod.desc">Whisper는 서버 Asset Manager에서 STT 모델을 설치해야 합니다. 음성 입력 언어는 TTS 언어 설정을 따릅니다.</p>
+                    </div>
+                    <div class="setting-item">
+                        <div class="setting-toggle" onclick="toggleSwitch('cfg-stt-continuous')">
+                            <span data-i18n="setting.sttContinuous.label">연속 듣기</span>
+                            <input type="checkbox" id="cfg-stt-continuous">
+                        </div>
+                        <p class="setting-desc" data-i18n="setting.sttContinuous.desc">발화가 끝나면 자동 전송하고, 답변 생성 및 음성 재생이 끝난 뒤 다시 듣습니다. 마이크 버튼을 다시 누르면 종료합니다.</p>
+                    </div>
                     <div class="setting-item" id="container-voice-input-auto-tts">
                         <div class="setting-toggle" onclick="toggleSwitch('cfg-voice-input-auto-tts')">
                             <span data-i18n="setting.voiceInputAutoPlay.label">음성 입력 시 자동 재생</span>
@@ -913,7 +928,7 @@
             });
     </script>
     <script src="app-utils.js?v=3"></script>
-    <script src="app-i18n.js?v=9"></script>
+    <script src="app-i18n.js?v=10"></script>
     <script src="app-saved-library.js?v=1"></script>
     <script src="app-models.js?v=1"></script>
     <script src="supertonic3.js?v=3"></script>
@@ -923,8 +938,8 @@
     <script src="app-chat-streaming.js?v=1"></script>
     <script src="app-chat-ui.js?v=1"></script>
     <script src="app-progress-ui.js?v=1"></script>
-    <script src="app-mic.js?v=2"></script>
-    <script src="app.js?v=35"></script>
+    <script src="app-mic.js?v=3"></script>
+    <script src="app.js?v=36"></script>
 
 </body>
 

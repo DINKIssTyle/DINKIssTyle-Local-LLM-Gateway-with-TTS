@@ -205,8 +205,10 @@ func runSTTInference(audio []byte, format, lang, speechFilter string, preview ..
 	}
 	reply, err := activeSTTWorker.read(90 * time.Second)
 	if err != nil {
-		activeSTTWorker.close()
-		activeSTTWorker = nil
+		if reply.Error == "" {
+			activeSTTWorker.close()
+			activeSTTWorker = nil
+		}
 		return sttWorkerReply{}, err
 	}
 	return reply, nil

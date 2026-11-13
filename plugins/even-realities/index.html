@@ -33,7 +33,57 @@
         <span id="hud-notice">대기</span>
         <span id="hud-status-text">--:-- / --</span>
       </div>
-      <div id="hud-screen" class="hud-screen">Even Realities G2 대기 중...<br>안경 터치 패드를 탭하거나 음성 버튼을 눌러 말씀하세요.<span class="hud-cursor"></span></div>
+      <div id="hud-screen" class="hud-screen">
+        <div class="hud-ai-box">
+          <div class="hud-ai-header">
+            <span id="hud-ai-badge" class="hud-ai-badge">AI 응답</span>
+            <span id="hud-ai-meta" class="hud-ai-meta">대기</span>
+          </div>
+          <div id="hud-ai-body" class="hud-ai-body">AI 대기 중 · 호출어로 부르거나 텍스트로 질문하세요.</div>
+        </div>
+        <div class="hud-transcript-box">
+          <div class="hud-transcript-label">전사</div>
+          <div id="hud-transcript-body" class="hud-transcript-body">안경 터치 패드를 탭하거나 음성 버튼을 눌러 말씀하세요.<span class="hud-cursor"></span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Glasses Mode Switcher -->
+    <div class="mode-switcher-card">
+      <div class="mode-switcher" role="tablist" aria-label="안경 동작 모드">
+        <button id="mode-btn-transcript" type="button" class="mode-btn active" data-mode="transcript" role="tab" aria-selected="true">전사 모드</button>
+        <button id="mode-btn-ai" type="button" class="mode-btn" data-mode="ai" role="tab" aria-selected="false">AI 모드</button>
+        <button id="mode-btn-translate" type="button" class="mode-btn" data-mode="translate" role="tab" aria-selected="false">번역 모드</button>
+      </div>
+      <div id="mode-description" class="mode-description">전사 및 AI 범용 · 호출어 또는 수동 녹음으로 AI 질문</div>
+      <p id="hint-status" role="status" style="font-size:12px;color:var(--text-secondary)">AI 힌트 대기 · 판별 오류가 나도 전사는 계속됩니다.</p>
+      <div id="translate-lang-row" class="translate-lang-row" hidden>
+        <label for="translate-source-lang">인식 언어</label>
+        <select id="translate-source-lang">
+          <option value="auto" selected>자동 (상대 언어)</option>
+          <option value="en">영어 (English)</option>
+          <option value="ko">한국어 (Korean)</option>
+          <option value="ja">일본어 (Japanese)</option>
+          <option value="zh">중국어 (Chinese)</option>
+          <option value="es">스페인어 (Spanish)</option>
+          <option value="fr">프랑스어 (French)</option>
+          <option value="de">독일어 (German)</option>
+          <option value="vi">베트남어 (Vietnamese)</option>
+          <option value="th">태국어 (Thai)</option>
+        </select>
+        <label for="translate-target-lang">번역 언어</label>
+        <select id="translate-target-lang">
+          <option value="ko" selected>한국어 (Korean)</option>
+          <option value="en">영어 (English)</option>
+          <option value="ja">일본어 (Japanese)</option>
+          <option value="zh">중국어 (Chinese)</option>
+          <option value="es">스페인어 (Spanish)</option>
+          <option value="fr">프랑스어 (French)</option>
+          <option value="de">독일어 (German)</option>
+          <option value="vi">베트남어 (Vietnamese)</option>
+          <option value="th">태국어 (Thai)</option>
+        </select>
+      </div>
     </div>
 
     <!-- Voice Control -->
@@ -116,7 +166,21 @@
 
       <!-- Glasses Options -->
       <div class="form-group">
-        <label for="voice-mode">음성 모드</label>
+        <label for="glasses-mode">안경 동작 모드 (안경 메뉴·길게 누르기로도 전환 가능)</label>
+        <select id="glasses-mode">
+          <option value="transcript" selected>전사 모드 · 전사 및 AI 범용 모드</option>
+          <option value="ai">AI 모드 · 질문 답변 + 자동 정보 힌트</option>
+          <option value="translate">번역 모드 · 실시간 번역 + 긍정/부정 답변 표시</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="ai-hint-mode">AI 모드 응답 방식</label>
+        <select id="ai-hint-mode"><option value="hints">힌트 자동 선별 (EmbeddingGemma 2 + JEV)</option><option value="all">모든 발화에 응답 · 기존 연속 대화</option></select>
+        <label for="hint-sensitivity">힌트 적극성</label>
+        <select id="hint-sensitivity"><option value="quiet">조용하게</option><option value="balanced" selected>균형</option><option value="active">적극적으로</option></select>
+      </div>
+      <div class="form-group">
+        <label for="voice-mode">전사 모드 세부 방식</label>
         <select id="voice-mode">
           <option value="manual">수동 · 한 번 녹음 후 AI 답변</option>
           <option value="continuous">실시간 전사 · 트리거 워드가 나오면 AI 답변</option>
@@ -153,7 +217,7 @@
       <div class="form-group">
         <label>스마트 글래스 옵션</label>
         <div class="toggle-group">
-          <span class="toggle-label">글래스 최적화 요약 답변</span>
+          <span class="toggle-label">핵심 설명 · 4~6문장 (해제 시 더 자세히)</span>
           <input type="checkbox" id="opt-concise-mode" checked style="width: auto;">
         </div>
         <div class="toggle-group">

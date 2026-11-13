@@ -1,7 +1,11 @@
+import { parseTranslationDisplay, translationReplyText, translationPhoneText } from './translation-display.mjs';
+import { directQuestionIntent } from './direct-question.mjs';
+import { cuePrompts, parseCueResponse, fitCue, hintPlanPrompts, parseHintPlan, hintAnswerPrompts, extractHintFact, readHintPlanResponse } from './hint-enrichment.mjs';
+import { HintGate } from './hint-gate.mjs';
 import { waitForEvenAppBridge, AudioInputSource, OsEventTypeList } from '@evenrealities/even_hub_sdk';
 import { normalizeModels } from './model-list.mjs';
 import { SpeechSegmenter, mergePCM, pcmLevel } from './audio-segments.mjs';
-import { hudStatusText, hudNoticeText } from './hud-status.mjs';
+import { hudStatusText, hudNoticeText, withAnimatedDots, extractVisibleAndReasoning, stripSourcesForGlasses, formatToolStatusText, sliceHUDWindow, normalizeGlassesMode, nextGlassesMode, glassesModeMenuIdToMode, targetLanguageLabel, glassesModeShortLabel, glassesModeBadgeText, buildModePrompts } from './hud-status.mjs';
 import { LocalAgreement } from './local-agreement.mjs';
 
 /**
@@ -21,6 +25,11 @@ import { LocalAgreement } from './local-agreement.mjs';
     model: '',
     connectionMode: 'sse',
     conciseMode: true,
+    aiHintMode: true,
+    hintSensitivity: 'balanced',
+    glassesMode: 'transcript',
+    translateSourceLang: 'auto',
+    translateTargetLang: 'ko',
     voiceMode: 'manual',
     triggerWord: '이븐',
     speechFilter: 'strict',
@@ -62,6 +71,7 @@ import { LocalAgreement } from './local-agreement.mjs';
   let segmenter = null;
   let pendingClips = [];
   let draining = false;
+  let activeFinalClip = null;
   let activeUtterance = null;
   let pendingPreview = null;
   let previewBusy = false;
@@ -71,14 +81,43 @@ import { LocalAgreement } from './local-agreement.mjs';
   let captionStable = '';
   let captionDraft = '';
   let answerText = '';
+  let translationDisplay={translation:'',positive:'',negative:''};
   let answerHoldUntil = 0;
   let answerTimer = null;
   let processingAI = false;
+  let activeAIJob = null;
   const pendingAI = [];
   const knownAIJobs = new Set();
   let pendingTrigger = false;
   let transcriptText = '';
   const transcriptContext = [];
+  const directDialogue = [];
+  function aiVisibleLines(){return normalizeGlassesMode(config.glassesMode)==='translate'?5:6;}
+  let nativeTranslateLayout=false;
+  const AI_SCROLL_START_MS = 5000;
+  const AI_SCROLL_LINE_MS = 2500;
+  // Inner width: 576 - 2 × (2px padding + 1px border).
+  const AI_BOX_WIDTH_PX = 570;
+  const TRANSCRIPT_VISIBLE_LINES = 3;
+  const TRANSCRIPT_WIDTH_PX = 576;
+  let aiPhaseTitle = '';
+  let aiPhaseDetail = '';
+  let aiReasoningPreview = '';
+  let aiReasoningStartMs = 0;
+  let aiAnimStep = 0;
+  let aiAnimTimer = null;
+  let aiScrollOffset = 0;
+  let aiScrollTimer = null;
+  let lastAIHUDContent = '';
+  let lastTranscriptHUDContent = '';
+  let transcriptStatusMessage = '';
+  let autoLangUnsupported = false;
+  let previewAbortController = null;
+  let clipAbortController = null;
+  let aiAbortController = null;
+  let aiAbortedByModeSwitch = false;
+  const MAX_PENDING_CLIPS = 64;
+  const MAX_PENDING_AUDIO_BYTES = 32000 * 120; // Pause after two minutes of unsaved PCM.
 
   // --- DOM Elements ---
   const els = {
@@ -101,7 +140,18 @@ import { LocalAgreement } from './local-agreement.mjs';
     hudStatus: document.getElementById('hud-status-text'),
     hudNotice: document.getElementById('hud-notice'),
     hudPageIndicator: document.getElementById('hud-page-indicator'),
+    glassesMode: document.getElementById('glasses-mode'),
+    translateSourceLang: document.getElementById('translate-source-lang'),
+    translateTargetLang: document.getElementById('translate-target-lang'),
+    translateLangRow: document.getElementById('translate-lang-row'),
+    modeBtnTranscript: document.getElementById('mode-btn-transcript'),
+    modeBtnAi: document.getElementById('mode-btn-ai'),
+    modeBtnTranslate: document.getElementById('mode-btn-translate'),
+    modeDescription: document.getElementById('mode-description'),
     voiceMode: document.getElementById('voice-mode'),
+    hintMode: document.getElementById('ai-hint-mode'),
+    hintSensitivity: document.getElementById('hint-sensitivity'),
+    hintStatus: document.getElementById('hint-status'),
     chatForm: document.getElementById('text-chat-form'),
     chatInput: document.getElementById('chat-input'),
     chatQuestion: document.getElementById('chat-question'),
@@ -118,6 +168,23 @@ import { LocalAgreement } from './local-agreement.mjs';
     voiceBtn: document.getElementById('voice-btn'),
     actionHint: document.getElementById('action-hint')
   };
+
+  const hintGate=new HintGate({
+    decide:async(job,signal)=>{
+      const res=await gatewayFetch(`${config.serverUrl}/api/glasses/hint-decision`,{
+        method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),signal,
+        body:JSON.stringify({text:job.text,context:job.context,sensitivity:config.hintSensitivity})
+      });
+      if(!res.ok)throw new Error(`HTTP ${res.status}${res.status===404?' · 게이트웨이 업데이트 필요':''}`);
+      return res.json();
+    },
+    onHint:job=>{
+      if(!isRecording || config.glassesMode!=='ai' || config.aiHintMode===false || (activeAIJob && !activeAIJob.hint) || pendingAI.some(job=>!job.hint))return false;
+      enqueueAI(job.id,job.text,job.context,'ai',config.translateTargetLang,{...job,hint:true});
+      return true;
+    },
+    onStatus:text=>{els.hintStatus.textContent=text;}
+  });
 
   // --- Lifecycle & Initialization ---
   async function init() {
@@ -149,14 +216,133 @@ import { LocalAgreement } from './local-agreement.mjs';
     if (els.authUsername) els.authUsername.value = config.username || '';
     if (els.apiKey) els.apiKey.value = config.apiKey || '';
     if (els.connectionMode) els.connectionMode.value = config.connectionMode || 'sse';
+    els.hintMode.value=config.aiHintMode===false?'all':'hints';
+    els.hintSensitivity.value=config.hintSensitivity || 'balanced';
     if (els.optConciseMode) els.optConciseMode.checked = config.conciseMode !== false;
     if (els.optEnableTts) els.optEnableTts.checked = config.enableTTS !== false;
+    config.glassesMode = normalizeGlassesMode(config.glassesMode);
+    config.translateSourceLang = config.translateSourceLang || 'auto';
+    config.translateTargetLang = config.translateTargetLang || 'ko';
+    if (els.glassesMode) els.glassesMode.value = config.glassesMode;
+    if (els.translateSourceLang) els.translateSourceLang.value = config.translateSourceLang;
+    if (els.translateTargetLang) els.translateTargetLang.value = config.translateTargetLang;
     els.voiceMode.value = config.voiceMode;
     els.triggerWord.value = config.triggerWord;
     els.speechFilter.value = config.speechFilter;
     els.speakerScope.value = config.speakerScope;
     const now = new Date();
     els.transcriptDate.value = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+    syncModeUI();
+  }
+
+  function isContinuousCaptureMode(mode = config.glassesMode) {
+    const normalized = normalizeGlassesMode(mode);
+    if (normalized === 'ai' || normalized === 'translate') return true;
+    return config.voiceMode === 'continuous';
+  }
+
+  function abortPendingPreview() {
+    pendingPreview = null;
+    if (previewAbortController) {
+      previewAbortController.abort();
+      previewAbortController = null;
+    }
+  }
+
+  function resetQueuesForModeSwitch(nextMode) {
+    translationDisplay={translation:'',positive:'',negative:''};
+    directDialogue.length=0;
+    hintGate.reset();
+    abortPendingPreview();
+    activeUtterance = null;
+    draftUtteranceId = '';
+    captionStable = '';
+    captionDraft = '';
+    pendingClips.length = 0;
+    if (clipAbortController) {
+      clipAbortController.abort();
+      clipAbortController = null;
+    }
+    pendingAI.length = 0;
+    if (aiAbortController) {
+      aiAbortedByModeSwitch = true;
+      aiAbortController.abort();
+      aiAbortController = null;
+    }
+    clearTimeout(answerTimer);
+    answerHoldUntil = 0;
+    stopAIAutoScroll();
+    stopThinkingAnimation();
+    answerText = '';
+    aiScrollOffset = 0;
+    aiPhaseTitle = '';
+    aiPhaseDetail = '';
+    aiReasoningPreview = '';
+    if (isRecording) {
+      audioBuffer = [];
+      recordedBytes = 0;
+      recordingStarted = Date.now();
+      segmenter = new SpeechSegmenter();
+      clearTimeout(manualTimer);
+      manualTimer = null;
+      if (!isContinuousCaptureMode(nextMode)) {
+        manualTimer = setTimeout(() => stopVoiceRecording().catch(console.warn), 25000);
+      }
+    }
+  }
+
+  function syncModeUI() {
+    const mode = normalizeGlassesMode(config.glassesMode);
+    const sourceLang = config.translateSourceLang || 'auto';
+    const targetLang = config.translateTargetLang || 'ko';
+    if (els.glassesMode && els.glassesMode.value !== mode) els.glassesMode.value = mode;
+    if (els.translateSourceLang && els.translateSourceLang.value !== sourceLang) els.translateSourceLang.value = sourceLang;
+    if (els.translateTargetLang && els.translateTargetLang.value !== targetLang) els.translateTargetLang.value = targetLang;
+    if (els.translateLangRow) els.translateLangRow.hidden = mode !== 'translate';
+    for (const [btn, key] of [
+      [els.modeBtnTranscript, 'transcript'],
+      [els.modeBtnAi, 'ai'],
+      [els.modeBtnTranslate, 'translate'],
+    ]) {
+      if (!btn) continue;
+      const active = mode === key;
+      btn.classList?.toggle?.('active', active);
+      btn.setAttribute?.('aria-selected', active ? 'true' : 'false');
+    }
+    if (els.modeDescription) {
+      if (mode === 'ai') {
+        els.modeDescription.textContent = 'AI 모드 · 질문·요청에는 바로 답변하고 일반 대화에는 새 정보 힌트를 표시합니다';
+      } else if (mode === 'translate') {
+        els.modeDescription.textContent = `번역 모드 (→${targetLanguageLabel(targetLang, true)}) · 실시간 번역 + 긍정/부정 답변 표시`;
+      } else {
+        els.modeDescription.textContent = '전사 및 AI 범용 · 호출어 또는 수동 녹음으로 AI 질문';
+      }
+    }
+    renderLiveHUD();
+  }
+
+  function setGlassesMode(nextMode, persist = false) {
+    const prevMode = normalizeGlassesMode(config.glassesMode);
+    const mode = normalizeGlassesMode(nextMode);
+    const modeChanged = prevMode !== mode;
+    config.glassesMode = mode;
+    pendingTrigger = false;
+    captureFailure = '';
+    if (modeChanged) {
+      resetQueuesForModeSwitch(mode);
+    }
+    syncModeUI();
+    if (mode === 'ai') {
+      setHUDNotice(isRecording ? (config.aiHintMode!==false?'[AI 힌트] 대화 듣는 중':'[AI 모드] 연속 대화 중 · 호출어 없이 말씀하세요') : '[AI 모드] 트리거 없이 연속 대화');
+    } else if (mode === 'translate') {
+      const langShort = targetLanguageLabel(config.translateTargetLang, true);
+      setHUDNotice(isRecording ? `[번역→${langShort}] 실시간 통번역 중` : `[번역→${langShort}] 긍정·부정 답변 추천`);
+    } else {
+      transcriptNotice(isRecording ? (config.voiceMode === 'continuous' ? '실시간 전사 중' : '녹음 중') : '녹음 정지');
+    }
+    if (persist) {
+      persistSettings().catch(console.warn);
+    }
   }
 
   async function saveSettings(showMessage = true) {
@@ -167,11 +353,18 @@ import { LocalAgreement } from './local-agreement.mjs';
     config.model = els.modelSelect.value || '';
     config.connectionMode = els.connectionMode.value;
     config.conciseMode = els.optConciseMode.checked;
+    config.aiHintMode=els.hintMode.value!=='all';
+    config.hintSensitivity=els.hintSensitivity.value || 'balanced';
+    hintGate.reset();
     config.enableTTS = els.optEnableTts.checked;
+    if (els.glassesMode?.value) config.glassesMode = normalizeGlassesMode(els.glassesMode.value);
+    if (els.translateSourceLang?.value) config.translateSourceLang = els.translateSourceLang.value;
+    if (els.translateTargetLang?.value) config.translateTargetLang = els.translateTargetLang.value;
     config.voiceMode = els.voiceMode.value === 'continuous' ? 'continuous' : 'manual';
     config.triggerWord = els.triggerWord.value.trim();
     config.speechFilter = els.speechFilter.value === 'standard' ? 'standard' : 'strict';
     config.speakerScope = els.speakerScope.value === 'self' ? 'self' : 'conversation';
+    syncModeUI();
 
     try {
       await persistSettings();
@@ -219,26 +412,45 @@ import { LocalAgreement } from './local-agreement.mjs';
   }
 
   // --- Even Realities SDK Bridge ---
+  function hudPage(translate){return {
+        containerTotalNum: 4,
+        textObject: [{
+          xPosition: 0, yPosition: 27, width: 576, height: translate?141:168,
+          borderWidth: 1, borderColor: 4, borderRadius: 4, paddingLength: 2,
+          containerID: 1, containerName: 'gateway',
+          content: lastAIHUDContent || '',
+          isEventCapture: 1,
+        }, {
+          xPosition: 400, yPosition: 0, width: 176, height: 27,
+          paddingLength: 0, borderWidth: 0,
+          containerID: 2, containerName: 'status', content: hudStatusText(glassesBattery), isEventCapture: 0,
+        }, {
+          xPosition: 0, yPosition: 0, width: 396, height: 27,
+          paddingLength: 0, borderWidth: 0,
+          containerID: 3, containerName: 'notice', content: hudNoticeText(els.hudNotice.textContent || '대기'), isEventCapture: 0,
+        }, {
+          xPosition: 0, yPosition: translate?168:195, width: 576, height: translate?120:93,
+          paddingLength: 0, borderWidth: 0,
+          containerID: 4, containerName: 'transcript',
+          content: lastTranscriptHUDContent || '',
+          isEventCapture: 0,
+        }],
+        menuObject: {
+          menuItems: [
+            { itemID: 1, itemName: '전사 모드' },
+            { itemID: 2, itemName: 'AI 모드' },
+            { itemID: 3, itemName: '번역 모드' },
+          ],
+        },
+      };}
+
   async function initEvenRealitiesBridge() {
     try {
       updateConnectionState(false, 'Even 앱 연결 대기 · 브라우저 미리보기');
       bridge = await waitForEvenAppBridge();
       restoreNativeSettings();
-      const result = await bridge.createStartUpPageContainer({
-        containerTotalNum: 3,
-        textObject: [{
-          xPosition: 0, yPosition: 32, width: 576, height: 256,
-          containerID: 1, containerName: 'gateway',
-          content: 'DKST Gateway 준비 완료.\n한 번 탭: 녹음 시작/종료\n두 번 탭: 앱 종료',
-          isEventCapture: 1,
-        }, {
-          xPosition: 400, yPosition: 0, width: 176, height: 28,
-          containerID: 2, containerName: 'status', content: hudStatusText(null), isEventCapture: 0,
-        }, {
-          xPosition: 0, yPosition: 0, width: 396, height: 28,
-          containerID: 3, containerName: 'notice', content: '대기', isEventCapture: 0,
-        }],
-      });
+      nativeTranslateLayout=normalizeGlassesMode(config.glassesMode)==='translate';
+      const result = await bridge.createStartUpPageContainer(hudPage(nativeTranslateLayout));
       if (result !== 0) throw new Error(`안경 화면 생성 실패: ${result}`);
       displayReady = true;
       updateConnectionState(true, 'G2 화면 연결됨');
@@ -253,7 +465,7 @@ import { LocalAgreement } from './local-agreement.mjs';
   function setupBridgeEvents() {
     if (!bridge) return;
 
-    // Listen to hardware events (tap, gesture, mic audio)
+    // Listen to hardware events (tap, gesture, menu, mic audio)
     if (typeof bridge.onEvenHubEvent === 'function') {
       bridge.onEvenHubEvent((event) => {
         if (!event) return;
@@ -265,15 +477,41 @@ import { LocalAgreement } from './local-agreement.mjs';
             receivePCM(new Uint8Array(pcm), event.audioEvent.speakerRole);
           }
         }
+        if (event.audioEvent) return;
 
-        // Handle Touch / Gesture Event (Tap to toggle mic)
+        // Handle Glasses Contextual Menu (전사 / AI / 번역 모드 선택)
+        if (event.menuItemClickEvent) {
+          const selectedMode = glassesModeMenuIdToMode(event.menuItemClickEvent.itemID);
+          if (selectedMode) {
+            setGlassesMode(selectedMode, true);
+          }
+          return;
+        }
+
+        // Handle Touch / Gesture Event
         const sysType = event.sysEvent
           ? (event.sysEvent.eventType ?? OsEventTypeList.CLICK_EVENT) : null;
         const textType = event.textEvent ? (event.textEvent.eventType ?? OsEventTypeList.CLICK_EVENT) : null;
-        if (event.audioEvent) return;
-        if (sysType === OsEventTypeList.DOUBLE_CLICK_EVENT || textType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
+        const evType = sysType ?? textType;
+
+        if (evType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
           stopVoiceRecording().catch(console.warn).finally(() => bridge.shutDownPageContainer(1).catch(console.warn));
-        } else if (sysType === OsEventTypeList.CLICK_EVENT || textType === OsEventTypeList.CLICK_EVENT) {
+        } else if (evType === (OsEventTypeList.LONG_PRESS_EVENT ?? 9)) {
+          setGlassesMode(nextGlassesMode(config.glassesMode), true);
+        } else if (evType === (OsEventTypeList.SCROLL_TOP_EVENT ?? 1)) {
+          if (answerText) {
+            stopAIAutoScroll();
+            aiScrollOffset = Math.max(0, aiScrollOffset - 1);
+            renderLiveHUD();
+          }
+        } else if (evType === (OsEventTypeList.SCROLL_BOTTOM_EVENT ?? 2)) {
+          if (answerText) {
+            stopAIAutoScroll();
+            const win = sliceHUDWindow(answerText, aiScrollOffset, aiVisibleLines(), AI_BOX_WIDTH_PX);
+            aiScrollOffset = Math.min(win.maxOffset, aiScrollOffset + 1);
+            renderLiveHUD();
+          }
+        } else if (evType === OsEventTypeList.CLICK_EVENT) {
           toggleVoiceRecording();
         }
       });
@@ -287,18 +525,133 @@ import { LocalAgreement } from './local-agreement.mjs';
   }
 
   // --- Display / HUD Rendering (576x288 Micro-LED) ---
-  function updateHUD(text, pageInfo = 'P 1/1') {
+  function formatLiveAIStatus() {
+    const headline = withAnimatedDots(aiPhaseTitle || '생각 중', aiAnimStep);
+    const lines = [headline];
+    if (aiPhaseDetail) lines.push(aiPhaseDetail);
+    if (aiReasoningPreview) {
+      const compact = aiReasoningPreview.replace(/\s+/g, ' ').trim().slice(-42);
+      if (compact) lines.push(`💭 ${compact}`);
+    }
+    return lines.join('\n');
+  }
+
+  function startThinkingAnimation() {
+    stopThinkingAnimation();
+    aiAnimStep = 0;
+    function tick() {
+      if (!isThinking && !processingAI) {
+        aiAnimTimer = null;
+        return;
+      }
+      aiAnimStep = (aiAnimStep + 1) % 3;
+      if (!answerText) {
+        if(!activeAIJob?.hint)els.chatOutput.textContent = formatLiveAIStatus();
+      }
+      renderLiveHUD();
+      aiAnimTimer = setTimeout(tick, 450);
+    }
+    aiAnimTimer = setTimeout(tick, 450);
+  }
+
+  function stopThinkingAnimation() {
+    if (aiAnimTimer) {
+      clearTimeout(aiAnimTimer);
+      aiAnimTimer = null;
+    }
+  }
+
+  function stopAIAutoScroll() {
+    if (aiScrollTimer) {
+      clearTimeout(aiScrollTimer);
+      aiScrollTimer = null;
+    }
+  }
+
+  function startAIAutoScroll(maxOffset) {
+    stopAIAutoScroll();
+    aiScrollOffset = 0;
+    if (maxOffset <= 0) return;
+    function stepScroll() {
+      if (processingAI || isThinking || !answerText) {
+        aiScrollTimer = null;
+        return;
+      }
+      const win = sliceHUDWindow(answerText, aiScrollOffset, aiVisibleLines(), AI_BOX_WIDTH_PX);
+      if (aiScrollOffset < win.maxOffset) {
+        aiScrollOffset += 1;
+        renderLiveHUD();
+        aiScrollTimer = setTimeout(stepScroll, AI_SCROLL_LINE_MS);
+      } else {
+        aiScrollTimer = null;
+      }
+    }
+    aiScrollTimer = setTimeout(stepScroll, AI_SCROLL_START_MS);
+  }
+
+  function buildTranscriptSectionText() {
+    if (captureFailure) return captureFailure;
+    const draft = captionStable + captionDraft;
+    const transcriptLines = [
+      captionFinal,
+      draft ? draft + (captionDraft ? ' …' : '') : ''
+    ].filter(Boolean);
+    if (transcriptLines.length) {
+      return transcriptLines.join('\n');
+    }
+    if (transcriptStatusMessage) return transcriptStatusMessage;
+    return isRecording
+      ? (config.voiceMode === 'continuous' ? '듣는 중... 말하는 동안 자막이 갱신됩니다.' : '듣는 중... 다시 탭하면 전송합니다.')
+      : '녹음 정지';
+  }
+
+  function renderHUDContainers(aiFullText, aiWindowText, aiMetaLabel, transcriptFullText, pageInfo = 'P 1/1', scrollRatio = 0) {
+    const badgeLabel = glassesModeBadgeText(config.glassesMode, config.translateTargetLang);
+    const translateMode=normalizeGlassesMode(config.glassesMode)==='translate';
+    const bottomPhoneText=translateMode?translationReplyText(translationDisplay):transcriptFullText;
     if (els.hudScreen) {
-      els.hudScreen.innerHTML = escapeHtml(text) + '<span class="hud-cursor"></span>';
+      const aiCursor = (isThinking || processingAI) ? '<span class="hud-cursor"></span>' : '';
+      const txCursor = (!translateMode && !isThinking && !processingAI && isRecording) ? '<span class="hud-cursor"></span>' : '';
+      els.hudScreen.innerHTML =
+        `<div class="hud-ai-box">` +
+          `<div class="hud-ai-header">` +
+            `<span id="hud-ai-badge" class="hud-ai-badge">${escapeHtml(badgeLabel)}</span>` +
+            `<span id="hud-ai-meta" class="hud-ai-meta">${escapeHtml(aiMetaLabel)}</span>` +
+          `</div>` +
+          `<div id="hud-ai-body" class="hud-ai-body">${escapeHtml(aiFullText)}${aiCursor}</div>` +
+        `</div>` +
+        `<div class="hud-transcript-box${translateMode?' hud-translation-replies':''}">` +
+          `<div class="hud-transcript-label">${translateMode?'예상 답변':'전사'}</div>` +
+          `<div id="hud-transcript-body" class="hud-transcript-body">${escapeHtml(bottomPhoneText)}${txCursor}</div>` +
+        `</div>`;
+      const aiBodyEl = typeof document.getElementById === 'function' ? document.getElementById('hud-ai-body') : null;
+      if (aiBodyEl && typeof aiBodyEl.scrollHeight === 'number' && typeof aiBodyEl.clientHeight === 'number') {
+        const maxScroll = Math.max(0, aiBodyEl.scrollHeight - aiBodyEl.clientHeight);
+        aiBodyEl.scrollTop = Math.round(maxScroll * Math.max(0, Math.min(1, scrollRatio)));
+      }
     }
     if (els.hudPageIndicator) {
       els.hudPageIndicator.textContent = pageInfo;
     }
 
     if (displayReady) {
-      pendingHUD.set(1, { containerID: 1, containerName: 'gateway', content: String(text).slice(0, 2000) });
-      flushHUD();
+      const nextAI = String(aiWindowText || '').slice(0, 2000);
+      const nextTx = String(transcriptFullText || '').slice(0, 2000);
+      if (nextAI !== lastAIHUDContent) {
+        lastAIHUDContent = nextAI;
+        pendingHUD.set(1, { containerID: 1, containerName: 'gateway', content: nextAI });
+      }
+      if (nextTx !== lastTranscriptHUDContent) {
+        lastTranscriptHUDContent = nextTx;
+        pendingHUD.set(4, { containerID: 4, containerName: 'transcript', content: nextTx });
+      }
+      if (pendingHUD.size || nativeTranslateLayout!==translateMode) flushHUD();
     }
+  }
+
+  function updateHUD(text, pageInfo = 'P 1/1') {
+    transcriptStatusMessage = String(text || '');
+    renderLiveHUD(pageInfo);
   }
 
   // Serialize and coalesce updates so streamed tokens do not flood Bluetooth.
@@ -306,7 +659,15 @@ import { LocalAgreement } from './local-agreement.mjs';
     if (sendingHUD) return;
     sendingHUD = true;
     try {
-      while (pendingHUD.size && displayReady) {
+      while (displayReady) {
+        const translate=normalizeGlassesMode(config.glassesMode)==='translate';
+        if(nativeTranslateLayout!==translate){
+          const success=await bridge.rebuildPageContainer(hudPage(translate));
+          if(!success)throw new Error('안경 화면 배치 변경 실패');
+          nativeTranslateLayout=translate;
+          continue;
+        }
+        if(!pendingHUD.size)break;
         const [id, update] = pendingHUD.entries().next().value;
         pendingHUD.delete(id);
         const success = await bridge.textContainerUpgrade(update);
@@ -352,17 +713,59 @@ import { LocalAgreement } from './local-agreement.mjs';
     if(micCloseUncertain || pendingMicOpen && !isRecording){setHUDNotice('마이크 정지 확인 필요');return;}
     if(micStopPromise || pendingMicCloses.size){setHUDNotice('마이크 정지 중');return;}
     if(captureFailure){setHUDNotice('전사 오류 · 미저장 음성 대기');return;}
+    const mode = normalizeGlassesMode(config.glassesMode);
+    if (mode === 'ai') {
+      setHUDNotice(isRecording ? (config.aiHintMode!==false?'[AI 힌트] 대화 듣는 중':'[AI 모드] 연속 대화 중 · 호출어 없이 말씀하세요') : (state==='전사 저장됨' ? '[AI 모드] 녹음 정지 · 저장 완료' : '녹음 정지'));
+      return;
+    }
+    if (mode === 'translate') {
+      const langShort = targetLanguageLabel(config.translateTargetLang, true);
+      setHUDNotice(isRecording ? `[번역→${langShort}] 실시간 통번역 중` : (state==='전사 저장됨' ? `[번역→${langShort}] 녹음 정지 · 저장 완료` : '녹음 정지'));
+      return;
+    }
     setHUDNotice(isRecording ? `${state} · AI 호출어: ${triggerLabels()[0] || '미설정'}` : (state==='전사 저장됨' ? '녹음 정지 · 저장 완료' : '녹음 정지'));
   }
-  function renderLiveHUD() {
-    if(captureFailure){updateHUD(captureFailure);return;}
-    const draft = captionStable + captionDraft;
-    if (processingAI || Date.now() < answerHoldUntil) {
-      const tail = draft || captionFinal;
-      updateHUD((answerText || '답변 생성 중...') + (isRecording && tail ? '\n… '+tail.slice(-90) : ''));
-    } else {
-      updateHUD([captionFinal, draft ? draft+(captionDraft ? ' …' : '') : ''].filter(Boolean).join('\n') || (isRecording ? '듣는 중...' : '녹음 정지'));
+  function renderLiveHUD(overridePageInfo) {
+    const transcriptRaw = buildTranscriptSectionText();
+    const transcriptWin = sliceHUDWindow(transcriptRaw, Infinity, TRANSCRIPT_VISIBLE_LINES, TRANSCRIPT_WIDTH_PX);
+    const transcriptGlassesText = normalizeGlassesMode(config.glassesMode)==='translate'
+      ? translationReplyText(translationDisplay,TRANSCRIPT_WIDTH_PX) : transcriptWin.visibleText || transcriptRaw;
+
+    if ((processingAI || isThinking) && !activeAIJob?.hint) {
+      if (answerText) {
+        const win = sliceHUDWindow(answerText, Infinity, aiVisibleLines(), AI_BOX_WIDTH_PX);
+        const meta = withAnimatedDots(aiPhaseTitle || '답변 작성 중', aiAnimStep);
+        const pageInfo = overridePageInfo || `P ${win.page}/${win.totalPages}`;
+        renderHUDContainers(answerText, win.visibleText, meta, transcriptGlassesText, pageInfo, 1);
+      } else {
+        const statusDisplay = formatLiveAIStatus();
+        const win = sliceHUDWindow(statusDisplay, Infinity, aiVisibleLines(), AI_BOX_WIDTH_PX);
+        const meta = withAnimatedDots(aiPhaseTitle || '생각 중', aiAnimStep);
+        renderHUDContainers(statusDisplay, win.visibleText, meta, transcriptGlassesText, overridePageInfo || 'P 1/1', 1);
+      }
+      return;
     }
+
+    if (answerText) {
+      const win = sliceHUDWindow(answerText, aiScrollOffset, aiVisibleLines(), AI_BOX_WIDTH_PX);
+      const pageInfo = overridePageInfo || `P ${win.page}/${win.totalPages}`;
+      const ratio = win.maxOffset > 0 ? win.offsetLine / win.maxOffset : 0;
+      const meta = win.maxOffset > 0
+        ? `자동 스크롤 ${win.offsetLine + 1}/${win.maxOffset + 1}`
+        : '응답 완료';
+      renderHUDContainers(answerText, win.visibleText, meta, transcriptGlassesText, pageInfo, ratio);
+      return;
+    }
+
+    const mode = normalizeGlassesMode(config.glassesMode);
+    let idleAI = 'AI 대기 중 · 호출어로 부르거나 텍스트로 질문하세요.';
+    if (mode === 'ai') {
+      idleAI = 'AI 모드 · 질문·요청에는 답변하고 일반 대화에는 새 정보 힌트를 표시합니다.';
+    } else if (mode === 'translate') {
+      const langShort = targetLanguageLabel(config.translateTargetLang, true);
+      idleAI = `번역 모드 (→${langShort}) · 말하면 번역과 긍정/부정 답변을 표시합니다.`;
+    }
+    renderHUDContainers(idleAI, idleAI, '대기', transcriptGlassesText, overridePageInfo || 'P 1/1', 0);
   }
 
   function applyGlassesStatus(status) {
@@ -426,6 +829,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     els.voiceBtn?.setAttribute?.('aria-pressed','false');
     els.voiceBtn?.setAttribute?.('aria-label','녹음 시작');
     els.voiceMode.disabled=false;els.triggerWord.disabled=false;
+    if (!captureFailure && !micCloseUncertain) transcriptStatusMessage = '';
     setHUDNotice(pendingClips.length || draining ? '녹음 정지 · 남은 전사 처리 중' : '녹음 정지');
     setVoiceHint(pendingClips.length || draining ? '마이크 꺼짐 · 남은 음성만 처리 중' : '마이크 꺼짐 · 탭하면 녹음 시작');
     if(!captureFailure && !pendingClips.length && !draining)renderLiveHUD();
@@ -480,14 +884,22 @@ import { LocalAgreement } from './local-agreement.mjs';
   }
 
   async function startVoiceRecording(generation, signal) {
-    if (draining || previewBusy) { showMicStopped();setVoiceHint('이전 음성을 처리 중입니다. 잠시 후 다시 시작하세요.'); return; }
+    abortPendingPreview();
+    hintGate.reset();
+    config.aiHintMode=els.hintMode.value!=='all';
+    config.hintSensitivity=els.hintSensitivity.value || 'balanced';
+    if (els.glassesMode?.value) config.glassesMode = normalizeGlassesMode(els.glassesMode.value);
+    if (els.translateSourceLang?.value) config.translateSourceLang = els.translateSourceLang.value;
+    if (els.translateTargetLang?.value) config.translateTargetLang = els.translateTargetLang.value;
     config.voiceMode = els.voiceMode.value === 'continuous' ? 'continuous' : 'manual';
     config.triggerWord = els.triggerWord.value.trim();
     config.speechFilter = els.speechFilter.value === 'standard' ? 'standard' : 'strict';
     config.speakerScope = els.speakerScope.value === 'self' ? 'self' : 'conversation';
+    const mode = normalizeGlassesMode(config.glassesMode);
+    const continuousCapture = isContinuousCaptureMode(mode);
     const labels = triggerLabels();
-    if (config.voiceMode === 'continuous' && !labels.length) throw new Error('AI 호출어를 입력하세요.');
-    if (labels.length>8 || labels.some(label=>Array.from(label.replace(/\s/gu,'')).length>40)) throw new Error('AI 호출어는 최대 8개, 각각 40자 이하로 입력하세요.');
+    if (mode === 'transcript' && config.voiceMode === 'continuous' && !labels.length) throw new Error('AI 호출어를 입력하세요.');
+    if (mode === 'transcript' && (labels.length>8 || labels.some(label=>Array.from(label.replace(/\s/gu,'')).length>40))) throw new Error('AI 호출어는 최대 8개, 각각 40자 이하로 입력하세요.');
     const statusRes = await gatewayFetch(`${config.serverUrl}/api/stt/status`, { headers: getAuthHeaders(),signal });
     if(generation!==captureGeneration || signal.aborted)return;
     if (!statusRes.ok) throw new Error(`STT 상태 확인 실패: HTTP ${statusRes.status}`);
@@ -499,16 +911,17 @@ import { LocalAgreement } from './local-agreement.mjs';
     if(generation!==captureGeneration || signal.aborted)return;
     if (!warmup.ok) throw new Error(`음성 엔진 준비 실패: HTTP ${warmup.status}. 게이트웨이를 업데이트하세요.`);
     captureFailure = '';
+    for(const clip of pendingClips)clip.attempts=0;
     sessionId = newID(); pendingTrigger = false;
     activeUtterance = null; pendingPreview = null; draftUtteranceId = '';
     captionStable = captionDraft = ''; captionFinal = '';
-    transcriptNotice(config.voiceMode === 'continuous' ? '실시간 전사 중' : '녹음 중');
+    transcriptNotice(continuousCapture ? '실시간 전사 중' : '녹음 중');
     audioBuffer = []; recordedBytes = 0; recordingStarted = Date.now();
     segmenter = new SpeechSegmenter();
     isRecording = true;
     els.voiceMode.disabled = true; els.triggerWord.disabled = true;
     els.voiceBtn?.classList.add('active');
-    updateHUD(config.voiceMode === 'continuous'
+    updateHUD(continuousCapture
       ? '말씀하세요. 말하는 동안 자막이 갱신됩니다.' : '말씀하세요. 다시 탭하면 전송합니다.');
     micMayBeOpen=true;
     setHUDNotice('마이크 여는 중 · 탭하면 취소');
@@ -533,14 +946,14 @@ import { LocalAgreement } from './local-agreement.mjs';
     capturePreparing=false;micCloseUncertain=false;
     els.voiceBtn?.setAttribute?.('aria-pressed','true');
     els.voiceBtn?.setAttribute?.('aria-label','녹음 정지');
-    transcriptNotice(config.voiceMode==='continuous'?'실시간 전사 중':'녹음 중');
+    transcriptNotice(continuousCapture?'실시간 전사 중':'녹음 중');
     captureTimer = setTimeout(() => {
       if (isRecording && !recordedBytes) {
         stopVoiceRecording().catch(console.warn);
         updateHUD('마이크는 열렸지만 오디오가 오지 않습니다.\nG2 연결과 마이크 권한을 확인하고 앱을 다시 여세요.');
       }
     }, 6000);
-    if (config.voiceMode === 'manual') manualTimer = setTimeout(() => stopVoiceRecording().catch(console.warn), 25000);
+    if (!continuousCapture) manualTimer = setTimeout(() => stopVoiceRecording().catch(console.warn), 25000);
     setVoiceHint('마이크 켜짐 · 오디오 수신 대기');
     if (pendingClips.length) drainClips();
   }
@@ -550,12 +963,13 @@ import { LocalAgreement } from './local-agreement.mjs';
     if (config.speakerScope === 'self' && speakerRole === 'other') bytes = new Uint8Array(bytes.length);
     recordedBytes += bytes.length;
     const level = pcmLevel(bytes);
-    setVoiceHint(`${config.voiceMode === 'continuous' ? '연속 전사 중' : '녹음 중'} · ${(recordedBytes/32000).toFixed(1)}초 · 음량 ${Math.round(level*1000)} · 대기 ${pendingClips.length}`);
-    if (config.voiceMode === 'manual') { audioBuffer.push(bytes); return; }
+    const continuousCapture = isContinuousCaptureMode();
+    setVoiceHint(`${continuousCapture ? '연속 감지 중' : '녹음 중'} · ${(recordedBytes/32000).toFixed(1)}초 · 음량 ${Math.round(level*1000)} · 대기 ${pendingClips.length}`);
+    if (!continuousCapture) { audioBuffer.push(bytes); return; }
     const clip = segmenter.push(bytes);
     if (clip) {
       const id = activeUtterance?.id || newID();
-      activeUtterance = null; pendingPreview = null;
+      activeUtterance = null; abortPendingPreview();
       enqueueClip(clip, true, recordingStarted + recordedBytes/32, id);
       return;
     }
@@ -568,13 +982,35 @@ import { LocalAgreement } from './local-agreement.mjs';
     const endedAt = recordingStarted + recordedBytes/32;
     pendingPreview = {bytes:snapshot,sessionId,segmentId:activeUtterance.id,
       revision:++activeUtterance.revision,startedAt:new Date(endedAt-snapshot.length/32).toISOString(),
-      endedAt:new Date(endedAt).toISOString(),speechFilter:config.speechFilter};
+      endedAt:new Date(endedAt).toISOString(),speechFilter:config.speechFilter,
+      mode:normalizeGlassesMode(config.glassesMode),
+      sourceLang:config.translateSourceLang || 'auto',
+      targetLang:config.translateTargetLang || 'ko'};
     drainPreview();
   }
 
-  function sttPayload(clip) {
-    return {audio:uint8ArrayToBase64(clip.bytes),format:'pcm',sampleRate:16000,language:'ko',
-      sessionId:clip.sessionId,segmentId:clip.segmentId,revision:clip.revision || 0,
+  function fallbackTranslateSourceLang(clip) {
+    const target = String(clip?.targetLang || config.translateTargetLang || 'ko').toLowerCase();
+    return target === 'ko' ? 'en' : 'ko';
+  }
+
+  function resolveTranslateSourceLang(clip) {
+    const explicit = String(clip?.sourceLang || config.translateSourceLang || 'auto').trim().toLowerCase();
+    if (/^[a-z]{2}$/.test(explicit)) return explicit;
+    return fallbackTranslateSourceLang(clip);
+  }
+
+  function sttPayload(clip, overrideLang = '') {
+    let lang = overrideLang;
+    if (!lang) {
+      if (clip.mode === 'translate') {
+        lang = resolveTranslateSourceLang(clip);
+      } else {
+        lang = 'ko';
+      }
+    }
+    return {audio:uint8ArrayToBase64(clip.bytes),format:'pcm',sampleRate:16000,language:lang,
+      realtime:clip.mode==='ai',sessionId:clip.sessionId,segmentId:clip.segmentId,revision:clip.revision || 0,
       startedAt:clip.startedAt,endedAt:clip.endedAt,triggerWord:clip.triggerWord || '',speechFilter:clip.speechFilter};
   }
 
@@ -582,12 +1018,21 @@ import { LocalAgreement } from './local-agreement.mjs';
     if (previewBusy || draining || pendingClips.length || !pendingPreview || !isRecording) return;
     const snapshot = pendingPreview; pendingPreview = null; previewBusy = true;
     const controller = new AbortController();
+    previewAbortController = controller;
     const timeout = setTimeout(() => controller.abort(),15000);
     try {
-      const res = await gatewayFetch(`${config.serverUrl}/api/stt/preview`, {
+      const payload = sttPayload(snapshot);
+      let res = await gatewayFetch(`${config.serverUrl}/api/stt/preview`, {
         method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),
-        body:JSON.stringify(sttPayload(snapshot)),signal:controller.signal,
+        body:JSON.stringify(payload),signal:controller.signal,
       });
+      if (!res.ok && res.status !== 429 && payload.language === 'auto') {
+        autoLangUnsupported = true;
+        res = await gatewayFetch(`${config.serverUrl}/api/stt/preview`, {
+          method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),
+          body:JSON.stringify(sttPayload(snapshot, fallbackTranslateSourceLang(snapshot))),signal:controller.signal,
+        });
+      }
       if (res.status===429) return;
       if (!res.ok) throw new Error(`임시 전사 HTTP ${res.status}`);
       const data = await res.json();
@@ -597,24 +1042,41 @@ import { LocalAgreement } from './local-agreement.mjs';
       const agreed = activeUtterance.agreement.update(data.text);
       draftUtteranceId = snapshot.segmentId;
       captionStable = agreed.stable; captionDraft = agreed.draft;
+      transcriptStatusMessage = '';
       transcriptNotice('실시간 전사 중');
       renderLiveHUD();
     } catch (err) {
-      if (isRecording) setVoiceHint(`임시 자막 지연 · 최종 전사는 계속합니다 (${err.message})`);
+      if (isRecording && !controller.signal.aborted) setVoiceHint(`임시 자막 지연 · 최종 전사는 계속합니다 (${err.message})`);
     } finally {
-      clearTimeout(timeout); previewBusy = false;
+      clearTimeout(timeout);
+      if (previewAbortController === controller) previewAbortController = null;
+      previewBusy = false;
       if (pendingClips.length) drainClips();
       else if (pendingPreview) drainPreview();
     }
   }
 
   function enqueueClip(bytes, continuous, endedAt = Date.now(), segmentId = newID()) {
-    pendingClips.push({ bytes, continuous, sessionId, segmentId,
+    abortPendingPreview();
+    const mode = normalizeGlassesMode(config.glassesMode);
+    const sourceLang = config.translateSourceLang || 'auto';
+    const targetLang = config.translateTargetLang || 'ko';
+    const triggerWord = (mode === 'transcript' && continuous) ? config.triggerWord : '';
+    if(mode==='ai') {
+      // Keep one active inference and only the newest waiting clip.
+      pendingClips=pendingClips.filter(clip=>clip.mode!=='ai' || clip===activeFinalClip);
+    }
+    pendingClips.push({ bytes, continuous, sessionId, segmentId, mode, sourceLang, targetLang,
       startedAt:new Date(endedAt-bytes.length/32).toISOString(),endedAt:new Date(endedAt).toISOString(),
-      triggerWord:continuous?config.triggerWord:'',speechFilter:config.speechFilter });
-    if (pendingClips.length > 12 && isRecording) {
-      stopVoiceRecording(false).catch(console.warn);
-      updateHUD('서버 처리 지연으로 녹음을 중지했습니다. 대기 중인 전사를 저장하고 있습니다.');
+      triggerWord, speechFilter:config.speechFilter });
+    if(mode!=='ai' && isRecording && (pendingClips.length>=MAX_PENDING_CLIPS || pendingClips.reduce((sum,clip)=>sum+clip.bytes.length,0)>=MAX_PENDING_AUDIO_BYTES)) {
+      // Preserve every queued segment; bound growth by stopping capture, not deleting audio.
+      stopVoiceRecording().then(()=>{
+        if(!captureFailure && !isRecording) {
+          setHUDNotice('처리 지연 · 녹음 일시정지');
+          setVoiceHint('대기 음성을 전사·저장하고 있습니다. 처리 후 탭하면 다시 녹음합니다.');
+        }
+      }).catch(console.warn);
     }
     drainClips();
   }
@@ -622,13 +1084,15 @@ import { LocalAgreement } from './local-agreement.mjs';
   async function stopVoiceRecording(flush = true) {
     if(micStopPromise)return micStopPromise;
     if(!isRecording && !capturePreparing && !pendingMicOpen && !micMayBeOpen && !micCloseUncertain && !pendingMicCloses.size)return;
+    hintGate.reset();
     const hadCapture=isRecording;
+    const continuousCapture = isContinuousCaptureMode();
     ++captureGeneration;
     captureAbort?.abort();capturePreparing=false;
     isRecording=false;resetCaptureTimers();
     const segmentId=activeUtterance?.id || newID();
-    activeUtterance=null;pendingPreview=null;
-    const clip=hadCapture ? (config.voiceMode==='continuous'?segmenter?.flush():mergePCM(audioBuffer)) : null;
+    activeUtterance=null;abortPendingPreview();
+    const clip=hadCapture ? (continuousCapture?segmenter?.flush():mergePCM(audioBuffer)) : null;
     audioBuffer=[];
     setHUDNotice('마이크 정지 중');
     setVoiceHint('마이크를 끄고 있습니다. 남은 전사는 계속 처리합니다.');
@@ -646,33 +1110,83 @@ import { LocalAgreement } from './local-agreement.mjs';
     })();
     micStopPromise=stopping;
     try {await stopping;} finally {if(micStopPromise===stopping)micStopPromise=null;}
-    if(flush && clip?.length>=3200)enqueueClip(clip,config.voiceMode==='continuous',recordingStarted+recordedBytes/32,segmentId);
+    if(flush && clip?.length>=3200)enqueueClip(clip,continuousCapture,recordingStarted+recordedBytes/32,segmentId);
     if(!micCloseUncertain && !pendingMicOpen && !pendingMicCloses.size)showMicStopped();
   }
 
   async function drainClips() {
-    if (draining || previewBusy) return;
+    if (previewBusy) abortPendingPreview();
+    if (draining) return;
     draining = true;
     try {
       while (pendingClips.length) {
         const clip = pendingClips[0];
-        const data = await processAudioTranscription(clip);
-        pendingClips.shift();
+        activeFinalClip=clip;
+        if(clip.mode==='ai' && Date.now()-Date.parse(clip.endedAt)>20000){pendingClips.shift();continue;}
+        let data;
+        try {
+          data = await processAudioTranscription(clip);
+        } catch (err) {
+          // A mode switch can clear the old request while new audio is queued.
+          // Never shift a new segment in response to an old cancellation/failure.
+          if(!pendingClips.includes(clip))continue;
+          if(clip.mode==='ai') {
+            pendingClips.splice(pendingClips.indexOf(clip),1);
+            els.hintStatus.textContent=`음성 처리 지연 · 해당 구간 생략, 새 대화 계속 (${err.message})`;
+            setHUDNotice('지난 음성 생략 · 계속 듣는 중');
+            setVoiceHint('실시간 AI · 처리하지 못한 구간은 버리고 최신 대화를 듣습니다.');
+            // Avoid a hot loop on repeated server failures without stopping capture.
+            await new Promise(resolve=>setTimeout(resolve,200));
+            continue;
+          }
+          clip.attempts=(clip.attempts || 0)+1;
+          if(err.retryable!==false && clip.attempts<=3) {
+            setHUDNotice(`전사 재시도 ${clip.attempts}/3 · 음성 보관 중`);
+            setVoiceHint(`일시적인 전사 지연 · ${pendingClips.length}개 보관 · 자동 재시도합니다.`);
+            await new Promise(resolve=>setTimeout(resolve,300 * 2**(clip.attempts-1)));
+            continue;
+          }
+          throw err;
+        }
+        if(!pendingClips.includes(clip))continue;
+        pendingClips.splice(pendingClips.indexOf(clip),1);
         if (draftUtteranceId === clip.segmentId) { captionStable = captionDraft = ''; draftUtteranceId = ''; }
         if (data.rejected) { setVoiceHint('불확실하거나 반복되는 인식 결과 제외 · 다시 말씀하세요'); renderLiveHUD(); continue; }
         if (!data.text?.trim()) { setVoiceHint('음성 필터 · 인식할 말소리 없음'); renderLiveHUD(); continue; }
         const text = data.text.trim();
         captionFinal = text;
+        transcriptStatusMessage = '';
         transcriptContext.push(text); if (transcriptContext.length > 8) transcriptContext.shift();
         const time = new Date(clip.startedAt).toLocaleTimeString();
         transcriptText += `[${time}] ${text}\n`;
         els.transcriptLog.textContent = transcriptText;
+        const clipMode = normalizeGlassesMode(clip.mode || config.glassesMode);
+        const clipTargetLang = clip.targetLang || config.translateTargetLang || 'ko';
         let prompt = '';
-        if (!clip.continuous) prompt = text;
-        else if (data.triggered) { prompt = data.prompt?.trim() || ''; pendingTrigger = !prompt; }
-        else if (pendingTrigger) { prompt = text; pendingTrigger = false; }
+        let directIntent={direct:false,search:false};
+        if(clipMode==='ai' && config.aiHintMode!==false) {
+          directIntent=directQuestionIntent(text);
+          if(directIntent.direct) {
+            hintGate.reset();
+            if(activeAIJob?.hint)aiAbortController?.abort();
+            prompt=text;
+            els.hintStatus.textContent=directIntent.search?'명확한 검색 요청 · 바로 검색':'명확한 질문 · 바로 답변';
+          } else if(isRecording && normalizeGlassesMode(config.glassesMode)==='ai')hintGate.observe(text,{id:clip.segmentId,at:Date.parse(clip.endedAt)});
+          pendingTrigger=false;
+        } else if (clipMode === 'ai' || clipMode === 'translate') {
+          prompt = text;
+          pendingTrigger = false;
+        } else if (!clip.continuous) {
+          prompt = text;
+        } else if (data.triggered) {
+          prompt = data.prompt?.trim() || '';
+          pendingTrigger = !prompt;
+        } else if (pendingTrigger) {
+          prompt = text;
+          pendingTrigger = false;
+        }
         if (prompt) {
-          enqueueAI(clip.segmentId, prompt, clip.continuous ? transcriptContext.slice(0,-1).join('\n') : '');
+          enqueueAI(clip.segmentId, prompt, clip.continuous ? transcriptContext.slice(0,-1).join('\n') : '', clipMode, clipTargetLang, directIntent.direct?{directQuestion:true,forceSearch:directIntent.search}:{});
         } else {
           if (pendingTrigger) setHUDNotice('AI 호출됨 · 질문을 말씀하세요');
           else transcriptNotice('전사 저장됨');
@@ -681,10 +1195,11 @@ import { LocalAgreement } from './local-agreement.mjs';
       }
     } catch (err) {
       await stopVoiceRecording(false).catch(console.warn);
-      captureFailure = `전사/저장 실패: ${err.message}\n처리하지 못한 음성은 앱을 닫기 전까지 대기합니다. 다시 시작하면 재시도합니다.`;
+      captureFailure = `전사/저장 실패: ${err.message}\n처리하지 못한 음성 ${pendingClips.length}개를 앱 안에 보관 중입니다. 다시 탭하면 재시도합니다. 앱을 닫으면 미저장 음성은 사라집니다.`;
       setHUDNotice('전사 오류 · 미저장 음성 대기'); renderLiveHUD();
       setVoiceHint('오류로 녹음 중지 · 서버 확인 후 다시 시작');
     } finally {
+      activeFinalClip=null;
       draining = false;
       if (!isRecording && !pendingClips.length && !micStopPromise && !pendingMicOpen && !micCloseUncertain && !pendingMicCloses.size) setVoiceHint('마이크 꺼짐 · 전사 저장 완료');
       if (pendingPreview) drainPreview();
@@ -692,14 +1207,43 @@ import { LocalAgreement } from './local-agreement.mjs';
   }
 
   async function processAudioTranscription(clip) {
-    const res = await gatewayFetch(`${config.serverUrl}/api/stt/transcribe`, {
-      method: 'POST', headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify(sttPayload(clip)),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0,300)}`);
-    const data = await res.json();
-    if (data.text?.trim() && !data.saved) throw new Error('서버에서 전사 저장을 확인하지 못했습니다. 서버를 업데이트하세요.');
-    return data;
+    const controller = new AbortController();
+    clipAbortController = controller;
+    let timedOut=false;
+    // Worker inference allows 90s plus cold-start time; a 20s client limit caused
+    // abandoned requests and repeated inference under load.
+    const timeout = setTimeout(() => {timedOut=true;controller.abort();}, clip.mode==='ai'?12000:120000);
+    try {
+      const payload = sttPayload(clip);
+      let res = await gatewayFetch(`${config.serverUrl}/api/stt/transcribe`, {
+        method: 'POST', headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(payload), signal: controller.signal,
+      });
+      if (!res.ok && payload.language === 'auto') {
+        autoLangUnsupported = true;
+        res = await gatewayFetch(`${config.serverUrl}/api/stt/transcribe`, {
+          method: 'POST', headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify(sttPayload(clip, fallbackTranslateSourceLang(clip))), signal: controller.signal,
+        });
+      }
+      if (!res.ok) {
+        const err=new Error(`HTTP ${res.status}: ${(await res.text()).slice(0,300)}`);
+        err.retryable=[408,425,429].includes(res.status) || res.status>=500;
+        throw err;
+      }
+      const data = await res.json();
+      if (data.text?.trim() && !data.saved) {
+        const err=new Error('서버에서 전사 저장을 확인하지 못했습니다. 서버를 업데이트하세요.');
+        err.retryable=false;throw err;
+      }
+      return data;
+    } catch(err) {
+      if(timedOut){const timeoutError=new Error('전사 서버 응답 시간 초과 · 음성 보관 중');timeoutError.retryable=true;throw timeoutError;}
+      throw err;
+    } finally {
+      clearTimeout(timeout);
+      if (clipAbortController === controller) clipAbortController = null;
+    }
   }
 
   function openTranscriptModal() {
@@ -725,27 +1269,63 @@ import { LocalAgreement } from './local-agreement.mjs';
     els.transcriptLog.textContent = transcriptText || '저장된 전사 기록이 없습니다.';
   }
 
-  function enqueueAI(id, prompt, context) {
+  function enqueueAI(id, prompt, context, mode = config.glassesMode, targetLang = config.translateTargetLang, options = {}) {
     if (knownAIJobs.has(id)) return;
     knownAIJobs.add(id);
     if (knownAIJobs.size>1000) knownAIJobs.delete(knownAIJobs.values().next().value);
-    pendingAI.push({prompt,context});
+    const normMode = normalizeGlassesMode(mode);
+    const normLang = targetLang || 'ko';
+    if (pendingAI.length > 0) {
+      const last = pendingAI[pendingAI.length - 1];
+      if(options.hint){for(const dropped of pendingAI)if(dropped.hint)hintGate.complete(dropped);pendingAI.length=0;}
+      else if (last.mode === normMode && last.targetLang === normLang && !last.hint) {
+        last.prompt = `${last.prompt}\n${prompt}`.trim();
+        if (context) last.context = context;
+        return;
+      }
+      pendingAI.length = 0;
+    }
+    pendingAI.push({...options,prompt, context, mode: normMode, targetLang: normLang});
     drainAI();
   }
   async function drainAI() {
     if (processingAI) return;
-    processingAI = true; clearTimeout(answerTimer);
+    processingAI = true; clearTimeout(answerTimer); stopAIAutoScroll();
+    aiAbortedByModeSwitch = false;
     try {
       while (pendingAI.length) {
         const job = pendingAI.shift();
-        answerText = ''; if(!captureFailure)setHUDNotice(isRecording ? 'AI 답변 중 · 전사 계속' : '녹음 정지 · AI 답변 중'); renderLiveHUD();
-        await queryDKSTChat(job.prompt,job.context);
+        if(job.hint && !hintGate.fresh(job)){hintGate.complete(job);continue;}
+        activeAIJob=job;
+        if(job.mode==='translate')translationDisplay={translation:'',positive:'',negative:''};
+        if(!job.hint)answerText = '';
+        aiScrollOffset = 0;
+        aiPhaseTitle = job.mode === 'translate' ? '번역 및 답변 생성 중' : '생각 중';
+        aiPhaseDetail = '';
+        aiReasoningPreview = '';
+        if(!job.hint && !captureFailure)setHUDNotice(isRecording ? 'AI 답변 중 · 전사 계속' : '녹음 정지 · AI 답변 중');
+        renderLiveHUD();
+        await queryDKSTChat(job.prompt, job.context, job.mode, job.targetLang,job);
+        activeAIJob=null;
       }
     } finally {
-      processingAI = false; answerHoldUntil = Date.now()+8000;
-      transcriptNotice('전사 저장됨');
-      renderLiveHUD();
-      answerTimer = setTimeout(() => { answerHoldUntil=0; if(isRecording)renderLiveHUD(); },8000);
+      activeAIJob=null;
+      processingAI = false;
+      stopThinkingAnimation();
+      if (!aiAbortedByModeSwitch) {
+        const win = sliceHUDWindow(answerText, 0, aiVisibleLines(), AI_BOX_WIDTH_PX);
+        aiScrollOffset = 0;
+        const holdMs = Math.max(8000, AI_SCROLL_START_MS + win.maxOffset * AI_SCROLL_LINE_MS + 4000);
+        answerHoldUntil = Date.now() + holdMs;
+        transcriptNotice(isRecording ? (isContinuousCaptureMode() ? '실시간 전사 중' : '녹음 중') : '전사 저장됨');
+        renderLiveHUD();
+        if (win.maxOffset > 0) {
+          startAIAutoScroll(win.maxOffset);
+        }
+        answerTimer = setTimeout(() => { answerHoldUntil=0; if(isRecording)renderLiveHUD(); }, holdMs);
+      }
+      aiAbortedByModeSwitch = false;
+      if (pendingAI.length) drainAI();
     }
   }
 
@@ -758,37 +1338,174 @@ import { LocalAgreement } from './local-agreement.mjs';
   }
 
   // --- LLM Chat Execution ---
-  async function queryDKSTChat(prompt, conversationContext = '') {
+  async function queryDKSTChat(prompt, conversationContext = '', mode = config.glassesMode, targetLang = config.translateTargetLang, options = {}) {
+    const activeMode = normalizeGlassesMode(mode);
+    let enrichmentPlan=null;
+    let cueDisplayed=false;let cueTopic='';
+    const controller = new AbortController();
+    aiAbortController = controller;
+    const timeout = setTimeout(() => controller.abort(), options.hint?30000:45000);
     isThinking = true;
+    stopAIAutoScroll();
+    aiPhaseTitle = activeMode === 'translate' ? '번역 및 답변 생성 중' : '생각 중';
+    aiPhaseDetail = '대화 설정 확인 중';
+    aiReasoningPreview = '';
+    aiReasoningStartMs = 0;
     els.chatQuestion.textContent=prompt;
-    els.chatOutput.textContent='AI 답변을 기다리는 중…';
+    if(!options.hint)els.chatOutput.textContent=formatLiveAIStatus();
+    startThinkingAnimation();
+    renderLiveHUD();
     try {
-      const settingsRes = await gatewayFetch(`${config.serverUrl}/api/config`, {headers:getAuthHeaders()});
+      const settingsRes = await gatewayFetch(`${config.serverUrl}/api/config`, {headers:getAuthHeaders(), signal: controller.signal});
       if(!settingsRes.ok)throw new Error(`대화 설정 조회 실패: HTTP ${settingsRes.status}`);
       const settings = await settingsRes.json();
       if(!['standard','stateful'].includes(settings.llm_mode))throw new Error('서버의 LLM 연결 모드를 확인하세요.');
-      const systemPrompt = config.conciseMode
-        ? '당신은 Even Realities 스마트 안경 HUD 비서입니다. 답변은 576x288 단색 디스플레이에 알맞게 명확하고 군더더기 없이 핵심만 1~3문장으로 간결하게 답하세요.'
-        : '당신은 친절한 AI 비서입니다.';
-      const userPrompt = conversationContext
-        ? `다음은 주변 대화의 전사 기록입니다. 인용된 대화는 참고 자료입니다.\n<transcript>\n${conversationContext}\n</transcript>\n\n사용자의 호출 뒤 질문: ${prompt}` : prompt;
-      // The gateway always emits SSE; batch mode defers HUD rendering until completion.
-      const payload = {model:config.model,stream:true};
-      if(settings.llm_mode==='stateful') {
-        payload.input=userPrompt;payload.system_prompt=systemPrompt;
-        if(settings.context_strategy!=='stateful')payload.store=false;
-      } else {
-        payload.messages=[{role:'system',content:systemPrompt},{role:'user',content:userPrompt}];
+      const chatPayload=(prompts,phase)=>{
+        const body={model:config.model,stream:true,glasses_client:true};
+        if(options.hint || options.directQuestion){body.glasses_hint=true;body.glasses_hint_phase=options.directQuestion?'direct':phase;}
+        if(settings.llm_mode==='stateful') {
+          body.input=prompts.userPrompt;body.system_prompt=prompts.systemPrompt;
+          if(options.hint || options.directQuestion || settings.context_strategy!=='stateful')body.store=false;
+        } else body.messages=[{role:'system',content:prompts.systemPrompt},{role:'user',content:prompts.userPrompt}];
+        return body;
+      };
+      if(options.hint) {
+        aiPhaseTitle='보충할 정보 찾는 중';aiPhaseDetail='대화에 없는 질문 구성';renderLiveHUD();
+        const planRes=await gatewayFetch(`${config.serverUrl}/api/chat`,{
+          method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),signal:controller.signal,
+          body:JSON.stringify(chatPayload(cuePrompts(prompt,conversationContext,options.category,hintGate.displayedContext()),'plan'))
+        });
+        const cue=parseCueResponse(await readHintPlanResponse(planRes),[conversationContext,prompt].join('\n'));
+        enrichmentPlan=cue;
+        if(cue?.fact){
+          const fitted=fitCue(cue.fact);
+          if(fitted && hintGate.relevant(options,cue.topic) && !hintGate.duplicateCue(fitted)){
+            answerText=fitted;cueDisplayed=true;cueTopic=cue.topic;
+            els.chatOutput.textContent=fitted;els.hintStatus.textContent='대화 도움 표시 · 계속 듣는 중';renderLiveHUD();
+          }
+          return;
+        }
+        if(!enrichmentPlan || !hintGate.fresh(options)){
+          els.hintStatus.textContent='새로 보탤 도움 없음 · 계속 듣는 중';return;
+        }
+        aiPhaseTitle=enrichmentPlan.source==='web'?'웹에서 근거 찾는 중':enrichmentPlan.source==='memory'?'기억에서 근거 찾는 중':'내부 지식에서 정보 찾는 중';
+        aiPhaseDetail=enrichmentPlan.question;els.hintStatus.textContent=aiPhaseTitle;renderLiveHUD();
       }
+      const prompts=options.hint ? hintAnswerPrompts(enrichmentPlan) : buildModePrompts(activeMode,{
+        conciseMode:config.conciseMode,targetLang:targetLang || config.translateTargetLang || 'ko',prompt,
+        conversationContext:options.directQuestion?[directDialogue.join('\n'),conversationContext].filter(Boolean).join('\n'):conversationContext
+      });
+      const payload=chatPayload(prompts,'answer');
+      if(options.hint)payload.hint_research={query:enrichmentPlan.question,source:enrichmentPlan.source};
+      if(options.directQuestion && options.forceSearch)payload.hint_research={query:Array.from(prompt).slice(0,300).join(''),source:'web'};
+      aiPhaseTitle = activeMode === 'translate' ? '번역 및 답변 생성 중' : '생각 중';
+      aiPhaseDetail = '';
+      if(!options.hint)els.chatOutput.textContent = formatLiveAIStatus();
+      renderLiveHUD();
       const res = await gatewayFetch(`${config.serverUrl}/api/chat`, {
-        method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),body:JSON.stringify(payload)
+        method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),body:JSON.stringify(payload), signal: controller.signal
       });
       if(!res.ok) {
         const detail=(await res.text()).trim().slice(0,500);
         throw new Error(`대화 생성 실패: HTTP ${res.status}${detail ? ' · '+detail : ''}`);
       }
 
-      let fullAnswer = '';
+      let rawAnswer = '';
+      let rawReasoning = '';
+      function setVisibleAnswer(raw) {
+        if(activeMode==='translate') {
+          translationDisplay=parseTranslationDisplay(raw);
+          answerText=translationDisplay.translation;
+          els.chatOutput.textContent=translationPhoneText(translationDisplay);
+        } else {
+          answerText=stripSourcesForGlasses(raw);
+          els.chatOutput.textContent=answerText || formatLiveAIStatus();
+        }
+      }
+
+      function applyStreamStatusEvent(type, parsed) {
+        if (type === 'model_load.start') {
+          aiPhaseTitle = '모델 로딩 중';
+          aiPhaseDetail = '모델을 메모리에 불러오는 중';
+          return true;
+        }
+        if (type === 'model_load.progress') {
+          const pct = typeof parsed.progress === 'number' ? Math.round(parsed.progress * 100) : null;
+          aiPhaseTitle = pct !== null ? `모델 로딩 중 (${pct}%)` : '모델 로딩 중';
+          aiPhaseDetail = '모델을 메모리에 불러오는 중';
+          return true;
+        }
+        if (type === 'model_load.end') {
+          aiPhaseTitle = '모델 로드 완료';
+          aiPhaseDetail = '프롬프트 처리 중';
+          return true;
+        }
+        if (type === 'prompt_processing.progress') {
+          const pct = typeof parsed.progress === 'number' ? Math.round(parsed.progress * 100) : null;
+          aiPhaseTitle = pct !== null ? `프롬프트 처리 중 (${pct}%)` : '프롬프트 처리 중';
+          aiPhaseDetail = '';
+          return true;
+        }
+        if (type === 'skill.applied') {
+          const names = Array.isArray(parsed.skills)
+            ? parsed.skills.map(s => String(s?.display_name || s?.name || s?.namespace || '').trim()).filter(Boolean)
+            : [];
+          aiPhaseTitle = '스킬 적용됨';
+          aiPhaseDetail = names.join(', ');
+          return true;
+        }
+        if (type === 'reasoning.start') {
+          if (!aiReasoningStartMs) aiReasoningStartMs = Date.now();
+          aiPhaseTitle = '생각 중';
+          aiPhaseDetail = '';
+          return true;
+        }
+        if (type === 'reasoning.delta') {
+          if (!aiReasoningStartMs) aiReasoningStartMs = Date.now();
+          const chunk = parsed.content || parsed.reasoning_content || parsed.text || '';
+          rawReasoning += chunk;
+          const elapsedMs = Number(parsed.total_elapsed_ms || parsed.elapsed_ms || (Date.now() - aiReasoningStartMs));
+          const sec = Number.isFinite(elapsedMs) && elapsedMs >= 1000 ? Math.round(elapsedMs / 1000) : 0;
+          aiPhaseTitle = sec > 0 ? `생각 중 (${sec}초)` : '생각 중';
+          aiPhaseDetail = '';
+          aiReasoningPreview = rawReasoning;
+          return true;
+        }
+        if (type === 'reasoning.end') {
+          const elapsedMs = Number(parsed.total_elapsed_ms || parsed.elapsed_ms || (aiReasoningStartMs ? Date.now() - aiReasoningStartMs : 0));
+          const sec = Number.isFinite(elapsedMs) && elapsedMs >= 1000 ? Math.round(elapsedMs / 1000) : 0;
+          aiPhaseTitle = sec > 0 ? `${sec}초 동안 생각함` : '생각 완료';
+          aiPhaseDetail = '답변 작성 중';
+          aiReasoningPreview = '';
+          return true;
+        }
+        if (type.startsWith('tool_call.')) {
+          const toolInfo = formatToolStatusText({ ...parsed, type });
+          aiPhaseTitle = toolInfo.title;
+          aiPhaseDetail = toolInfo.detail;
+          aiReasoningPreview = '';
+          return true;
+        }
+        if (type === 'generation.phase') {
+          if (parsed.phase === 'thinking') {
+            aiPhaseTitle = '생각 중';
+            return true;
+          }
+          if (parsed.phase === 'tool_call' && parsed.tool) {
+            const toolInfo = formatToolStatusText({ type: 'tool_call.start', tool: parsed.tool });
+            aiPhaseTitle = toolInfo.title;
+            aiPhaseDetail = toolInfo.detail;
+            return true;
+          }
+          if (parsed.phase === 'answering') {
+            aiPhaseTitle = '답변 작성 중';
+            aiPhaseDetail = '';
+            aiReasoningPreview = '';
+            return true;
+          }
+        }
+        return false;
+      }
 
       if ((res.headers?.get('content-type')?.includes('text/event-stream') || config.connectionMode === 'sse') && res.body) {
         const reader = res.body.getReader();
@@ -807,11 +1524,34 @@ import { LocalAgreement } from './local-agreement.mjs';
           if (parsed.error) throw new Error(typeof parsed.error === 'string' ? parsed.error : parsed.error.message || JSON.stringify(parsed.error));
           const type=parsed.type || eventName;
           if(type==='error')throw new Error(parsed.message || 'LLM 응답 오류');
+
+          if (parsed.choices?.[0]?.delta?.reasoning_content) {
+            if (!aiReasoningStartMs) aiReasoningStartMs = Date.now();
+            rawReasoning += parsed.choices[0].delta.reasoning_content;
+            aiPhaseTitle = '생각 중';
+            aiReasoningPreview = rawReasoning;
+          }
+
+          applyStreamStatusEvent(type, parsed);
+
           const final=finalChatText(parsed);
-          if(final!==null)fullAnswer=final;
-          else if(type==='message.delta')fullAnswer+=parsed.content || '';
-          else fullAnswer+=parsed.choices?.[0]?.delta?.content || parsed.message?.content || '';
-          answerText = fullAnswer; els.chatOutput.textContent=fullAnswer || 'AI 답변을 기다리는 중…'; if(config.connectionMode==='sse')renderLiveHUD();
+          if(final!==null)rawAnswer=final;
+          else if(type==='message.delta')rawAnswer+=parsed.content || '';
+          else rawAnswer+=parsed.choices?.[0]?.delta?.content || parsed.message?.content || '';
+
+          const extracted = extractVisibleAndReasoning(rawAnswer);
+          if (extracted.isInlineReasoning) {
+            aiPhaseTitle = '생각 중';
+            aiReasoningPreview = extracted.reasoningText;
+          } else if (extracted.visibleText) {
+            aiPhaseTitle = '답변 작성 중';
+            aiPhaseDetail = '';
+            aiReasoningPreview = '';
+          }
+
+          if(options.hint)return; // Optional hints are displayed only when complete and still fresh.
+          setVisibleAnswer(rawAnswer);
+          if(config.connectionMode==='sse')renderLiveHUD();
         }
         while (true) {
           const { done, value } = await reader.read();
@@ -827,22 +1567,48 @@ import { LocalAgreement } from './local-agreement.mjs';
       } else {
         const data = await res.json();
         if(data.error)throw new Error(typeof data.error==='string'?data.error:data.error.message || JSON.stringify(data.error));
-        fullAnswer = finalChatText(data) ?? data.choices?.[0]?.message?.content ?? data.response ?? '';
-        answerText = fullAnswer; els.chatOutput.textContent=fullAnswer || 'AI 답변을 기다리는 중…'; renderLiveHUD();
+        rawAnswer = finalChatText(data) ?? data.choices?.[0]?.message?.content ?? data.response ?? '';
+        if(!options.hint){
+          setVisibleAnswer(rawAnswer);
+          renderLiveHUD();
+        }
       }
 
-      answerText=fullAnswer;renderLiveHUD();
-      if(!fullAnswer.trim())throw new Error('LLM에서 답변 본문을 받지 못했습니다. 서버의 모델 상태를 확인하세요.');
+      const enrichedFact=options.hint?extractHintFact(rawAnswer,[conversationContext,prompt].join('\n'),enrichmentPlan):'';
+      if(options.hint && (!hintGate.relevant(options,enrichmentPlan.topic) || !fitCue(enrichedFact) || hintGate.duplicateCue(fitCue(enrichedFact)))){els.hintStatus.textContent='현재 대화에 필요한 새 정보 없음 · 생략';return;}
+      if(options.hint){answerText=fitCue(enrichedFact);cueDisplayed=true;cueTopic=enrichmentPlan.topic;}else setVisibleAnswer(rawAnswer);
+      if(options.hint)els.hintStatus.textContent=enrichmentPlan.source==='web'?'웹검색 근거로 보충한 정보':enrichmentPlan.source==='memory'?'저장된 기억으로 보충한 정보':'내부 지식으로 보충한 정보';
+      els.chatOutput.textContent = activeMode==='translate'?translationPhoneText(translationDisplay):answerText;
+      renderLiveHUD();
+      if(!answerText.trim())throw new Error('LLM에서 답변 본문을 받지 못했습니다. 서버의 모델 상태를 확인하세요.');
+
+      if(options.directQuestion){
+        directDialogue.push(`질문: ${prompt}\n답변: ${answerText.slice(0,1200)}`);
+        if(directDialogue.length>4)directDialogue.shift();
+        els.hintStatus.textContent='직접 질문 답변 완료 · 계속 듣는 중';
+      }
 
       // TTS Playback if enabled
-      if (config.enableTTS && fullAnswer && config.voiceMode !== 'continuous') {
-        playTTS(fullAnswer);
+      if (!options.hint && config.enableTTS && answerText && config.voiceMode !== 'continuous') {
+        playTTS(answerText);
       }
     } catch (err) {
+      if (controller.signal.aborted && aiAbortedByModeSwitch) {
+        return;
+      }
+      if(options.hint && controller.signal.aborted && pendingAI.some(job=>job.directQuestion))return;
+      if(options.hint){els.hintStatus.textContent=`힌트 생성 실패 · 전사 계속 (${err.message})`;return;}
       console.error('Chat error:', err);
       answerText = `AI 오류: ${err.message}`; els.chatOutput.textContent=answerText; renderLiveHUD();
     } finally {
+      if(options.hint)hintGate.complete(options,{displayed:cueDisplayed,text:cueDisplayed?answerText:'',topic:cueTopic});
+      clearTimeout(timeout);
+      if (aiAbortController === controller) aiAbortController = null;
       isThinking = false;
+      stopThinkingAnimation();
+      aiPhaseTitle = '';
+      aiPhaseDetail = '';
+      aiReasoningPreview = '';
       if (!isRecording && !captureFailure && !micCloseUncertain && !pendingMicOpen) setVoiceHint('마이크 꺼짐 · 탭하면 녹음 시작');
     }
   }
@@ -1040,6 +1806,29 @@ import { LocalAgreement } from './local-agreement.mjs';
     if (els.btnRefreshModels) els.btnRefreshModels.addEventListener('click', fetchModelList);
     if (els.btnSaveSettings) els.btnSaveSettings.addEventListener('click', saveSettings);
     if (els.voiceBtn) els.voiceBtn.addEventListener('click', toggleVoiceRecording);
+    if (els.modeBtnTranscript) els.modeBtnTranscript.addEventListener('click', () => setGlassesMode('transcript', true));
+    if (els.modeBtnAi) els.modeBtnAi.addEventListener('click', () => setGlassesMode('ai', true));
+    if (els.modeBtnTranslate) els.modeBtnTranslate.addEventListener('click', () => setGlassesMode('translate', true));
+    if (els.glassesMode) {
+      els.glassesMode.addEventListener('change', () => {
+        settingsEdited = true;
+        setGlassesMode(els.glassesMode.value, true);
+      });
+    }
+    if (els.translateSourceLang) {
+      els.translateSourceLang.addEventListener('change', () => {
+        settingsEdited = true;
+        config.translateSourceLang = els.translateSourceLang.value || 'auto';
+        setGlassesMode(config.glassesMode, true);
+      });
+    }
+    if (els.translateTargetLang) {
+      els.translateTargetLang.addEventListener('change', () => {
+        settingsEdited = true;
+        config.translateTargetLang = els.translateTargetLang.value || 'ko';
+        setGlassesMode(config.glassesMode, true);
+      });
+    }
     els.btnTranscripts.addEventListener('click', () => { openTranscriptModal(); loadTranscripts().catch(err => { els.transcriptLog.textContent = err.message; }); });
     els.btnCloseTranscripts.addEventListener('click', closeTranscriptModal);
     els.transcriptModal.addEventListener('click', event => { if (event.target === els.transcriptModal) closeTranscriptModal(); });
@@ -1052,7 +1841,8 @@ import { LocalAgreement } from './local-agreement.mjs';
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
       }
     });
-    for (const el of [els.serverUrl, els.authUsername, els.apiKey, els.modelSelect, els.connectionMode, els.voiceMode, els.triggerWord, els.speechFilter, els.speakerScope, els.optEnableTts, els.optConciseMode]) {
+    for (const el of [els.hintMode, els.hintSensitivity, els.serverUrl, els.authUsername, els.apiKey, els.modelSelect, els.connectionMode, els.voiceMode, els.triggerWord, els.speechFilter, els.speakerScope, els.optEnableTts, els.optConciseMode]) {
+      if (!el) continue;
       el.addEventListener('input', () => { settingsEdited = true; });
       el.addEventListener('change', () => { settingsEdited = true; });
     }

@@ -133,6 +133,7 @@ func handleSTTStatus(app *App) http.HandlerFunc {
 }
 
 type STTTranscribeRequest struct {
+	Realtime     bool   `json:"realtime"`
 	Audio        string `json:"audio"`      // Base64 encoded audio
 	Format       string `json:"format"`     // "pcm" or "wav"
 	SampleRate   int    `json:"sampleRate"` // e.g. 16000
@@ -304,7 +305,7 @@ func handleSTTAudio(app *App, preview bool) http.HandlerFunc {
 		if r.Context().Err() != nil {
 			return
 		}
-		inference, err := runSTTInference(audioBytes, format, lang, metadata.SpeechFilter, preview)
+		inference, err := runSTTInference(audioBytes, format, lang, metadata.SpeechFilter, preview || metadata.Realtime)
 		if err != nil {
 			if err == errSTTBusy {
 				w.Header().Set("Retry-After", "1")

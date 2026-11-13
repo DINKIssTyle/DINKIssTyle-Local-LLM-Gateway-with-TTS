@@ -35,6 +35,8 @@ let config = {
     ttsSpeed: 0.9,         // Default: 0.9 (native Supertonic synthesis speed)
     ttsSpeedVersion: 2,
     autoTTS: false,        // Default: False (Auto-play)
+    sttMethod: 'browser',
+    sttContinuous: false,
     voiceInputAutoTTS: true, // Default: True (Override auto-play for STT messages)
     ttsFormat: 'wav',      // Default: wav
     ttsSteps: 5,           // Default: 5
@@ -3196,6 +3198,8 @@ function loadConfig() {
     config.osTtsPitch = Number(config.osTtsPitch) >= 0 ? Number(config.osTtsPitch) : 1.0;
     config.ttsSteps = Math.max(1, Math.min(20, parseInt(config.ttsSteps, 10) || 5));
     config.ttsThreads = Math.max(1, Math.min(4, parseInt(config.ttsThreads, 10) || 4));
+    config.sttMethod = config.sttMethod === 'local' ? 'local' : 'browser';
+    config.sttContinuous = config.sttContinuous === true;
     config.voiceInputAutoTTS = config.voiceInputAutoTTS !== false;
     config.contextStrategy = normalizeContextStrategyForMode(config.llmMode, config.contextStrategy);
     config.enableTools = enforceToolPolicyForMode(config.llmMode);
@@ -3233,6 +3237,10 @@ function loadConfig() {
     if (statefulTokenBudgetEl) statefulTokenBudgetEl.value = parseInt(config.statefulTokenBudget, 10) || DEFAULT_STATEFUL_TOKEN_BUDGET;
 
     document.getElementById('cfg-auto-tts').checked = config.autoTTS || false;
+    const sttMethodEl = document.getElementById('cfg-stt-method');
+    if (sttMethodEl) sttMethodEl.value = config.sttMethod;
+    const sttContinuousEl = document.getElementById('cfg-stt-continuous');
+    if (sttContinuousEl) sttContinuousEl.checked = config.sttContinuous;
     const voiceInputAutoTTSEl = document.getElementById('cfg-voice-input-auto-tts');
     if (voiceInputAutoTTSEl) voiceInputAutoTTSEl.checked = config.voiceInputAutoTTS !== false;
     document.getElementById('cfg-tts-engine').value = config.ttsEngine || 'supertonic';
@@ -3380,7 +3388,7 @@ function setupSettingsListeners() {
     });
 
     // Selects & Inputs: save on change
-    const autoSaveIds = ['cfg-api', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-os-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-context-strategy', 'cfg-show-reasoning-control', 'cfg-force-show-reasoning-control', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model', 'cfg-tts-engine', 'cfg-web-theme', 'cfg-streaming-scroll-mode', 'cfg-markdown-render-mode', 'cfg-auto-dismiss-mobile-keyboard', 'cfg-enable-haptics', 'cfg-embedding-model', 'cfg-mic-layout'];
+    const autoSaveIds = ['cfg-api', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-os-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-context-strategy', 'cfg-show-reasoning-control', 'cfg-force-show-reasoning-control', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model', 'cfg-tts-engine', 'cfg-web-theme', 'cfg-streaming-scroll-mode', 'cfg-markdown-render-mode', 'cfg-auto-dismiss-mobile-keyboard', 'cfg-enable-haptics', 'cfg-embedding-model', 'cfg-mic-layout', 'cfg-stt-method', 'cfg-stt-continuous'];
     autoSaveIds.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.onchange = () => saveConfig(false);
@@ -3528,6 +3536,13 @@ function saveConfig(closeModal = true) {
     config.autoTTS = document.getElementById('cfg-auto-tts').checked;
     const voiceInputAutoTTSEl = document.getElementById('cfg-voice-input-auto-tts');
     config.voiceInputAutoTTS = voiceInputAutoTTSEl ? voiceInputAutoTTSEl.checked : true;
+    const nextSTTMethod = document.getElementById('cfg-stt-method')?.value === 'local' ? 'local' : 'browser';
+    const nextSTTContinuous = document.getElementById('cfg-stt-continuous')?.checked === true;
+    if (nextSTTMethod !== config.sttMethod || nextSTTContinuous !== config.sttContinuous) {
+        stopSTT({ suppressAutoSend: true, forceAbort: true });
+    }
+    config.sttMethod = nextSTTMethod;
+    config.sttContinuous = nextSTTContinuous;
     config.ttsEngine = document.getElementById('cfg-tts-engine').value || 'supertonic';
     config.ttsLang = document.getElementById('cfg-tts-lang').value;
     config.enableEmbeddings = document.getElementById('cfg-enable-embeddings').checked;
@@ -8705,6 +8720,7 @@ function updateMicLayout() {
  */
 function toggleSTT() {
     triggerHaptic('nudge');
+    if (AppState.input.isSTTActive) return micController.stop({ suppressAutoSend: true, forceAbort: true });
     // 1. If generating response, stop it (Mic acts as stop button)
     if (AppState.chat.isGenerating) {
         return stopGeneration();

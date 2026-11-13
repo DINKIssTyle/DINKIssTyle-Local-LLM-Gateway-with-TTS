@@ -13,6 +13,7 @@ import (
 const defaultToolTurnMaxTokens = 4096
 
 type RequestInput struct {
+	PromptProfile     string
 	Body              []byte
 	EndpointRaw       string
 	TokenRaw          string
@@ -48,6 +49,10 @@ func PrepareRequest(input RequestInput) (PreparedRequest, error) {
 		Token:    sanitizeToken(input.TokenRaw),
 	}
 	contextStrategy := normalizeContextStrategy(input.LLMMode, input.ContextStrategy)
+	glassesProfile := input.PromptProfile == "glasses"
+	if glassesProfile {
+		contextStrategy = "none"
+	}
 
 	var reqMap map[string]interface{}
 	if err := json.Unmarshal(input.Body, &reqMap); err != nil {
@@ -55,6 +60,10 @@ func PrepareRequest(input RequestInput) (PreparedRequest, error) {
 		return prepared, nil
 	}
 
+	if glassesProfile {
+		delete(reqMap, "previous_response_id")
+		reqMap["store"] = false
+	}
 	prepared.ReqMap = reqMap
 	prepared.InitialUserInputText = extractChatInputText(reqMap)
 	prepared.IsStatefulFollowup = isStatefulFollowup(input.LLMMode, contextStrategy, reqMap)
@@ -63,8 +72,11 @@ func PrepareRequest(input RequestInput) (PreparedRequest, error) {
 
 	useNativeTools := input.EnableTools && strings.TrimSpace(strings.ToLower(input.LLMMode)) != "stateful"
 	includeRetrievalMemory := contextStrategy == "retrieval"
-	compactTaskInstructions := promptkit.BuildCompactTaskInstructions(prepared.InitialUserInputText)
-	shouldInjectRuntime := input.EnableTools || includeRetrievalMemory || strings.TrimSpace(input.SkillInstructions) != "" || compactTaskInstructions != ""
+	compactTaskInstructions := ""
+	if !glassesProfile {
+		compactTaskInstructions = promptkit.BuildCompactTaskInstructions(prepared.InitialUserInputText)
+	}
+	shouldInjectRuntime := glassesProfile || input.EnableTools || includeRetrievalMemory || strings.TrimSpace(input.SkillInstructions) != "" || compactTaskInstructions != ""
 
 	if shouldInjectRuntime {
 		if useNativeTools {
@@ -72,7 +84,13 @@ func PrepareRequest(input RequestInput) (PreparedRequest, error) {
 			applyToolTurnOutputBudget(reqMap)
 		}
 		extraInstr := compactTaskInstructions + input.SkillInstructions
-		if !prepared.IsStatefulFollowup {
+		if glassesProfile {
+			tools := input.Tools
+			if !input.EnableTools {
+				tools = nil
+			}
+			extraInstr = promptkit.BuildGlassesRuntimeInstructions(useNativeTools, tools)
+		} else if !prepared.IsStatefulFollowup {
 			extraInstr = promptkit.BuildRuntimeInstructions(promptkit.RuntimeInstructionsInput{
 				EnvironmentInfo:   buildEnvironmentInfo(),
 				ModelID:           extractModelID(reqMap),

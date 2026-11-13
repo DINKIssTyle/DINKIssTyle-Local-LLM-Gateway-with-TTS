@@ -18,7 +18,7 @@ def send(value):
     print(json.dumps(value, ensure_ascii=False), flush=True)
 
 
-def transcript_rejection(text, average_logprob=None):
+def transcript_rejection(text, average_logprob=None, speech_seconds=None, speech_ratio=None, no_speech_probability=None):
     """Reject decoding failures instead of saving them as something someone said."""
     data = text.strip().encode('utf-8')
     if not data:
@@ -28,6 +28,22 @@ def transcript_rejection(text, average_logprob=None):
         return 'repetition'
     if len(data) > 80 and len(data) / len(zlib.compress(data)) > 2.4:
         return 'repetition'
+    # Do not ban genuine spoken video closings. Require weak acoustic evidence
+    # or decoder uncertainty as well as an entire boilerplate-only transcript.
+    normalized = ''.join(re.findall(r'[a-z0-9가-힣]+', text.lower()))
+    closing = re.fullmatch(
+        r'(?:(?:여러분)?시청해주셔서감사합니다|다음영상에서(?:또|다시)?만나(?:요|뵙겠습니다)|'
+        r'구독과좋아요(?:부탁드립니다|부탁드려요)?|thankyouforwatching|thanksforwatching|'
+        r'seeyouinthenextvideo)+', normalized)
+    weak_voice = (speech_seconds is not None and speech_ratio is not None
+                  and speech_seconds < 1.2 and speech_ratio < 0.6)
+    uncertain = (average_logprob is not None and average_logprob < -0.45)
+    likely_silence = (no_speech_probability is not None and no_speech_probability > 0.45)
+    if closing and (weak_voice or uncertain or likely_silence):
+        return 'unsupported-video-caption'
+    hangul_count = len(re.findall(r'[가-힣]', text))
+    if speech_seconds is not None and hangul_count > max(14, speech_seconds * 18):
+        return 'text-exceeds-speech'
     if average_logprob is not None and average_logprob < -1.0:
         return 'low-confidence'
     return ''
@@ -67,6 +83,7 @@ class SpeechFilter:
         state = np.zeros((2, 1, 128), dtype=np.float32)
         context = np.zeros((1, 64), dtype=np.float32)
         voiced = []
+        self.stats = {'speech_seconds': 0.0, 'speech_ratio': 0.0}
         for offset in range(0, len(audio), 512):
             frame = audio[offset:offset + 512]
             frame = np.pad(frame, (0, 512 - len(frame))).reshape(1, 512)
@@ -74,6 +91,8 @@ class SpeechFilter:
             probability, state = self.session.run(None, {'input': value, 'state': state, 'sr': np.array(16000, dtype=np.int64)})
             voiced.append(float(probability.reshape(-1)[0]) >= (0.75 if mode == 'strict' else 0.5))
             context = frame[:, -64:]
+        self.stats = {'speech_seconds': min(len(audio)/16000, sum(voiced)*512/16000),
+                      'speech_ratio': sum(voiced)/max(1,len(voiced))}
         run = longest = 0
         for speech in voiced:
             run = run + 1 if speech else 0
@@ -129,9 +148,11 @@ def main():
             if not len(audio):
                 send({'text': '', 'duration': duration, 'filtered': True})
                 continue
+            raw_lang = (request.get('language') or '').strip()
+            whisper_lang = None if raw_lang.lower() == 'auto' else (raw_lang or 'ko')
             if args.backend == 'mlx':
                 result = mlx_whisper.transcribe(
-                    audio, path_or_hf_repo=args.model, language=request.get('language') or 'ko',
+                    audio, path_or_hf_repo=args.model, language=whisper_lang,
                     task='transcribe', verbose=None, temperature=0.0,
                     condition_on_previous_text=False, compression_ratio_threshold=2.4,
                     logprob_threshold=-1.0, no_speech_threshold=0.6,
@@ -141,19 +162,25 @@ def main():
                 segments = result.get('segments') or []
                 weights = [max(1,len(segment.get('tokens',[]))) for segment in segments]
                 average = (sum(segment.get('avg_logprob',-10)*weight for segment,weight in zip(segments,weights))/sum(weights)) if weights else None
-                rejected = transcript_rejection(text, average)
+                max_no_speech = max((segment.get('no_speech_prob',0) for segment in segments), default=0)
+                rejected = transcript_rejection(text, average, **speech_filter.stats, no_speech_probability=max_no_speech)
                 if any(segment.get('no_speech_prob',0)>.6 and segment.get('avg_logprob',-10)<-.5 for segment in segments):
                     rejected = rejected or 'no-speech'
                 send({'text': '' if rejected else text, 'duration': duration,
-                      'rejected': bool(rejected), 'reason': rejected, 'averageLogprob': average})
+                      'rejected': bool(rejected), 'reason': rejected, 'averageLogprob': average, **speech_filter.stats})
                 continue
             inputs = processor(audio, sampling_rate=16000, return_tensors='pt', return_attention_mask=True)
+            gen_kwargs = dict(
+                attention_mask=inputs.attention_mask,
+                task='transcribe',
+                max_new_tokens=min(192, max(32, int(len(audio) / 16000 * 16))),
+                do_sample=False, return_dict_in_generate=True, output_scores=True,
+            )
+            if whisper_lang:
+                gen_kwargs['language'] = whisper_lang
             with torch.inference_mode():
                 generated = model.generate(
-                    inputs.input_features, attention_mask=inputs.attention_mask,
-                    language=request.get('language') or 'ko', task='transcribe',
-                    max_new_tokens=min(192, max(32, int(len(audio) / 16000 * 16))),
-                    do_sample=False, return_dict_in_generate=True, output_scores=True,
+                    inputs.input_features, **gen_kwargs
                 )
             text = processor.batch_decode(generated.sequences, skip_special_tokens=True)[0].strip()
             probabilities = []
@@ -164,14 +191,14 @@ def main():
                 if np.isfinite(probability):
                     probabilities.append(probability)
             average = sum(probabilities) / len(probabilities) if probabilities else None
-            rejected = transcript_rejection(text, average)
+            rejected = transcript_rejection(text, average, **speech_filter.stats)
             # An unfinished decode at the token ceiling is unsafe to treat as a
             # complete utterance, especially when it is already looping.
             eos = model.generation_config.eos_token_id
             if generated.sequences[0, -1].item() not in ([eos] if isinstance(eos, int) else eos):
                 rejected = rejected or 'incomplete-decode'
             send({'text': '' if rejected else text, 'duration': duration,
-                  'rejected': bool(rejected), 'reason': rejected, 'averageLogprob': average})
+                  'rejected': bool(rejected), 'reason': rejected, 'averageLogprob': average, **speech_filter.stats})
         except Exception as exc:
             send({'error': str(exc)})
 

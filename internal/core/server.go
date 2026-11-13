@@ -18,6 +18,7 @@ import (
 	"dinkisstyle-chat/internal/chatharness"
 	"dinkisstyle-chat/internal/mcp"
 	"dinkisstyle-chat/internal/promptkit"
+	"dinkisstyle-chat/internal/skillkit"
 	"dinkisstyle-chat/internal/toolruntime"
 	"encoding/hex"
 	"encoding/json"
@@ -2913,6 +2914,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	mux.HandleFunc("/api/tts/on-device/status", AuthMiddleware(authMgr, handleOnDeviceTTSStatus(app)))
 	mux.HandleFunc("/api/tts/on-device/assets/", AuthMiddleware(authMgr, handleOnDeviceTTSAsset()))
 	mux.HandleFunc("/__tts-model/supertonic-3/", handleOnDeviceTTSAsset())
+	mux.HandleFunc("/api/glasses/hint-decision", AuthMiddleware(authMgr, handleGlassesHintDecision(authMgr)))
 	mux.HandleFunc("/api/stt/status", AuthMiddleware(authMgr, handleSTTStatus(app)))
 	mux.HandleFunc("/api/stt/transcribe", AuthMiddleware(authMgr, handleSTTTranscribe(app)))
 	mux.HandleFunc("/api/stt/preview", AuthMiddleware(authMgr, handleSTTPreview(app)))
@@ -4361,6 +4363,34 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	}
 	defer r.Body.Close()
 
+	// A client may only restrict a request into ambient, read-only hint mode.
+	var hintEnvelope map[string]interface{}
+	_ = json.Unmarshal(body, &hintEnvelope)
+	glassesHint, _ := hintEnvelope["glasses_hint"].(bool)
+	glassesClient, _ := hintEnvelope["glasses_client"].(bool)
+	glassesRequest := glassesHint || glassesClient
+	promptProfile := "chat"
+	if glassesRequest {
+		promptProfile = "glasses"
+	}
+	hintPhase, _ := hintEnvelope["glasses_hint_phase"].(string)
+	var hintResearch hintResearchRequest
+	if raw, ok := hintEnvelope["hint_research"]; ok {
+		data, _ := json.Marshal(raw)
+		_ = json.Unmarshal(data, &hintResearch)
+	}
+	delete(hintEnvelope, "glasses_client")
+	delete(hintEnvelope, "glasses_hint_phase")
+	delete(hintEnvelope, "hint_research")
+	if _, exists := hintEnvelope["glasses_hint"]; exists || glassesClient {
+		delete(hintEnvelope, "glasses_hint")
+		if glassesRequest {
+			delete(hintEnvelope, "previous_response_id")
+			hintEnvelope["store"] = false
+		}
+		body, _ = json.Marshal(hintEnvelope)
+	}
+
 	var llmURL string
 
 	// Default configuration (Global)
@@ -4397,9 +4427,13 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	statefulRiskLevel := strings.TrimSpace(r.Header.Get("X-Stateful-Risk-Level"))
 	statefulResetReason := strings.TrimSpace(r.Header.Get("X-Stateful-Reset-Reason"))
 
-	chatCtx, chatCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	baseChatCtx := context.Background()
+	if glassesRequest {
+		baseChatCtx = r.Context()
+	}
+	chatCtx, chatCancel := context.WithTimeout(baseChatCtx, 5*time.Minute)
 	defer chatCancel()
-	if strings.TrimSpace(userID) != "" {
+	if !glassesRequest && strings.TrimSpace(userID) != "" {
 		registerCurrentChatCancel(userID, chatCancel)
 		defer unregisterCurrentChatCancel(userID)
 	}
@@ -4456,6 +4490,26 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	if requestContextStrategy != "" {
 		contextStrategy = normalizeContextStrategyForMode(llmMode, requestContextStrategy)
 	}
+	if glassesHint {
+		disabledTools = readOnlyHintTools(disabledTools)
+		if hintPhase == "plan" {
+			enableTools = false
+			enableMemory = false
+			contextStrategy = "none"
+		}
+	}
+
+	if glassesHint && hintPhase != "direct" && hintResearch.Source != "memory" {
+		enableMemory = false
+	}
+	if glassesHint && hintPhase == "answer" && hintResearch.Source == "internal" {
+		enableTools = false
+	}
+
+	if glassesRequest {
+		contextStrategy = "none"
+	}
+
 	toolExecCtx := toolruntime.ExecutionContext{
 		RequestID:             clientTurnID,
 		UserID:                userID,
@@ -4521,7 +4575,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		body, _ = json.Marshal(reqMap)
 	}
 	hasPreviousResponseID := llmMode == "stateful" && chatharness.IsValidResponseID(incomingPreviousResponseID)
-	if !hasPreviousResponseID && llmMode == "stateful" && strings.TrimSpace(userID) != "" {
+	if !glassesRequest && !hasPreviousResponseID && llmMode == "stateful" && strings.TrimSpace(userID) != "" {
 		if existingSession, err := mcp.GetCurrentChatSession(userID); err == nil && chatharness.IsValidResponseID(existingSession.LastResponseID) {
 			hasPreviousResponseID = true
 		}
@@ -4554,7 +4608,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 	// Load structured user profile facts (always, not dependent on context strategy)
 	userProfileFacts := ""
-	if enableMemory && strings.TrimSpace(userID) != "" {
+	if !glassesRequest && enableMemory && strings.TrimSpace(userID) != "" {
 		userProfileFacts = mcp.FormatUserProfileForPrompt(userID)
 		if strings.TrimSpace(userProfileFacts) != "" {
 			log.Printf("[handleChat] Loaded %d chars of user profile facts for %s", len(userProfileFacts), userID)
@@ -4600,7 +4654,10 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		})
 	}
 
-	skillCompilation := compileActiveSkills(initialUserInputText)
+	var skillCompilation skillkit.Compilation
+	if !glassesRequest {
+		skillCompilation = compileActiveSkills(initialUserInputText)
+	}
 	selectedSkillNames := make([]string, 0, len(skillCompilation.Selected))
 	selectedSkillEvents := make([]map[string]string, 0, len(skillCompilation.Selected))
 	for _, skill := range skillCompilation.Selected {
@@ -4619,7 +4676,24 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		"instruction_chars": len([]rune(skillCompilation.Prompt)),
 	})
 
+	if glassesHint && hintPhase != "plan" && hintResearch.Source != "" {
+		evidence, researchErr := loadHintEvidence(chatCtx, toolruntime.Default, toolExecCtx, enableTools, hintResearch)
+		if researchErr != nil {
+			http.Error(w, "힌트 근거 조회 실패: "+researchErr.Error(), http.StatusFailedDependency)
+			return
+		}
+		if evidence != "" {
+			enrichedBody, enrichErr := appendHintEvidence(body, evidence)
+			if enrichErr != nil {
+				http.Error(w, enrichErr.Error(), 400)
+				return
+			}
+			body = enrichedBody
+		}
+	}
+
 	preparedRequest, err := chatharness.PrepareRequest(chatharness.RequestInput{
+		PromptProfile:     promptProfile,
 		Body:              body,
 		EndpointRaw:       endpointRaw,
 		TokenRaw:          tokenRaw,
@@ -4667,6 +4741,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		"url":                      llmURL,
 		"body_bytes":               len(body),
 		"injected_prompt":          preparedRequest.InjectedPrompt,
+		"prompt_profile":           promptProfile,
 		"selected_skills":          selectedSkillNames,
 		"stateful_followup":        preparedRequest.IsStatefulFollowup,
 		"memory_snapshot_chars":    len([]rune(strings.TrimSpace(memorySnapshot))),
@@ -4678,6 +4753,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		"chunk_match_count":        autoContextDebug.ChunkMatchCount,
 		"__payload": map[string]interface{}{
 			"kind":                 "prepared_request_context",
+			"prompt_profile":       promptProfile,
+			"glasses_phase":        hintPhase,
+			"automatic_context":    !glassesRequest,
 			"context_strategy":     contextStrategy,
 			"recent_context":       recentContext,
 			"memory_snapshot":      memorySnapshot,
@@ -4723,7 +4801,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		sessionUIStateJSON    = "{}"
 		sessionUISnapshot     = chatharness.SessionUISnapshot{ToolCards: map[string]chatharness.SessionToolCardSnapshot{}, Messages: []chatharness.SessionMessageSnapshot{}}
 	)
-	if strings.TrimSpace(userID) != "" {
+	if !glassesRequest && strings.TrimSpace(userID) != "" {
 		if existingSession, existingErr := mcp.GetCurrentChatSession(userID); existingErr == nil {
 			sessionUIStateJSON = existingSession.UIStateJSON
 			sessionUISnapshot = chatharness.ParseUISnapshot(existingSession.UIStateJSON)
@@ -6700,7 +6778,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	}
 
 	// 🔍 FINAL Memory Logging: Catch everything after all turns and corrections
-	if enableMemory && len(messagesForMemory) > 0 && fullResponse != "" {
+	if !glassesRequest && enableMemory && len(messagesForMemory) > 0 && fullResponse != "" {
 		log.Printf("[handleChat] Final Assistant Response Captured (Len: %d). Logging to DB...", len(fullResponse))
 		go logChatToHistory(userID, messagesForMemory, fullResponse, modelID)
 	}
@@ -6776,7 +6854,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		"user":           userID,
 		"elapsed_ms":     requestElapsedMs(),
 		"response_chars": len(fullResponse),
-		"memory_logged":  enableMemory && len(messagesForMemory) > 0 && fullResponse != "",
+		"memory_logged":  !glassesRequest && enableMemory && len(messagesForMemory) > 0 && fullResponse != "",
 		"stateful_turns": statefulTurnCount,
 		"stateful_chars": statefulEstChars,
 		"risk_score":     statefulRiskScore,

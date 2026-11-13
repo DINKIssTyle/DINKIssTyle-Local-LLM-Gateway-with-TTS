@@ -36,3 +36,5 @@ all_funcs.txt
 .env.eval.local
 .eval-results/
 .gocache
+!internal/core/glasses_hints_test.go
+!internal/chatharness/glasses_request_test.go

@@ -1,13 +1,13 @@
 {
   "name": "dkst-even-realities-plugin",
-  "version": "1.3.2",
+  "version": "1.4.10",
   "description": "DKST AI Gateway for Even Realities G2",
   "main": "plugin.js",
   "scripts": {
     "build": "node build.mjs",
     "qr": "evenhub qr",
     "pack": "node pack.mjs",
-    "test": "node test.cjs"
+    "test": "node test.cjs && node hint-gate.test.mjs && node hint-enrichment.test.mjs && node direct-question.test.mjs && node translation-display.test.mjs"
   },
   "keywords": [
     "even-realities",
@@ -19,7 +19,8 @@
   "author": "DINKIssTyle",
   "license": "MIT",
   "dependencies": {
-    "@evenrealities/even_hub_sdk": "0.0.16"
+    "@evenrealities/even_hub_sdk": "0.0.16",
+    "@evenrealities/pretext": "0.1.4"
   },
   "devDependencies": {
     "@evenrealities/evenhub-cli": "0.2.0",
