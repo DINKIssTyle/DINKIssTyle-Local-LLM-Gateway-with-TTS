@@ -38,3 +38,9 @@ all_funcs.txt
 .gocache
 !internal/core/glasses_hints_test.go
 !internal/chatharness/glasses_request_test.go
+!internal/core/chrome_translation_test.go
+!internal/core/chrome_speech_test.go
+
+!internal/core/chrome_profile_lock_test.go
+
+!internal/core/chrome_profile_unix_test.go

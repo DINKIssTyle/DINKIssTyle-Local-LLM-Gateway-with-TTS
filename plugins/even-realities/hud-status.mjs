@@ -14,13 +14,26 @@ export function hudStatusText(level, date = new Date()) {
 }
 
 export function hudNoticeText(message) {
-  let text = '', units = 0;
-  for (const char of Array.from(message)) {
-    const width = char.codePointAt(0) <= 255 ? 1 : 2;
-    if (units + width > 34) return text.trimEnd() + '…';
-    text += char; units += width;
+  const text=String(message).replace(/\s+/gu,' ').trim();
+  if(getTextWidth(text)<=396)return text;
+  const chars=Array.from(text);let lo=0,hi=chars.length;
+  while(lo<hi){const mid=Math.ceil((lo+hi)/2);if(getTextWidth(chars.slice(0,mid).join('')+'…')<=396)lo=mid;else hi=mid-1;}
+  return chars.slice(0,lo).join('').trimEnd()+'…';
+}
+
+export function translationHeaderText({source='en',target='ko',running=false,phase='',translating=false,error=''}={}){
+  let detail=error?'오류':running?'듣는 중':'-';
+  if(!error && translating)detail='번역 처리';
+  else if(!error && phase){
+    const match=String(phase).match(/(\d{1,3})%/u);
+    const pct=match?` ${Math.min(100,Number(match[1]))}%`:'';
+    if(/프롬프트/u.test(phase))detail='프롬프트 처리'+pct;
+    else if(/모델.*(?:로딩|로드)/u.test(phase))detail='모델 로딩'+pct;
+    else if(/번역/u.test(phase))detail='번역 처리';
+    else if(/답변.*(?:작성|생성)/u.test(phase))detail='답변 생성';
+    else detail='답변 준비';
   }
-  return text;
+  return `[번역] ${String(source).toUpperCase()}→${String(target).toUpperCase()} | ${running?'작동중':'대기중'} | ${detail}`;
 }
 
 export function animatedDots(step = 0) {

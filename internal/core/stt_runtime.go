@@ -83,12 +83,14 @@ type sttWorker struct {
 	log    limitedWorkerLog
 }
 type sttWorkerReply struct {
-	Ready    bool    `json:"ready"`
-	Text     string  `json:"text"`
-	Error    string  `json:"error"`
-	Duration float64 `json:"duration"`
-	Rejected bool    `json:"rejected"`
-	Reason   string  `json:"reason"`
+	StableText string  `json:"stableText,omitempty"`
+	DraftText  string  `json:"draftText,omitempty"`
+	Ready      bool    `json:"ready"`
+	Text       string  `json:"text"`
+	Error      string  `json:"error"`
+	Duration   float64 `json:"duration"`
+	Rejected   bool    `json:"rejected"`
+	Reason     string  `json:"reason"`
 }
 
 var activeSTTWorker *sttWorker // protected by sttLock

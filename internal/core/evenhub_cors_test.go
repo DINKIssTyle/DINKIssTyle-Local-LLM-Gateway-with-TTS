@@ -13,6 +13,8 @@ func TestEvenHubCORS(t *testing.T) {
 		allowed, forwarded                                   bool
 	}{
 		{"login preflight", "http://127.0.0.1:50496", "/api/login", "OPTIONS", "POST", "content-type", 204, true, false},
+		{"chrome translate preflight", "http://localhost:7890", "/api/translate/chrome", "OPTIONS", "POST", "authorization, content-type", 204, true, false},
+		{"chrome prepare preflight", "http://localhost:7890", "/api/translate/chrome/prepare", "OPTIONS", "POST", "authorization, content-type", 204, true, false},
 		{"hint preflight", "http://localhost:7890", "/api/glasses/hint-decision", "OPTIONS", "POST", "authorization, content-type", 204, true, false},
 		{"bearer preflight", "http://localhost:7890", "/api/chat", "OPTIONS", "POST", "authorization, content-type", 204, true, false},
 		{"config read", "http://localhost:7890", "/api/config", "GET", "", "", 200, true, true},

@@ -83,6 +83,8 @@
           <option value="vi">베트남어 (Vietnamese)</option>
           <option value="th">태국어 (Thai)</option>
         </select>
+        <label class="translate-speaker-option"><input type="checkbox" id="chrome-translation" checked><span>Chrome 로컬 번역 사용</span></label>
+        <div class="translate-chrome-setup"><button id="prepare-chrome-translation" class="btn btn-secondary" type="button">Chrome 번역 준비</button><p id="chrome-translation-status" role="status">중간 인식을 실시간 번역하고 확정 문장으로 교체합니다. Mac의 정식 Chrome을 사용하며 언어 선택 후 처음 한 번 준비해 주세요.</p></div>
         <label class="translate-speaker-option"><input type="checkbox" id="translate-exclude-self" checked><span>번역 중 내 목소리 제외</span></label>
         <p class="translate-speaker-help">Whisper 전사 전에 안경이 제공한 화자 정보로 내 음성을 제외합니다. 화자 구분 불가 음성은 포함될 수 있습니다.</p>
       </div>
@@ -196,7 +198,14 @@
         <p style="font-size:12px;color:var(--text-secondary)">연속 모드는 시작 버튼을 누른 동안 전사문을 서버에 저장합니다. 다시 누르면 중지합니다.</p>
       </div>
       <div class="form-group">
-        <label for="speech-filter">말소리 감지</label>
+        <label for="stt-engine">음성 인식 엔진</label>
+        <select id="stt-engine"><option value="whisper">Whisper · 기존 엔진</option><option value="chrome-online">Chrome 온라인 STT · Google로 음성 전송</option></select>
+        <label class="stt-fallback-option"><input type="checkbox" id="stt-fallback" checked><span>Chrome 오류 시 Whisper 사용</span></label>
+        <button id="prepare-chrome-stt" type="button" class="btn btn-secondary">Chrome STT 준비</button>
+        <p id="stt-engine-status" role="status">정식 Mac Chrome의 음성 인식을 사용합니다. Chrome 온라인 모드를 선택하면 음성이 Google로 전송됩니다.</p>
+      </div>
+      <div class="form-group">
+        <label for="speech-filter">말소리 감지 · Whisper</label>
         <select id="speech-filter">
           <option value="strict">엄격 · 잡음 오인식 줄이기</option>
           <option value="standard">표준 · 작은 목소리도 감지</option>

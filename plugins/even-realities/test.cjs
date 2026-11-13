@@ -1,15 +1,15 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const src = fs.readFileSync('plugin.js','utf8').replace(/^import .*\n/gm, '').replace('  function enqueueClip(', `  window.__queueTest={ai(){resetQueuesForModeSwitch('ai');config.glassesMode='ai';captureFailure='';isRecording=true;segmenter=new SpeechSegmenter();},hintGate,enqueueClip,drainClips,stopVoiceRecording,reset(){resetQueuesForModeSwitch('transcript');config.glassesMode='transcript';},state(){return{ids:pendingClips.map(c=>c.segmentId),failure:captureFailure,recording:isRecording};},record(){isRecording=true;segmenter=new SpeechSegmenter();}};
+const src = fs.readFileSync('plugin.js','utf8').replace(/^import .*\n/gm, '').replace('  function enqueueClip(', `  window.__queueTest={ai(){resetQueuesForModeSwitch('ai');config.glassesMode='ai';captureFailure='';isRecording=true;segmenter=new SpeechSegmenter();},hintGate,liveTranslations,enqueueClip,drainClips,stopVoiceRecording,reset(){resetQueuesForModeSwitch('transcript');config.glassesMode='transcript';},state(){return{ids:pendingClips.map(c=>c.segmentId),failure:captureFailure,recording:isRecording,engine:activeSttEngine,mode:config.glassesMode,active:activeUtterance?.id,previewBusy};},record(){isRecording=true;segmenter=new SpeechSegmenter();}};
   function enqueueClip(`);
 const elements = new Map();
 function element(id) {
   if (!elements.has(id)) elements.set(id, {value:'', checked:true, textContent:'', innerHTML:'', style:{}, hidden:true, focus(){}, handlers:{}, options:[], classList:{add(){},remove(){},toggle(){}}, addEventListener(type, fn){this.handlers[type]=fn;}, appendChild(opt){ this.options.push(opt); if(!this.value) this.value=opt.value; }});
   return elements.get(id);
 }
-let llmMode='standard', chatReply=null, cueReply=null;
-let nextTranscript = '테스트';
+let llmMode='standard', chatReply=null, cueReply=null, chromeText=null;
+let nextTranscript = '테스트';let nextPreviewText=null;
 let nextRejected = false;
 let holdPreview = false;
 let releasePreview = null;
@@ -28,6 +28,7 @@ const chunks=['data: {"choices":[{"delta":{"con','tent":"안녕"}}]}\n\ndata: {"
 const context={DKST_DEFAULT_SERVER_URL:'https://192.168.1.4:2806',waitForEvenAppBridge:async()=>bridge,AudioInputSource:{Glasses:0},OsEventTypeList:{CLICK_EVENT:0,DOUBLE_CLICK_EVENT:3},console,TextDecoder,Uint8Array,URL,AbortController,setTimeout:(fn,ms)=>{const timer=setTimeout(fn,ms);if(ms>=1000)timer.unref();return timer;},clearTimeout,alert(){},localStorage:{getItem(){return null;},setItem(){}},window:{location:{origin:'https://192.168.1.4:2806',hostname:'192.168.1.4'},btoa:s=>Buffer.from(s,'binary').toString('base64')},document:{body:{style:{overflow:''}},activeElement:{focus(){}},addEventListener(type,fn){documentHandlers[type]=fn;},readyState:'complete',getElementById:element,createElement:()=>({})},fetch:async(url,opts={})=>{
  requests.push({url,opts});
  if(url.endsWith('/api/glasses/hint-decision')){if(hintDecision.error)return{ok:false,status:503};return{ok:true,json:async()=>hintDecision};}
+ if(url.endsWith('/api/translate/chrome'))return chromeText?{ok:true,json:async()=>({status:'ready',text:chromeText,source:'en',target:'ko'})}:{ok:false,json:async()=>({status:'needs_prepare',error:'준비 필요'})};
  if(url.endsWith('/api/config'))return{ok:true,json:async()=>({llm_mode:llmMode,context_strategy:'retrieval'})};
  if(url.endsWith('/api/auth/check'))return{ok:true,json:async()=>({authenticated:opts.headers?.Authorization==='Bearer test-session'})};
  if(url.endsWith('/api/login'))return{ok:true,json:async()=>({token:'test-session'})};
@@ -35,11 +36,13 @@ const context={DKST_DEFAULT_SERVER_URL:'https://192.168.1.4:2806',waitForEvenApp
  if(url.includes('/api/stt/transcripts?'))return{ok:true,json:async()=>({entries:[{startedAt:'2026-11-12T05:00:00Z',endedAt:'2026-11-12T05:00:01Z',text:'긴 전사 기록 '.repeat(10000)}]})};
  if(url.endsWith('/api/stt/warmup')){const response={ok:true,json:async()=>({ready:true,preview:true})};if(holdWarmup){holdWarmup=false;return await new Promise(resolve=>{releaseWarmup=()=>resolve(response);});}return response;}
  if(url.endsWith('/api/stt/preview')){
-  const request=JSON.parse(opts.body), text=nextTranscript;
-  const response={ok:true,status:200,json:async()=>({sessionId:request.sessionId,segmentId:request.segmentId,revision:request.revision,stage:'draft',text,saved:false,triggered:false})};
+  const request=JSON.parse(opts.body), text=nextPreviewText ?? nextTranscript;
+  const response={ok:true,status:200,json:async()=>({sessionId:request.sessionId,segmentId:request.segmentId,revision:request.revision,stage:'draft',text,engine:request.engine,stableText:'',draftText:text,saved:false,triggered:false})};
   if(holdPreview){holdPreview=false;return await new Promise(resolve=>{releasePreview=()=>resolve(response);});}
   return response;
  }
+ if(url.endsWith('/api/stt/chrome/prepare'))return{ok:true,json:async()=>({status:'ready'})};
+ if(url.endsWith('/api/stt/chrome/stop'))return{ok:true,json:async()=>({status:'ready'})};
  if(url.endsWith('/api/stt/status'))return{ok:true,json:async()=>({active:true})};
  if(url.endsWith('/api/stt/transcribe')) {
   const reqBody=JSON.parse(opts.body);
@@ -56,14 +59,16 @@ const context={DKST_DEFAULT_SERVER_URL:'https://192.168.1.4:2806',waitForEvenApp
 }};
 const tick=()=>new Promise(r=>setImmediate(r));
 (async()=>{
+ Object.assign(context,await import('./live-translation.mjs'));
+ Object.assign(context,await import('./chrome-translation.mjs'));
  Object.assign(context,await import('./speaker-filter.mjs'));
  Object.assign(context,await import('./translation-display.mjs'));
  Object.assign(context,await import('./direct-question.mjs'));
  Object.assign(context,await import('./hint-enrichment.mjs'));
  const {HintGate}=await import('./hint-gate.mjs');context.HintGate=HintGate;
  const {normalizeModels} = await import('./model-list.mjs');
- const {cleanHintText,clockText,glassesBatteryText,hudStatusText,hudNoticeText,animatedDots,withAnimatedDots,extractVisibleAndReasoning,stripSourcesForGlasses,formatToolStatusText,wrapHUDLines,sliceHUDWindow,normalizeGlassesMode,nextGlassesMode,glassesModeMenuIdToMode,targetLanguageLabel,glassesModeShortLabel,glassesModeBadgeText,buildModePrompts}=await import('./hud-status.mjs');
- Object.assign(context,{cleanHintText,hudStatusText,hudNoticeText,withAnimatedDots,extractVisibleAndReasoning,stripSourcesForGlasses,formatToolStatusText,sliceHUDWindow,normalizeGlassesMode,nextGlassesMode,glassesModeMenuIdToMode,targetLanguageLabel,glassesModeShortLabel,glassesModeBadgeText,buildModePrompts});
+ const {translationHeaderText,cleanHintText,clockText,glassesBatteryText,hudStatusText,hudNoticeText,animatedDots,withAnimatedDots,extractVisibleAndReasoning,stripSourcesForGlasses,formatToolStatusText,wrapHUDLines,sliceHUDWindow,normalizeGlassesMode,nextGlassesMode,glassesModeMenuIdToMode,targetLanguageLabel,glassesModeShortLabel,glassesModeBadgeText,buildModePrompts}=await import('./hud-status.mjs');
+ Object.assign(context,{translationHeaderText,cleanHintText,hudStatusText,hudNoticeText,withAnimatedDots,extractVisibleAndReasoning,stripSourcesForGlasses,formatToolStatusText,sliceHUDWindow,normalizeGlassesMode,nextGlassesMode,glassesModeMenuIdToMode,targetLanguageLabel,glassesModeShortLabel,glassesModeBadgeText,buildModePrompts});
  assert.equal(normalizeGlassesMode('ai'),'ai');
  assert.equal(normalizeGlassesMode('translate'),'translate');
  assert.equal(normalizeGlassesMode('unknown'),'transcript');
@@ -452,6 +457,65 @@ const tick=()=>new Promise(r=>setImmediate(r));
  const jaSttBody = JSON.parse(requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).at(-1).opts.body);
  assert.equal(jaSttBody.language,'ja','Translate mode must use selected source language code');
  assert.doesNotMatch(element('hud-notice').textContent,/전사 오류/);
+ // Local translation is visible before a slow reply LLM and the next utterance
+ // can replace it without waiting for the previous LLM result.
+ chromeText='Chrome이 먼저 번역한 첫 문장';chatReply=null;holdChat=true;
+ nextTranscript='最初の文です';utterance('other');await tick();await tick();await tick();
+ assert.match(element('hud-screen').innerHTML,/Chrome이 먼저 번역한 첫 문장/);
+ assert.doesNotMatch(element('hud-screen').innerHTML,/프롬프트|생각 중|생성 중|번역 중/,'progress must stay outside the translation box');
+ assert.match(element('hud-notice').textContent,/번역/);
+ const replyOnly=JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
+ assert.match(replyOnly.system_prompt,/번역문을 생성·수정하지 마세요/);
+ assert.equal(replyOnly.glasses_hint,true);assert.equal(replyOnly.hint_research.source,'internal');
+ chromeText='Chrome의 최신 번역';
+ chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({translation:'LLM이 덮어쓰면 안 되는 문장',positive:'네.\nはい。',negative:'아니요.\nいいえ。'})})+'\n\n');
+ nextTranscript='次の文です';utterance('other');await tick();await tick();await tick();await tick();
+ assert.match(element('hud-screen').innerHTML,/Chrome의 최신 번역/);
+ assert.doesNotMatch(element('hud-screen').innerHTML,/LLM이 덮어쓰면/);
+ assert.match(element('chrome-translation-status').textContent,/답변 예시 완료/);
+ chromeText='LLM 실패에도 유지되는 번역문';chatReply={ok:false,status:500,text:async()=>'LLM unavailable'};
+ nextTranscript='翻訳は残ります';utterance('other');await tick();await tick();await tick();
+ assert.match(element('hud-screen').innerHTML,/LLM 실패에도 유지되는 번역문/);
+ assert.match(element('chrome-translation-status').textContent,/답변 예시 생성 실패/);
+ // Prompt progress updates only the last header field, never the translation.
+ chromeText='진행률 표시 중에도 유지되는 번역';
+ let progressRead=0,releaseProgress;
+ chatReply={ok:true,body:{getReader:()=>({read:async()=>{
+   if(progressRead++===0)return{done:false,value:Buffer.from('data: '+JSON.stringify({type:'prompt_processing.progress',progress:.32})+'\n\n')};
+   if(progressRead===2)return await new Promise(resolve=>{releaseProgress=()=>resolve({done:false,value:Buffer.from('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({positive:'네.\nはい。',negative:'아니요.\nいいえ。'})})+'\n\n')});});
+   return{done:true};
+ }})}};
+ nextTranscript='進行状況を確認します';utterance('other');await tick();await tick();await tick();
+ assert.equal(element('hud-notice').textContent,'[번역] JA→KO | 작동중 | 프롬프트 처리 32%');
+ assert.match(element('hud-screen').innerHTML,/진행률 표시 중에도 유지되는 번역/);assert.doesNotMatch(element('hud-screen').innerHTML,/프롬프트 처리/);
+ releaseProgress();await tick();await tick();await tick();
+ // Live Chrome hypotheses reach the translation box before the final endpoint.
+ await context.window.__queueTest.stopVoiceRecording(false);
+ element('stt-engine').value='chrome-online';element('stt-engine').handlers.change();
+ context.window.__queueTest.liveTranslations.intervalMs=0;
+ handler({sysEvent:{eventType:0}});await tick();await tick();await tick();
+ assert.equal(context.window.__queueTest.state().engine,'chrome-online');assert.equal(context.window.__queueTest.state().recording,true);
+ const liveChatStart=requests.filter(r=>r.url.endsWith('/api/chat')).length;
+ const liveFinalStart=requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).length;
+ nextPreviewText='interim phrase';chromeText='말하는 동안 표시되는 임시 번역';
+ for(let i=0;i<4;i++)handler({audioEvent:{audioPcm:speech,speakerRole:'other'}});
+ await tick();await tick();await tick();
+ assert.match(element('hud-screen').innerHTML,/말하는 동안 표시되는 임시 번역/);
+ assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,liveChatStart,'interim translation must not call the LLM');
+ assert.equal(requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).length,liveFinalStart,'interim translation must precede final STT/save');
+ nextPreviewText='corrected interim phrase';chromeText='다시 교정된 임시 번역';
+ for(let i=0;i<3;i++)handler({audioEvent:{audioPcm:speech,speakerRole:'other'}});
+ await tick();await tick();await tick();assert.match(element('hud-screen').innerHTML,/다시 교정된 임시 번역/);
+ nextTranscript='authoritative final phrase';chromeText='최종 확정 번역';
+ chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({positive:'네.\nはい。',negative:'아니요.\nいいえ。'})})+'\n\n');
+ for(let i=0;i<9;i++)handler({audioEvent:{audioPcm:Buffer.alloc(3200),speakerRole:'other'}});
+ await tick();await tick();await tick();await tick();
+ assert.match(element('hud-screen').innerHTML,/최종 확정 번역/);assert.doesNotMatch(element('hud-screen').innerHTML,/다시 교정된 임시 번역/);
+ assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,liveChatStart+1,'only the final utterance creates reply examples');
+ nextPreviewText=null;await context.window.__queueTest.stopVoiceRecording(false);
+ element('stt-engine').value='whisper';element('stt-engine').handlers.change();
+ handler({sysEvent:{eventType:0}});await tick();await tick();await tick();
+ chromeText=null;
  handler({sysEvent:{eventType:0}});await tick();await tick();
  handler({menuItemClickEvent:{itemID:1}});await tick();
  assert.equal(element('glasses-mode').value,'transcript');
@@ -537,6 +601,20 @@ const tick=()=>new Promise(r=>setImmediate(r));
  await new Promise(resolve=>setTimeout(resolve,260));await tick();context.setTimeout=normalTimer;
  assert.equal(queue.state().recording,true);assert.equal(queue.state().ids.length,0);assert.equal(queue.state().failure,'');
  await queue.stopVoiceRecording(false);queue.reset();
+ // Chrome uses the same save/trigger pipeline without requiring Whisper warmup.
+ element('stt-engine').value='chrome-online';element('stt-engine').handlers.change();
+ const warmupsBeforeChrome=requests.filter(r=>r.url.endsWith('/api/stt/warmup')).length;
+ handler({menuItemClickEvent:{itemID:1}});element('voice-mode').value='continuous';
+ handler({sysEvent:{eventType:0}});await tick();await tick();await tick();
+ assert.equal(queue.state().recording,true);
+ assert.equal(requests.filter(r=>r.url.endsWith('/api/stt/warmup')).length,warmupsBeforeChrome);
+ assert.ok(requests.some(r=>r.url.endsWith('/api/stt/chrome/prepare')));
+ assert.equal(element('stt-engine').disabled,true);
+ nextTranscript='크롬 엔진 전사';utterance('other');await tick();await tick();await tick();
+ assert.equal(JSON.parse(requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).at(-1).opts.body).engine,'chrome-online');
+ assert.equal(JSON.parse(requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).at(-1).opts.body).fallback,true);
+ await queue.stopVoiceRecording(false);queue.reset();
+ assert.equal(element('stt-engine').disabled,false);
  elements.clear();
  vm.runInNewContext(src,context);await tick();await tick();
  assert.equal(element('server-url').value,'https://192.168.1.4:2806');

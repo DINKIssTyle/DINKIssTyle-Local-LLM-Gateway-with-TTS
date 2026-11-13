@@ -133,6 +133,8 @@ func handleSTTStatus(app *App) http.HandlerFunc {
 }
 
 type STTTranscribeRequest struct {
+	Engine       string `json:"engine"`
+	Fallback     bool   `json:"fallback"`
 	Realtime     bool   `json:"realtime"`
 	Audio        string `json:"audio"`      // Base64 encoded audio
 	Format       string `json:"format"`     // "pcm" or "wav"
@@ -148,6 +150,10 @@ type STTTranscribeRequest struct {
 }
 
 type STTTranscribeResponse struct {
+	StableText     string  `json:"stableText"`
+	DraftText      string  `json:"draftText"`
+	Engine         string  `json:"engine,omitempty"`
+	Warning        string  `json:"warning,omitempty"`
 	SessionID      string  `json:"sessionId,omitempty"`
 	SegmentID      string  `json:"segmentId,omitempty"`
 	Revision       int     `json:"revision,omitempty"`
@@ -176,12 +182,6 @@ func handleSTTAudio(app *App, preview bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		status := getSTTModelStatus()
-		if !status.Installed {
-			http.Error(w, "STT model is not installed. Please download it from Asset Manager.", http.StatusBadRequest)
 			return
 		}
 
@@ -305,7 +305,33 @@ func handleSTTAudio(app *App, preview bool) http.HandlerFunc {
 		if r.Context().Err() != nil {
 			return
 		}
-		inference, err := runSTTInference(audioBytes, format, lang, metadata.SpeechFilter, preview || metadata.Realtime)
+		engine := metadata.Engine
+		if engine == "" {
+			engine = "whisper"
+		}
+		if engine != "whisper" && !chromeSTTEngine(engine) {
+			http.Error(w, "unknown STT engine", 400)
+			return
+		}
+		var inference sttWorkerReply
+		warning := ""
+		if chromeSTTEngine(engine) {
+			metadata.Language = lang
+			metadata.Format = format
+			inference, err = runChromeSpeech(r.Context(), metadata, audioBytes, preview, r.Header.Get("X-User-ID"))
+			if err != nil && err != errSTTBusy && metadata.Fallback && !preview && getSTTModelStatus().Installed {
+				warning = "Chrome STT 오류로 Whisper 사용: " + err.Error()
+				engine = "whisper"
+				inference, err = runSTTInference(audioBytes, format, lang, metadata.SpeechFilter, metadata.Realtime)
+			}
+		} else {
+			if !getSTTModelStatus().Installed {
+				http.Error(w, "STT model is not installed. Please download it from Asset Manager.", 400)
+				return
+			}
+			inference, err = runSTTInference(audioBytes, format, lang, metadata.SpeechFilter, preview || metadata.Realtime)
+		}
+
 		if err != nil {
 			if err == errSTTBusy {
 				w.Header().Set("Retry-After", "1")
@@ -320,7 +346,7 @@ func handleSTTAudio(app *App, preview bool) http.HandlerFunc {
 		if inference.Rejected {
 			transcribedText = ""
 		}
-		resp := STTTranscribeResponse{
+		resp := STTTranscribeResponse{Engine: engine, Warning: warning, StableText: inference.StableText, DraftText: inference.DraftText,
 			SessionID: metadata.SessionID, SegmentID: metadata.SegmentID, Revision: metadata.Revision, Stage: "final",
 			Rejected: inference.Rejected, Reason: inference.Reason,
 			Text:     transcribedText,

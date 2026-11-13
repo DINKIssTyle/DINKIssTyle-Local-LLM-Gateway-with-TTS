@@ -1201,6 +1201,7 @@ func (a *App) SetPort(port string) {
 
 // StopServer stops the HTTP server
 func (a *App) StopServer() error {
+	defer chromeTranslation.Close()
 	a.serverMux.Lock()
 	defer a.serverMux.Unlock()
 
