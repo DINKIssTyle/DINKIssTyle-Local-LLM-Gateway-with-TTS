@@ -1,7 +1,7 @@
 import {LiveTranslationQueue} from './live-translation.mjs';
 import {chromeTranslate,translationReplyPrompts} from './chrome-translation.mjs';
 import {filterSpeakerPCM} from './speaker-filter.mjs';
-import { parseTranslationDisplay, translationReplyText, translationPhoneText } from './translation-display.mjs';
+import { mergeTranslationDisplay, hasCompleteTranslationReplies, parseTranslationDisplay, translationReplyText, translationPhoneText } from './translation-display.mjs';
 import { directQuestionIntent } from './direct-question.mjs';
 import { webHintPlan, cuePrompts, parseCueResponse, fitCue, hintPlanPrompts, parseHintPlan, hintAnswerPrompts, extractHintFact, readHintPlanResponse } from './hint-enrichment.mjs';
 import { HintGate } from './hint-gate.mjs';
@@ -215,7 +215,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     onText:(job,text)=>{
       if(normalizeGlassesMode(config.glassesMode)!=='translate')return;
       liveTranslationDraft=job.draft;
-      translationDisplay={translation:text,positive:'',negative:''};answerText=text;aiScrollOffset=0;
+      translationDisplay={...translationDisplay,translation:text};answerText=text;aiScrollOffset=0;
       els.chatOutput.textContent=translationPhoneText(translationDisplay);
       els.chromeTranslationStatus.textContent=job.draft?'Chrome 실시간 번역 · 인식에 따라 수정됩니다':'Chrome 확정 번역 · 답변 예시 생성 중';renderLiveHUD();
     },
@@ -1418,7 +1418,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         if(job.hint && !hintGate.fresh(job)){hintGate.complete(job);continue;}
         activeAIJob=job;
         if(job.translationToken && job.translationToken!==translationToken)continue;
-        if(job.mode==='translate' && !job.chromeTranslationText && config.chromeTranslation===false)translationDisplay={translation:'',positive:'',negative:''};
+        if(job.mode==='translate' && !job.chromeTranslationText && config.chromeTranslation===false)translationDisplay={...translationDisplay,translation:''};
         if(!job.hint && !job.chromeTranslationText && !(job.mode==='translate' && config.chromeTranslation!==false))answerText = '';
         aiScrollOffset = 0;
         aiPhaseTitle = job.mode === 'translate' ? '번역 및 답변 생성 중' : '생각 중';
@@ -1462,6 +1462,7 @@ import { LocalAgreement } from './local-agreement.mjs';
   async function queryDKSTChat(prompt, conversationContext = '', mode = config.glassesMode, targetLang = config.translateTargetLang, options = {}) {
     const activeMode = normalizeGlassesMode(mode);
     let enrichmentPlan=null;
+    let repliesReplaced=false;
     let chromeText=options.chromeTranslationText || '';let chromeSource=options.translationSource || resolveTranslateSourceLang({targetLang});
     let cueDisplayed=false;let cueTopic='';
     function showCue(cue,status){
@@ -1488,7 +1489,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         aiPhaseTitle='Chrome 로컬 번역 중';renderLiveHUD();
         const local=await chromeTranslate(gatewayFetch,config.serverUrl,getAuthHeaders({'Content-Type':'application/json'}),{text:prompt,source:chromeSource,target:targetLang || config.translateTargetLang},controller.signal);
         if(local.ok){
-          chromeText=local.text;translationDisplay={translation:chromeText,positive:'',negative:''};answerText=chromeText;
+          chromeText=local.text;translationDisplay={...translationDisplay,translation:chromeText};answerText=chromeText;
           els.chatOutput.textContent=translationPhoneText(translationDisplay);
           els.chromeTranslationStatus.textContent='Chrome 로컬 번역 완료 · 답변 예시 생성 중';
           aiPhaseTitle='긍정·부정 답변 생성 중';renderLiveHUD();
@@ -1557,11 +1558,13 @@ import { LocalAgreement } from './local-agreement.mjs';
 
       let rawAnswer = '';
       let rawReasoning = '';
-      function setVisibleAnswer(raw) {
+      function setVisibleAnswer(raw,commitReplies=false) {
         if(options.translationToken && options.translationToken!==translationToken)return;
         if(activeMode==='translate') {
           const previousTranslation=translationDisplay.translation;
-          translationDisplay=parseTranslationDisplay(raw);
+          const parsedTranslation=parseTranslationDisplay(raw);
+          translationDisplay=mergeTranslationDisplay(translationDisplay,parsedTranslation,{commitReplies});
+          if(commitReplies && hasCompleteTranslationReplies(parsedTranslation))repliesReplaced=true;
           if(!translationDisplay.translation && config.chromeTranslation!==false)translationDisplay.translation=previousTranslation;
           if(chromeText)translationDisplay.translation=chromeText;
           answerText=translationDisplay.translation;
@@ -1727,10 +1730,10 @@ import { LocalAgreement } from './local-agreement.mjs';
       if(options.translationToken && options.translationToken!==translationToken)return;
       const enrichedFact=options.hint?extractHintFact(rawAnswer,[conversationContext,prompt].join('\n'),enrichmentPlan):'';
       if(options.hint && (!hintGate.relevant(options,enrichmentPlan.topic) || !fitCue(enrichedFact) || hintGate.duplicateCue(fitCue(enrichedFact)))){els.hintStatus.textContent='현재 대화에 필요한 새 정보 없음 · 생략';return;}
-      if(options.hint){answerText=fitCue(enrichedFact);cueDisplayed=true;cueTopic=enrichmentPlan.topic;}else setVisibleAnswer(rawAnswer);
+      if(options.hint){answerText=fitCue(enrichedFact);cueDisplayed=true;cueTopic=enrichmentPlan.topic;}else setVisibleAnswer(rawAnswer,true);
       if(options.hint)els.hintStatus.textContent=enrichmentPlan.source==='web'?'웹검색 근거로 보충한 정보':enrichmentPlan.source==='memory'?'저장된 기억으로 보충한 정보':'내부 지식으로 보충한 정보';
       els.chatOutput.textContent = activeMode==='translate'?translationPhoneText(translationDisplay):answerText;
-      if(chromeText)els.chromeTranslationStatus.textContent=translationDisplay.positive || translationDisplay.negative?'Chrome 로컬 번역 · 답변 예시 완료':'Chrome 번역 완료 · 답변 예시를 받지 못했습니다';
+      if(chromeText)els.chromeTranslationStatus.textContent=repliesReplaced?'Chrome 로컬 번역 · 답변 예시 완료':hasCompleteTranslationReplies(translationDisplay)?'Chrome 번역 완료 · 이전 답변 예시 유지':'Chrome 번역 완료 · 답변 예시를 받지 못했습니다';
       renderLiveHUD();
       if(!answerText.trim())throw new Error('LLM에서 답변 본문을 받지 못했습니다. 서버의 모델 상태를 확인하세요.');
 

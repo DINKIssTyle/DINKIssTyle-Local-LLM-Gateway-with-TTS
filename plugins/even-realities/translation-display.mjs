@@ -42,3 +42,15 @@ export function translationReplyText(result,maxWidth=null) {
   }).join('\n');
 }
 export function translationPhoneText(result){return [result.translation,translationReplyText(result)].filter(Boolean).join('\n');}
+
+
+export function hasCompleteTranslationReplies(value){
+  return ['positive','negative'].every(key=>typeof value[key]==='string' && value[key].trim() && !['…','...'].includes(value[key].trim()));
+}
+export function mergeTranslationDisplay(previous,next,{commitReplies=false}={}){
+  const result={...previous,translation:next.translation || previous.translation || ''};
+  if(commitReplies && hasCompleteTranslationReplies(next)){
+    result.positive=next.positive;result.negative=next.negative;
+  }
+  return result;
+}

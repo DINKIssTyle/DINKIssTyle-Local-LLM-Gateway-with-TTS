@@ -44,3 +44,12 @@ const rows=translationReplyText(bilingual,576).split('\n');
 assert.equal(rows[0],'긍정: Yes, please.');assert.equal(rows[1].trim(),'네, 주세요.');
 assert.equal(rows[2],'부정: No, thank you.');assert.equal(rows[3].trim(),'아니요, 괜찮습니다.');
 assert.match(buildModePrompts('translate',{targetLang:'en'}).systemPrompt,/첫 줄에 목표 언어/);
+
+const {mergeTranslationDisplay}=await import('./translation-display.mjs');
+const previous={translation:'이전 번역',positive:'Yes.\n네.',negative:'No.\n아니요.'};
+assert.deepEqual(mergeTranslationDisplay(previous,{translation:'새 임시 번역',positive:'',negative:''}),{...previous,translation:'새 임시 번역'});
+assert.deepEqual(mergeTranslationDisplay(previous,{translation:'',positive:'새 긍정',negative:''},{commitReplies:true}),previous,'incomplete pair must not replace either previous reply');
+assert.deepEqual(mergeTranslationDisplay(previous,{translation:'',positive:'새 긍정',negative:'새 부정'}),previous,'streaming pair stays private until completion');
+assert.deepEqual(mergeTranslationDisplay(previous,{translation:'새 확정 번역',positive:'새 긍정',negative:'새 부정'},{commitReplies:true}),{translation:'새 확정 번역',positive:'새 긍정',negative:'새 부정'});
+assert.deepEqual(mergeTranslationDisplay(previous,{translation:'',positive:'…',negative:'...'},{commitReplies:true}),previous);
+console.log('PASS: previous reply pair survives drafts/partial/empty results; complete replacements commit together');
