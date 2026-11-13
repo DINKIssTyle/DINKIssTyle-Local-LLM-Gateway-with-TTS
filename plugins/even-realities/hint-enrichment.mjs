@@ -90,3 +90,11 @@ export function fitCue(text,width=570,lines=6) {
   }
   return output;
 }
+
+
+export function webHintPlan(text,category,preferWeb=true) {
+  if(!preferWeb || !['background','explain','check','lookup'].includes(category))return null;
+  const query=String(text).replace(/\s+/gu,' ').trim();
+  if(!query)return null;
+  return {topic:Array.from(query).slice(0,80).join(''),question:Array.from(query).slice(0,300).join(''),source:'web',knownFacts:[query.slice(0,600)]};
+}

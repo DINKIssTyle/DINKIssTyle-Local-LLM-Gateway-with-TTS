@@ -56,6 +56,7 @@ const context={DKST_DEFAULT_SERVER_URL:'https://192.168.1.4:2806',waitForEvenApp
 }};
 const tick=()=>new Promise(r=>setImmediate(r));
 (async()=>{
+ Object.assign(context,await import('./speaker-filter.mjs'));
  Object.assign(context,await import('./translation-display.mjs'));
  Object.assign(context,await import('./direct-question.mjs'));
  Object.assign(context,await import('./hint-enrichment.mjs'));
@@ -203,7 +204,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  element('voice-mode').value='continuous'; element('trigger-word').value='이븐';
  handler({sysEvent:{eventType:0}}); await tick();await tick();
  const speech=Buffer.alloc(3200);for(let i=0;i<speech.length;i+=2)speech.writeInt16LE(5000,i);
- function utterance(){for(let i=0;i<6;i++)handler({audioEvent:{audioPcm:speech}});for(let i=0;i<9;i++)handler({audioEvent:{audioPcm:Buffer.alloc(3200)}});}
+ function utterance(speakerRole){for(let i=0;i<6;i++)handler({audioEvent:{audioPcm:speech,speakerRole}});for(let i=0;i<9;i++)handler({audioEvent:{audioPcm:Buffer.alloc(3200),speakerRole}});}
  nextTranscript='오늘 회의는 세 시입니다'; utterance();await tick();await tick();
  assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,originalChatCount,'ordinary conversation must not call AI');
  assert.match(element('transcript-log').textContent,/오늘 회의/);
@@ -335,6 +336,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  assert.match(element('chat-output').textContent,/호출어 없이 바로 답변/);
  // Hint mode classifies saved finals without blocking the transcript queue.
  handler({sysEvent:{eventType:0}});await tick();await tick();
+ element('hint-web-search').checked=false;element('hint-web-search').handlers.change();
  element('ai-hint-mode').value='hints';handler({sysEvent:{eventType:0}});await tick();await tick();
  context.window.__queueTest.hintGate.settleMs=0;
  const beforeHints=requests.filter(r=>r.url.endsWith('/api/chat')).length;
@@ -369,6 +371,26 @@ const tick=()=>new Promise(r=>setImmediate(r));
  assert.match(element('chat-output').textContent,/왕실 무덤/);
  assert.doesNotMatch(element('hud-screen').innerHTML,/보충할 정보 찾는 중|대화에 없는 질문 구성/);
  cueReply=null;
+ // Web preference routes selected public topics directly to evidence + answer,
+ // without a planning LLM or a model-generated source choice.
+ context.window.__queueTest.hintGate.reset();
+ element('hint-web-search').checked=true;element('hint-web-search').handlers.change();
+ hintDecision={hint:true,category:'background',focus:'맥북 에어 M4의 무게 얘기야'};
+ chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({fact:'검색 근거에서 확인한 모델 무게 정보입니다.',adds_information:true})})+'\n\n');
+ const webStart=requests.filter(r=>r.url.endsWith('/api/chat')).length;
+ nextTranscript='맥북 에어 M4의 무게 얘기야\n네, 알겠습니다';utterance();await tick();await tick();await tick();
+ const webBody=JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
+ assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,webStart+1);
+ assert.equal(webBody.glasses_hint_phase,'answer');assert.equal(webBody.hint_research.source,'web');
+ assert.equal(webBody.hint_research.query,'맥북 에어 M4의 무게 얘기야');
+ assert.match(element('chat-output').textContent,/검색 근거에서 확인한/);
+ context.window.__queueTest.hintGate.reset();
+ cueReply=JSON.stringify({topic:'맥북 에어',cue_type:'concept',source:'internal',fact:'맥북 에어는 휴대성을 중시한 노트북 제품군입니다.',adds_information:true});
+ chatReply={ok:false,status:424,text:async()=>'힌트 근거 조회 실패'};
+ nextTranscript='맥북 에어 M4의 무게 얘기야';utterance();await tick();await tick();await tick();await tick();
+ assert.match(element('hint-status').textContent,/웹검색 사용 불가 · 내부 지식 힌트/);
+ assert.match(element('chat-output').textContent,/휴대성/);cueReply=null;
+ element('hint-web-search').checked=false;element('hint-web-search').handlers.change();
  // Clear questions bypass optional hint classification and enrichment planning.
  hintDecision={error:true};
  let directStart=requests.filter(r=>r.url.endsWith('/api/chat')).length;
@@ -398,6 +420,9 @@ const tick=()=>new Promise(r=>setImmediate(r));
  handler({menuItemClickEvent:{itemID:3}});await tick();
  assert.equal(element('glasses-mode').value,'translate');
  await new Promise(r=>setTimeout(r,800));
+ const beforeSelf=requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).length;
+ utterance('self');await tick();await tick();
+ assert.equal(requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).length,beforeSelf,'self speech must not start translation');
  const translatedLayout=rebuilds.at(-1);
  assert.ok(translatedLayout,'entering translation must rebuild the native layout');
  const translationBox=translatedLayout.textObject[0],replyBox=translatedLayout.textObject.find(c=>c.containerID===4);

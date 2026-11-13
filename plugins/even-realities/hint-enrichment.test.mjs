@@ -31,3 +31,9 @@ assert.equal(fitCue('짧은 완결 문장입니다. '+ '너무 긴 문장 '.repe
 assert.equal(fitCue('너무 긴 문장 '.repeat(100)), '','never show a cut-off sentence');
 assert.match(cuePrompts('최근 발화','이전 문맥','background','이미 나온 도움').userPrompt,/이미 나온 도움/);
 console.log('PASS: single-pass typed cues, evidence-only research, complete sentences in six-line display');
+
+const {webHintPlan}=await import('./hint-enrichment.mjs');
+for(const category of ['background','explain','check','lookup'])assert.equal(webHintPlan('새 맥북 에어 M4 모델',category).source,'web');
+for(const category of ['recall','reply'])assert.equal(webHintPlan('개인 약속과 응답',category),null);
+assert.equal(webHintPlan('피라미드','background',false),null);
+assert.ok(Array.from(webHintPlan('긴문장 '.repeat(200),'check').question).length<=300);

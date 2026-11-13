@@ -1,6 +1,7 @@
+import {filterSpeakerPCM} from './speaker-filter.mjs';
 import { parseTranslationDisplay, translationReplyText, translationPhoneText } from './translation-display.mjs';
 import { directQuestionIntent } from './direct-question.mjs';
-import { cuePrompts, parseCueResponse, fitCue, hintPlanPrompts, parseHintPlan, hintAnswerPrompts, extractHintFact, readHintPlanResponse } from './hint-enrichment.mjs';
+import { webHintPlan, cuePrompts, parseCueResponse, fitCue, hintPlanPrompts, parseHintPlan, hintAnswerPrompts, extractHintFact, readHintPlanResponse } from './hint-enrichment.mjs';
 import { HintGate } from './hint-gate.mjs';
 import { waitForEvenAppBridge, AudioInputSource, OsEventTypeList } from '@evenrealities/even_hub_sdk';
 import { normalizeModels } from './model-list.mjs';
@@ -27,9 +28,11 @@ import { LocalAgreement } from './local-agreement.mjs';
     conciseMode: true,
     aiHintMode: true,
     hintSensitivity: 'balanced',
+    hintWebSearch: true,
     glassesMode: 'transcript',
     translateSourceLang: 'auto',
     translateTargetLang: 'ko',
+    translateExcludeSelf: true,
     voiceMode: 'manual',
     triggerWord: '이븐',
     speechFilter: 'strict',
@@ -141,6 +144,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     hudNotice: document.getElementById('hud-notice'),
     hudPageIndicator: document.getElementById('hud-page-indicator'),
     glassesMode: document.getElementById('glasses-mode'),
+    translateExcludeSelf: document.getElementById('translate-exclude-self'),
     translateSourceLang: document.getElementById('translate-source-lang'),
     translateTargetLang: document.getElementById('translate-target-lang'),
     translateLangRow: document.getElementById('translate-lang-row'),
@@ -151,6 +155,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     voiceMode: document.getElementById('voice-mode'),
     hintMode: document.getElementById('ai-hint-mode'),
     hintSensitivity: document.getElementById('hint-sensitivity'),
+    hintWebSearch: document.getElementById('hint-web-search'),
     hintStatus: document.getElementById('hint-status'),
     chatForm: document.getElementById('text-chat-form'),
     chatInput: document.getElementById('chat-input'),
@@ -218,6 +223,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     if (els.connectionMode) els.connectionMode.value = config.connectionMode || 'sse';
     els.hintMode.value=config.aiHintMode===false?'all':'hints';
     els.hintSensitivity.value=config.hintSensitivity || 'balanced';
+    if(els.hintWebSearch)els.hintWebSearch.checked=config.hintWebSearch!==false;
     if (els.optConciseMode) els.optConciseMode.checked = config.conciseMode !== false;
     if (els.optEnableTts) els.optEnableTts.checked = config.enableTTS !== false;
     config.glassesMode = normalizeGlassesMode(config.glassesMode);
@@ -230,6 +236,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     els.triggerWord.value = config.triggerWord;
     els.speechFilter.value = config.speechFilter;
     els.speakerScope.value = config.speakerScope;
+    if(els.translateExcludeSelf)els.translateExcludeSelf.checked=config.translateExcludeSelf!==false;
     const now = new Date();
     els.transcriptDate.value = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
     syncModeUI();
@@ -355,6 +362,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     config.conciseMode = els.optConciseMode.checked;
     config.aiHintMode=els.hintMode.value!=='all';
     config.hintSensitivity=els.hintSensitivity.value || 'balanced';
+    config.hintWebSearch=els.hintWebSearch?.checked!==false;
     hintGate.reset();
     config.enableTTS = els.optEnableTts.checked;
     if (els.glassesMode?.value) config.glassesMode = normalizeGlassesMode(els.glassesMode.value);
@@ -364,6 +372,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     config.triggerWord = els.triggerWord.value.trim();
     config.speechFilter = els.speechFilter.value === 'standard' ? 'standard' : 'strict';
     config.speakerScope = els.speakerScope.value === 'self' ? 'self' : 'conversation';
+    config.translateExcludeSelf=els.translateExcludeSelf?.checked!==false;
     syncModeUI();
 
     try {
@@ -888,6 +897,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     hintGate.reset();
     config.aiHintMode=els.hintMode.value!=='all';
     config.hintSensitivity=els.hintSensitivity.value || 'balanced';
+    config.hintWebSearch=els.hintWebSearch?.checked!==false;
     if (els.glassesMode?.value) config.glassesMode = normalizeGlassesMode(els.glassesMode.value);
     if (els.translateSourceLang?.value) config.translateSourceLang = els.translateSourceLang.value;
     if (els.translateTargetLang?.value) config.translateTargetLang = els.translateTargetLang.value;
@@ -895,6 +905,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     config.triggerWord = els.triggerWord.value.trim();
     config.speechFilter = els.speechFilter.value === 'standard' ? 'standard' : 'strict';
     config.speakerScope = els.speakerScope.value === 'self' ? 'self' : 'conversation';
+    config.translateExcludeSelf=els.translateExcludeSelf?.checked!==false;
     const mode = normalizeGlassesMode(config.glassesMode);
     const continuousCapture = isContinuousCaptureMode(mode);
     const labels = triggerLabels();
@@ -959,8 +970,8 @@ import { LocalAgreement } from './local-agreement.mjs';
   }
 
   function receivePCM(bytes, speakerRole = 'unknown') {
-    // Preserve the audio clock and silence boundaries when excluding another speaker.
-    if (config.speakerScope === 'self' && speakerRole === 'other') bytes = new Uint8Array(bytes.length);
+    // Preserve the audio clock and silence boundaries when excluding a speaker.
+    bytes=filterSpeakerPCM(bytes,speakerRole,config);
     recordedBytes += bytes.length;
     const level = pcmLevel(bytes);
     const continuousCapture = isContinuousCaptureMode();
@@ -1342,6 +1353,12 @@ import { LocalAgreement } from './local-agreement.mjs';
     const activeMode = normalizeGlassesMode(mode);
     let enrichmentPlan=null;
     let cueDisplayed=false;let cueTopic='';
+    function showCue(cue,status){
+      const fitted=cue?.fact?fitCue(cue.fact):'';
+      if(!fitted || !hintGate.relevant(options,cue.topic) || hintGate.duplicateCue(fitted))return false;
+      answerText=fitted;cueDisplayed=true;cueTopic=cue.topic;
+      els.chatOutput.textContent=fitted;els.hintStatus.textContent=status;renderLiveHUD();return true;
+    }
     const controller = new AbortController();
     aiAbortController = controller;
     const timeout = setTimeout(() => controller.abort(), options.hint?30000:45000);
@@ -1369,7 +1386,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         } else body.messages=[{role:'system',content:prompts.systemPrompt},{role:'user',content:prompts.userPrompt}];
         return body;
       };
-      if(options.hint) {
+      if(options.hint && !(enrichmentPlan=webHintPlan(prompt,options.category,config.hintWebSearch!==false))) {
         aiPhaseTitle='보충할 정보 찾는 중';aiPhaseDetail='대화에 없는 질문 구성';renderLiveHUD();
         const planRes=await gatewayFetch(`${config.serverUrl}/api/chat`,{
           method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),signal:controller.signal,
@@ -1377,20 +1394,14 @@ import { LocalAgreement } from './local-agreement.mjs';
         });
         const cue=parseCueResponse(await readHintPlanResponse(planRes),[conversationContext,prompt].join('\n'));
         enrichmentPlan=cue;
-        if(cue?.fact){
-          const fitted=fitCue(cue.fact);
-          if(fitted && hintGate.relevant(options,cue.topic) && !hintGate.duplicateCue(fitted)){
-            answerText=fitted;cueDisplayed=true;cueTopic=cue.topic;
-            els.chatOutput.textContent=fitted;els.hintStatus.textContent='대화 도움 표시 · 계속 듣는 중';renderLiveHUD();
-          }
-          return;
-        }
+        if(cue?.fact){showCue(cue,'대화 도움 표시 · 계속 듣는 중');return;}
         if(!enrichmentPlan || !hintGate.fresh(options)){
           els.hintStatus.textContent='새로 보탤 도움 없음 · 계속 듣는 중';return;
         }
         aiPhaseTitle=enrichmentPlan.source==='web'?'웹에서 근거 찾는 중':enrichmentPlan.source==='memory'?'기억에서 근거 찾는 중':'내부 지식에서 정보 찾는 중';
         aiPhaseDetail=enrichmentPlan.question;els.hintStatus.textContent=aiPhaseTitle;renderLiveHUD();
       }
+      if(options.hint && enrichmentPlan?.source==='web'){els.hintStatus.textContent='선별한 내용 웹검색 중';}
       const prompts=options.hint ? hintAnswerPrompts(enrichmentPlan) : buildModePrompts(activeMode,{
         conciseMode:config.conciseMode,targetLang:targetLang || config.translateTargetLang || 'ko',prompt,
         conversationContext:options.directQuestion?[directDialogue.join('\n'),conversationContext].filter(Boolean).join('\n'):conversationContext
@@ -1405,6 +1416,18 @@ import { LocalAgreement } from './local-agreement.mjs';
       const res = await gatewayFetch(`${config.serverUrl}/api/chat`, {
         method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),body:JSON.stringify(payload), signal: controller.signal
       });
+      if(options.hint && enrichmentPlan?.source==='web' && res.status===424){
+        // Evidence lookup failed before generation. Spend at most one LLM
+        // request on a clearly labeled stable-knowledge fallback, never retry web.
+        els.hintStatus.textContent='웹검색 사용 불가 · 내부 지식 확인';
+        const fallback=await gatewayFetch(`${config.serverUrl}/api/chat`,{
+          method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),signal:controller.signal,
+          body:JSON.stringify(chatPayload(cuePrompts(prompt,conversationContext,options.category,hintGate.displayedContext()),'plan'))
+        });
+        const cue=parseCueResponse(await readHintPlanResponse(fallback),[conversationContext,prompt].join('\n'));
+        if(!showCue(cue,'웹검색 사용 불가 · 내부 지식 힌트'))els.hintStatus.textContent='웹 근거 조회 실패 · 전사 계속';
+        return;
+      }
       if(!res.ok) {
         const detail=(await res.text()).trim().slice(0,500);
         throw new Error(`대화 생성 실패: HTTP ${res.status}${detail ? ' · '+detail : ''}`);
@@ -1840,6 +1863,11 @@ import { LocalAgreement } from './local-agreement.mjs';
         if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
       }
+    });
+    els.hintWebSearch?.addEventListener('change',()=>{settingsEdited=true;config.hintWebSearch=els.hintWebSearch.checked;persistSettings().catch(console.warn);});
+    els.translateExcludeSelf?.addEventListener('change',()=>{
+      settingsEdited=true;config.translateExcludeSelf=els.translateExcludeSelf.checked;
+      persistSettings().catch(console.warn);
     });
     for (const el of [els.hintMode, els.hintSensitivity, els.serverUrl, els.authUsername, els.apiKey, els.modelSelect, els.connectionMode, els.voiceMode, els.triggerWord, els.speechFilter, els.speakerScope, els.optEnableTts, els.optConciseMode]) {
       if (!el) continue;

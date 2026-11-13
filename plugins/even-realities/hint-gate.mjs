@@ -61,17 +61,20 @@ export class HintGate {
       if(!this.fresh(job) || controller.signal.aborted)return;
       this.recent=this.recent.filter(e=>now-e.at<180000);
       for(const [key,candidate] of this.generating)if(!this.fresh(candidate))this.generating.delete(key);
-      if(decision.hint && [...this.recent,...this.generating.values()].some(e=>similarHint(e.focusText || e.text,job.focusText || job.text))) {
+      const focus=typeof decision.focus==='string' && job.text.includes(decision.focus.trim())?decision.focus.trim():'';
+      const focusedJob=focus?{...job,text:focus,focusText:focus,context:[job.context,job.text].filter(Boolean).join('\n').slice(-1600)}:job;
+      if(decision.hint && [...this.recent,...this.generating.values()].some(e=>similarHint(e.focusText || e.text,focusedJob.focusText || focusedJob.text))) {
         this.onStatus('같은 내용 · 힌트 생략');return;
       }
       if(decision.hint) {
-        const candidate={...job,category:decision.category};
-        this.generating.set(job.sequence,job);
+        const candidate={...focusedJob,category:decision.category};
+        this.generating.set(job.sequence,focusedJob);
         const accepted=this.onHint(candidate);
         if(accepted===false){this.generating.delete(job.sequence);this.onStatus('힌트 생성 대기 · 다음 대화에서 재판별');return;}
         this.nextGeneration=this.now()+this.generationIntervalMs;
         this.onStatus('도움이 될 내용 · 힌트 생성');
       } else {
+        if(decision.reason==='embedding_busy' && !this.pending && !job.retry){this.pending={...job,retry:true,due:this.now()+2000};}
         const reasons={embedding_disabled:'임베딩 비활성 · 전사만 계속',embedding_unavailable:'임베딩 준비 필요 · 전사만 계속',jev_required:'EmbeddingGemma 2 + JEV 필요',embedding_busy:'임베딩 사용 중 · 다음 발화에서 재판별'};
         const prefix=decision.reason==='uncertain'?'힌트 보류':'힌트 대기';
         this.onStatus(reasons[decision.reason] || `${prefix} · 최근 ${job.windowCount}개 발화 / ${Array.from(job.text).length}자 판별`);

@@ -323,3 +323,69 @@ func TestGlassesRequestsIsolateGeneralChatAndPreserveStorage(t *testing.T) {
 		t.Fatalf("glasses response was auto-saved as memory: %d %v", len(memories), err)
 	}
 }
+
+func TestHintFocusSelectionGroundedInTranscript(t *testing.T) {
+	text := "資料は EBITDA を使うそうです。\n네, 알겠습니다.\n새 맥북 에어 M4 모델 얘기도 나왔어\n응 그렇구나."
+	candidates := hintFocusCandidates(text)
+	if len(candidates) != 2 {
+		t.Fatalf("candidates: %#v", candidates)
+	}
+	reply := jevReply{Selected: "focus_1", Probabilities: map[string]float64{"focus_1": .7, "focus_0": .2, "none": .1}}
+	if got := focusHintChoice(reply, candidates, "balanced"); got != candidates[1] {
+		t.Fatalf("focus %q", got)
+	}
+	reply.Selected = "focus_99"
+	if focusHintChoice(reply, candidates, "active") != "" {
+		t.Fatal("out of range selection")
+	}
+	reply.Selected = "focus_1"
+	reply.Probabilities["none"] = .8
+	if focusHintChoice(reply, candidates, "balanced") != "" {
+		t.Fatal("strong none must not become a topic")
+	}
+	reply.Probabilities["none"] = math.NaN()
+	if focusHintChoice(reply, candidates, "active") != "" {
+		t.Fatal("invalid scores")
+	}
+}
+
+func TestGlassesHintFocusLocalJev(t *testing.T) {
+	python, model := os.Getenv("DKST_JEV_TEST_PYTHON"), os.Getenv("DKST_JEV_TEST_MODEL")
+	if python == "" || model == "" {
+		t.Skip("local assets not specified")
+	}
+	worker, err := startJevEncoder(python, model, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer worker.Close()
+	for _, text := range []string{"점심 먹었어.\n자료에 EBITDA가 나왔어.\n네, 알겠습니다.", "오늘도 수고했어.\n맥북 에어 M4 얘기야.\n응 그렇구나.", "점심 맛있었어.\n내일 만나자."} {
+		candidates := hintFocusCandidates(text)
+		criteria := map[string]string{"none": "맞장구·인사·단순 개인 일정뿐이며 공개 지식이나 확인할 정보가 없음"}
+		for i, sentence := range candidates {
+			criteria[fmt.Sprintf("focus_%d", i)] = sentence
+		}
+		reply, err := worker.request(map[string]any{"op": "choice", "text": text, "criteria": criteria, "instructions": hintFocusQuery + hintFocusInstructions}, 6*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		focus := focusHintChoice(reply, candidates, "balanced")
+		if focus != "" {
+			verified, err := worker.request(map[string]any{"op": "choice", "text": focus, "criteria": glassesBackgroundCriteria, "instructions": glassesBackgroundInstructions}, 6*time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("verify selected=%s scores=%v", verified.Selected, verified.Probabilities)
+			if !selectBackgroundHint(verified, "balanced").Hint {
+				focus = ""
+			}
+		}
+		if (strings.Contains(text, "EBITDA") || strings.Contains(text, "맥북")) && focus == "" {
+			t.Error("missed specific topic")
+		}
+		if strings.Contains(text, "점심 맛있었어") && focus != "" {
+			t.Error("ordinary conversation opened research")
+		}
+		t.Logf("focus text=%q selected=%s scores=%v focus=%q", text, reply.Selected, reply.Probabilities, focus)
+	}
+}

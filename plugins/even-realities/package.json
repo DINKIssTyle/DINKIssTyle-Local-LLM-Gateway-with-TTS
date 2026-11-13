@@ -1,13 +1,13 @@
 {
   "name": "dkst-even-realities-plugin",
-  "version": "1.4.10",
+  "version": "1.4.12",
   "description": "DKST AI Gateway for Even Realities G2",
   "main": "plugin.js",
   "scripts": {
     "build": "node build.mjs",
     "qr": "evenhub qr",
     "pack": "node pack.mjs",
-    "test": "node test.cjs && node hint-gate.test.mjs && node hint-enrichment.test.mjs && node direct-question.test.mjs && node translation-display.test.mjs"
+    "test": "node test.cjs && node hint-gate.test.mjs && node hint-enrichment.test.mjs && node direct-question.test.mjs && node translation-display.test.mjs && node speaker-filter.test.mjs"
   },
   "keywords": [
     "even-realities",

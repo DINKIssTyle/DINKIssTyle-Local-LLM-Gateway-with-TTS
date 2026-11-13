@@ -83,6 +83,8 @@
           <option value="vi">베트남어 (Vietnamese)</option>
           <option value="th">태국어 (Thai)</option>
         </select>
+        <label class="translate-speaker-option"><input type="checkbox" id="translate-exclude-self" checked><span>번역 중 내 목소리 제외</span></label>
+        <p class="translate-speaker-help">Whisper 전사 전에 안경이 제공한 화자 정보로 내 음성을 제외합니다. 화자 구분 불가 음성은 포함될 수 있습니다.</p>
       </div>
     </div>
 
@@ -176,6 +178,7 @@
       <div class="form-group">
         <label for="ai-hint-mode">AI 모드 응답 방식</label>
         <select id="ai-hint-mode"><option value="hints">힌트 자동 선별 (EmbeddingGemma 2 + JEV)</option><option value="all">모든 발화에 응답 · 기존 연속 대화</option></select>
+        <label class="toggle-label"><input type="checkbox" id="hint-web-search" checked><span>정보 힌트는 웹검색 우선</span></label>
         <label for="hint-sensitivity">힌트 적극성</label>
         <select id="hint-sensitivity"><option value="quiet">조용하게</option><option value="balanced" selected>균형</option><option value="active">적극적으로</option></select>
       </div>

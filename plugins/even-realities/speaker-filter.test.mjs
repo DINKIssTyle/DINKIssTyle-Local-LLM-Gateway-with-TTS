@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import {filterSpeakerPCM} from './speaker-filter.mjs';
+const pcm=new Uint8Array([1,2,3,4]);
+const translate={glassesMode:'translate',translateExcludeSelf:true,speakerScope:'conversation'};
+assert.deepEqual([...filterSpeakerPCM(pcm,'self',translate)],[0,0,0,0]);
+for(const role of ['other','unknown',undefined])assert.equal(filterSpeakerPCM(pcm,role,translate),pcm);
+assert.deepEqual([...pcm],[1,2,3,4],'must not mutate incoming SDK data');
+assert.equal(filterSpeakerPCM(pcm,'self',{...translate,translateExcludeSelf:false}),pcm);
+assert.equal(filterSpeakerPCM(pcm,'other',{...translate,speakerScope:'self'}),pcm,'translation exclusion takes precedence over self-only transcription preference');
+assert.equal(filterSpeakerPCM(pcm,'self',{...translate,glassesMode:'ai'}),pcm);
+assert.deepEqual([...filterSpeakerPCM(pcm,'other',{glassesMode:'transcript',speakerScope:'self'})],[0,0,0,0]);
+console.log('PASS: translation self exclusion, unknown fallback, PCM timing and other mode scope preservation');

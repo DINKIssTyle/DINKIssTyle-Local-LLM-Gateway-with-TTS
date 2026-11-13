@@ -63,3 +63,16 @@ const budget=new HintGate({now:()=>now,settleMs:0,intervalMs:0,cooldownMs:0,deci
 budget.observe('첫 번째 후보',{id:'budget1'});await tick();
 budget.observe('두 번째 다른 후보',{id:'budget2'});await tick();assert.equal(budgetCalls.length,1);
 clearTimeout(budget.timer);now+=8001;await budget.pump();assert.equal(budgetCalls.length,2,'generation rate budget must bound LLM calls');budget.reset();
+
+let focused=[];
+const focusGate=new HintGate({settleMs:0,generationIntervalMs:0,intervalMs:0,cooldownMs:0,decide:async()=>({hint:true,category:'background',focus:'자료에 EBITDA가 나왔어'}),onHint:j=>focused.push(j)});
+focusGate.observe('자료에 EBITDA가 나왔어\n네, 알겠습니다',{id:'focused'});await tick();
+assert.equal(focused[0].text,'자료에 EBITDA가 나왔어');assert.match(focused[0].context,/네, 알겠습니다/);focusGate.reset();
+const grounded=new HintGate({settleMs:0,generationIntervalMs:0,intervalMs:0,cooldownMs:0,decide:async()=>({hint:true,category:'background',focus:'전사에 없는 이름'}),onHint:j=>focused.push(j)});
+grounded.observe('실제 전사 내용입니다',{id:'grounded'});await tick();assert.equal(focused.at(-1).text,'실제 전사 내용입니다');grounded.reset();
+
+let busyCount=0,busyHints=[];
+const busyGate=new HintGate({now:()=>now,settleMs:0,intervalMs:0,generationIntervalMs:0,cooldownMs:0,decide:async()=>++busyCount===1?{hint:false,reason:'embedding_busy'}:{hint:true,category:'explain'},onHint:j=>busyHints.push(j)});
+busyGate.observe('일시적으로 바쁜 동안 들어온 전문 용어',{id:'busy'});await tick();
+assert.equal(busyHints.length,0);clearTimeout(busyGate.timer);now+=4001;await busyGate.pump();
+assert.equal(busyHints.length,1,'temporarily busy embedding must retry without another utterance');busyGate.reset();
