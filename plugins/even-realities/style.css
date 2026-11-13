@@ -208,7 +208,7 @@ body {
 }
 
 #hud-notice { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-#hud-status-text { flex-shrink: 0; margin-left: 12px; }
+#hud-status-text { flex: 0 0 auto; margin-left: auto; padding-left: 12px; text-align: right; }
 
 .hud-cursor {
   display: inline-block;
@@ -237,7 +237,7 @@ body {
 
 .mode-switcher {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 6px;
 }
 

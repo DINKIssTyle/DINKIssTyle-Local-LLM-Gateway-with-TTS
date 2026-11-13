@@ -76,3 +76,13 @@ const busyGate=new HintGate({now:()=>now,settleMs:0,intervalMs:0,generationInter
 busyGate.observe('일시적으로 바쁜 동안 들어온 전문 용어',{id:'busy'});await tick();
 assert.equal(busyHints.length,0);clearTimeout(busyGate.timer);now+=4001;await busyGate.pump();
 assert.equal(busyHints.length,1,'temporarily busy embedding must retry without another utterance');busyGate.reset();
+
+let shortJobs=[];
+const shortGate=new HintGate({now:()=>now,settleMs:0,intervalMs:0,decide:async job=>{shortJobs.push(job);return{hint:false};},onHint:()=>assert.fail()});
+shortGate.observe('이전 주제는 이미 지나갔습니다',{id:'past'});await tick();now+=9000;
+shortGate.observe('피라미드',{id:'current'});await tick();
+assert.equal(shortJobs.at(-1).text,'피라미드','current topic detection must not require a long conversation');
+assert.match(shortJobs.at(-1).context,/이전 주제/);
+for(let i=0;i<4;i++){shortGate.observe(`지금 발화 ${i}`,{id:`short-${i}`});await tick();}
+assert.equal(shortJobs.at(-1).windowCount,3);assert.ok(shortJobs.at(-1).text.length<=800);assert.ok(shortJobs.at(-1).context.length<=800);
+shortGate.reset();

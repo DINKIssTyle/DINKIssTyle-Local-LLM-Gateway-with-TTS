@@ -3,8 +3,10 @@ package core
 import (
 	"context"
 	"errors"
+	"github.com/chromedp/chromedp"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -76,6 +78,18 @@ func TestChromeTranslationLocal(t *testing.T) {
 		t.Fatalf("unexpected translation: %+v", result)
 	}
 	t.Logf("translated: %s", result.Text)
+	// Inject the reported browser exception once, then exercise the real model.
+	// Recovery must keep the same browser so active Chrome STT is not aborted.
+	browser := chromedp.FromContext(s.tab).Browser
+	if err = chromedp.Run(s.tab, chromedp.Evaluate(`(() => { const original=Translator.prototype.translate; Translator.prototype.translate=function(...args){Translator.prototype.translate=original;return Promise.reject(new DOMException('Other generic failures occurred.','UnknownError'));}; })()`, nil)); err != nil {
+		t.Fatal(err)
+	}
+	recovered, recoverErr := s.run(ctx, req, false)
+	if recoverErr != nil || !strings.Contains(strings.ToLower(recovered.Text), "coffee") || chromedp.FromContext(s.tab).Browser != browser {
+		t.Fatalf("translator-only recovery: %+v %v", recovered, recoverErr)
+	}
+	t.Logf("recovered UnknownError without restarting Chrome: %s", recovered.Text)
+
 	// Verify cache/model usability after a worker restart with a fresh localhost
 	// origin; this catches availability masking and user-activation issues.
 	s.Close()
@@ -94,4 +108,53 @@ func TestChromeTranslationLocal(t *testing.T) {
 	}
 	t.Logf("English to Korean: %s", result.Text)
 
+}
+
+func TestChromeTranslationRecoveryBounds(t *testing.T) {
+	for _, tc := range []struct {
+		message        string
+		attempt        int
+		prepared, want bool
+	}{
+		{"UnknownError: Other generic failures occurred.", 0, true, true},
+		{"UnknownError: Other generic failures occurred.", 1, true, false},
+		{"UnknownError: failed", 0, false, true},
+		{"InvalidStateError: destroyed", 0, true, true},
+		{"InvalidStateError: destroyed", 1, true, false},
+		{"NotSupportedError: starting", 2, true, true},
+		{"NotSupportedError: unsupported", 0, false, false},
+		{"NotSupportedError: starting", 3, true, false},
+		{"NotAllowedError: activation", 0, true, false},
+		{"", 0, true, false},
+	} {
+		if got := retryChromeTranslation(tc.message, tc.attempt, tc.prepared); got != tc.want {
+			t.Errorf("%+v got %v", tc, got)
+		}
+	}
+}
+
+func TestChromeTranslationFailedObjectEvicted(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node unavailable")
+	}
+	script := strings.TrimSuffix(strings.SplitN(chromeTranslationPage, "<script>", 2)[1], "</script>")
+	fixture := `const assert=require('node:assert/strict');global.self=global;global.window=global;
+ let creates=0,destroys=0;
+ global.Translator={availability:async()=> 'available',create:async()=>{const id=++creates;return{destroy(){destroys++;if(id===1)throw Error('already closed')},async translate(text){if(id===1)throw Object.assign(Error('Other generic failures occurred.'),{name:'UnknownError'});return 'translated '+text;}}}};
+ ` + script + `
+ (async()=>{
+ const p={source:'ko',target:'en',text:'test'};
+ await chromeTranslation.prepare(p);
+ const other={source:'ja',target:'en',text:'other'};await chromeTranslation.prepare(other);
+ const failed=await chromeTranslation.translate(p,true);assert.match(failed.error,/^UnknownError:/);
+ assert.equal(destroys,1);assert.equal(creates,2);
+ const recovered=await chromeTranslation.translate(p,true);assert.equal(recovered.text,'translated test');assert.equal(creates,3);
+ const kept=await chromeTranslation.translate(other,true);assert.equal(kept.text,'translated other');assert.equal(creates,3,'healthy language pairs must stay cached');
+ })().catch(error=>{console.error(error);process.exitCode=1;});`
+	cmd := exec.Command(node)
+	cmd.Stdin = strings.NewReader(fixture)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("cache recovery: %v %s", err, out)
+	}
 }

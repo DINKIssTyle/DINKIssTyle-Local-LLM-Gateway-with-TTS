@@ -389,3 +389,66 @@ func TestGlassesHintFocusLocalJev(t *testing.T) {
 		t.Logf("focus text=%q selected=%s scores=%v focus=%q", text, reply.Selected, reply.Probabilities, focus)
 	}
 }
+
+func TestGlassesHintShortTopicPipeline(t *testing.T) {
+	for _, tc := range []struct {
+		text  string
+		shown []string
+		want  string
+	}{
+		{"피라미드 얘기야\n응 그렇구나", nil, "피라미드 얘기야"},
+		{"피라미드 얘기야\n청동기 시대", []string{"피라미드 얘기야"}, "청동기 시대"},
+	} {
+		calls := 0
+		decision, err := decideGlassesHint(glassesHintRequest{Text: tc.text, Shown: tc.shown}, func(text string, criteria map[string]string, instructions string) (jevReply, error) {
+			calls++
+			if _, focus := criteria["focus_0"]; focus {
+				t.Fatal("filler/shown spans should have been removed before choice")
+			}
+			if text != tc.want {
+				t.Fatalf("classifier got %q want focused %q", text, tc.want)
+			}
+			return jevReply{Selected: "background", Probabilities: map[string]float64{"background": .8, "none": .1}}, nil
+		})
+		if err != nil || !decision.Hint || decision.Focus != tc.want || calls != 1 {
+			t.Fatalf("%+v calls=%d err=%v", decision, calls, err)
+		}
+	}
+	long := "피라미드 " + strings.Repeat("이런 건축물이 있다고 하더라고 ", 20)
+	if candidates := hintFocusCandidates(long); len(candidates) == 0 || !strings.Contains(candidates[0], "피라미드") {
+		t.Fatal("long utterance silently lost its topic")
+	}
+}
+
+func TestGlassesHintShortTopicLocalJev(t *testing.T) {
+	python, model := os.Getenv("DKST_JEV_TEST_PYTHON"), os.Getenv("DKST_JEV_TEST_MODEL")
+	if python == "" || model == "" {
+		t.Skip("local assets not specified")
+	}
+	worker, err := startJevEncoder(python, model, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer worker.Close()
+	for _, tc := range []struct {
+		text  string
+		shown []string
+		want  bool
+	}{
+		{"피라미드", nil, true}, {"청동기 시대", nil, true},
+		{"자료에 EBITDA가 나왔어\n네, 알겠습니다", nil, true},
+		{"피라미드 얘기야\n맥북 에어 M4 무게 얘기야", []string{"피라미드 얘기야"}, true},
+		{"점심 맛있었어\n내일 만나자", nil, false},
+	} {
+		start := time.Now()
+		calls := 0
+		d, err := decideGlassesHint(glassesHintRequest{Text: tc.text, Shown: tc.shown}, func(text string, criteria map[string]string, instructions string) (jevReply, error) {
+			calls++
+			return worker.request(map[string]any{"op": "choice", "text": text, "criteria": criteria, "instructions": instructions}, 5*time.Second)
+		})
+		t.Logf("text=%q hint=%v focus=%q category=%s calls=%d elapsed=%v", tc.text, d.Hint, d.Focus, d.Category, calls, time.Since(start))
+		if err != nil || d.Hint != tc.want {
+			t.Errorf("decision=%+v err=%v", d, err)
+		}
+	}
+}

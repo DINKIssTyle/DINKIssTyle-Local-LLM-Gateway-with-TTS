@@ -233,6 +233,15 @@ func (s *chromeTranslator) rememberPair(key string) error {
 	return os.WriteFile(s.preparedPath(), data, 0600)
 }
 
+// Recreate failed translator objects once; retain the shared Chrome/STT process.
+// NotSupportedError during model restoration keeps its existing startup grace.
+func retryChromeTranslation(message string, attempt int, prepared bool) bool {
+	if strings.HasPrefix(message, "UnknownError:") || strings.HasPrefix(message, "InvalidStateError:") {
+		return attempt == 0
+	}
+	return prepared && attempt < 3 && strings.HasPrefix(message, "NotSupportedError:")
+}
+
 func (s *chromeTranslator) run(ctx context.Context, req chromeTranslationRequest, prepare bool) (chromeTranslationResult, error) {
 	result := chromeTranslationResult{Source: req.Source, Target: req.Target, Backend: "chrome-translator"}
 	if err := validateChromeTranslation(&req, prepare); err != nil {
@@ -268,7 +277,7 @@ func (s *chromeTranslator) run(ctx context.Context, req chromeTranslationRequest
 	expression := "window.chromeTranslation." + method + "(" + string(payload) + "," + fmt.Sprint(restore) + ")"
 	var err error
 	for attempt := 0; attempt < 4; attempt++ {
-		result.Error = ""
+		result = chromeTranslationResult{Source: req.Source, Target: req.Target, Backend: "chrome-translator"}
 		err = chromedp.Run(task, chromedp.ActionFunc(func(ctx context.Context) error {
 			object, exception, err := cdpruntime.Evaluate(expression).WithAwaitPromise(true).WithReturnByValue(true).WithUserGesture(prepare || restore).Do(ctx)
 			if err != nil {
@@ -282,7 +291,7 @@ func (s *chromeTranslator) run(ctx context.Context, req chromeTranslationRequest
 			}
 			return json.Unmarshal(object.Value, &result)
 		}))
-		if err != nil || !(prepare || restore) || !strings.HasPrefix(result.Error, "NotSupportedError:") || attempt == 3 {
+		if err != nil || !retryChromeTranslation(result.Error, attempt, prepare || restore) {
 			break
 		}
 		select {
@@ -359,6 +368,7 @@ const chromeTranslationPage = `<!doctype html><meta charset="utf-8"><title>DKST 
 (() => {
 const cache=new Map();
 const result=(p,extra)=>({source:p.source,target:p.target,backend:'chrome-translator',...extra});
+function discard(p){const key=p.source+'>'+p.target;const translator=cache.get(key);cache.delete(key);try{translator?.destroy();}catch{}}
 async function get(p,prepare){
  if(!self.Translator)return result(p,{status:'unsupported',error:'Chrome Translator API를 지원하지 않습니다'});
  const key=p.source+'>'+p.target;
@@ -370,12 +380,12 @@ async function get(p,prepare){
  }
  // Call create before any async availability probe consumes user activation.
  const translator=await Translator.create({sourceLanguage:p.source,targetLanguage:p.target});
- if(cache.size>=4){const oldest=cache.keys().next().value;cache.get(oldest).destroy();cache.delete(oldest);}
+ if(cache.size>=4){const oldest=cache.keys().next().value;const old=cache.get(oldest);cache.delete(oldest);try{old.destroy();}catch{}}
  cache.set(key,translator);return result(p,{status:'ready'});
 }
 window.chromeTranslation={
- async prepare(p){try{return await get(p,true);}catch(e){return result(p,{status:'unavailable',error:e.name+': '+e.message});}},
- async translate(p,restore){try{const state=await get(p,restore===true);if(state.status!=='ready')return state;return result(p,{status:'ready',text:await cache.get(p.source+'>'+p.target).translate(p.text)});}catch(e){return result(p,{status:'unavailable',error:e.name+': '+e.message});}}
+ async prepare(p){try{return await get(p,true);}catch(e){discard(p);return result(p,{status:'unavailable',error:e.name+': '+e.message});}},
+ async translate(p,restore){try{const state=await get(p,restore===true);if(state.status!=='ready')return state;return result(p,{status:'ready',text:await cache.get(p.source+'>'+p.target).translate(p.text)});}catch(e){discard(p);return result(p,{status:'unavailable',error:e.name+': '+e.message});}}
 };
 })();
 </script>`

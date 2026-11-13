@@ -16,6 +16,11 @@ export function mergePCM(parts) {
 }
 
 // Segment by audio sample count, so delayed Bluetooth batches do not change VAD.
+export function speechSegmentOptions(engine,mode){
+  if(engine==='whisper')return {};
+  return {snapshotMinMs:250,snapshotVoicedMs:150,...(mode==='translate'?{silenceMs:1600,maxMs:20000}:{})};
+}
+
 export class SpeechSegmenter {
   constructor({ threshold = 0.008, silenceMs = 900, maxMs = 12000, snapshotMinMs = 1200, snapshotVoicedMs = 400 } = {}) {
     Object.assign(this, { threshold, silenceMs, maxMs, snapshotMinMs, snapshotVoicedMs });

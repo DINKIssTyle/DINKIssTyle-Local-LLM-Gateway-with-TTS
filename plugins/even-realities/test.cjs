@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const src = fs.readFileSync('plugin.js','utf8').replace(/^import .*\n/gm, '').replace('  function enqueueClip(', `  window.__queueTest={ai(){resetQueuesForModeSwitch('ai');config.glassesMode='ai';captureFailure='';isRecording=true;segmenter=new SpeechSegmenter();},hintGate,liveTranslations,enqueueClip,drainClips,stopVoiceRecording,reset(){resetQueuesForModeSwitch('transcript');config.glassesMode='transcript';},state(){return{ids:pendingClips.map(c=>c.segmentId),failure:captureFailure,recording:isRecording,engine:activeSttEngine,mode:config.glassesMode,active:activeUtterance?.id,previewBusy};},record(){isRecording=true;segmenter=new SpeechSegmenter();}};
+const src = fs.readFileSync('plugin.js','utf8').replace(/^import .*\n/gm, '').replace('  function enqueueClip(', `  window.__queueTest={ai(){resetQueuesForModeSwitch('ai');config.glassesMode='ai';captureFailure='';isRecording=true;segmenter=new SpeechSegmenter();},hintGate,liveTranslations,translationHistory,enqueueClip,drainClips,stopVoiceRecording,reset(){resetQueuesForModeSwitch('translate');config.glassesMode='translate';},state(){return{ids:pendingClips.map(c=>c.segmentId),failure:captureFailure,recording:isRecording,engine:activeSttEngine,mode:config.glassesMode,active:activeUtterance?.id,previewBusy};},record(){isRecording=true;segmenter=new SpeechSegmenter();}};
   function enqueueClip(`);
 const elements = new Map();
 function element(id) {
@@ -9,7 +9,7 @@ function element(id) {
   return elements.get(id);
 }
 let llmMode='standard', chatReply=null, cueReply=null, chromeText=null;
-let nextTranscript = '테스트';let nextPreviewText=null;
+let nextTranscript = '이븐 테스트';let nextPreviewText=null;
 let nextRejected = false;
 let holdPreview = false;
 let releasePreview = null;
@@ -52,7 +52,7 @@ const context={DKST_DEFAULT_SERVER_URL:'https://192.168.1.4:2806',waitForEvenApp
   return{ok:true,json:async()=>({text:nextRejected?'':nextTranscript,saved:!nextRejected,rejected:nextRejected,triggered:nextRejected?false:triggered,prompt:triggered ? nextTranscript.split(word).slice(1).join(word).trim() : ''})};
  }
  if(url.endsWith('/api/chat')){if(JSON.parse(opts.body).glasses_hint_phase==='plan'){
- const content=cueReply || JSON.stringify({topic:'묵시적 갱신',question:'묵시적 갱신은 무엇을 뜻하나요?',knownFacts:['계약서에 묵시적 갱신이 나옴'],source:'internal'});
+ const content=(Array.isArray(cueReply)?cueReply.shift():cueReply) || JSON.stringify({topic:'묵시적 갱신',question:'묵시적 갱신은 무엇을 뜻하나요?',knownFacts:['계약서에 묵시적 갱신이 나옴'],source:'internal'});
  let done=false;return{ok:true,body:{getReader:()=>({read:async()=>done?{done:true}:(done=true,{value:Buffer.from('data: '+JSON.stringify({type:'message.delta',content})+'\n\n'),done:false})})}};
  }if(chatReply){const reply=chatReply;chatReply=null;return reply;}if(holdChat){holdChat=false;await new Promise((resolve,reject)=>{const aborted=()=>{const err=new Error('aborted');err.name='AbortError';reject(err);};opts.signal?.addEventListener('abort',aborted,{once:true});releaseChat=()=>{opts.signal?.removeEventListener('abort',aborted);resolve();};});}let i=0;return{ok:true,body:{getReader:()=>({read:async()=>i<chunks.length?{value:Buffer.from(chunks[i++]),done:false}:{done:true}})}};}
  throw Error('Unexpected request '+url);
@@ -60,6 +60,9 @@ const context={DKST_DEFAULT_SERVER_URL:'https://192.168.1.4:2806',waitForEvenApp
 const tick=()=>new Promise(r=>setImmediate(r));
 (async()=>{
  Object.assign(context,await import('./live-translation.mjs'));
+ Object.assign(context,await import('./translation-sentence.mjs'));
+ Object.assign(context,await import('./translation-history.mjs'));
+ Object.assign(context,await import('./ai-conversation.mjs'));
  Object.assign(context,await import('./chrome-translation.mjs'));
  Object.assign(context,await import('./speaker-filter.mjs'));
  Object.assign(context,await import('./translation-display.mjs'));
@@ -67,17 +70,18 @@ const tick=()=>new Promise(r=>setImmediate(r));
  Object.assign(context,await import('./hint-enrichment.mjs'));
  const {HintGate}=await import('./hint-gate.mjs');context.HintGate=HintGate;
  const {normalizeModels} = await import('./model-list.mjs');
- const {translationHeaderText,cleanHintText,clockText,glassesBatteryText,hudStatusText,hudNoticeText,animatedDots,withAnimatedDots,extractVisibleAndReasoning,stripSourcesForGlasses,formatToolStatusText,wrapHUDLines,sliceHUDWindow,normalizeGlassesMode,nextGlassesMode,glassesModeMenuIdToMode,targetLanguageLabel,glassesModeShortLabel,glassesModeBadgeText,buildModePrompts}=await import('./hud-status.mjs');
- Object.assign(context,{translationHeaderText,cleanHintText,hudStatusText,hudNoticeText,withAnimatedDots,extractVisibleAndReasoning,stripSourcesForGlasses,formatToolStatusText,sliceHUDWindow,normalizeGlassesMode,nextGlassesMode,glassesModeMenuIdToMode,targetLanguageLabel,glassesModeShortLabel,glassesModeBadgeText,buildModePrompts});
+ const {rightAlignedStatusText,modeHeaderText,translationHeaderText,cleanHintText,clockText,glassesBatteryText,hudStatusText,hudNoticeText,animatedDots,withAnimatedDots,extractVisibleAndReasoning,stripSourcesForGlasses,formatToolStatusText,wrapHUDLines,sliceHUDWindow,normalizeGlassesMode,nextGlassesMode,glassesModeMenuIdToMode,targetLanguageLabel,glassesModeShortLabel,glassesModeBadgeText,buildModePrompts}=await import('./hud-status.mjs');
+ Object.assign(context,{rightAlignedStatusText,modeHeaderText,translationHeaderText,cleanHintText,hudStatusText,hudNoticeText,withAnimatedDots,extractVisibleAndReasoning,stripSourcesForGlasses,formatToolStatusText,sliceHUDWindow,normalizeGlassesMode,nextGlassesMode,glassesModeMenuIdToMode,targetLanguageLabel,glassesModeShortLabel,glassesModeBadgeText,buildModePrompts});
  assert.equal(normalizeGlassesMode('ai'),'ai');
  assert.equal(normalizeGlassesMode('translate'),'translate');
- assert.equal(normalizeGlassesMode('unknown'),'transcript');
- assert.equal(nextGlassesMode('transcript'),'ai');
+ assert.equal(normalizeGlassesMode('unknown'),'ai');
+ assert.equal(normalizeGlassesMode('transcript'),'ai');
+ assert.equal(nextGlassesMode('transcript'),'translate');
  assert.equal(nextGlassesMode('ai'),'translate');
- assert.equal(nextGlassesMode('translate'),'transcript');
- assert.equal(glassesModeMenuIdToMode(1),'transcript');
- assert.equal(glassesModeMenuIdToMode(2),'ai');
- assert.equal(glassesModeMenuIdToMode(3),'translate');
+ assert.equal(nextGlassesMode('translate'),'ai');
+ assert.equal(glassesModeMenuIdToMode(1),'ai');
+ assert.equal(glassesModeMenuIdToMode(2),'translate');
+ assert.equal(glassesModeMenuIdToMode(3),null);
  assert.equal(glassesModeBadgeText('translate','en'),'번역 · 추천 답변 (→영어)');
  assert.equal(cleanHintText('explain\n청동기 시대 설명'),'청동기 시대 설명');
  assert.equal(cleanHintText('## **background**: 피라미드 소개'),'피라미드 소개');
@@ -134,8 +138,8 @@ const tick=()=>new Promise(r=>setImmediate(r));
  assert.equal(hudStatusText(100,new Date(2026,10,12,0,0)),'00:00 / 100%');
  assert.equal(glassesBatteryText(0),'0%');
  assert.equal(glassesBatteryText(undefined),'--');
- const {SpeechSegmenter,mergePCM,pcmLevel}=await import('./audio-segments.mjs');
- Object.assign(context,{SpeechSegmenter,mergePCM,pcmLevel});
+ const {speechSegmentOptions,SpeechSegmenter,mergePCM,pcmLevel}=await import('./audio-segments.mjs');
+ Object.assign(context,{speechSegmentOptions,SpeechSegmenter,mergePCM,pcmLevel});
  const vad=new SpeechSegmenter();
  const voiced=Buffer.alloc(3200);for(let i=0;i<voiced.length;i+=2)voiced.writeInt16LE(5000,i);
  for(let i=0;i<20;i++)assert.equal(vad.push(Buffer.alloc(3200)),null,'silence must not generate clips');
@@ -172,7 +176,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
 
  assert.equal(startup.textObject.find(c=>c.containerName==='transcript').containerID,4);
  assert.equal(startup.textObject.find(c=>c.containerName==='transcript').yPosition,195);
- assert.deepEqual(Array.from(startup.menuObject.menuItems,m=>m.itemName),['전사 모드','AI 모드','번역 모드']);
+ assert.deepEqual(Array.from(startup.menuObject.menuItems,m=>m.itemName),['AI 모드','번역 모드']);
  assert.equal(startup.textObject.find(c=>c.containerName==='notice').yPosition,0);
  assert.ok(startup.textObject.find(c=>c.containerName==='notice').width<=startup.textObject.find(c=>c.containerName==='status').xPosition);
  assert.equal(startup.textObject.filter(c=>c.isEventCapture===1).length,1);
@@ -196,10 +200,10 @@ const tick=()=>new Promise(r=>setImmediate(r));
  assert.equal(JSON.parse(nativeSaved).serverUrl,'https://192.168.1.4:2806');
  handler({sysEvent:{eventSource:1}}); await tick();
  assert.deepEqual(audioCalls[0],[true,0]);
- handler({audioEvent:{audioPcm:Array(6400).fill(1)}});
+ handler({audioEvent:{audioPcm:Array(9600).fill(2)}});
  handler({sysEvent:{eventType:0}}); await tick();await tick();
  const stt=requests.find(r=>r.url.endsWith('/api/stt/transcribe'));
- assert.equal(Buffer.from(JSON.parse(stt.opts.body).audio,'base64').length,6400);
+ assert.equal(Buffer.from(JSON.parse(stt.opts.body).audio,'base64').length,9600);
  assert.equal(stt.opts.headers.Authorization,'Bearer test-session');
  assert.equal(JSON.parse(requests.find(r=>r.url.endsWith('/api/chat')).opts.body).model,'test-model');
  assert.match(element('hud-screen').innerHTML,/안녕하세요/,'fragmented SSE must be reassembled');
@@ -220,7 +224,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  holdChat=true;nextTranscript='이븐 오늘 일정을 요약해줘';utterance();await tick();await tick();await tick();
  assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,originalChatCount+1,'trigger should call the existing gateway chat');
  const triggerBody=JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
- assert.match(triggerBody.messages.at(-1).content,/오늘 회의/);
+ assert.doesNotMatch(triggerBody.messages.at(-1).content,/오늘 회의/,'ambient transcripts must not enter explicit AI chat history');
  assert.match(triggerBody.messages.at(-1).content,/오늘 일정을 요약해줘/);
  const finalsBeforeAIWait=requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).length;
  nextTranscript='AI 응답 중에도 전사할 문장';utterance();await tick();await tick();
@@ -246,7 +250,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  for(let i=0;i<9;i++)handler({audioEvent:{audioPcm:Buffer.alloc(3200)}});
  await tick();await tick();
  assert.match(element('transcript-log').textContent,/확정된 실제 문장/);
- assert.match(element('hud-notice').textContent,/전사 저장됨.*AI 호출어/);
+ assert.match(element('hud-notice').textContent,/\[AI\].*작동중.*듣는중.*호출어/);
  // An in-flight draft completed after endpointing must not repaint the final.
  holdPreview=true;nextTranscript='늦게 도착한 가짜 초안';
  for(let i=0;i<15;i++)handler({audioEvent:{audioPcm:speech}});
@@ -276,7 +280,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  holdWarmup=true;handler({sysEvent:{eventType:0}});await tick();await tick();
  assert.ok(releaseWarmup);
  handler({sysEvent:{eventType:0}});await tick();await tick();
- assert.match(element('hud-notice').textContent,/녹음 정지/);
+ assert.match(element('hud-notice').textContent,/대기중/);
  releaseWarmup();await tick();await tick();
  assert.equal(audioCalls.filter(call=>call[0]).length,opensBeforeWarmup);
  const normalAudioControl=bridge.audioControl;
@@ -288,7 +292,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  assert.equal(audioCalls.at(-1)[0],false,'stop must reach native MIC before open reply arrives');
  releaseOpen(true);await tick();await tick();await tick();
  assert.equal(audioCalls.at(-1)[0],false,'delayed MIC open must be closed again');
- assert.match(element('hud-notice').textContent,/녹음 정지/);
+ assert.match(element('hud-notice').textContent,/대기중/);
  // Stop must bypass any pending preview inference.
  bridge.audioControl=normalAudioControl;element('voice-mode').value='continuous';
  handler({sysEvent:{eventType:0}});await tick();await tick();
@@ -298,7 +302,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  const opensBeforeStop=audioCalls.filter(call=>call[0]).length;
  handler({sysEvent:{eventType:0}});await tick();await tick();
  assert.equal(audioCalls.at(-1)[0],false,'MIC stop must not wait for inference');
- assert.match(element('hud-notice').textContent,/녹음 정지/);
+ assert.match(element('hud-notice').textContent,/대기중/);
  releasePreview();await tick();await tick();
  assert.equal(audioCalls.filter(call=>call[0]).length,opensBeforeStop);
  // A failed close is visible; the next tap retries close instead of reopening.
@@ -311,7 +315,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  assert.match(element('hud-notice').textContent,/종료 확인 실패/);
  rejectClose=false;handler({sysEvent:{eventType:0}});await tick();await tick();
  assert.equal(audioCalls.filter(call=>call[0]).length,opensBeforeRetry);
- assert.match(element('hud-notice').textContent,/녹음 정지/);
+ assert.match(element('hud-notice').textContent,/대기중/);
  bridge.audioControl=normalAudioControl;
  // Text entry uses the same AI queue and chooses the effective account protocol.
  llmMode='stateful';
@@ -320,29 +324,22 @@ const tick=()=>new Promise(r=>setImmediate(r));
  element('chat-input').value='텍스트 질문';
  element('text-chat-form').handlers.submit({preventDefault(){}});await tick();await tick();await tick();
  let textRequest=JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
- assert.equal(textRequest.input,'텍스트 질문');assert.equal(textRequest.store,false);assert.equal(textRequest.messages,undefined);
+ assert.ok(textRequest.input.endsWith('텍스트 질문'));assert.match(textRequest.input,/오늘 일정을 요약해줘/,'typed chat should share explicit wake-word chat context');assert.equal(textRequest.store,false);assert.equal(textRequest.messages,undefined);
  assert.match(textRequest.system_prompt,/HUD/);
  assert.equal(element('chat-input').value,'');
  assert.equal(element('chat-output').textContent,'최종 답변','terminal answer must replace drafts without duplicating content, revealing reasoning, or keeping sources');
  assert.match(element('hud-screen').innerHTML,/hud-ai-box/);
  assert.match(element('hud-screen').innerHTML,/hud-transcript-box/);
  assert.doesNotMatch(element('hud-screen').innerHTML,/검색 출처|kma\.go\.kr/);
- // Glasses contextual menu switches to AI mode (continuous AI without trigger word) and Translate mode
- element('ai-hint-mode').value='all';
- handler({menuItemClickEvent:{itemID:2}});await tick();
+ // The unified AI mode keeps ambient speech as hints, not every-utterance chat.
+ handler({menuItemClickEvent:{itemID:1}});await tick();
  assert.equal(element('glasses-mode').value,'ai');
- assert.match(element('hud-screen').innerHTML,/AI 연속 대화/);
+ assert.match(element('hud-screen').innerHTML,/AI 모드/);
  handler({sysEvent:{eventType:0}});await tick();await tick();
- const chatsBeforeAIMode = requests.filter(r=>r.url.endsWith('/api/chat')).length;
- chatReply=sseReply('data: {"choices":[{"delta":{"content":"네, 호출어 없이 바로 답변드립니다."}}]}\n\ndata: [DONE]\n\n');
- nextTranscript='호출어 없이 바로 질문합니다';
- utterance();await tick();await tick();await tick();
- assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,chatsBeforeAIMode+1,'AI mode must call /api/chat for every utterance without trigger word');
- assert.match(element('chat-output').textContent,/호출어 없이 바로 답변/);
  // Hint mode classifies saved finals without blocking the transcript queue.
  handler({sysEvent:{eventType:0}});await tick();await tick();
  element('hint-web-search').checked=false;element('hint-web-search').handlers.change();
- element('ai-hint-mode').value='hints';handler({sysEvent:{eventType:0}});await tick();await tick();
+ handler({sysEvent:{eventType:0}});await tick();await tick();
  context.window.__queueTest.hintGate.settleMs=0;
  const beforeHints=requests.filter(r=>r.url.endsWith('/api/chat')).length;
  nextTranscript='응, 오늘도 수고했어';utterance();await tick();await tick();await tick();
@@ -376,21 +373,22 @@ const tick=()=>new Promise(r=>setImmediate(r));
  assert.match(element('chat-output').textContent,/왕실 무덤/);
  assert.doesNotMatch(element('hud-screen').innerHTML,/보충할 정보 찾는 중|대화에 없는 질문 구성/);
  cueReply=null;
- // Web preference routes selected public topics directly to evidence + answer,
- // without a planning LLM or a model-generated source choice.
+ // Web preference first extracts the actual topic and an independent lookup question.
  context.window.__queueTest.hintGate.reset();
  element('hint-web-search').checked=true;element('hint-web-search').handlers.change();
  hintDecision={hint:true,category:'background',focus:'맥북 에어 M4의 무게 얘기야'};
+ cueReply=JSON.stringify({topic:'맥북 에어 M4',question:'MacBook Air M4 13인치와 15인치의 무게는 각각 얼마인가?',knownFacts:[],source:'web'});
  chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({fact:'검색 근거에서 확인한 모델 무게 정보입니다.',adds_information:true})})+'\n\n');
  const webStart=requests.filter(r=>r.url.endsWith('/api/chat')).length;
  nextTranscript='맥북 에어 M4의 무게 얘기야\n네, 알겠습니다';utterance();await tick();await tick();await tick();
  const webBody=JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
- assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,webStart+1);
+ assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,webStart+2);
  assert.equal(webBody.glasses_hint_phase,'answer');assert.equal(webBody.hint_research.source,'web');
- assert.equal(webBody.hint_research.query,'맥북 에어 M4의 무게 얘기야');
+ assert.equal(webBody.hint_research.query,'MacBook Air M4 13인치와 15인치의 무게는 각각 얼마인가?');
+ assert.doesNotMatch(webBody.input,/네, 알겠습니다/);
  assert.match(element('chat-output').textContent,/검색 근거에서 확인한/);
  context.window.__queueTest.hintGate.reset();
- cueReply=JSON.stringify({topic:'맥북 에어',cue_type:'concept',source:'internal',fact:'맥북 에어는 휴대성을 중시한 노트북 제품군입니다.',adds_information:true});
+ cueReply=[JSON.stringify({topic:'맥북 에어',question:'맥북 에어 M4 무게는?',knownFacts:[],source:'web'}),JSON.stringify({topic:'맥북 에어',cue_type:'concept',source:'internal',fact:'맥북 에어는 휴대성을 중시한 노트북 제품군입니다.',adds_information:true})];
  chatReply={ok:false,status:424,text:async()=>'힌트 근거 조회 실패'};
  nextTranscript='맥북 에어 M4의 무게 얘기야';utterance();await tick();await tick();await tick();await tick();
  assert.match(element('hint-status').textContent,/웹검색 사용 불가 · 내부 지식 힌트/);
@@ -411,7 +409,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  nextTranscript='그 내용을 웹에서 검색해줘';utterance();await tick();await tick();await tick();
  directBody=JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
  assert.equal(directBody.hint_research.source,'web');assert.match(directBody.hint_research.query,/검색해줘/);
- assert.match(directBody.input,/질문의 내용에 바로 답변합니다/,'follow-up must include recent direct answers');
+ assert.doesNotMatch(directBody.input,/질문의 내용에 바로 답변합니다/,'ambient questions must not include explicit chat history');
  // A direct question interrupts an optional hint without stopping capture.
  hintDecision={hint:true,category:'background'};context.window.__queueTest.hintGate.reset();holdChat=true;
  nextTranscript='전문적인 새 개념이 대화에 등장했어';utterance();await tick();await tick();await tick();
@@ -421,8 +419,38 @@ const tick=()=>new Promise(r=>setImmediate(r));
  nextTranscript='피라미드는 누가 지었어';utterance();await tick();await tick();await tick();await tick();
  assert.match(element('chat-output').textContent,/새 질문에 우선/);
  assert.equal(context.window.__queueTest.state().recording,true);
- // Switch to Translate mode via glasses menu item 3
- handler({menuItemClickEvent:{itemID:3}});await tick();
+ // Wake-only acknowledgement is local; the next utterance is explicit chat.
+ context.window.__queueTest.hintGate.reset();hintDecision={hint:false};
+ const beforeWake=requests.filter(r=>r.url.endsWith('/api/chat')).length;
+ nextTranscript='이븐';utterance();await tick();await tick();await tick();
+ assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,beforeWake,'wake-only must not spend an LLM request');
+ assert.match(element('hud-screen').innerHTML,/네, 이븐입니다. 말씀하세요./);
+ assert.match(element('hud-notice').textContent,/질문 대기/);
+ chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:'쿠푸왕의 피라미드에 대한 답변입니다.'})+'\n\n');
+ nextTranscript='피라미드는 누가 만들었나요';utterance();await tick();await tick();await tick();
+ let privateChat=JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
+ assert.equal(privateChat.glasses_hint_phase,'direct');assert.ok(privateChat.input.endsWith('피라미드는 누가 만들었나요'));
+ assert.doesNotMatch(privateChat.input,/질문의 내용에 바로 답변합니다/,'ambient answers are not private chat memory');
+ const afterPrivate=requests.filter(r=>r.url.endsWith('/api/chat')).length;
+ nextTranscript='일상 대화를 이어서 듣는 중입니다';utterance();await tick();await tick();await tick();
+ assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,afterPrivate,'one armed question must return to hints afterward');
+ chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:'앞선 쿠푸왕 답변을 참고한 후속 답변입니다.'})+'\n\n');
+ nextTranscript='이븐 그 사람은 언제 살았어';utterance();await tick();await tick();await tick();
+ privateChat=JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
+ assert.match(privateChat.input,/피라미드는 누가 만들었나요/);assert.match(privateChat.input,/쿠푸왕의 피라미드에 대한 답변/);
+ assert.doesNotMatch(privateChat.input,/일상 대화를 이어서 듣는 중입니다/,'ambient transcripts stay out of explicit chat');
+ assert.ok(privateChat.input.endsWith('그 사람은 언제 살았어'));
+ // A new wake-only acknowledgement supersedes an unfinished chat answer.
+ holdChat=true;element('chat-input').value='취소할 오래된 질문';element('text-chat-form').handlers.submit({preventDefault(){}});
+ await tick();await tick();
+ nextTranscript='이븐';utterance();await tick();await tick();await tick();
+ assert.match(element('hud-screen').innerHTML,/네, 이븐입니다. 말씀하세요./);assert.doesNotMatch(element('hud-screen').innerHTML,/AI 오류/);
+ chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:'새 질문에 대한 정상 답변입니다.'})+'\n\n');
+ nextTranscript='다시 물어볼 내용';utterance();await tick();await tick();await tick();
+ privateChat=JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
+ assert.doesNotMatch(privateChat.input,/취소할 오래된 질문/);assert.match(element('chat-output').textContent,/새 질문에 대한 정상 답변/);
+ // Switch to Translate mode via menu item 2
+ handler({menuItemClickEvent:{itemID:2}});await tick();
  assert.equal(element('glasses-mode').value,'translate');
  await new Promise(r=>setTimeout(r,800));
  const beforeSelf=requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).length;
@@ -434,7 +462,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  assert.equal(Math.floor((translationBox.height-6)/27),5);
  assert.ok(replyBox.height>=4*27);assert.equal(translationBox.yPosition+translationBox.height,replyBox.yPosition);
  assert.equal(replyBox.yPosition+replyBox.height,288);
- assert.equal(translatedLayout.menuObject.menuItems.length,3);
+ assert.equal(translatedLayout.menuObject.menuItems.length,2);
  assert.match(element('hud-screen').innerHTML,/번역 · 추천 답변/);
  chatReply=sseReply('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify({translation:"커피 드시겠어요?",positive:"네, 주세요.\nYes, please.",negative:"괜찮습니다.\nNo, thank you."})}}]})+'\n\ndata: [DONE]\n\n');
  nextTranscript='Would you like some coffee?';
@@ -449,6 +477,32 @@ const tick=()=>new Promise(r=>setImmediate(r));
  assert.match(preview,/예상 답변/);assert.match(preview,/긍정: 네, 주세요/);assert.match(preview,/부정: 괜찮습니다/);
  assert.doesNotMatch(preview,/\[중립\]|Maybe later|Would you like some coffee/);
  assert.doesNotMatch(preview.split('hud-transcript-box')[0],/Yes, please|No, thank you|네, 주세요|괜찮습니다|\[번역\]/,'box must contain only translation, not reply choices');
+
+ // Default LLM translation keeps the previous box while preparing/streaming,
+ // including a reply-first JSON stream, empty output and generation failure.
+ element('chrome-translation').checked=false;element('chrome-translation').handlers.change();
+ let llmTranslationRead=0,finishLLMTranslation;
+ chatReply={ok:true,body:{getReader:()=>({read:async()=>{
+   if(llmTranslationRead++===0)return{done:false,value:Buffer.from('data: '+JSON.stringify({type:'prompt_processing.progress',progress:.32})+'\n\n')};
+   if(llmTranslationRead===2)return{done:false,value:Buffer.from('data: '+JSON.stringify({type:'message.delta',content:'{"positive":"좋아요"'})+'\n\n')};
+   if(llmTranslationRead===3)return await new Promise(resolve=>{finishLLMTranslation=()=>resolve({done:false,value:Buffer.from('data: '+JSON.stringify({type:'message.delta',content:',"translation":"다음 번역문입니다.","negative":"아니요"}'})+'\n\n')});});
+   return{done:true};
+ }})}};
+ nextTranscript='Next sentence';utterance('other');await tick();await tick();await tick();
+ assert.match(element('hud-screen').innerHTML,/hud-ai-body">커피 드시겠어요\?/,'LLM startup and reply-only chunks must keep the previous translation');
+ assert.match(element('hud-screen').innerHTML,/긍정: 네, 주세요/);
+ finishLLMTranslation();await tick();await tick();await tick();
+ assert.match(element('hud-screen').innerHTML,/hud-ai-body">[\s\S]*다음 번역문입니다/);
+ chatReply={ok:false,status:500,text:async()=>'LLM unavailable'};
+ nextTranscript='Failed next sentence';utterance('other');await tick();await tick();await tick();
+ assert.match(element('hud-screen').innerHTML,/hud-ai-body">[\s\S]*다음 번역문입니다/);
+ assert.doesNotMatch(element('hud-screen').innerHTML,/AI 오류/);
+ assert.match(element('hud-notice').textContent,/번역 오류/);
+ chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:'{}'})+'\n\n');
+ nextTranscript='Empty next sentence';utterance('other');await tick();await tick();await tick();
+ assert.match(element('hud-screen').innerHTML,/hud-ai-body">[\s\S]*다음 번역문입니다/);
+ assert.match(element('chrome-translation-status').textContent,/번역문을 받지 못했습니다/);
+ element('chrome-translation').checked=true;element('chrome-translation').handlers.change();
 
  element('translate-source-lang').value='ja';element('translate-source-lang').handlers.change();await tick();
  chatReply=sseReply('data: {"choices":[{"delta":{"content":"[번역] 안녕하세요.\\n[긍정] こんにちは — 안녕하세요\\n[부정] すみません — 죄송합니다\\n[중립] はい — 네"}}]}\n\ndata: [DONE]\n\n');
@@ -510,17 +564,22 @@ const tick=()=>new Promise(r=>setImmediate(r));
  await tick();await tick();await tick();assert.match(element('hud-screen').innerHTML,/다시 교정된 임시 번역/);
  nextTranscript='authoritative final phrase';chromeText='최종 확정 번역';
  chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({positive:'네.\nはい。',negative:'아니요.\nいいえ。'})})+'\n\n');
- for(let i=0;i<9;i++)handler({audioEvent:{audioPcm:Buffer.alloc(3200),speakerRole:'other'}});
+ for(let i=0;i<16;i++)handler({audioEvent:{audioPcm:Buffer.alloc(3200),speakerRole:'other'}});
  await tick();await tick();await tick();await tick();
  assert.match(element('hud-screen').innerHTML,/최종 확정 번역/);assert.doesNotMatch(element('hud-screen').innerHTML,/다시 교정된 임시 번역/);
  assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,liveChatStart+1,'only the final utterance creates reply examples');
+ nextPreviewText='today?';chromeText='앞 문장과 이어진 번역';
+ for(let i=0;i<4;i++)handler({audioEvent:{audioPcm:speech,speakerRole:'other'}});
+ await tick();await tick();await tick();
+ assert.equal(JSON.parse(requests.filter(r=>r.url.endsWith('/api/translate/chrome')).at(-1).opts.body).text,'authoritative final phrase today?','the translator must receive the whole sentence across short audio endpoints');
+ assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,liveChatStart+1,'continued drafts must not generate reply examples');
  nextPreviewText=null;await context.window.__queueTest.stopVoiceRecording(false);
  element('stt-engine').value='whisper';element('stt-engine').handlers.change();
  handler({sysEvent:{eventType:0}});await tick();await tick();await tick();
  chromeText=null;
  handler({sysEvent:{eventType:0}});await tick();await tick();
  handler({menuItemClickEvent:{itemID:1}});await tick();
- assert.equal(element('glasses-mode').value,'transcript');
+ assert.equal(element('glasses-mode').value,'ai');
  chatReply=sseReply('data: {"choices":[{"delta":{"content":"오류 전 텍스트"}}]}\n\nevent: error\ndata: LLM error: input is required\n\n');
  element('chat-input').value='오류 확인';element('text-chat-form').handlers.submit({preventDefault(){}});await tick();await tick();await tick();
  assert.match(element('chat-output').textContent,/AI 오류: LLM error: input is required/,'plain SSE errors must preserve the original cause');
@@ -529,7 +588,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  element('chat-input').value='인증 확인';element('text-chat-form').handlers.submit({preventDefault(){}});await tick();await tick();await tick();
  assert.match(element('chat-output').textContent,/HTTP 401.*invalid API key/);
  textRequest=JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
- assert.equal(textRequest.messages.at(-1).content,'인증 확인');assert.equal(textRequest.input,undefined);
+ assert.ok(textRequest.messages.at(-1).content.endsWith('인증 확인'));assert.equal(textRequest.input,undefined);
  chatReply=sseReply('data: {"type":"reasoning.delta","content":"생각만"}\n\n');
  element('chat-input').value='빈 응답';element('text-chat-form').handlers.submit({preventDefault(){}});await tick();await tick();await tick();
  assert.match(element('chat-output').textContent,/답변 본문을 받지 못했습니다/);
@@ -617,6 +676,47 @@ const tick=()=>new Promise(r=>setImmediate(r));
  assert.equal(JSON.parse(requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).at(-1).opts.body).fallback,true);
  await queue.stopVoiceRecording(false);queue.reset();
  assert.equal(element('stt-engine').disabled,false);
+ // Translation scrollback follows the newest five of thirty rows and supports
+ // actual glasses scroll events without snapping back on the next translation.
+ handler({menuItemClickEvent:{itemID:2}});await tick();
+ element('chrome-translation').checked=false;element('chrome-translation').handlers.change();
+ for(let i=0;i<35;i++){
+   chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({translation:`기록 ${i}`,positive:'네',negative:'아니요'})})+'\n\n');
+   element('chat-input').value=`문장 ${i}`;element('text-chat-form').handlers.submit({preventDefault(){}});
+   await tick();await tick();await tick();
+ }
+ const scrollback=context.window.__queueTest.translationHistory;
+ assert.equal(scrollback.window().totalLines,30);assert.match(scrollback.window().visibleText,/기록 34$/);
+ assert.match(element('hud-screen').innerHTML,/기록 5\n/);assert.doesNotMatch(element('hud-screen').innerHTML,/기록 4\n/);
+ for(let i=0;i<6;i++)handler({sysEvent:{eventType:1}});
+ const pausedView=scrollback.window().visibleText;assert.equal(scrollback.follow,false);
+ chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({translation:'기록 35',positive:'네',negative:'아니요'})})+'\n\n');
+ element('chat-input').value='문장 35';element('text-chat-form').handlers.submit({preventDefault(){}});
+ await tick();await tick();await tick();
+ assert.equal(scrollback.window().visibleText,pausedView,'new translations must preserve the user scroll position');
+ for(let i=0;i<35;i++)handler({sysEvent:{eventType:2}});
+ assert.equal(scrollback.follow,true);assert.match(scrollback.window().visibleText,/기록 35$/);
+ // Every mode uses the same header; progress never replaces the previous answer.
+ for(const [itemID,label] of [[1,'AI']]){
+   handler({menuItemClickEvent:{itemID}});await tick();
+   chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:'이전 답변 유지 확인'})+'\n\n');
+   element('chat-input').value='테스트 질문';element('text-chat-form').handlers.submit({preventDefault(){}});
+   await tick();await tick();await tick();
+   let read=0,finish;
+   chatReply={ok:true,body:{getReader:()=>({read:async()=>{
+     if(read++===0)return{done:false,value:Buffer.from('data: '+JSON.stringify({type:'prompt_processing.progress',progress:.32})+'\n\n')};
+     if(read===2)return await new Promise(resolve=>{finish=()=>resolve({done:false,value:Buffer.from('data: '+JSON.stringify({type:'message.delta',content:'새 답변'})+'\n\n')});});
+     return{done:true};
+   }})}};
+   element('chat-input').value='다음 질문';element('text-chat-form').handlers.submit({preventDefault(){}});
+   await tick();await tick();await tick();
+   assert.equal(element('hud-notice').textContent,`[${label}] | 작동중 | 프롬프트 처리 32%`);
+   assert.match(element('hud-screen').innerHTML,/이전 답변 유지 확인/);
+   assert.doesNotMatch(element('hud-screen').innerHTML,/프롬프트 처리|생각 중/);
+   finish();await tick();await tick();await tick();
+   assert.match(element('hud-screen').innerHTML,/새 답변/);
+   assert.equal(element('hud-notice').textContent,`[${label}] | 대기중 | -`);
+ }
  elements.clear();
  vm.runInNewContext(src,context);await tick();await tick();
  assert.equal(element('server-url').value,'https://192.168.1.4:2806');

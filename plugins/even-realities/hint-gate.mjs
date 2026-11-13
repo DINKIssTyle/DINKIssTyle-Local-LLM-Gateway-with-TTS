@@ -1,6 +1,6 @@
 // One optional decision at a time; never await this from transcription.
 export class HintGate {
-  constructor({decide,onHint,onStatus=()=>{},now=()=>Date.now(),cooldownMs=15000,generationIntervalMs=8000,intervalMs=4000,maxAgeMs=45000,displayAgeMs=45000,windowMs=20000,settleMs=1200}) {
+  constructor({decide,onHint,onStatus=()=>{},now=()=>Date.now(),cooldownMs=8000,generationIntervalMs=8000,intervalMs=2000,maxAgeMs=45000,displayAgeMs=45000,windowMs=8000,settleMs=500}) {
     Object.assign(this,{decide,onHint,onStatus,now,cooldownMs,generationIntervalMs,intervalMs,maxAgeMs,displayAgeMs,windowMs,settleMs});
     this.epoch=0;this.entries=[];this.recent=[];this.pending=null;this.inflight=null;
     this.generating=new Map();this.sequence=0;this.nextGeneration=-Infinity;this.lastDecision=-Infinity;this.nextHint=-Infinity;this.timer=null;
@@ -16,9 +16,9 @@ export class HintGate {
     if(!text?.trim() || now-at>this.maxAgeMs)return;
     this.entries=this.entries.filter(e=>now-e.at<=60000);
     this.entries.push({text:text.slice(0,1600),at,sequence:++this.sequence});this.entries=this.entries.slice(-16);
-    const focus=this.entries.filter(e=>now-e.at<=this.windowMs).slice(-6);
+    const focus=this.entries.filter(e=>now-e.at<=this.windowMs).slice(-3);
     const older=this.entries.filter(e=>!focus.includes(e));
-    this.pending={id,text:focus.map(e=>e.text).join('\n').slice(-1600),context:older.map(e=>e.text).join('\n').slice(-4000),at,epoch:this.epoch,focusText:text.trim(),windowCount:focus.length,sequence:this.sequence,
+    this.pending={id,text:focus.map(e=>e.text).join('\n').slice(-800),context:older.map(e=>e.text).join('\n').slice(-800),at,epoch:this.epoch,focusText:text.trim(),windowCount:focus.length,sequence:this.sequence,
       due:Math.min(now+this.settleMs,this.pending?.due ?? now+this.settleMs)};
     this.pump();
   }
@@ -34,6 +34,7 @@ export class HintGate {
     this.pump();
   }
   duplicateCue(text){return this.recent.some(e=>this.now()-e.at<180000 && e.cue && similarHint(e.cue,text));}
+  shownFocus(){return this.recent.filter(e=>this.now()-e.at<180000).slice(-4).map(e=>e.focusText || e.text);}
   displayedContext(){return this.recent.filter(e=>this.now()-e.at<180000).slice(-4).map(e=>e.cue).filter(Boolean).join('\n');}
   relevant(job,topic='') {
     if(!this.fresh(job))return false;
@@ -62,7 +63,7 @@ export class HintGate {
       this.recent=this.recent.filter(e=>now-e.at<180000);
       for(const [key,candidate] of this.generating)if(!this.fresh(candidate))this.generating.delete(key);
       const focus=typeof decision.focus==='string' && job.text.includes(decision.focus.trim())?decision.focus.trim():'';
-      const focusedJob=focus?{...job,text:focus,focusText:focus,context:[job.context,job.text].filter(Boolean).join('\n').slice(-1600)}:job;
+      const focusedJob=focus?{...job,text:focus,focusText:focus,context:[job.context,job.text].filter(Boolean).join('\n').slice(-1200)}:job;
       if(decision.hint && [...this.recent,...this.generating.values()].some(e=>similarHint(e.focusText || e.text,focusedJob.focusText || focusedJob.text))) {
         this.onStatus('같은 내용 · 힌트 생략');return;
       }
@@ -72,7 +73,7 @@ export class HintGate {
         const accepted=this.onHint(candidate);
         if(accepted===false){this.generating.delete(job.sequence);this.onStatus('힌트 생성 대기 · 다음 대화에서 재판별');return;}
         this.nextGeneration=this.now()+this.generationIntervalMs;
-        this.onStatus('도움이 될 내용 · 힌트 생성');
+        this.onStatus(`힌트 후보 · ${focusedJob.text.slice(0,80)}`);
       } else {
         if(decision.reason==='embedding_busy' && !this.pending && !job.retry){this.pending={...job,retry:true,due:this.now()+2000};}
         const reasons={embedding_disabled:'임베딩 비활성 · 전사만 계속',embedding_unavailable:'임베딩 준비 필요 · 전사만 계속',jev_required:'EmbeddingGemma 2 + JEV 필요',embedding_busy:'임베딩 사용 중 · 다음 발화에서 재판별'};
