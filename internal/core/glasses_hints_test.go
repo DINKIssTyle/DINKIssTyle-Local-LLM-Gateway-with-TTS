@@ -452,3 +452,25 @@ func TestGlassesHintShortTopicLocalJev(t *testing.T) {
 		}
 	}
 }
+
+func TestGlassesHintContextAndFillers(t *testing.T) {
+	for _, text := range []string{"아 진짜?", "수고하셨습니다!", "잠시만요.", "hmm", "thanks"} {
+		if !hintFiller(text) {
+			t.Fatalf("expected filler: %q", text)
+		}
+	}
+	var seenInput string
+	_, err := decideGlassesHint(glassesHintRequest{
+		Text:    "그거 무게가 얼마나 나가지?",
+		Context: "맥북 에어 M4 얘기 중이었어",
+	}, func(text string, criteria map[string]string, instructions string) (jevReply, error) {
+		seenInput = text
+		return jevReply{Selected: "check", Probabilities: map[string]float64{"check": 0.7, "none": 0.3}}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(seenInput, "맥북 에어 M4") || !strings.Contains(seenInput, "그거 무게가") {
+		t.Fatalf("expected prior context to be included for referential utterance, got %q", seenInput)
+	}
+}

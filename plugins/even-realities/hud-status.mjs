@@ -30,20 +30,41 @@ export function hudNoticeText(message) {
   return chars.slice(0,lo).join('').trimEnd()+'…';
 }
 
-export function modeHeaderText({mode='ai',hint=true,source='en',target='ko',running=false,listening=running,phase='',translating=false,error='',detail='',trigger=''}={}){
+export function modeHeaderText({mode='ai',hint=true,source='en',target='ko',running=false,listening=running,phase='',phaseDetail='',translating=false,error='',detail='',trigger=''}={}){
   detail=error || detail || (listening?'듣는중':'-');
   if(!error && translating)detail='번역 처리';
   else if(!error && phase){
-    const match=String(phase).match(/(\d{1,3})%/u);
+    const cleanPhase=String(phase).replace(/[.…]+\s*$/u,'').trim();
+    const match=cleanPhase.match(/(\d{1,3})%/u);
     const pct=match?` ${Math.min(100,Number(match[1]))}%`:'';
-    if(/프롬프트/u.test(phase))detail='프롬프트 처리'+pct;
-    else if(/모델.*(?:로딩|로드)/u.test(phase))detail='모델 로딩'+pct;
-    else if(/번역/u.test(phase))detail='번역 처리';
-    else if(/답변.*(?:작성|생성)/u.test(phase))detail='답변 생성';
-    else if(/웹|검색/u.test(phase))detail='웹검색';
-    else if(/기억/u.test(phase))detail='기억 조회';
-    else if(/지식/u.test(phase))detail='정보 조회';
-    else detail='답변 준비';
+    const secMatch=cleanPhase.match(/(\d+)\s*초/u);
+    const sec=secMatch?` ${secMatch[1]}초`:'';
+    if(/프롬프트/u.test(cleanPhase))detail='프롬프트 처리'+pct;
+    else if(/모델.*(?:로딩|로드)/u.test(cleanPhase))detail='모델 로딩'+pct;
+    else if(/번역/u.test(cleanPhase))detail='번역 처리';
+    else if(/네이버\s*검색/u.test(cleanPhase))detail='네이버 검색중';
+    else if(/나무위키/u.test(cleanPhase))detail='나무위키 검색중';
+    else if(/웹\s*페이지\s*읽/u.test(cleanPhase))detail='웹페이지 읽는중';
+    else if(/소스\s*읽/u.test(cleanPhase))detail='소스 읽는중';
+    else if(/메모리\s*검색|기억/u.test(cleanPhase))detail='기억 조회중';
+    else if(/메모리\s*읽/u.test(cleanPhase))detail='메모리 읽는중';
+    else if(/메모리\s*삭제/u.test(cleanPhase))detail='메모리 삭제중';
+    else if(/명령어\s*실행/u.test(cleanPhase))detail='명령어 실행중';
+    else if(/시간/u.test(cleanPhase))detail='시간 확인';
+    else if(/위치/u.test(cleanPhase))detail='위치 확인';
+    else if(/스킬/u.test(cleanPhase))detail=phaseDetail?`스킬: ${phaseDetail}`:'스킬 적용';
+    else if(/도구\s*실행\s*실패/u.test(cleanPhase))detail='도구 실패';
+    else if(/도구\s*실행.*완료/u.test(cleanPhase))detail='도구 완료';
+    else if(/도구\s*실행\s*중/u.test(cleanPhase))detail=cleanPhase.replace(/^도구\s*실행\s*중\s*/u,'도구: ') || '도구 실행중';
+    else if(/웹|검색/u.test(cleanPhase))detail='웹검색중';
+    else if(/생각/u.test(cleanPhase))detail=/완료|동안/u.test(cleanPhase)?'생각 완료':'생각중'+sec;
+    else if(/답변.*(?:작성|생성)/u.test(cleanPhase))detail='답변 생성';
+    else if(/지식|정보/u.test(cleanPhase))detail='정보 조회중';
+    else detail=cleanPhase;
+    if(phaseDetail && /검색중|읽는중|조회중|실행중/u.test(detail)){
+      const compactDetail=String(phaseDetail).replace(/^(?:검색어|페이지 열기|소스 읽기|메모리 검색|명령어 실행)\s*:\s*/u,'').replace(/\s+/gu,' ').trim();
+      if(compactDetail)detail+=` (${compactDetail.slice(0,18)}${compactDetail.length>18?'…':''})`;
+    }
   }
   if(mode!=='translate' && trigger && detail==='듣는중')detail+=` · 호출어: ${trigger}`;
   const label=mode==='translate'?`[번역] ${String(source).toUpperCase()}→${String(target).toUpperCase()}`:'[AI]';
@@ -108,14 +129,31 @@ export function extractVisibleAndReasoning(rawText) {
     .replace(/<\|channel\|>analysis[\s\S]*?(?=<\|channel\|>final|$)/gi, '')
     .replace(/<\|channel(?:\||>)?\s*thought[\s\S]*?(?:<channel\|>|<\/channel\|>|<\|channel(?:\||>)?\s*(?:message|final|instruction|response)|$)/gi, '')
     .replace(/<\|channel(?:\||>)?\s*(?:analysis|final|message|instruction|response)\b[^>]*>?/gi, '')
-    .replace(/<\/?channel\|>/gi, '')
-    .replace(/<\|end\|>/gi, '');
+    .replace(/<\/?channel\|>/gi, '');
+
+  visible = stripToolTagsForGlasses(visible).replace(/<\|end\|>/gi, '');
 
   return {
     visibleText: visible.trim(),
     reasoningText,
     isInlineReasoning,
   };
+}
+
+export function stripToolTagsForGlasses(text) {
+  return String(text || '')
+    // Closed and streaming <tool_call>, <tool_code>, <function=...>, <parameter=...>
+    .replace(/<(?:tool_call|tool_code|tool_use|tool_result|function_call)\b[^>]*>[\s\S]*?(?:<\/(?:tool_call|tool_code|tool_use|tool_result|function_call)\s*>|$)/gi, '')
+    .replace(/<\/(?:tool_call|tool_code|tool_use|tool_result|function_call)\s*>/gi, '')
+    // Closed and streaming <|tool_call|>, <|tool_code|>, <|call:...|>, <|tool_response|>
+    .replace(/<\|(?:tool_call|tool_code|tool_response|call:[^|>]*)\|?>[\s\S]*?(?:<\|\/?(?:tool_call|tool_code|tool_response|call|end)\|>|$)/gi, '')
+    .replace(/<\|\/?(?:tool_call|tool_code|tool_response|call(?::[^|>]*)?)\|?>/gi, '')
+    // Closed and streaming snake_case tool tags like <search_web>...</search_web>, <get_current_time>{}</get_current_time>
+    .replace(/<([a-z]+_[a-z0-9_]*)\b[^>]*>[\s\S]*?(?:<\/\1\s*>|$)/gi, '')
+    .replace(/<\/[a-z]+_[a-z0-9_]*\s*>/gi, '')
+    // Unclosed partial tag at the very end of a stream chunk (e.g. "<tool_c" or "<search_")
+    .replace(/<(?:tool_|function|parameter|\|call:|[a-z]+_[a-z0-9_]*)[^>]*$/i, '')
+    .trim();
 }
 
 export function stripSourcesForGlasses(text) {

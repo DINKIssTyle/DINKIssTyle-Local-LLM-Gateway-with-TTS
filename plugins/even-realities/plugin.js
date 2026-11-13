@@ -749,7 +749,7 @@ import { LocalAgreement } from './local-agreement.mjs';
   function currentTranslationHeader(){
     return translationHeaderText({source:resolveTranslateSourceLang({sourceLang:config.translateSourceLang,targetLang:config.translateTargetLang}),target:config.translateTargetLang,
       running:isRecording || capturePreparing || processingAI || isThinking || translating,
-      phase:(isThinking || processingAI)?aiPhaseTitle:'',translating,
+      phase:(isThinking || processingAI)?aiPhaseTitle:'',phaseDetail:(isThinking || processingAI)?aiPhaseDetail:'',translating,
       error:captureFailure || micCloseUncertain?'오류':translationFailure});
   }
   function setHUDNotice(message) {
@@ -770,7 +770,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     const detail=micStopPromise || pendingMicCloses.size?'마이크 정지중':capturePreparing?'녹음 준비중':pendingTrigger?'질문 대기':draining || pendingClips.length?'전사 처리':'';
     return modeHeaderText({mode,hint:config.aiHintMode!==false,listening:isRecording,
       running:isRecording || capturePreparing || processingAI || isThinking || draining || pendingClips.length>0,
-      phase:(isThinking || processingAI)?aiPhaseTitle:'',error,detail,trigger:triggerLabels()[0] || ''});
+      phase:(isThinking || processingAI)?aiPhaseTitle:'',phaseDetail:(isThinking || processingAI)?aiPhaseDetail:'',error,detail,trigger:triggerLabels()[0] || ''});
   }
   function triggerLabels() {
     const seen = new Set();
@@ -1462,23 +1462,26 @@ import { LocalAgreement } from './local-agreement.mjs';
     let cueDisplayed=false;let cueTopic='';
     function showCue(cue,status){
       const fitted=cue?.fact?fitCue(cue.fact):'';
-      if(!fitted || !hintGate.relevant(options,cue.topic) || hintGate.duplicateCue(fitted))return false;
+      if(!fitted || !hintGate.relevant(options,cue.topic) || hintGate.duplicateCue(fitted) || hintGate.duplicateTopic(cue.topic))return false;
       answerText=fitted;cueDisplayed=true;cueTopic=cue.topic;
+      els.chatQuestion.textContent=cue.topic?`💡 자동 힌트 · ${cue.topic}`:'💡 자동 힌트';
       els.chatOutput.textContent=fitted;els.hintStatus.textContent=status;renderLiveHUD();return true;
     }
     const controller = new AbortController();
     aiAbortController = controller;
     const timeout = setTimeout(() => controller.abort(), options.hint?30000:45000);
-    isThinking = true;
-    stopAIAutoScroll();
-    aiPhaseTitle = activeMode === 'translate' ? '번역 및 답변 생성 중' : '생각 중';
-    aiPhaseDetail = '대화 설정 확인 중';
-    aiReasoningPreview = '';
-    aiReasoningStartMs = 0;
-    els.chatQuestion.textContent=prompt;
-    if(!options.hint && !chromeText)els.chatOutput.textContent=answerText;
-    startThinkingAnimation();
-    renderLiveHUD();
+    if (!options.hint) {
+      isThinking = true;
+      stopAIAutoScroll();
+      aiPhaseTitle = activeMode === 'translate' ? '번역 및 답변 생성 중' : '생각 중';
+      aiPhaseDetail = '대화 설정 확인 중';
+      aiReasoningPreview = '';
+      aiReasoningStartMs = 0;
+      els.chatQuestion.textContent=prompt;
+      if(!chromeText)els.chatOutput.textContent=answerText;
+      startThinkingAnimation();
+      renderLiveHUD();
+    }
     try {
       if(activeMode==='translate' && config.chromeTranslation!==false && !chromeText && !options.chromeAttempted){
         aiPhaseTitle='Chrome 로컬 번역 중';renderLiveHUD();
@@ -1496,20 +1499,23 @@ import { LocalAgreement } from './local-agreement.mjs';
       const settings = await settingsRes.json();
       if(!['standard','stateful'].includes(settings.llm_mode))throw new Error('서버의 LLM 연결 모드를 확인하세요.');
       const chatPayload=(prompts,phase)=>{
-        const body={model:config.model,stream:true,glasses_client:true};
+        const isAmbient=!options.chatSession;
+        const body={model:config.model,stream:true};
+        if(isAmbient)body.glasses_client=true;
         if(chromeText){body.glasses_hint=true;body.glasses_hint_phase='answer';body.hint_research={source:'internal'};}
-        if(options.hint || options.directQuestion){body.glasses_hint=true;body.glasses_hint_phase=options.directQuestion?'direct':phase;}
+        if(isAmbient && (options.hint || options.directQuestion)){body.glasses_hint=true;body.glasses_hint_phase=options.directQuestion?'direct':phase;}
         if(settings.llm_mode==='stateful') {
           body.input=prompts.userPrompt;body.system_prompt=prompts.systemPrompt;
-          if(options.hint || options.directQuestion || settings.context_strategy!=='stateful')body.store=false;
+          if((isAmbient && (options.hint || options.directQuestion)) || settings.context_strategy!=='stateful')body.store=false;
         } else body.messages=[{role:'system',content:prompts.systemPrompt},{role:'user',content:prompts.userPrompt}];
         return body;
       };
       if(options.hint) {
-        aiPhaseTitle='보충할 정보 찾는 중';aiPhaseDetail='대화에 없는 질문 구성';renderLiveHUD();
+        aiPhaseTitle='정보 조회 중';aiPhaseDetail='';setHUDNotice();
+        els.hintStatus.textContent='보충할 정보 찾는 중';
         const planRes=await gatewayFetch(`${config.serverUrl}/api/chat`,{
           method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),signal:controller.signal,
-          body:JSON.stringify(chatPayload(cuePrompts(prompt,conversationContext,options.category,hintGate.displayedContext(),{preferWeb:config.hintWebSearch!==false}),'plan'))
+          body:JSON.stringify(chatPayload(cuePrompts(prompt,conversationContext,options.category,hintGate.shownTopics(),{preferWeb:config.hintWebSearch!==false}),'plan'))
         });
         const cue=parseCueResponse(await readHintPlanResponse(planRes),[conversationContext,prompt].join('\n'));
         if(cue)els.hintStatus.textContent=`주제: ${cue.topic} · ${cue.question || '내부 지식 힌트'}`;
@@ -1519,7 +1525,8 @@ import { LocalAgreement } from './local-agreement.mjs';
           els.hintStatus.textContent='새로 보탤 도움 없음 · 계속 듣는 중';return;
         }
         aiPhaseTitle=enrichmentPlan.source==='web'?'웹에서 근거 찾는 중':enrichmentPlan.source==='memory'?'기억에서 근거 찾는 중':'내부 지식에서 정보 찾는 중';
-        aiPhaseDetail=enrichmentPlan.question;els.hintStatus.textContent=aiPhaseTitle;renderLiveHUD();
+        aiPhaseDetail=enrichmentPlan.topic || '';setHUDNotice();
+        els.hintStatus.textContent=enrichmentPlan.source==='web'?'웹에서 근거 찾는 중':enrichmentPlan.source==='memory'?'기억에서 근거 찾는 중':'내부 지식에서 정보 찾는 중';
       }
       if(options.hint && enrichmentPlan?.source==='web'){els.hintStatus.textContent='선별한 내용 웹검색 중';}
       const prompts=options.hint ? hintAnswerPrompts(enrichmentPlan) : chromeText?translationReplyPrompts(prompt,chromeText,chromeSource,targetLang || config.translateTargetLang):buildModePrompts(activeMode,{
@@ -1528,11 +1535,13 @@ import { LocalAgreement } from './local-agreement.mjs';
       });
       const payload=chatPayload(prompts,'answer');
       if(options.hint)payload.hint_research={query:enrichmentPlan.question,source:enrichmentPlan.source};
-      if(options.directQuestion && options.forceSearch)payload.hint_research={query:Array.from(prompt).slice(0,300).join(''),source:'web'};
-      aiPhaseTitle = activeMode === 'translate' ? '번역 및 답변 생성 중' : '생각 중';
-      aiPhaseDetail = '';
-      if(!options.hint && !chromeText)els.chatOutput.textContent = answerText;
-      renderLiveHUD();
+      if(options.directQuestion && options.forceSearch && !options.chatSession)payload.hint_research={query:Array.from(prompt).slice(0,300).join(''),source:'web'};
+      if (!options.hint) {
+        aiPhaseTitle = activeMode === 'translate' ? '번역 및 답변 생성 중' : '생각 중';
+        aiPhaseDetail = '';
+        if(!chromeText)els.chatOutput.textContent = answerText;
+        renderLiveHUD();
+      }
       const res = await gatewayFetch(`${config.serverUrl}/api/chat`, {
         method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),body:JSON.stringify(payload), signal: controller.signal
       });
@@ -1542,7 +1551,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         els.hintStatus.textContent='웹검색 사용 불가 · 내부 지식 확인';
         const fallback=await gatewayFetch(`${config.serverUrl}/api/chat`,{
           method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),signal:controller.signal,
-          body:JSON.stringify(chatPayload(cuePrompts(prompt,conversationContext,options.category,hintGate.displayedContext()),'plan'))
+          body:JSON.stringify(chatPayload(cuePrompts(prompt,conversationContext,options.category,hintGate.shownTopics()),'plan'))
         });
         const cue=parseCueResponse(await readHintPlanResponse(fallback),[conversationContext,prompt].join('\n'));
         if(!showCue(cue,'웹검색 사용 불가 · 내부 지식 힌트'))els.hintStatus.textContent='웹 근거 조회 실패 · 전사 계속';
@@ -1644,7 +1653,7 @@ import { LocalAgreement } from './local-agreement.mjs';
             return true;
           }
           if (parsed.phase === 'tool_call' && parsed.tool) {
-            const toolInfo = formatToolStatusText({ type: 'tool_call.start', tool: parsed.tool });
+            const toolInfo = formatToolStatusText({ ...parsed, type: 'tool_call.start' });
             aiPhaseTitle = toolInfo.title;
             aiPhaseDetail = toolInfo.detail;
             return true;
@@ -1685,7 +1694,7 @@ import { LocalAgreement } from './local-agreement.mjs';
             aiReasoningPreview = rawReasoning;
           }
 
-          applyStreamStatusEvent(type, parsed);
+          const statusChanged = applyStreamStatusEvent(type, parsed);
 
           const final=finalChatText(parsed);
           if(final!==null)rawAnswer=final;
@@ -1703,9 +1712,9 @@ import { LocalAgreement } from './local-agreement.mjs';
           }
 
           if(options.translationToken && options.translationToken!==translationToken || options.chatEpoch && options.chatEpoch!==chatEpoch)return;
-          if(options.hint)return; // Optional hints are displayed only when complete and still fresh.
+          if(options.hint){if(statusChanged || extracted.isInlineReasoning || extracted.visibleText)setHUDNotice();return;} // Optional hints only update header status until complete.
           setVisibleAnswer(rawAnswer);
-          if(config.connectionMode==='sse')renderLiveHUD();
+          if(config.connectionMode==='sse' || statusChanged)renderLiveHUD();
         }
         while (true) {
           const { done, value } = await reader.read();
@@ -1730,8 +1739,8 @@ import { LocalAgreement } from './local-agreement.mjs';
 
       if(options.translationToken && options.translationToken!==translationToken || options.chatEpoch && options.chatEpoch!==chatEpoch)return;
       const enrichedFact=options.hint?extractHintFact(rawAnswer,[conversationContext,prompt].join('\n'),enrichmentPlan):'';
-      if(options.hint && (!hintGate.relevant(options,enrichmentPlan.topic) || !fitCue(enrichedFact) || hintGate.duplicateCue(fitCue(enrichedFact)))){els.hintStatus.textContent='현재 대화에 필요한 새 정보 없음 · 생략';return;}
-      if(options.hint){answerText=fitCue(enrichedFact);cueDisplayed=true;cueTopic=enrichmentPlan.topic;}else setVisibleAnswer(rawAnswer,true);
+      if(options.hint && (!hintGate.relevant(options,enrichmentPlan.topic) || !fitCue(enrichedFact) || hintGate.duplicateCue(fitCue(enrichedFact)) || hintGate.duplicateTopic(enrichmentPlan.topic))){els.hintStatus.textContent='현재 대화에 필요한 새 정보 없음 · 생략';return;}
+      if(options.hint){answerText=fitCue(enrichedFact);cueDisplayed=true;cueTopic=enrichmentPlan.topic;els.chatQuestion.textContent=cueTopic?`💡 자동 힌트 · ${cueTopic}`:'💡 자동 힌트';}else setVisibleAnswer(rawAnswer,true);
       if(options.hint)els.hintStatus.textContent=enrichmentPlan.source==='web'?'웹검색 근거로 보충한 정보':enrichmentPlan.source==='memory'?'저장된 기억으로 보충한 정보':'내부 지식으로 보충한 정보';
       els.chatOutput.textContent = activeMode==='translate'?translationPhoneText(translationDisplay):answerText;
       if(chromeText)els.chromeTranslationStatus.textContent=repliesReplaced?'Chrome 로컬 번역 · 답변 예시 완료':hasCompleteTranslationReplies(translationDisplay)?'Chrome 번역 완료 · 이전 답변 예시 유지':'Chrome 번역 완료 · 답변 예시를 받지 못했습니다';

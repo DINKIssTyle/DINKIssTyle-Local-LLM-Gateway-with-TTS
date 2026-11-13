@@ -50,6 +50,8 @@ clearTimeout(lifecycle.timer);now+=4001;
 lifecycle.observe('거절하고 싶은 제안',{id:'try2'});await tick();assert.equal(successful.length,2,'failed candidate may retry after short backoff');
 lifecycle.complete(successful.at(-1),{displayed:true,text:'이번에는 일정 때문에 어렵다고 말씀하세요.',topic:'제안'});
 assert.equal(lifecycle.recent.length,1);assert.ok(lifecycle.duplicateCue('이번에는 일정 때문에 어렵다고 말씀하세요.'));
+assert.ok(lifecycle.duplicateTopic('제안'));
+assert.equal(lifecycle.shownTopics(),'제안');
 assert.match(lifecycle.displayedContext(),/일정 때문에/);
 const old={...successful.at(-1),hint:true};now+=13000;
 lifecycle.observe('다음은 축구 경기 소식입니다',{id:'different1'});lifecycle.observe('축구팀 선수 이적 소식입니다',{id:'different2'});
@@ -86,3 +88,11 @@ assert.match(shortJobs.at(-1).context,/이전 주제/);
 for(let i=0;i<4;i++){shortGate.observe(`지금 발화 ${i}`,{id:`short-${i}`});await tick();}
 assert.equal(shortJobs.at(-1).windowCount,3);assert.ok(shortJobs.at(-1).text.length<=800);assert.ok(shortJobs.at(-1).context.length<=800);
 shortGate.reset();
+
+let unblocked=[];
+const perFocusGate=new HintGate({now:()=>now,settleMs:0,intervalMs:0,generationIntervalMs:0,cooldownMs:15000,decide:async()=>({hint:true,category:'explain'}),onHint:j=>unblocked.push(j)});
+perFocusGate.observe('실패한 주제 하나',{id:'fail-1'});await tick();
+perFocusGate.complete(unblocked.at(-1));
+perFocusGate.observe('완전히 새로운 주제 둘',{id:'other-1'});await tick();
+assert.equal(unblocked.length,2,'different utterance must not be delayed by failed candidate backoff');
+perFocusGate.reset();

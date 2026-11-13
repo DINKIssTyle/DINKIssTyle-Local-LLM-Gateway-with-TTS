@@ -37,3 +37,6 @@ assert.match(web.systemPrompt,/구체적인 주제 하나/);
 assert.match(web.systemPrompt,/source=web/);
 assert.match(web.systemPrompt,/원문 전체나 맞장구를 검색어로 사용하지 마세요/);
 assert.doesNotMatch(cuePrompts('거절하고 싶어','','reply','',{preferWeb:true}).systemPrompt,/웹검색 우선 설정입니다/);
+assert.equal(parseCueResponse('다음은 결과입니다:\n'+JSON.stringify(cue),'전사').topic,'제안');
+assert.equal(extractHintFact('확인 결과:\n'+JSON.stringify({suggestion:'금요일까지 검토 후 회신드리겠습니다.',adds_information:true}),observed,plan),'금요일까지 검토 후 회신드리겠습니다.');
+assert.equal(extractHintFact(JSON.stringify({fact:'네, 질문하신 기자의 대피라미드는 쿠푸왕의 무덤입니다. 도움이 되셨길 바랍니다.',adds_information:true}),observed,plan),'기자의 대피라미드는 쿠푸왕의 무덤입니다.');

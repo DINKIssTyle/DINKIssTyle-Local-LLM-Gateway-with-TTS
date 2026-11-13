@@ -429,7 +429,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:'쿠푸왕의 피라미드에 대한 답변입니다.'})+'\n\n');
  nextTranscript='피라미드는 누가 만들었나요';utterance();await tick();await tick();await tick();
  let privateChat=JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
- assert.equal(privateChat.glasses_hint_phase,'direct');assert.ok(privateChat.input.endsWith('피라미드는 누가 만들었나요'));
+ assert.equal(privateChat.glasses_hint,undefined);assert.equal(privateChat.glasses_client,undefined);assert.ok(privateChat.input.endsWith('피라미드는 누가 만들었나요'));
  assert.doesNotMatch(privateChat.input,/질문의 내용에 바로 답변합니다/,'ambient answers are not private chat memory');
  const afterPrivate=requests.filter(r=>r.url.endsWith('/api/chat')).length;
  nextTranscript='일상 대화를 이어서 듣는 중입니다';utterance();await tick();await tick();await tick();
