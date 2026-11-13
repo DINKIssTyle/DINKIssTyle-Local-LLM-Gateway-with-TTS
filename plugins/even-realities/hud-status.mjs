@@ -66,9 +66,9 @@ export function modeHeaderText({mode='ai',hint=true,source='en',target='ko',runn
       if(compactDetail)detail+=` (${compactDetail.slice(0,18)}${compactDetail.length>18?'…':''})`;
     }
   }
-  if(mode!=='translate' && trigger && detail==='듣는중')detail+=` · 호출어: ${trigger}`;
-  const label=mode==='translate'?`[번역] ${String(source).toUpperCase()}→${String(target).toUpperCase()}`:'[AI]';
-  return `${label} | ${running?'작동중':'대기중'} | ${detail}`;
+  const runIcon=running?'●':'○';
+  const label=mode==='translate'?`[번역] ${String(source).toUpperCase()}→${String(target).toUpperCase()}`:(trigger?`[AI ▶${trigger}]`:'[AI]');
+  return `${label} ${runIcon} | ${detail}`;
 }
 
 export function translationHeaderText(options={}){

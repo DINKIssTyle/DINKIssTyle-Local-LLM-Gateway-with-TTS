@@ -11,5 +11,8 @@
         "copyright": "Copyright (C) 2026 DINKI'ssTyle. All rights reserved.",
         "comments": "Local LLM Gateway with TTS"
     },
-    "bundleid": "com.dinkisstyle.llmchat"
+    "bundleid": "com.dinkisstyle.llmchat",
+    "postBuildHooks": {
+        "darwin/*": "scripts/build-apple-runtime.sh"
+    }
 }

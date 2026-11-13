@@ -82,8 +82,9 @@
           <option value="vi">베트남어 (Vietnamese)</option>
           <option value="th">태국어 (Thai)</option>
         </select>
-        <label class="translate-speaker-option"><input type="checkbox" id="chrome-translation" checked><span>Chrome 로컬 번역 사용</span></label>
-        <div class="translate-chrome-setup"><button id="prepare-chrome-translation" class="btn btn-secondary" type="button">Chrome 번역 준비</button><p id="chrome-translation-status" role="status">중간 인식을 실시간 번역하고 확정 문장으로 교체합니다. 언어 방향별로 처음 한 번 준비하면 이후에는 자동 재사용합니다. 언어팩을 삭제한 경우에는 다시 준비해 주세요.</p></div>
+        <input type="checkbox" id="chrome-translation" checked hidden>
+        <label for="translation-engine">번역 엔진</label><select id="translation-engine"><option value="llm">LLM 번역</option><option value="chrome" selected>Chrome 로컬 번역</option><option id="translation-option-apple" value="apple" disabled>Apple 로컬 번역 · macOS 26+</option></select>
+        <div class="translate-chrome-setup"><button id="prepare-chrome-translation" class="btn btn-secondary" type="button">번역 엔진 준비</button><p id="chrome-translation-status" role="status">중간 인식을 실시간 번역하고 확정 문장으로 교체합니다. 언어 방향별로 처음 한 번 준비하면 이후에는 자동 재사용합니다. 언어팩을 삭제한 경우에는 다시 준비해 주세요.</p></div>
         <label class="translate-speaker-option"><input type="checkbox" id="translate-exclude-self" checked><span>번역 중 내 목소리 제외</span></label>
         <p class="translate-speaker-help">Whisper 전사 전에 안경이 제공한 화자 정보로 내 음성을 제외합니다. 화자 구분 불가 음성은 포함될 수 있습니다.</p>
       </div>
@@ -190,9 +191,9 @@
       </div>
       <div class="form-group">
         <label for="stt-engine">음성 인식 엔진</label>
-        <select id="stt-engine"><option value="whisper">Whisper</option><option value="chrome-online">Chrome 온라인 STT · Google로 음성 전송</option></select>
-        <label class="stt-fallback-option"><input type="checkbox" id="stt-fallback" checked><span>Chrome 오류 시 Whisper 사용</span></label>
-        <button id="prepare-chrome-stt" type="button" class="btn btn-secondary">Chrome STT 준비</button>
+        <select id="stt-engine"><option value="whisper">Whisper</option><option value="chrome-online">Chrome 온라인 STT · Google로 음성 전송</option><option id="stt-option-apple" value="apple" disabled>Apple 로컬 STT · macOS 26+</option></select>
+        <label class="stt-fallback-option"><input type="checkbox" id="stt-fallback" checked><span>선택 엔진 오류 시 Whisper 사용</span></label>
+        <button id="prepare-chrome-stt" type="button" class="btn btn-secondary">STT 엔진 준비</button>
         <p id="stt-engine-status" role="status">녹음 시작 시 자동으로 준비합니다. 준비 버튼은 수동 확인용이며 매번 누르지 않아도 됩니다. Chrome 온라인 모드는 음성을 Google로 전송합니다.</p>
       </div>
       <div class="form-group">

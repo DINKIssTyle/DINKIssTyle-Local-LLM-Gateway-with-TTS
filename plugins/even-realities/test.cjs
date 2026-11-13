@@ -8,7 +8,7 @@ function element(id) {
   if (!elements.has(id)) elements.set(id, {value:'', checked:true, textContent:'', innerHTML:'', style:{}, hidden:true, focus(){}, handlers:{}, options:[], classList:{add(){},remove(){},toggle(){}}, addEventListener(type, fn){this.handlers[type]=fn;}, appendChild(opt){ this.options.push(opt); if(!this.value) this.value=opt.value; }});
   return elements.get(id);
 }
-let llmMode='standard', chatReply=null, cueReply=null, chromeText=null;
+let llmMode='standard', chatReply=null, cueReply=null, chromeText=null, appleText='Apple 번역 결과';
 let nextTranscript = '이븐 테스트';let nextPreviewText=null;
 let nextRejected = false;
 let holdPreview = false;
@@ -28,6 +28,9 @@ const chunks=['data: {"choices":[{"delta":{"con','tent":"안녕"}}]}\n\ndata: {"
 const context={DKST_DEFAULT_SERVER_URL:'https://192.168.1.4:2806',waitForEvenAppBridge:async()=>bridge,AudioInputSource:{Glasses:0},OsEventTypeList:{CLICK_EVENT:0,DOUBLE_CLICK_EVENT:3},console,TextDecoder,Uint8Array,URL,AbortController,setTimeout:(fn,ms)=>{const timer=setTimeout(fn,ms);if(ms>=1000)timer.unref();return timer;},clearTimeout,alert(){},localStorage:{getItem(){return null;},setItem(){}},window:{location:{origin:'https://192.168.1.4:2806',hostname:'192.168.1.4'},btoa:s=>Buffer.from(s,'binary').toString('base64')},document:{body:{style:{overflow:''}},activeElement:{focus(){}},addEventListener(type,fn){documentHandlers[type]=fn;},readyState:'complete',getElementById:element,createElement:()=>({})},fetch:async(url,opts={})=>{
  requests.push({url,opts});
  if(url.endsWith('/api/glasses/hint-decision')){if(hintDecision.error)return{ok:false,status:503};return{ok:true,json:async()=>hintDecision};}
+ if(url.endsWith('/api/apple/status'))return{ok:true,json:async()=>({available:true,speechAvailable:true})};
+ if(url.endsWith('/api/stt/apple/prepare') || url.endsWith('/api/stt/apple/stop') || url.endsWith('/api/translate/apple/prepare'))return{ok:true,json:async()=>({status:'ready'})};
+ if(url.endsWith('/api/translate/apple'))return{ok:true,json:async()=>({status:'ready',text:appleText})};
  if(url.endsWith('/api/translate/chrome'))return chromeText?{ok:true,json:async()=>({status:'ready',text:chromeText,source:'en',target:'ko'})}:{ok:false,json:async()=>({status:'needs_prepare',error:'준비 필요'})};
  if(url.endsWith('/api/config'))return{ok:true,json:async()=>({llm_mode:llmMode,context_strategy:'retrieval'})};
  if(url.endsWith('/api/auth/check'))return{ok:true,json:async()=>({authenticated:opts.headers?.Authorization==='Bearer test-session'})};
@@ -250,7 +253,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  for(let i=0;i<9;i++)handler({audioEvent:{audioPcm:Buffer.alloc(3200)}});
  await tick();await tick();
  assert.match(element('transcript-log').textContent,/확정된 실제 문장/);
- assert.match(element('hud-notice').textContent,/\[AI\].*작동중.*듣는중.*호출어/);
+ assert.match(element('hud-notice').textContent,/\[AI ▶[^\]]+\] ● \| 듣는중/);
  // An in-flight draft completed after endpointing must not repaint the final.
  holdPreview=true;nextTranscript='늦게 도착한 가짜 초안';
  for(let i=0;i<15;i++)handler({audioEvent:{audioPcm:speech}});
@@ -280,7 +283,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  holdWarmup=true;handler({sysEvent:{eventType:0}});await tick();await tick();
  assert.ok(releaseWarmup);
  handler({sysEvent:{eventType:0}});await tick();await tick();
- assert.match(element('hud-notice').textContent,/대기중/);
+ assert.match(element('hud-notice').textContent,/○ \|/);
  releaseWarmup();await tick();await tick();
  assert.equal(audioCalls.filter(call=>call[0]).length,opensBeforeWarmup);
  const normalAudioControl=bridge.audioControl;
@@ -292,7 +295,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  assert.equal(audioCalls.at(-1)[0],false,'stop must reach native MIC before open reply arrives');
  releaseOpen(true);await tick();await tick();await tick();
  assert.equal(audioCalls.at(-1)[0],false,'delayed MIC open must be closed again');
- assert.match(element('hud-notice').textContent,/대기중/);
+ assert.match(element('hud-notice').textContent,/○ \|/);
  // Stop must bypass any pending preview inference.
  bridge.audioControl=normalAudioControl;element('voice-mode').value='continuous';
  handler({sysEvent:{eventType:0}});await tick();await tick();
@@ -302,7 +305,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  const opensBeforeStop=audioCalls.filter(call=>call[0]).length;
  handler({sysEvent:{eventType:0}});await tick();await tick();
  assert.equal(audioCalls.at(-1)[0],false,'MIC stop must not wait for inference');
- assert.match(element('hud-notice').textContent,/대기중/);
+ assert.match(element('hud-notice').textContent,/○ \|/);
  releasePreview();await tick();await tick();
  assert.equal(audioCalls.filter(call=>call[0]).length,opensBeforeStop);
  // A failed close is visible; the next tap retries close instead of reopening.
@@ -315,7 +318,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  assert.match(element('hud-notice').textContent,/종료 확인 실패/);
  rejectClose=false;handler({sysEvent:{eventType:0}});await tick();await tick();
  assert.equal(audioCalls.filter(call=>call[0]).length,opensBeforeRetry);
- assert.match(element('hud-notice').textContent,/대기중/);
+ assert.match(element('hud-notice').textContent,/○ \|/);
  bridge.audioControl=normalAudioControl;
  // Text entry uses the same AI queue and chooses the effective account protocol.
  llmMode='stateful';
@@ -540,7 +543,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
    return{done:true};
  }})}};
  nextTranscript='進行状況を確認します';utterance('other');await tick();await tick();await tick();
- assert.equal(element('hud-notice').textContent,'[번역] JA→KO | 작동중 | 프롬프트 처리 32%');
+ assert.equal(element('hud-notice').textContent,'[번역] JA→KO ● | 프롬프트 처리 32%');
  assert.match(element('hud-screen').innerHTML,/진행률 표시 중에도 유지되는 번역/);assert.doesNotMatch(element('hud-screen').innerHTML,/프롬프트 처리/);
  releaseProgress();await tick();await tick();await tick();
  // Live Chrome hypotheses reach the translation box before the final endpoint.
@@ -710,18 +713,50 @@ const tick=()=>new Promise(r=>setImmediate(r));
    }})}};
    element('chat-input').value='다음 질문';element('text-chat-form').handlers.submit({preventDefault(){}});
    await tick();await tick();await tick();
-   assert.equal(element('hud-notice').textContent,`[${label}] | 작동중 | 프롬프트 처리 32%`);
+   assert.equal(element('hud-notice').textContent,`${label==='AI'?'[AI ▶이븐]':'[번역] JA→KO'} ● | 프롬프트 처리 32%`);
    assert.match(element('hud-screen').innerHTML,/이전 답변 유지 확인/);
    assert.doesNotMatch(element('hud-screen').innerHTML,/프롬프트 처리|생각 중/);
    finish();await tick();await tick();await tick();
    assert.match(element('hud-screen').innerHTML,/새 답변/);
-   assert.equal(element('hud-notice').textContent,`[${label}] | 대기중 | -`);
+   assert.equal(element('hud-notice').textContent,`${label==='AI'?'[AI ▶이븐]':'[번역] JA→KO'} ○ | -`);
  }
+ // Apple uses native prepare/STT and local translation without Whisper warmup.
+ await queue.stopVoiceRecording(false);
+ handler({menuItemClickEvent:{itemID:2}});await tick();
+ element('translation-engine').value='apple';element('translation-engine').handlers.change();
+ element('stt-engine').value='apple';element('stt-engine').handlers.change();
+ const beforeAppleWarmup=requests.filter(r=>r.url.endsWith('/api/stt/warmup')).length;
+ handler({sysEvent:{eventType:0}});await tick();await tick();await tick();
+ assert.equal(queue.state().engine,'apple');assert.equal(queue.state().recording,true);
+ assert.equal(requests.filter(r=>r.url.endsWith('/api/stt/warmup')).length,beforeAppleWarmup);
+ assert.ok(requests.some(r=>r.url.endsWith('/api/stt/apple/prepare')));
+ nextPreviewText='native interim';appleText='Apple의 실시간 임시 번역';
+ queue.liveTranslations.intervalMs=0;
+ for(let i=0;i<6;i++)handler({audioEvent:{audioPcm:speech,speakerRole:'other'}});
+ await tick();await tick();await tick();
+ assert.ok(requests.some(r=>r.url.endsWith('/api/stt/preview') && JSON.parse(r.opts.body).engine==='apple'));
+ assert.match(element('hud-screen').innerHTML,/Apple의 실시간 임시 번역/);
+ appleText='Apple의 최종 번역';nextTranscript='native final';
+ chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({positive:'네',negative:'아니요'})})+'\n\n');
+ for(let i=0;i<16;i++)handler({audioEvent:{audioPcm:Buffer.alloc(3200),speakerRole:'other'}});
+ await tick();await tick();await tick();
+ assert.equal(JSON.parse(requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).at(-1).opts.body).engine,'apple');
+ assert.match(element('hud-screen').innerHTML,/Apple의 최종 번역/);assert.doesNotMatch(element('hud-screen').innerHTML,/Apple의 실시간 임시 번역/);
+ assert.match(element('chrome-translation-status').textContent,/Apple/);
+ nextPreviewText=null;await queue.stopVoiceRecording(false);
+ await element('prepare-chrome-translation').handlers.click();
+ assert.ok(requests.some(r=>r.url.endsWith('/api/translate/apple/prepare')));
+ element('translation-engine').value='chrome';element('translation-engine').handlers.change();
+ element('stt-engine').value='whisper';element('stt-engine').handlers.change();
  elements.clear();
  vm.runInNewContext(src,context);await tick();await tick();
  assert.equal(element('server-url').value,'https://192.168.1.4:2806');
  assert.match(element('login-status-label').textContent,/인증됨/,'new WebView with empty browser storage must restore native login');
  assert.equal(element('auth-password').value,'');
+ const legacy=JSON.parse(nativeSaved);delete legacy.translationEngine;legacy.chromeTranslation=false;nativeSaved=JSON.stringify(legacy);
+ elements.clear();vm.runInNewContext(src,context);await tick();await tick();
+ assert.equal(element('translation-engine').value,'llm','legacy native preferences must preserve LLM translation after asynchronous restore');
+ assert.equal(element('chrome-translation').checked,false);
  nativeSaved=JSON.stringify({...JSON.parse(nativeSaved),authToken:'expired-session'});
  elements.clear();vm.runInNewContext(src,context);await tick();await tick();
  assert.match(element('login-status-label').textContent,/세션 만료/);

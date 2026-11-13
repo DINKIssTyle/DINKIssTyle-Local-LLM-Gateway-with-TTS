@@ -44,3 +44,5 @@ all_funcs.txt
 !internal/core/chrome_profile_lock_test.go
 
 !internal/core/chrome_profile_unix_test.go
+
+!internal/core/apple_runtime_test.go

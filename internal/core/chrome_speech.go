@@ -44,7 +44,22 @@ func (s *chromeTranslator) speech(ctx context.Context, req chromeSpeechRequest, 
 	if len(req.Language) != 2 {
 		return result, errors.New("Chrome STT 인식 언어를 선택하세요")
 	}
-	if !s.mu.TryLock() {
+	locked := s.mu.TryLock()
+	if !locked {
+		deadline := time.Now().Add(200 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			select {
+			case <-ctx.Done():
+				return result, ctx.Err()
+			case <-time.After(25 * time.Millisecond):
+			}
+			if s.mu.TryLock() {
+				locked = true
+				break
+			}
+		}
+	}
+	if !locked {
 		return result, errSTTBusy
 	}
 	defer s.mu.Unlock()
@@ -127,7 +142,7 @@ func runChromeSpeech(ctx context.Context, metadata STTTranscribeRequest, audio [
 	}
 	if !preview {
 		req.Audio = ""
-		deadline := time.Now().Add(time.Duration(float64(len(audio))/32000*float64(time.Second)) + 5*time.Second)
+		deadline := time.Now().Add(time.Duration(float64(len(audio))/32000*float64(time.Second)) + 7*time.Second)
 		for !result.Finished && time.Now().Before(deadline) {
 			select {
 			case <-ctx.Done():
@@ -160,69 +175,151 @@ func runChromeSpeech(ctx context.Context, metadata STTTranscribeRequest, audio [
 const chromeSpeechScript = `
 (() => {
  const SR=self.SpeechRecognition || self.webkitSpeechRecognition;
- const sessions=new Map();let active=null;
+ const segments=new Map();let activeStream=null;
  const supportsTrack=()=>Number((navigator.userAgent.match(/Chrome\/(\d+)/)||[])[1] || 0)>=135 && !!self.MediaStreamTrackGenerator && !!self.AudioData;
  const locale=lang=>({ko:'ko-KR',en:'en-US',ja:'ja-JP',zh:'zh-CN',es:'es-ES',fr:'fr-FR',de:'de-DE',vi:'vi-VN',th:'th-TH'}[lang] || lang);
- const snapshot=s=>({status:s.error?'error':'ready',error:s.error || '',text:(s.final+' '+s.draft).trim(),stableText:s.final,draftText:s.draft,finished:s.finished,debug:{started:!!s.started,bytes:s.bytes,events:s.events,track:s.track.getSettings(),id:s.id,visible:document.visibilityState}});
+ const snapshot=seg=>{
+  const st=seg.stream;
+  const finalText=(seg.finalText || '').trim();
+  const draftText=seg.finished?'':(seg.draftText || '');
+  return {status:st.error?'error':'ready',error:st.error || '',text:(finalText+' '+draftText).trim(),stableText:finalText,draftText,finished:seg.finished,debug:{started:!!st.started,bytes:seg.bytes,events:st.events.slice(-12),track:st.track.getSettings(),id:seg.id,streamKey:st.key,visible:document.visibilityState}};
+ };
  async function prepare(p){
   if(!SR)return {status:'unsupported',error:'Chrome SpeechRecognition API가 없습니다'};
   if(!supportsTrack())return {status:'unsupported',error:'Chrome 오디오 트랙 입력을 지원하지 않습니다'};
   return {status:'ready'};
  }
-
- async function make(p){
-  if(active && active.id!==p.id && !active.finished){
-   if(active.owner!==p.owner && Date.now()-active.touched<15000)throw Error('다른 Chrome STT 세션이 사용 중입니다');
-   active.finished=true;active.recognition.abort();active.track.stop();active.writer.close().catch(()=>{});
+ function closeStream(st){
+  if(!st || st.finished)return;
+  st.finished=true;
+  try{st.recognition.abort();}catch{}
+  try{st.track.stop();}catch{}
+  st.writer.close().catch(()=>{});
+ }
+ async function writePcmChunks(st,bytes){
+  const chunkSize=6400; // 200ms @ 16kHz s16 mono
+  for(let offset=0;offset<bytes.length;offset+=chunkSize){
+   const slice=bytes.subarray(offset,Math.min(offset+chunkSize,bytes.length));
+   const frames=Math.floor(slice.length/2);
+   if(frames<=0)continue;
+   const frame=new AudioData({format:'s16',sampleRate:16000,numberOfFrames:frames,numberOfChannels:1,timestamp:st.timestampUs,data:slice});
+   st.timestampUs+=Math.round(frames*1e6/16000);
+   try{await st.writer.write(frame);}finally{frame.close();}
+  }
+ }
+ async function ensureStream(p){
+  const lang=locale(p.language);
+  const key=p.owner+':'+lang;
+  if(activeStream && !activeStream.finished){
+   if(activeStream.key===key){
+    activeStream.touched=Date.now();
+    return activeStream;
+   }
+   if(activeStream.owner!==p.owner && Date.now()-activeStream.touched<15000)throw Error('다른 Chrome STT 세션이 사용 중입니다');
+   closeStream(activeStream);
   }
   if(!supportsTrack())throw Error('이 Chrome은 PCM 오디오 트랙 입력을 지원하지 않습니다');
   const track=new MediaStreamTrackGenerator({kind:'audio'});const writer=track.writable.getWriter();
-  const recognition=new SR();recognition.lang=locale(p.language);recognition.continuous=true;recognition.interimResults=true;
+  const recognition=new SR();recognition.lang=lang;recognition.continuous=true;recognition.interimResults=true;
   recognition.processLocally=false;
-  const s={id:p.id,owner:p.owner,recognition,track,writer,bytes:0,final:'',draft:'',finished:false,ending:false,error:'',events:[],touched:Date.now()};
-  for(const event of ['start','audiostart','soundstart','speechstart','speechend','audioend','end','result','nomatch','error'])recognition.addEventListener(event,e=>s.events.push(event+(e.error?':'+e.error:'')));
+  const st={key,owner:p.owner,lang,recognition,track,writer,timestampUs:0,finalCount:0,currentSegId:p.id,started:false,finished:false,error:'',events:[],touched:Date.now(),queue:Promise.resolve()};
+  for(const event of ['start','audiostart','soundstart','speechstart','speechend','audioend','end','result','nomatch','error'])recognition.addEventListener(event,e=>st.events.push(event+(e.error?':'+e.error:'')));
   recognition.onresult=e=>{
+   let firstDraft=e.results.length;
+   for(let i=0;i<e.results.length;i++){if(!e.results[i].isFinal){firstDraft=i;break;}}
+   st.finalCount=firstDraft;
+   const seg=segments.get(st.currentSegId);
+   if(!seg || seg.finished)return;
    let committed='',draft='';
-   for(let i=0;i<e.results.length;i++){if(e.results[i].isFinal)committed+=e.results[i][0].transcript+' ';else draft+=e.results[i][0].transcript;}
-   s.final=committed.trim();s.draft=draft;
-  };
-  recognition.onerror=e=>{if(e.error!=='no-speech' && !(e.error==='aborted' && s.finished))s.error='Chrome STT: '+e.error;};
-  recognition.onend=()=>{s.finished=true;s.track.stop();s.writer.close().catch(()=>{});};
-  track.addEventListener('ended',()=>s.events.push('track-ended'));track.addEventListener('mute',()=>s.events.push('track-mute'));
-  let readyResolve,readyReject;const ready=new Promise((resolve,reject)=>{readyResolve=resolve;readyReject=reject;});s.ready=ready;s.queue=Promise.resolve();
-  const timer=setTimeout(()=>{if(!s.started && !s.finished){s.error='Chrome STT 시작 응답 없음';s.finished=true;recognition.abort();track.stop();writer.close().catch(()=>{});readyReject(Error(s.error));}},8000);
-  recognition.onstart=()=>{s.started=true;clearTimeout(timer);readyResolve();if(s.ending)setTimeout(()=>{if(!s.finished)recognition.stop();},300);};
-  const original=recognition.onerror;recognition.onerror=e=>{original(e);clearTimeout(timer);if(!s.started){s.finished=true;track.stop();writer.close().catch(()=>{});readyReject(Error(s.error || e.error));}};
-  try{recognition.start(track);}catch(e){clearTimeout(timer);track.stop();writer.close().catch(()=>{});throw e;}
-  sessions.set(p.id,s);active=s;
-  const silence=new AudioData({format:'s16',sampleRate:16000,numberOfFrames:1600,numberOfChannels:1,timestamp:0,data:new Uint8Array(3200)});
-  try{await writer.write(silence);}finally{silence.close();}
-  await ready;
-  while(sessions.size>4){const key=sessions.keys().next().value;sessions.delete(key);}
-  return s;
- }
- setInterval(()=>{if(active && !active.finished && Date.now()-active.touched>15000){active.finished=true;active.recognition.abort();active.track.stop();active.writer.close().catch(()=>{});}},5000);
- window.chromeSpeech={prepare,
-  stop(p){const s=sessions.get(p.id);if(s && s.owner===p.owner && !s.finished){s.finished=true;s.recognition.abort();s.track.stop();s.writer.close().catch(()=>{});}return {status:'ready'};},
-  async push(p){try{
-   let s=sessions.get(p.id);
-   if(!s)s=await make(p);
-   const work=async()=>{
-   if(s.finished)return snapshot(s);
-   if(!s.started)await s.ready;
-   s.touched=Date.now();
-   const raw=atob(p.audio || '');
-   if(raw.length>s.bytes){
-    const bytes=new Uint8Array(raw.length-s.bytes);for(let i=0;i<bytes.length;i++)bytes[i]=raw.charCodeAt(s.bytes+i);
-    const frame=new AudioData({format:'s16',sampleRate:16000,numberOfFrames:bytes.length/2,numberOfChannels:1,timestamp:100000+s.bytes/32000*1e6,data:bytes});
-    try{await s.writer.write(frame);}finally{frame.close();}s.bytes=raw.length;
+   for(let i=seg.startResultIndex;i<e.results.length;i++){
+    if(e.results[i].isFinal)committed+=e.results[i][0].transcript+' ';
+    else draft+=e.results[i][0].transcript;
    }
-   if(p.final && !s.ending){s.ending=true;if(s.started)setTimeout(()=>{if(!s.finished)s.recognition.stop();},300);}
-   return snapshot(s);
+   seg.finalText=committed.trim();
+   seg.draftText=draft;
+   if(seg.ending && !draft && seg.finalText){
+    seg.finished=true;
+   }
+  };
+  const baseOnError=e=>{if(e.error!=='no-speech' && !(e.error==='aborted' && st.finished))st.error='Chrome STT: '+e.error;};
+  recognition.onend=()=>{
+   st.finished=true;
+   const seg=segments.get(st.currentSegId);
+   if(seg && !seg.finished){
+    if(!seg.finalText && seg.draftText)seg.finalText=seg.draftText;
+    seg.draftText='';
+    seg.finished=true;
+   }
+   try{st.track.stop();}catch{}
+   st.writer.close().catch(()=>{});
+  };
+  track.addEventListener('ended',()=>st.events.push('track-ended'));track.addEventListener('mute',()=>st.events.push('track-mute'));
+  let readyResolve,readyReject;const ready=new Promise((resolve,reject)=>{readyResolve=resolve;readyReject=reject;});st.ready=ready;
+  const timer=setTimeout(()=>{if(!st.started && !st.finished){st.error='Chrome STT 시작 응답 없음';closeStream(st);readyReject(Error(st.error));}},8000);
+  recognition.onstart=()=>{st.started=true;clearTimeout(timer);readyResolve();};
+  recognition.onerror=e=>{baseOnError(e);clearTimeout(timer);if(!st.started){closeStream(st);readyReject(Error(st.error || e.error));}};
+  try{recognition.start(track);}catch(e){clearTimeout(timer);try{track.stop();}catch{}writer.close().catch(()=>{});throw e;}
+  activeStream=st;
+  await writePcmChunks(st,new Uint8Array(3200)); // 100ms initial silence
+  await ready;
+  return st;
+ }
+ function ensureSegment(p,st){
+  let seg=segments.get(p.id);
+  if(seg && seg.stream===st)return seg;
+  const prev=segments.get(st.currentSegId);
+  if(prev && !prev.finished){
+   if(!prev.finalText && prev.draftText)prev.finalText=prev.draftText;
+   prev.draftText='';
+   prev.finished=true;
+  }
+  st.currentSegId=p.id;
+  seg={id:p.id,owner:p.owner,stream:st,bytes:0,startResultIndex:st.finalCount,finalText:'',draftText:'',finished:false,ending:false};
+  segments.set(p.id,seg);
+  while(segments.size>8){const key=segments.keys().next().value;if(key!==p.id)segments.delete(key);else break;}
+  return seg;
+ }
+ setInterval(()=>{if(activeStream && !activeStream.finished && Date.now()-activeStream.touched>45000){closeStream(activeStream);}},5000);
+ window.chromeSpeech={prepare,
+  stop(p){
+   const seg=segments.get(p.id);
+   if(seg && !seg.finished){
+    if(!seg.finalText && seg.draftText)seg.finalText=seg.draftText;
+    seg.draftText='';seg.finished=true;
+   }
+   if(activeStream && activeStream.owner===p.owner && !activeStream.finished)closeStream(activeStream);
+   return {status:'ready'};
+  },
+  async push(p){try{
+   const st=await ensureStream(p);
+   const seg=ensureSegment(p,st);
+   const work=async()=>{
+    if(seg.finished)return snapshot(seg);
+    if(!st.started)await st.ready;
+    st.touched=Date.now();
+    const raw=atob(p.audio || '');
+    if(raw.length>seg.bytes){
+     const bytes=new Uint8Array(raw.length-seg.bytes);for(let i=0;i<bytes.length;i++)bytes[i]=raw.charCodeAt(seg.bytes+i);
+     await writePcmChunks(st,bytes);
+     seg.bytes=raw.length;
+    }
+    if(p.final && !seg.ending){
+     seg.ending=true;
+     await writePcmChunks(st,new Uint8Array(12800)); // 400ms trailing silence to flush endpointing
+     setTimeout(()=>{
+      if(!seg.finished){
+       if(!seg.finalText && seg.draftText)seg.finalText=seg.draftText;
+       else if(seg.finalText && seg.draftText)seg.finalText=(seg.finalText+' '+seg.draftText).trim();
+       seg.draftText='';
+       seg.finished=true;
+      }
+     },900);
+    }
+    return snapshot(seg);
    };
-   const result=s.queue.then(work,work);s.queue=result.catch(()=>{});return await result;
+   const result=st.queue.then(work,work);st.queue=result.catch(()=>{});return await result;
   }catch(e){return {status:'error',error:e.name+': '+e.message};}},
-  read(p){const s=sessions.get(p.id);return s?snapshot(s):{status:'error',error:'Chrome STT 세션이 없습니다'};}
+  read(p){const seg=segments.get(p.id);return seg?snapshot(seg):{status:'error',error:'Chrome STT 세션이 없습니다'};}
  };
 })();
 `

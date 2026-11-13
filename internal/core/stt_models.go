@@ -309,18 +309,22 @@ func handleSTTAudio(app *App, preview bool) http.HandlerFunc {
 		if engine == "" {
 			engine = "whisper"
 		}
-		if engine != "whisper" && !chromeSTTEngine(engine) {
+		if engine != "whisper" && engine != "apple" && !chromeSTTEngine(engine) {
 			http.Error(w, "unknown STT engine", 400)
 			return
 		}
 		var inference sttWorkerReply
 		warning := ""
-		if chromeSTTEngine(engine) {
+		if chromeSTTEngine(engine) || engine == "apple" {
 			metadata.Language = lang
 			metadata.Format = format
-			inference, err = runChromeSpeech(r.Context(), metadata, audioBytes, preview, r.Header.Get("X-User-ID"))
+			if engine == "apple" {
+				inference, err = runAppleSpeech(r.Context(), metadata, audioBytes, preview, r.Header.Get("X-User-ID"))
+			} else {
+				inference, err = runChromeSpeech(r.Context(), metadata, audioBytes, preview, r.Header.Get("X-User-ID"))
+			}
 			if err != nil && err != errSTTBusy && metadata.Fallback && !preview && getSTTModelStatus().Installed {
-				warning = "Chrome STT 오류로 Whisper 사용: " + err.Error()
+				warning = engine + " STT 오류로 Whisper 사용: " + err.Error()
 				engine = "whisper"
 				inference, err = runSTTInference(audioBytes, format, lang, metadata.SpeechFilter, metadata.Realtime)
 			}

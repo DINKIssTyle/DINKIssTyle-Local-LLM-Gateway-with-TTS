@@ -2,7 +2,7 @@ import {LiveTranslationQueue} from './live-translation.mjs';
 import {TranslationSentence} from './translation-sentence.mjs';
 import {TranslationHistory} from './translation-history.mjs';
 import {ChatMemory,routeAIUtterance} from './ai-conversation.mjs';
-import {chromeTranslate,translationReplyPrompts} from './chrome-translation.mjs';
+import {localTranslate,translationReplyPrompts} from './chrome-translation.mjs';
 import {filterSpeakerPCM} from './speaker-filter.mjs';
 import { mergeTranslationDisplay, hasCompleteTranslationReplies, parseTranslationDisplay, translationReplyText, translationPhoneText } from './translation-display.mjs';
 import { directQuestionIntent } from './direct-question.mjs';
@@ -39,6 +39,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     translateTargetLang: 'ko',
     translateExcludeSelf: true,
     chromeTranslation: true,
+    translationEngine: "",
     voiceMode: 'continuous',
     triggerWord: '이븐',
     speechFilter: 'strict',
@@ -158,6 +159,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     glassesMode: document.getElementById('glasses-mode'),
     translateExcludeSelf: document.getElementById('translate-exclude-self'),
     chromeTranslation: document.getElementById('chrome-translation'),
+    translationEngine:document.getElementById('translation-engine'),
     btnPrepareChrome: document.getElementById('prepare-chrome-translation'),
     chromeTranslationStatus: document.getElementById('chrome-translation-status'),
     translateSourceLang: document.getElementById('translate-source-lang'),
@@ -208,10 +210,15 @@ import { LocalAgreement } from './local-agreement.mjs';
     onStatus:text=>{els.hintStatus.textContent=text;}
   });
 
+  function localEngine(){return config.translationEngine || (config.chromeTranslation===false?'llm':'chrome');}
+  function localLabel(){return localEngine()==='apple'?'Apple':'Chrome';}
+  function translateLocal(request,signal,engine=localEngine()){
+    return localTranslate(gatewayFetch,config.serverUrl,getAuthHeaders({'Content-Type':'application/json'}),request,signal,8000,engine);
+  }
   const translationHistory=new TranslationHistory();
   const translationSentence=new TranslationSentence();
   const liveTranslations=new LiveTranslationQueue({
-    translate:(job,signal)=>config.chromeTranslation===false?Promise.resolve({ok:false,reason:'Chrome 번역 비활성'}):chromeTranslate(gatewayFetch,config.serverUrl,getAuthHeaders({'Content-Type':'application/json'}),{text:job.prompt,source:job.source,target:job.target},signal),
+    translate:(job,signal)=>config.chromeTranslation===false?Promise.resolve({ok:false,reason:'Chrome 번역 비활성'}):translateLocal({text:job.prompt,source:job.source,target:job.target},signal,job.engine),
     onToken:token=>{
       translationToken=token;
       if(activeAIJob?.translationToken)aiAbortController?.abort();
@@ -223,7 +230,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       translationFailure='';translationDisplay={...translationDisplay,translation:text};answerText=text;
       translationHistory.update(job.historyId || job.id,text,{final:!job.draft,revision:job.id});
       els.chatOutput.textContent=translationPhoneText(translationDisplay);
-      els.chromeTranslationStatus.textContent=job.draft?'Chrome 실시간 번역 · 인식에 따라 수정됩니다':'Chrome 확정 번역 · 답변 예시 생성 중';renderLiveHUD();
+      els.chromeTranslationStatus.textContent=job.draft?`${localLabel()} 실시간 번역 · 인식에 따라 수정됩니다`:`${localLabel()} 확정 번역 · 답변 예시 생성 중`;renderLiveHUD();
     },
     onFinal:(job,result)=>{
       liveTranslationDraft=false;
@@ -251,7 +258,9 @@ import { LocalAgreement } from './local-agreement.mjs';
     try {
       const saved = nativeValue === undefined ? localStorage.getItem(STORAGE_KEY) : nativeValue;
       if (saved) {
-        config = { ...config, ...JSON.parse(saved) };
+        const incoming=JSON.parse(saved);
+        config = { ...config, ...incoming };
+        if(!Object.prototype.hasOwnProperty.call(incoming,'translationEngine'))config.translationEngine=incoming.chromeTranslation===false?'llm':'chrome';
       }
       if (/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(config.serverUrl) &&
           !['localhost', '127.0.0.1'].includes(window.location.hostname)) {
@@ -283,7 +292,10 @@ import { LocalAgreement } from './local-agreement.mjs';
     els.sttEngine.value=config.sttEngine || 'whisper';els.sttFallback.checked=config.sttFallback!==false;
     els.speakerScope.value = config.speakerScope;
     if(els.translateExcludeSelf)els.translateExcludeSelf.checked=config.translateExcludeSelf!==false;
-    if(els.chromeTranslation)els.chromeTranslation.checked=config.chromeTranslation!==false;
+    config.translationEngine=['llm','chrome','apple'].includes(config.translationEngine)?config.translationEngine:(config.chromeTranslation===false?'llm':'chrome');
+    config.chromeTranslation=config.translationEngine!=='llm';
+    if(els.translationEngine)els.translationEngine.value=config.translationEngine;
+    if(els.chromeTranslation)els.chromeTranslation.checked=config.chromeTranslation;
     const now = new Date();
     els.transcriptDate.value = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
     syncModeUI();
@@ -305,7 +317,7 @@ import { LocalAgreement } from './local-agreement.mjs';
 
   function stopChromeSegment(id){
     if(activeSttEngine==='whisper' || !id)return;
-    gatewayFetch(`${config.serverUrl}/api/stt/chrome/stop`,{method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),body:JSON.stringify({sessionId,segmentId:id})}).catch(()=>{});
+    gatewayFetch(`${config.serverUrl}/api/stt/${activeSttEngine==='apple'?'apple':'chrome'}/stop`,{method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),body:JSON.stringify({sessionId,segmentId:id})}).catch(()=>{});
   }
   function resetQueuesForModeSwitch(nextMode) {
     chatEpoch++;translationFailure='';translationSentence.reset();translationHistory.reset();
@@ -415,7 +427,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     config.voiceMode = 'continuous';
     config.triggerWord = els.triggerWord.value.trim();
     config.speechFilter = els.speechFilter.value === 'standard' ? 'standard' : 'strict';
-    config.sttEngine=els.sttEngine.value==='chrome-online'?els.sttEngine.value:'whisper';config.sttFallback=els.sttFallback.checked!==false;
+    config.sttEngine=['chrome-online','apple'].includes(els.sttEngine.value)?els.sttEngine.value:'whisper';config.sttFallback=els.sttFallback.checked!==false;
     config.speakerScope = els.speakerScope.value === 'self' ? 'self' : 'conversation';
     config.translateExcludeSelf=els.translateExcludeSelf?.checked!==false;
     config.chromeTranslation=els.chromeTranslation?.checked!==false;
@@ -938,11 +950,12 @@ import { LocalAgreement } from './local-agreement.mjs';
   async function prepareChromeStt(signal){
     const engine=els.sttEngine.value;
     const language=normalizeGlassesMode(config.glassesMode)==='translate'?resolveTranslateSourceLang({sourceLang:els.translateSourceLang.value,targetLang:els.translateTargetLang.value}):'ko';
-    els.sttEngineStatus.textContent='Chrome 온라인 STT 준비 중';
-    const response=await gatewayFetch(`${config.serverUrl}/api/stt/chrome/prepare`,{method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),signal,body:JSON.stringify({engine,language})});
+    const label=engine==='apple'?'Apple 로컬 STT':'Chrome 온라인 STT';
+    els.sttEngineStatus.textContent=label+' 준비 중 · 처음에는 언어 모델을 준비합니다';
+    const response=await gatewayFetch(`${config.serverUrl}/api/stt/${engine==='apple'?'apple':'chrome'}/prepare`,{method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),signal,body:JSON.stringify({engine,language})});
     const result=await response.json();
-    if(!response.ok || result.status!=='ready')throw Error(result.error || 'Chrome STT 준비 실패');
-    els.sttEngineStatus.textContent=`Chrome STT 준비 완료 · ${language}`;
+    if(!response.ok || result.status!=='ready')throw Error(result.error || label+' 준비 실패');
+    els.sttEngineStatus.textContent=`${label} 준비 완료 · ${language}`;
   }
 
   async function startVoiceRecording(generation, signal) {
@@ -958,7 +971,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     config.voiceMode = 'continuous';
     config.triggerWord = els.triggerWord.value.trim();
     config.speechFilter = els.speechFilter.value === 'standard' ? 'standard' : 'strict';
-    config.sttEngine=els.sttEngine.value==='chrome-online'?els.sttEngine.value:'whisper';config.sttFallback=els.sttFallback.checked!==false;
+    config.sttEngine=['chrome-online','apple'].includes(els.sttEngine.value)?els.sttEngine.value:'whisper';config.sttFallback=els.sttFallback.checked!==false;
     config.speakerScope = els.speakerScope.value === 'self' ? 'self' : 'conversation';
     config.translateExcludeSelf=els.translateExcludeSelf?.checked!==false;
     config.chromeTranslation=els.chromeTranslation?.checked!==false;
@@ -969,7 +982,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     activeSttEngine=config.sttEngine;els.sttEngine.disabled=true;
     if(activeSttEngine!=='whisper'){
       try{await prepareChromeStt(signal);}
-      catch(error){if(signal.aborted)throw error;if(!config.sttFallback)throw error;activeSttEngine='whisper';els.sttEngineStatus.textContent=`Chrome 준비 실패 · Whisper 사용 (${error.message})`;}
+      catch(error){if(signal.aborted)throw error;if(!config.sttFallback)throw error;const failedEngine=activeSttEngine;activeSttEngine='whisper';els.sttEngineStatus.textContent=`${failedEngine==='apple'?'Apple':'Chrome'} 준비 실패 · Whisper 사용 (${error.message})`;}
     }
     if(activeSttEngine==='whisper'){
     const statusRes = await gatewayFetch(`${config.serverUrl}/api/stt/status`, { headers: getAuthHeaders(),signal });
@@ -982,7 +995,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     const warmup = await gatewayFetch(`${config.serverUrl}/api/stt/warmup`, {method:'POST',headers:getAuthHeaders(),signal});
     if(generation!==captureGeneration || signal.aborted)return;
     if (!warmup.ok) throw new Error(`음성 엔진 준비 실패: HTTP ${warmup.status}. 게이트웨이를 업데이트하세요.`);
-    }else els.sttEngineStatus.textContent=activeSttEngine==='chrome-online'?'Chrome 온라인 STT · 음성은 Google로 전송됩니다':'Chrome 로컬 STT · 중간 자막 수신 중';
+    }else els.sttEngineStatus.textContent=activeSttEngine==='chrome-online'?'Chrome 온라인 STT · 음성은 Google로 전송됩니다':'Apple 로컬 STT · Mac에서 음성 처리 중';
     if(generation!==captureGeneration || signal.aborted)return;
     captureFailure = '';
     for(const clip of pendingClips){clip.attempts=0;clip.engine=activeSttEngine;}
@@ -1124,7 +1137,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       if (!isRecording || sessionId!==snapshot.sessionId || activeUtterance?.id!==snapshot.segmentId ||
           data.sessionId!==snapshot.sessionId || data.segmentId!==snapshot.segmentId || data.revision!==snapshot.revision) return;
       if (data.rejected || !data.text?.trim()) return;
-      const agreed = data.engine?.startsWith('chrome-')
+      const agreed = (data.engine==='apple' || data.engine?.startsWith('chrome-'))
         ? typeof data.stableText==='string' && typeof data.draftText==='string'
           ? {stable:data.stableText+(data.stableText && data.draftText?' ':''),draft:data.draftText}
           : {stable:'',draft:data.text}
@@ -1132,7 +1145,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       draftUtteranceId = snapshot.segmentId;
       captionStable = agreed.stable; captionDraft = agreed.draft;
       if(snapshot.mode==='translate' && config.chromeTranslation!==false){
-        enqueueTranslation(snapshot.segmentId,data.text,'',resolveTranslateSourceLang(snapshot),snapshot.targetLang,{draft:true,revision:snapshot.revision,joinSentence:snapshot.engine==='chrome-online' && isContinuousCaptureMode(),startedAt:snapshot.startedAt,endedAt:snapshot.endedAt});
+        enqueueTranslation(snapshot.segmentId,data.text,'',resolveTranslateSourceLang(snapshot),snapshot.targetLang,{draft:true,revision:snapshot.revision,joinSentence:snapshot.engine!=='whisper' && isContinuousCaptureMode(),startedAt:snapshot.startedAt,endedAt:snapshot.endedAt});
       }
       transcriptStatusMessage = '';
       transcriptNotice('실시간 전사 중');
@@ -1283,7 +1296,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         }else if(clipMode==='translate'){prompt=text;pendingTrigger=false;}
         if (prompt) {
           const context=chatSession?'':clip.continuous?transcriptContext.slice(0,-1).slice(-2).join('\n').slice(-800):'';
-          if(clipMode==='translate')enqueueTranslation(clip.segmentId,prompt,context,resolveTranslateSourceLang(clip),clipTargetLang,{joinSentence:clip.engine==='chrome-online' && clip.continuous,startedAt:clip.startedAt,endedAt:clip.endedAt});
+          if(clipMode==='translate')enqueueTranslation(clip.segmentId,prompt,context,resolveTranslateSourceLang(clip),clipTargetLang,{joinSentence:clip.engine!=='whisper' && clip.continuous,startedAt:clip.startedAt,endedAt:clip.endedAt});
           else enqueueAI(clip.segmentId,prompt,context,clipMode,clipTargetLang,directIntent.direct?{directQuestion:true,forceSearch:directIntent.search,chatSession,chatEpoch:chatSession?chatEpoch:undefined}:{});
         } else {
           if (pendingTrigger) setHUDNotice('AI 호출됨 · 질문을 말씀하세요');
@@ -1370,7 +1383,7 @@ import { LocalAgreement } from './local-agreement.mjs';
   }
 
   function enqueueTranslation(id,prompt,context,source,target,options={}){
-    const job={id,prompt,context,source,target,...options};
+    const job={id,prompt,context,source,target,engine:localEngine(),...options};
     const sentence=options.joinSentence?translationSentence.update(job):job;
     if(sentence)liveTranslations.submit(sentence);
   }
@@ -1484,13 +1497,13 @@ import { LocalAgreement } from './local-agreement.mjs';
     }
     try {
       if(activeMode==='translate' && config.chromeTranslation!==false && !chromeText && !options.chromeAttempted){
-        aiPhaseTitle='Chrome 로컬 번역 중';renderLiveHUD();
-        const local=await chromeTranslate(gatewayFetch,config.serverUrl,getAuthHeaders({'Content-Type':'application/json'}),{text:prompt,source:chromeSource,target:targetLang || config.translateTargetLang},controller.signal);
+        aiPhaseTitle=localLabel()+' 로컬 번역 중';renderLiveHUD();
+        const local=await translateLocal({text:prompt,source:chromeSource,target:targetLang || config.translateTargetLang},controller.signal);
         if(local.ok){
           chromeText=local.text;translationDisplay={...translationDisplay,translation:chromeText};answerText=chromeText;
           translationHistory.update(options.translationHistoryId,chromeText,{final:true,revision:options.translationRevisionId || options.translationHistoryId});
           els.chatOutput.textContent=translationPhoneText(translationDisplay);
-          els.chromeTranslationStatus.textContent='Chrome 로컬 번역 완료 · 답변 예시 생성 중';
+          els.chromeTranslationStatus.textContent=localLabel()+' 로컬 번역 완료 · 답변 예시 생성 중';
           aiPhaseTitle='긍정·부정 답변 생성 중';renderLiveHUD();
         }else els.chromeTranslationStatus.textContent=`기존 LLM 번역 사용 · ${local.reason}`;
       }
@@ -1743,7 +1756,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       if(options.hint){answerText=fitCue(enrichedFact);cueDisplayed=true;cueTopic=enrichmentPlan.topic;els.chatQuestion.textContent=cueTopic?`💡 자동 힌트 · ${cueTopic}`:'💡 자동 힌트';}else setVisibleAnswer(rawAnswer,true);
       if(options.hint)els.hintStatus.textContent=enrichmentPlan.source==='web'?'웹검색 근거로 보충한 정보':enrichmentPlan.source==='memory'?'저장된 기억으로 보충한 정보':'내부 지식으로 보충한 정보';
       els.chatOutput.textContent = activeMode==='translate'?translationPhoneText(translationDisplay):answerText;
-      if(chromeText)els.chromeTranslationStatus.textContent=repliesReplaced?'Chrome 로컬 번역 · 답변 예시 완료':hasCompleteTranslationReplies(translationDisplay)?'Chrome 번역 완료 · 이전 답변 예시 유지':'Chrome 번역 완료 · 답변 예시를 받지 못했습니다';
+      if(chromeText)els.chromeTranslationStatus.textContent=repliesReplaced?`${localLabel()} 로컬 번역 · 답변 예시 완료`:hasCompleteTranslationReplies(translationDisplay)?`${localLabel()} 번역 완료 · 이전 답변 예시 유지`:`${localLabel()} 번역 완료 · 답변 예시를 받지 못했습니다`;
       renderLiveHUD();
       if(!answerText.trim())throw new Error('LLM에서 답변 본문을 받지 못했습니다. 서버의 모델 상태를 확인하세요.');
 
@@ -1917,6 +1930,14 @@ import { LocalAgreement } from './local-agreement.mjs';
     } catch (_) {}
   }
 
+  async function fetchAppleCapabilities(){
+    try{
+      const response=await gatewayFetch(`${config.serverUrl}/api/apple/status`,{headers:getAuthHeaders()});
+      const status=await response.json();
+      document.getElementById('stt-option-apple').disabled=!response.ok || !status.available || !status.speechAvailable;
+      document.getElementById('translation-option-apple').disabled=!response.ok || !status.available;
+    }catch{}
+  }
   async function fetchModelList() {
     const url = (els.serverUrl.value || '').trim().replace(/\/+$/, '');
     try {
@@ -1926,6 +1947,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       if (!res.ok) return;
 
       const data = await res.json();
+      fetchAppleCapabilities();
       const models = normalizeModels(data);
       const previousModel = els.modelSelect.value || config.model;
 
@@ -2016,25 +2038,32 @@ import { LocalAgreement } from './local-agreement.mjs';
     els.sttEngine.addEventListener('change',()=>{settingsEdited=true;config.sttEngine=els.sttEngine.value;persistSettings().catch(console.warn);});
     els.sttFallback.addEventListener('change',()=>{settingsEdited=true;config.sttFallback=els.sttFallback.checked;persistSettings().catch(console.warn);});
     els.btnPrepareStt.addEventListener('click',async()=>{
-      if(els.sttEngine.value==='whisper'){els.sttEngineStatus.textContent='Chrome STT 모드를 먼저 선택하세요';return;}
+      if(els.sttEngine.value==='whisper'){els.sttEngineStatus.textContent='Apple 또는 Chrome STT 모드를 먼저 선택하세요';return;}
       if(els.btnPrepareStt.disabled)return;els.btnPrepareStt.disabled=true;
       const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),185000);
-      try{await prepareChromeStt(controller.signal);}catch(error){els.sttEngineStatus.textContent=`Chrome STT 준비 실패 · ${error.message}`;}
+      try{await prepareChromeStt(controller.signal);}catch(error){els.sttEngineStatus.textContent=`STT 준비 실패 · ${error.message}`;}
       finally{clearTimeout(timer);els.btnPrepareStt.disabled=false;}
     });
-    els.chromeTranslation?.addEventListener('change',()=>{settingsEdited=true;config.chromeTranslation=els.chromeTranslation.checked;persistSettings().catch(console.warn);});
+    els.chromeTranslation?.addEventListener('change',()=>{settingsEdited=true;config.chromeTranslation=els.chromeTranslation.checked;config.translationEngine=config.chromeTranslation?'chrome':'llm';els.translationEngine.value=config.translationEngine;persistSettings().catch(console.warn);});
+    els.translationEngine?.addEventListener('change',()=>{
+      settingsEdited=true;config.translationEngine=els.translationEngine.value;
+      config.chromeTranslation=config.translationEngine!=='llm';els.chromeTranslation.checked=config.chromeTranslation;
+      liveTranslationDraft=false;liveTranslations.reset();persistSettings().catch(console.warn);
+    });
     els.btnPrepareChrome?.addEventListener('click',async()=>{
       if(els.btnPrepareChrome.disabled)return;
-      els.btnPrepareChrome.disabled=true;els.chromeTranslationStatus.textContent='Chrome 언어팩 준비 중 · 처음에는 다운로드가 필요합니다';
+      if(localEngine()==='llm'){els.chromeTranslationStatus.textContent='LLM 번역은 별도 언어팩 준비가 필요 없습니다';return;}
+      const engine=localEngine(),label=localLabel();
+      els.btnPrepareChrome.disabled=true;els.translationEngine.disabled=true;els.chromeTranslationStatus.textContent=engine==='apple'?'Apple 언어팩 준비 중 · Mac의 준비 창을 확인해 주세요':'Chrome 언어팩 준비 중 · 처음에는 다운로드가 필요합니다';
       const prepareAbort=new AbortController();const prepareTimer=setTimeout(()=>prepareAbort.abort(),185000);
       try{
         const source=resolveTranslateSourceLang({sourceLang:els.translateSourceLang.value,targetLang:els.translateTargetLang.value});
-        const response=await gatewayFetch(`${config.serverUrl}/api/translate/chrome/prepare`,{method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),signal:prepareAbort.signal,body:JSON.stringify({source,target:els.translateTargetLang.value})});
+        const response=await gatewayFetch(`${config.serverUrl}/api/translate/${engine}/prepare`,{method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),signal:prepareAbort.signal,body:JSON.stringify({source,target:els.translateTargetLang.value})});
         const result=await response.json();
         if(!response.ok || result.status!=='ready')throw Error(result.error || `HTTP ${response.status}`);
-        els.chromeTranslationStatus.textContent=`Chrome 로컬 번역 준비 완료 · ${source} → ${els.translateTargetLang.value}`;
-      }catch(error){els.chromeTranslationStatus.textContent=`Chrome 준비 실패 · 기존 LLM 번역 사용 (${error.message})`;}
-      finally{clearTimeout(prepareTimer);els.btnPrepareChrome.disabled=false;}
+        els.chromeTranslationStatus.textContent=`${label} 로컬 번역 준비 완료 · ${source} → ${els.translateTargetLang.value}`;
+      }catch(error){els.chromeTranslationStatus.textContent=`번역 준비 실패 · 기존 LLM 번역 사용 (${error.message})`;}
+      finally{clearTimeout(prepareTimer);els.btnPrepareChrome.disabled=false;els.translationEngine.disabled=false;}
     });
     els.hintWebSearch?.addEventListener('change',()=>{settingsEdited=true;config.hintWebSearch=els.hintWebSearch.checked;persistSettings().catch(console.warn);});
     els.translateExcludeSelf?.addEventListener('change',()=>{

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {chromeTranslate,translationReplyPrompts} from './chrome-translation.mjs';
+import {localTranslate,chromeTranslate,translationReplyPrompts} from './chrome-translation.mjs';
 let request;
 const success=await chromeTranslate(async(url,options)=>{request={url,options};return {ok:true,json:async()=>({status:'ready',text:' Hello ',source:'ko',target:'en'})};},'https://gateway',{'Authorization':'Bearer test'}, {text:'안녕',source:'ko',target:'en'});
 assert.equal(success.text,'Hello');assert.equal(request.url,'https://gateway/api/translate/chrome');
@@ -13,3 +13,7 @@ await assert.rejects(chromeTranslate(()=>assert.fail('must not fetch'),' ',{}, {
 const prompts=translationReplyPrompts('안녕','Hello','ko','en');
 assert.match(prompts.systemPrompt,/translation 필드는 출력하지 마세요/);assert.match(prompts.userPrompt,/이미 완료된 번역[\s\S]*Hello/);
 console.log('PASS: authenticated Chrome bridge, bounded fallback, cancellation and reply-only prompts');
+
+let appleURL;
+const apple=await localTranslate(async(url)=>{appleURL=url;return{ok:true,json:async()=>({status:'ready',text:'Apple text'})}},'https://gateway',{}, {source:'ko',target:'en',text:'안녕'},undefined,1000,'apple');
+assert.equal(appleURL,'https://gateway/api/translate/apple');assert.equal(apple.text,'Apple text');
