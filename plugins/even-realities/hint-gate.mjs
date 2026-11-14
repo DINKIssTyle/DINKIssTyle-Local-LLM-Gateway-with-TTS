@@ -1,7 +1,7 @@
 // One optional decision at a time; never await this from transcription.
 export class HintGate {
-  constructor({decide,onHint,onStatus=()=>{},now=()=>Date.now(),cooldownMs=8000,generationIntervalMs=8000,intervalMs=2000,maxAgeMs=45000,displayAgeMs=45000,windowMs=8000,settleMs=500}) {
-    Object.assign(this,{decide,onHint,onStatus,now,cooldownMs,generationIntervalMs,intervalMs,maxAgeMs,displayAgeMs,windowMs,settleMs});
+  constructor({decide,onHint,onStatus=()=>{},now=()=>Date.now(),cooldownMs=8000,generationIntervalMs=8000,intervalMs=2000,maxAgeMs=45000,displayAgeMs=45000,windowMs=8000,settleMs=500,repeatFocusMs=20000}) {
+    Object.assign(this,{decide,onHint,onStatus,now,cooldownMs,generationIntervalMs,intervalMs,maxAgeMs,displayAgeMs,windowMs,settleMs,repeatFocusMs});
     this.epoch=0;this.entries=[];this.recent=[];this.failed=new Map();this.pending=null;this.inflight=null;
     this.generating=new Map();this.sequence=0;this.nextGeneration=-Infinity;this.lastDecision=-Infinity;this.nextHint=-Infinity;this.timer=null;
   }
@@ -28,7 +28,7 @@ export class HintGate {
     this.generating.delete(job.sequence);
     if(job.epoch!==this.epoch)return;
     if(displayed){
-      this.recent.push({text:job.text,focusText:job.focusText,cue:text,topic,at:this.now()});
+      this.recent.push({text:job.text,focusText:job.focusText,cue:text,topic,at:this.now()});this.recent=this.recent.slice(-24);
       this.nextHint=this.now()+this.cooldownMs;
     } else {
       const key=normalized(job.focusText || job.text).join('');
@@ -37,9 +37,10 @@ export class HintGate {
     this.pump();
   }
   duplicateCue(text){return this.recent.some(e=>this.now()-e.at<180000 && e.cue && similarHint(e.cue,text));}
-  duplicateTopic(topic){const t=normalized(String(topic || '')).join('');return !!t && this.recent.some(e=>this.now()-e.at<180000 && e.topic && normalized(e.topic).join('')===t);}
-  shownFocus(){return this.recent.filter(e=>this.now()-e.at<180000).slice(-4).map(e=>e.focusText || e.text);}
+  duplicateTopic(topic){const t=normalized(String(topic || '')).join('');return !!t && this.recent.some(e=>this.now()-e.at<this.cooldownMs && e.topic && normalized(e.topic).join('')===t);}
+  shownFocus(){return this.recent.filter(e=>this.now()-e.at<this.repeatFocusMs).slice(-4).map(e=>e.focusText || e.text);}
   shownTopics(){return [...new Set(this.recent.filter(e=>this.now()-e.at<180000 && e.topic).slice(-4).map(e=>e.topic))].join(', ');}
+  diversityContext(){return this.recent.filter(e=>this.now()-e.at<180000 && e.cue).slice(-6).map(e=>`[${e.topic || '정보'}] ${e.cue}`).join('\n').slice(-1200);}
   displayedContext(){return this.recent.filter(e=>this.now()-e.at<180000).slice(-4).map(e=>e.cue).filter(Boolean).join('\n');}
   relevant(job,topic='') {
     if(!this.fresh(job))return false;
@@ -74,7 +75,7 @@ export class HintGate {
       if(decision.hint && focusKey && (this.failed.get(focusKey) || 0)>this.now()) {
         this.onStatus('직전 생략 후보 · 새 발화 대기');return;
       }
-      if(decision.hint && [...this.recent,...this.generating.values()].some(e=>similarHint(e.focusText || e.text,focusedJob.focusText || focusedJob.text))) {
+      if(decision.hint && [...this.recent.filter(e=>this.now()-e.at<this.repeatFocusMs),...this.generating.values()].some(e=>similarHint(e.focusText || e.text,focusedJob.focusText || focusedJob.text))) {
         this.onStatus('같은 내용 · 힌트 생략');return;
       }
       if(decision.hint) {

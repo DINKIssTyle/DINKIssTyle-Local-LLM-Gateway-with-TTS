@@ -4,6 +4,19 @@ const observed='피라미드 영상이 나오네. 거기 청동기 시대 얘기
 const plan=parseHintPlan(JSON.stringify({topic:'피라미드',question:'이집트 피라미드는 어떤 목적으로 건립되었나?',knownFacts:['피라미드 영상이 나옴'],source:'internal'}));
 assert.equal(plan.source,'internal');
 assert.match(hintPlanPrompts(observed,'','background').systemPrompt,/아직 없는/);
+for(const prompts of [hintPlanPrompts(observed,'','background'),hintAnswerPrompts(plan),cuePrompts(observed,'','background'),cuePrompts(observed,'','background','',{preferWeb:true}),cuePrompts(observed,'','reply')]){
+ assert.match(prompts.systemPrompt,/역할: 자율 정보 제공/);
+ assert.match(prompts.systemPrompt,/사용자가 AI에게 보낸 질문이 아닙니다/);
+ assert.match(prompts.systemPrompt,/question 필드는.*내부 조사 항목/);
+}
+assert.match(hintAnswerPrompts(plan).userPrompt,/내부 조사 항목\(사용자 질문 아님\)/);
+const prior='[피라미드] 피라미드는 왕실 무덤으로 건립되었습니다.';
+for(const prompts of [cuePrompts('피라미드 건축 방식이 궁금한 대화','','background',prior),cuePrompts('피라미드 건축 방식이 궁금한 대화','','background',prior,{preferWeb:true}),hintAnswerPrompts(plan,prior)]){
+ assert.ok(prompts.userPrompt.includes(prior),'prompt must carry previously shown information');
+ assert.match(prompts.systemPrompt,/같은 주제가 이어져도 새 정보/);
+ assert.match(prompts.systemPrompt,/표현만 바꾼 반복은 금지/);
+ assert.doesNotMatch(prompts.userPrompt,/제외할 직전 주제|다시 다루지 말 것|새로운 토픽만/,'do not exclude an entire topic');
+}
 assert.doesNotMatch(hintAnswerPrompts(plan).userPrompt,/청동기 시대 얘기도/,'raw transcript must not be the final answer task');
 assert.match(hintAnswerPrompts(plan).userPrompt,/어떤 목적으로/);
 assert.equal(parseHintPlan('HINT_SKIP'),null);assert.equal(parseHintPlan('{"source":"execute_command"}'),null);

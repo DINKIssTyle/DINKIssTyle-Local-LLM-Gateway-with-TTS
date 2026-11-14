@@ -4,25 +4,31 @@ export class LiveTranslationQueue {
   constructor({translate,onText,onFinal,onToken=()=>{},onBusy=()=>{},onFailure=()=>{},intervalMs=500,now=()=>Date.now()}){
     Object.assign(this,{translate,onText,onFinal,onToken,onBusy,onFailure,intervalMs,now});
     this.token=0;this.segment='';this.pair='';this.finalSubmitted=false;this.finalKey='';this.lastDraftKey='';
-    this.pending=null;this.active=null;this.controller=null;this.timer=null;this.nextDraftAt=0;
+    this.pending=null;this.active=null;this.controller=null;this.timer=null;this.nextDraftAt=0;this.latestStart=NaN;
   }
   reset(){
     this.token++;this.onToken(this.token);this.segment='';this.pair='';this.finalSubmitted=false;this.finalKey=this.lastDraftKey='';
-    this.pending=null;clearTimeout(this.timer);this.timer=null;this.controller?.abort();this.nextDraftAt=0;this.onBusy(false);
+    this.pending=null;clearTimeout(this.timer);this.timer=null;this.controller?.abort();this.nextDraftAt=0;this.latestStart=NaN;this.onBusy(false);
   }
   hasDraft(){return !!this.segment && !this.finalSubmitted;}
   submit(job){
     const prompt=String(job.prompt || '').trim();if(!prompt)return false;
-    const pair=`${job.source}>${job.target}`;
+    const pair=`${job.source}>${job.target}\0${job.sessionId || ''}`;
     const key=pair+'\0'+prompt;
     const draft=job.draft===true;
     const changed=job.id!==this.segment || pair!==this.pair;
+    const start=Date.parse(job.startedAt);
+    if(pair===this.pair && changed && Number.isFinite(start) && start<this.latestStart)return false;
+    if(Number.isFinite(start))this.latestStart=start;
     if(changed){this.token++;this.onToken(this.token);this.segment=job.id;this.pair=pair;this.finalSubmitted=false;this.finalKey=this.lastDraftKey='';this.nextDraftAt=0;}
     if(draft && this.finalSubmitted)return false;
     if(!draft && this.finalSubmitted && this.finalKey===key)return false;
     if(draft && (this.lastDraftKey===key || this.pending?.key===key || (this.active?.key===key && this.active.token===this.token)))return false;
     if(!draft){this.token++;this.onToken(this.token);this.finalSubmitted=true;this.finalKey=key;clearTimeout(this.timer);this.timer=null;}
-    this.pending={...job,prompt,draft,key,token:this.token};this.pump();return true;
+    this.pending={...job,prompt,draft,key,token:this.token};
+    // Obsolete requests must not hold the latest sentence until their timeout.
+    if(this.active && (changed || !draft))this.controller?.abort();
+    this.pump();return true;
   }
   async pump(){
     if(this.active || !this.pending)return;
@@ -31,7 +37,11 @@ export class LiveTranslationQueue {
     clearTimeout(this.timer);this.timer=null;
     const job=this.pending;this.pending=null;this.active=job;const controller=new AbortController();this.controller=controller;this.onBusy(true);
     try{
-      const result=await this.translate(job,controller.signal);
+      let abort;
+      const cancelled=new Promise((_,reject)=>{abort=()=>reject(new Error('번역 취소'));controller.signal.addEventListener('abort',abort,{once:true});});
+      let result;
+      try{result=await Promise.race([this.translate(job,controller.signal),cancelled]);}
+      finally{controller.signal.removeEventListener('abort',abort);}
       if(job.token!==this.token || controller.signal.aborted)return;
       if(result.ok){if(job.draft)this.lastDraftKey=job.key;this.onText(job,result.text);}
       else this.onFailure(job,result.reason);

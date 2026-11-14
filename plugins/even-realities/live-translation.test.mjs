@@ -30,3 +30,16 @@ const throttled=new LiveTranslationQueue({now:()=>now,intervalMs:500,translate:a
 throttled.submit(job('one'));await tick();throttled.submit(job('two'));throttled.submit(job('three'));assert.deepEqual(limited,['one']);
 now=501;clearTimeout(throttled.timer);throttled.timer=null;await throttled.pump();assert.deepEqual(limited,['one','three']);throttled.reset();q.reset();
 console.log('PASS: live drafts coalesce, final correction replaces, no interim LLM calls, stale/reset rejection, bounded retry and rate');
+// A hung transport need not cooperate with abort for a new segment to run.
+let obsoleteSignal,oldFinish;const latestShown=[];
+const fresh=new LiveTranslationQueue({intervalMs:0,translate:(j,s)=>{
+ if(j.id==='old'){obsoleteSignal=s;return new Promise(resolve=>oldFinish=resolve);}
+ return Promise.resolve({ok:true,text:j.prompt});
+},onText:(j,t)=>latestShown.push(t),onFinal:()=>{}});
+fresh.submit(job('obsolete',{id:'old',startedAt:'2026-11-14T01:00:00Z'}));
+fresh.submit(job('current',{id:'new',startedAt:'2026-11-14T01:00:05Z'}));
+await tick();await tick();
+assert.equal(obsoleteSignal.aborted,true);assert.deepEqual(latestShown,['current'],'new caption bypasses obsolete translation timeout');
+assert.equal(fresh.submit(job('late saved final',{id:'old',draft:false,startedAt:'2026-11-14T01:00:00Z'})),false,'archived old audio cannot move live display backwards');
+oldFinish({ok:true,text:'late old translation'});await tick();assert.deepEqual(latestShown,['current']);fresh.reset();
+console.log('PASS: obsolete translation aborts immediately and late archive finals cannot displace newer live captions');

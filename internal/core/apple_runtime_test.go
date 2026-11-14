@@ -82,6 +82,24 @@ func TestAppleRuntimeIntegration(t *testing.T) {
 	if !strings.Contains(text, "안녕") || !seen || result["finished"] != true {
 		t.Fatalf("unexpected streaming result: %+v", result)
 	}
+	// A new live segment can start while older audio awaits persistence. Native
+	// sessions interrupted by such switches must rebuild from full PCM snapshots.
+	for _, id := range []string{"archive", "live"} {
+		_, err = worker.request(ctx, map[string]any{"op": "sttPush", "session": id, "owner": "synthetic", "language": "ko", "audio": base64.StdEncoding.EncodeToString(pcm[:8000])})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range []string{"archive", "live"} {
+		result, err = worker.request(ctx, map[string]any{"op": "sttPush", "session": id, "owner": "synthetic", "language": "ko", "audio": base64.StdEncoding.EncodeToString(pcm), "final": true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if text, _ := result["text"].(string); !strings.Contains(text, "안녕") || result["finished"] != true {
+			t.Fatalf("interleaved %s lost full audio: %+v", id, result)
+		}
+		t.Logf("interleaved %s recovered: %v", id, result["text"])
+	}
 
 	// Exercise the actual HTTP save/trigger route, including a final-only upload.
 	old := appleNative

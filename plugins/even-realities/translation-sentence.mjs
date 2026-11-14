@@ -27,6 +27,6 @@ export class TranslationSentence {
     // or send its unfinished speech to the reply LLM.
     if(index!==this.parts.length-1)return null;
     const prefix=this.parts.slice(0,index).filter(part=>part.final).map(part=>part.prompt);
-    return {...job,historyId:this.parts[0].id,prompt:[...prefix,job.prompt].join(' ')};
+    return {...job,historyId:this.parts[0].id,prompt:[...prefix,job.prompt].join(' '),stableText:[...prefix,job.stableText || ''].join(' ').trim()};
   }
 }

@@ -132,6 +132,10 @@ struct PreparationView:View {
    if let active,!active.finished {
     guard active.owner==owner || Date().timeIntervalSince(active.touched)>20 else{throw RuntimeError(message:"다른 Apple STT 세션이 사용 중입니다")}
     await active.stop()
+    // Preview and archive finalization can now interleave. A stopped session
+    // contains only its old snapshot: discard it so a later full PCM snapshot
+    // reconstructs the complete segment instead of returning truncated text.
+    sessions.removeValue(forKey:active.id);order.removeAll{$0==active.id}
    }
    let module=try await transcriber(p["language"] as? String ?? "ko")
    guard await AssetInventory.status(forModules:[module]) == .installed else{throw RuntimeError(message:"Apple STT 준비 버튼으로 언어 모델을 준비해 주세요")}

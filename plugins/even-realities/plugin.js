@@ -1,4 +1,8 @@
+import {EnginePreparation,waitForPreparation} from './engine-preparation.mjs';
+import {chatDeadline,chatFailureMessage} from './chat-deadline.mjs';
+import {ROLE_MODEL_KEYS,normalizeRoleModels,resolveRoleModel,llmRequestRole,roleModelOptions,translationOnlyPrompts} from './role-models.mjs';
 import {LiveTranslationQueue} from './live-translation.mjs';
+import {StableTranslation} from './stable-translation.mjs';
 import {TranslationSentence} from './translation-sentence.mjs';
 import {TranslationHistory} from './translation-history.mjs';
 import {ChatMemory,routeAIUtterance} from './ai-conversation.mjs';
@@ -29,6 +33,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     username: '',
     apiKey: '',
     model: '',
+    roleModels:{},
     connectionMode: 'sse',
     conciseMode: true,
     aiHintMode: true,
@@ -107,7 +112,8 @@ import { LocalAgreement } from './local-agreement.mjs';
   const transcriptContext = [];
   const chatMemory=new ChatMemory();
   let chatEpoch=1;
-  function chatScope(){return [config.serverUrl,config.username,config.model].join('\0');}
+  function chatScope(){return [config.serverUrl,config.username,resolveRoleModel('chat',config)].join('\0');}
+  let availableModels=[];
   function aiVisibleLines(){return normalizeGlassesMode(config.glassesMode)==='translate'?5:6;}
   let nativeTranslateLayout=false;
   const AI_SCROLL_START_MS = 5000;
@@ -145,6 +151,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     loginStatusLabel: document.getElementById('login-status-label'),
     apiKey: document.getElementById('api-key'),
     modelSelect: document.getElementById('model-select'),
+    roleModels:{chat:document.getElementById('model-ai-chat'),hint:document.getElementById('model-ai-hint'),translation:document.getElementById('model-translation'),translationReply:document.getElementById('model-translation-reply')},
     btnRefreshModels: document.getElementById('btn-refresh-models'),
     connectionMode: document.getElementById('connection-mode'),
     optConciseMode: document.getElementById('opt-concise-mode'),
@@ -212,13 +219,72 @@ import { LocalAgreement } from './local-agreement.mjs';
 
   function localEngine(){return config.translationEngine || (config.chromeTranslation===false?'llm':'chrome');}
   function localLabel(){return localEngine()==='apple'?'Apple':'Chrome';}
-  function translateLocal(request,signal,engine=localEngine()){
-    return localTranslate(gatewayFetch,config.serverUrl,getAuthHeaders({'Content-Type':'application/json'}),request,signal,8000,engine);
+  function engineSpec(kind,overrides={}){
+    return {kind,server:config.serverUrl,headers:getAuthHeaders({'Content-Type':'application/json'}),
+      engine:kind==='stt'?config.sttEngine:localEngine(),
+      language:normalizeGlassesMode(config.glassesMode)==='translate'?resolveTranslateSourceLang({sourceLang:config.translateSourceLang,targetLang:config.translateTargetLang}):'ko',
+      source:resolveTranslateSourceLang({sourceLang:config.translateSourceLang,targetLang:config.translateTargetLang}),target:config.translateTargetLang || 'ko',...overrides};
+  }
+  function canonicalSpec(spec){
+    if(spec.kind==='stt'){const {kind,server,headers,engine,language}=spec;return {kind,server,headers,engine,language:engine==='whisper'?'ko':language};}
+    const {kind,server,headers,engine,source,target}=spec;return {kind,server,headers,engine,source,target};
+  }
+  async function runEnginePreparation(spec,signal){
+    const {kind,server,headers,engine}=spec;
+    if(kind==='stt' && engine==='whisper'){
+      const response=await gatewayFetch(`${server}/api/stt/status`,{headers,signal});
+      const status=await response.json();
+      if(!response.ok || !status.active)throw Error(status.message || '서버에서 STT 모델과 런타임을 설치하세요.');
+      const warmup=await gatewayFetch(`${server}/api/stt/warmup`,{method:'POST',headers,signal});
+      if(!warmup.ok)throw Error(`음성 엔진 준비 실패: HTTP ${warmup.status}`);
+      return;
+    }
+    const path=kind==='stt'?`/api/stt/${engine==='apple'?'apple':'chrome'}/prepare`:`/api/translate/${engine}/prepare`;
+    const body=kind==='stt'?{engine,language:spec.language}:{source:spec.source,target:spec.target};
+    const response=await gatewayFetch(server+path,{method:'POST',headers,signal,body:JSON.stringify(body)});
+    const result=await response.json();
+    if(!response.ok || result.status!=='ready')throw Error(result.error || `HTTP ${response.status}`);
+  }
+  function preparationStatus(kind,state,spec,error){
+    const stt=kind==='stt',el=stt?els.sttEngineStatus:els.chromeTranslationStatus;
+    const label=spec.engine==='apple'?'Apple':spec.engine==='whisper'?'Whisper':'Chrome';
+    const detail=stt?spec.language:`${spec.source} → ${spec.target}`;
+    el.textContent=state==='preparing'?`${label} ${stt?'STT':'번역'} 자동 준비 중 · ${detail}${spec.engine==='apple'?' · 최초 준비 시 Mac의 언어팩 창을 확인해 주세요':''}`:
+      state==='ready'?`${label} ${stt?'STT':'로컬 번역'} 준비 완료 · ${detail}`:
+      `${stt?'STT':'번역'} 준비 실패 · ${error?.name==='AbortError'?'준비 시간 초과':error?.message}${stt?'':' · 기존 LLM 번역 사용'}`;
+    (stt?els.btnPrepareStt:els.btnPrepareChrome).disabled=state==='preparing';
+  }
+  const sttPreparation=new EnginePreparation(runEnginePreparation,(...args)=>preparationStatus('stt',...args));
+  const translationPreparation=new EnginePreparation(runEnginePreparation,(...args)=>preparationStatus('translation',...args));
+  function prepareSelectedStt(signal,force=false,engine=config.sttEngine){return waitForPreparation(sttPreparation.ensure(canonicalSpec(engineSpec('stt',{engine})),{force}),signal);}
+  function prepareSelectedTranslation(signal,force=false){
+    if(localEngine()==='llm'){translationPreparation.clear();els.btnPrepareChrome.disabled=false;els.chromeTranslationStatus.textContent='LLM 번역은 별도 언어팩 준비가 필요 없습니다';return Promise.resolve();}
+    return waitForPreparation(translationPreparation.ensure(canonicalSpec(engineSpec('translation')),{force}),signal);
+  }
+  function autoPrepareEngines(){
+    if(!config.serverUrl)return;
+    prepareSelectedStt().catch(()=>{});
+    prepareSelectedTranslation().catch(()=>{});
+  }
+  async function translateLocal(request,signal,engine=localEngine()){
+    const spec=canonicalSpec(engineSpec('translation',{engine,source:request.source,target:request.target}));
+    try{
+      await waitForPreparation(translationPreparation.ensure(spec),signal);
+      let result=await localTranslate(gatewayFetch,spec.server,spec.headers,request,signal,8000,engine);
+      if(!result.ok){
+        // Server restart or removed language assets invalidate client readiness.
+        await waitForPreparation(translationPreparation.ensure(spec,{force:true}),signal);
+        result=await localTranslate(gatewayFetch,spec.server,spec.headers,request,signal,8000,engine);
+      }
+      return result;
+    }catch(error){if(signal?.aborted)throw error;return {ok:false,reason:error.message};}
   }
   const translationHistory=new TranslationHistory();
   const translationSentence=new TranslationSentence();
+  const stableTranslation=new StableTranslation((job,signal)=>translateLocal({text:job.prompt,source:job.source,target:job.target},signal,job.engine));
+  let previewRetryTimer=null;
   const liveTranslations=new LiveTranslationQueue({
-    translate:(job,signal)=>config.chromeTranslation===false?Promise.resolve({ok:false,reason:'Chrome 번역 비활성'}):translateLocal({text:job.prompt,source:job.source,target:job.target},signal,job.engine),
+    translate:(job,signal)=>config.chromeTranslation===false?Promise.resolve({ok:false,reason:'로컬 번역 비활성'}):stableTranslation.run(job,signal),
     onToken:token=>{
       translationToken=token;
       if(activeAIJob?.translationToken)aiAbortController?.abort();
@@ -260,6 +326,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       if (saved) {
         const incoming=JSON.parse(saved);
         config = { ...config, ...incoming };
+        config.roleModels=normalizeRoleModels(incoming.roleModels);
         if(!Object.prototype.hasOwnProperty.call(incoming,'translationEngine'))config.translationEngine=incoming.chromeTranslation===false?'llm':'chrome';
       }
       if (/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(config.serverUrl) &&
@@ -289,6 +356,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     els.voiceMode.value = config.voiceMode;
     els.triggerWord.value = config.triggerWord;
     els.speechFilter.value = config.speechFilter;
+    config.roleModels=normalizeRoleModels(config.roleModels);renderRoleModelSelectors();
     els.sttEngine.value=config.sttEngine || 'whisper';els.sttFallback.checked=config.sttFallback!==false;
     els.speakerScope.value = config.speakerScope;
     if(els.translateExcludeSelf)els.translateExcludeSelf.checked=config.translateExcludeSelf!==false;
@@ -308,6 +376,7 @@ import { LocalAgreement } from './local-agreement.mjs';
   }
 
   function abortPendingPreview() {
+    clearTimeout(previewRetryTimer);previewRetryTimer=null;
     pendingPreview = null;
     if (previewAbortController) {
       previewAbortController.abort();
@@ -320,7 +389,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     gatewayFetch(`${config.serverUrl}/api/stt/${activeSttEngine==='apple'?'apple':'chrome'}/stop`,{method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),body:JSON.stringify({sessionId,segmentId:id})}).catch(()=>{});
   }
   function resetQueuesForModeSwitch(nextMode) {
-    chatEpoch++;translationFailure='';translationSentence.reset();translationHistory.reset();
+    chatEpoch++;translationFailure='';translationSentence.reset();translationHistory.reset();stableTranslation.reset();
     stopChromeSegment(activeUtterance?.id);
     liveTranslationDraft=false;liveTranslations.reset();
     translationDisplay={translation:'',positive:'',negative:''};
@@ -392,6 +461,7 @@ import { LocalAgreement } from './local-agreement.mjs';
   }
 
   function setGlassesMode(nextMode, persist = false) {
+    if(persist && capturePreparing)stopVoiceRecording(false).catch(console.warn);
     const prevMode = normalizeGlassesMode(config.glassesMode);
     const mode = normalizeGlassesMode(nextMode);
     const modeChanged = prevMode !== mode;
@@ -404,6 +474,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     syncModeUI();
     setHUDNotice();
     if (persist) {
+      autoPrepareEngines();
       persistSettings().catch(console.warn);
     }
   }
@@ -414,6 +485,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     config.username = (els.authUsername.value || '').trim();
     config.apiKey = (els.apiKey.value || '').trim();
     config.model = els.modelSelect.value || '';
+    config.roleModels=Object.fromEntries(ROLE_MODEL_KEYS.map(role=>[role,els.roleModels[role].value || '']));
     config.connectionMode = els.connectionMode.value;
     config.conciseMode = els.optConciseMode.checked;
     config.aiHintMode=true;
@@ -435,6 +507,7 @@ import { LocalAgreement } from './local-agreement.mjs';
 
     try {
       await persistSettings();
+      autoPrepareEngines();
       if (showMessage !== false) alert('설정이 저장되었습니다.');
     } catch (err) {
       if (showMessage !== false) alert(`설정 저장 실패: ${err.message}`);
@@ -759,7 +832,7 @@ import { LocalAgreement } from './local-agreement.mjs';
   }
 
   function currentTranslationHeader(){
-    return translationHeaderText({source:resolveTranslateSourceLang({sourceLang:config.translateSourceLang,targetLang:config.translateTargetLang}),target:config.translateTargetLang,
+    return translationHeaderText({source:config.translateSourceLang || 'auto',target:config.translateTargetLang,
       running:isRecording || capturePreparing || processingAI || isThinking || translating,
       phase:(isThinking || processingAI)?aiPhaseTitle:'',phaseDetail:(isThinking || processingAI)?aiPhaseDetail:'',translating,
       error:captureFailure || micCloseUncertain?'오류':translationFailure});
@@ -947,16 +1020,6 @@ import { LocalAgreement } from './local-agreement.mjs';
     }
   }
 
-  async function prepareChromeStt(signal){
-    const engine=els.sttEngine.value;
-    const language=normalizeGlassesMode(config.glassesMode)==='translate'?resolveTranslateSourceLang({sourceLang:els.translateSourceLang.value,targetLang:els.translateTargetLang.value}):'ko';
-    const label=engine==='apple'?'Apple 로컬 STT':'Chrome 온라인 STT';
-    els.sttEngineStatus.textContent=label+' 준비 중 · 처음에는 언어 모델을 준비합니다';
-    const response=await gatewayFetch(`${config.serverUrl}/api/stt/${engine==='apple'?'apple':'chrome'}/prepare`,{method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),signal,body:JSON.stringify({engine,language})});
-    const result=await response.json();
-    if(!response.ok || result.status!=='ready')throw Error(result.error || label+' 준비 실패');
-    els.sttEngineStatus.textContent=`${label} 준비 완료 · ${language}`;
-  }
 
   async function startVoiceRecording(generation, signal) {
     translationSentence.reset();
@@ -981,20 +1044,12 @@ import { LocalAgreement } from './local-agreement.mjs';
     if (mode === 'ai' && (labels.length>8 || labels.some(label=>Array.from(label.replace(/\s/gu,'')).length>40))) throw new Error('AI 호출어는 최대 8개, 각각 40자 이하로 입력하세요.');
     activeSttEngine=config.sttEngine;els.sttEngine.disabled=true;
     if(activeSttEngine!=='whisper'){
-      try{await prepareChromeStt(signal);}
+      try{await prepareSelectedStt(signal,true);}
       catch(error){if(signal.aborted)throw error;if(!config.sttFallback)throw error;const failedEngine=activeSttEngine;activeSttEngine='whisper';els.sttEngineStatus.textContent=`${failedEngine==='apple'?'Apple':'Chrome'} 준비 실패 · Whisper 사용 (${error.message})`;}
     }
     if(activeSttEngine==='whisper'){
-    const statusRes = await gatewayFetch(`${config.serverUrl}/api/stt/status`, { headers: getAuthHeaders(),signal });
-    if(generation!==captureGeneration || signal.aborted)return;
-    if (!statusRes.ok) throw new Error(`STT 상태 확인 실패: HTTP ${statusRes.status}`);
-    const status = await statusRes.json();
-    if(generation!==captureGeneration || signal.aborted)return;
-    if (!status.active) throw new Error(status.message || '서버에서 STT 모델과 런타임을 설치하세요.');
     setHUDNotice('음성 엔진 준비 중');
-    const warmup = await gatewayFetch(`${config.serverUrl}/api/stt/warmup`, {method:'POST',headers:getAuthHeaders(),signal});
-    if(generation!==captureGeneration || signal.aborted)return;
-    if (!warmup.ok) throw new Error(`음성 엔진 준비 실패: HTTP ${warmup.status}. 게이트웨이를 업데이트하세요.`);
+    await prepareSelectedStt(signal,true,'whisper');
     }else els.sttEngineStatus.textContent=activeSttEngine==='chrome-online'?'Chrome 온라인 STT · 음성은 Google로 전송됩니다':'Apple 로컬 STT · Mac에서 음성 처리 중';
     if(generation!==captureGeneration || signal.aborted)return;
     captureFailure = '';
@@ -1113,7 +1168,10 @@ import { LocalAgreement } from './local-agreement.mjs';
   }
 
   async function drainPreview() {
-    if (previewBusy || draining || pendingClips.length || !pendingPreview || !isRecording) return;
+    if (previewBusy || previewRetryTimer || !pendingPreview || !isRecording) return;
+    // Chrome recognition shares a continuous browser stream across segments;
+    // archive playback must stay ordered there. Apple can rebuild full snapshots.
+    if((pendingPreview.mode!=='translate' || String(pendingPreview.engine).startsWith('chrome-')) && (draining || pendingClips.length))return;
     const snapshot = pendingPreview; pendingPreview = null; previewBusy = true;
     const controller = new AbortController();
     previewAbortController = controller;
@@ -1131,7 +1189,15 @@ import { LocalAgreement } from './local-agreement.mjs';
           body:JSON.stringify(sttPayload(snapshot, fallbackTranslateSourceLang(snapshot))),signal:controller.signal,
         });
       }
-      if (res.status===429) return;
+      if (res.status===429) {
+        // The native engine may still be finalizing audio. Keep only the newest
+        // snapshot and retry independently of transcript persistence/backlog.
+        if(isRecording && sessionId===snapshot.sessionId && activeUtterance?.id===snapshot.segmentId){
+          if(!pendingPreview)pendingPreview=snapshot;
+          previewRetryTimer=setTimeout(()=>{previewRetryTimer=null;drainPreview();},300);
+        }
+        return;
+      }
       if (!res.ok) throw new Error(`임시 전사 HTTP ${res.status}`);
       const data = await res.json();
       if (!isRecording || sessionId!==snapshot.sessionId || activeUtterance?.id!==snapshot.segmentId ||
@@ -1145,7 +1211,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       draftUtteranceId = snapshot.segmentId;
       captionStable = agreed.stable; captionDraft = agreed.draft;
       if(snapshot.mode==='translate' && config.chromeTranslation!==false){
-        enqueueTranslation(snapshot.segmentId,data.text,'',resolveTranslateSourceLang(snapshot),snapshot.targetLang,{draft:true,revision:snapshot.revision,joinSentence:snapshot.engine!=='whisper' && isContinuousCaptureMode(),startedAt:snapshot.startedAt,endedAt:snapshot.endedAt});
+        enqueueTranslation(snapshot.segmentId,data.text,'',resolveTranslateSourceLang(snapshot),snapshot.targetLang,{sessionId:snapshot.sessionId,draft:true,stableText:agreed.stable.trim(),revision:snapshot.revision,joinSentence:String(snapshot.engine||'').startsWith('chrome-') && isContinuousCaptureMode(),startedAt:snapshot.startedAt,endedAt:snapshot.endedAt});
       }
       transcriptStatusMessage = '';
       transcriptNotice('실시간 전사 중');
@@ -1157,7 +1223,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       if (previewAbortController === controller) previewAbortController = null;
       previewBusy = false;
       if (pendingClips.length) drainClips();
-      else if (pendingPreview) drainPreview();
+      if (pendingPreview) drainPreview();
     }
   }
 
@@ -1222,7 +1288,7 @@ import { LocalAgreement } from './local-agreement.mjs';
   }
 
   async function drainClips() {
-    if (previewBusy) abortPendingPreview();
+    if (previewBusy && (normalizeGlassesMode(config.glassesMode)!=='translate' || activeSttEngine.startsWith('chrome-'))) abortPendingPreview();
     if (draining) return;
     draining = true;
     try {
@@ -1246,6 +1312,7 @@ import { LocalAgreement } from './local-agreement.mjs';
             await new Promise(resolve=>setTimeout(resolve,200));
             continue;
           }
+          if(err.busy){await new Promise(resolve=>setTimeout(resolve,300));continue;}
           clip.attempts=(clip.attempts || 0)+1;
           if(err.retryable!==false && clip.attempts<=3) {
             setHUDNotice(`전사 재시도 ${clip.attempts}/3 · 음성 보관 중`);
@@ -1286,17 +1353,15 @@ import { LocalAgreement } from './local-agreement.mjs';
             directIntent={...directQuestionIntent(prompt),direct:true};
             hintGate.reset();if(activeAIJob?.hint)aiAbortController?.abort();
             els.hintStatus.textContent='AI 채팅 · 이전 질문·답변 참조';
-          }else{
-            directIntent=directQuestionIntent(text);
-            if(directIntent.direct){
-              prompt=text;hintGate.reset();if(activeAIJob?.hint)aiAbortController?.abort();
-              els.hintStatus.textContent='주변 대화의 질문 · 짧은 문맥으로 답변';
-            }else if(isRecording && normalizeGlassesMode(config.glassesMode)==='ai')hintGate.observe(text,{id:clip.segmentId,at:Date.parse(clip.endedAt)});
+          }else if(isRecording && normalizeGlassesMode(config.glassesMode)==='ai'){
+            // Ambient questions are observed conversation too. Only the wake
+            // route (or typed input) authorizes a conversational AI response.
+            hintGate.observe(text,{id:clip.segmentId,at:Date.parse(clip.endedAt)});
           }
         }else if(clipMode==='translate'){prompt=text;pendingTrigger=false;}
         if (prompt) {
           const context=chatSession?'':clip.continuous?transcriptContext.slice(0,-1).slice(-2).join('\n').slice(-800):'';
-          if(clipMode==='translate')enqueueTranslation(clip.segmentId,prompt,context,resolveTranslateSourceLang(clip),clipTargetLang,{joinSentence:clip.engine!=='whisper' && clip.continuous,startedAt:clip.startedAt,endedAt:clip.endedAt});
+          if(clipMode==='translate')enqueueTranslation(clip.segmentId,prompt,context,resolveTranslateSourceLang(clip),clipTargetLang,{sessionId:clip.sessionId,joinSentence:String(clip.engine||'').startsWith('chrome-') && clip.continuous,startedAt:clip.startedAt,endedAt:clip.endedAt});
           else enqueueAI(clip.segmentId,prompt,context,clipMode,clipTargetLang,directIntent.direct?{directQuestion:true,forceSearch:directIntent.search,chatSession,chatEpoch:chatSession?chatEpoch:undefined}:{});
         } else {
           if (pendingTrigger) setHUDNotice('AI 호출됨 · 질문을 말씀하세요');
@@ -1340,6 +1405,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       }
       if (!res.ok) {
         const err=new Error(`HTTP ${res.status}: ${(await res.text()).slice(0,300)}`);
+        err.busy=res.status===429;
         err.retryable=[408,425,429].includes(res.status) || res.status>=500;
         throw err;
       }
@@ -1383,12 +1449,14 @@ import { LocalAgreement } from './local-agreement.mjs';
   }
 
   function enqueueTranslation(id,prompt,context,source,target,options={}){
+    if(options.sessionId && options.sessionId!==sessionId)return;
     const job={id,prompt,context,source,target,engine:localEngine(),...options};
     const sentence=options.joinSentence?translationSentence.update(job):job;
     if(sentence)liveTranslations.submit(sentence);
   }
 
   function enqueueAI(id, prompt, context, mode = config.glassesMode, targetLang = config.translateTargetLang, options = {}) {
+    if(options.replyOnly && pendingAI.some(job=>job.mode==='translate' && !job.replyOnly))return;
     if (knownAIJobs.has(id)) return;
     knownAIJobs.add(id);
     if (knownAIJobs.size>1000) knownAIJobs.delete(knownAIJobs.values().next().value);
@@ -1405,7 +1473,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     if (pendingAI.length > 0 && !options.chatSession) {
       const last = pendingAI[pendingAI.length - 1];
       if(options.hint){for(const dropped of pendingAI)if(dropped.hint)hintGate.complete(dropped);pendingAI.length=0;}
-      else if (last.mode === normMode && last.targetLang === normLang && !last.hint && !options.translationToken && !last.translationToken) {
+      else if (last.mode === normMode && last.targetLang === normLang && !last.hint && !last.replyOnly && !options.replyOnly && !options.translationToken && !last.translationToken) {
         last.prompt = `${last.prompt}\n${prompt}`.trim();
         if (context) last.context = context;
         return;
@@ -1467,10 +1535,12 @@ import { LocalAgreement } from './local-agreement.mjs';
   // --- LLM Chat Execution ---
   async function queryDKSTChat(prompt, conversationContext = '', mode = config.glassesMode, targetLang = config.translateTargetLang, options = {}) {
     const activeMode = normalizeGlassesMode(mode);
+    const modelConfig={model:config.model,roleModels:normalizeRoleModels(config.roleModels)};
     const requestChatScope=chatScope();
     const chatContext=options.chatSession?chatMemory.context(requestChatScope):'';
     let enrichmentPlan=null;
     let repliesReplaced=false;
+    let receivedVisibleAnswer=false;
     let chromeText=options.chromeTranslationText || '';let chromeSource=options.translationSource || resolveTranslateSourceLang({targetLang});
     let cueDisplayed=false;let cueTopic='';
     function showCue(cue,status){
@@ -1482,7 +1552,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     }
     const controller = new AbortController();
     aiAbortController = controller;
-    const timeout = setTimeout(() => controller.abort(), options.hint?30000:45000);
+    const deadline=chatDeadline(controller,{chatSession:options.chatSession===true,hint:options.hint===true,setTimer:setTimeout,clearTimer:clearTimeout});
     if (!options.hint) {
       isThinking = true;
       stopAIAutoScroll();
@@ -1508,12 +1578,16 @@ import { LocalAgreement } from './local-agreement.mjs';
         }else els.chromeTranslationStatus.textContent=`기존 LLM 번역 사용 · ${local.reason}`;
       }
       const settingsRes = await gatewayFetch(`${config.serverUrl}/api/config`, {headers:getAuthHeaders(), signal: controller.signal});
+      deadline.touch();
       if(!settingsRes.ok)throw new Error(`대화 설정 조회 실패: HTTP ${settingsRes.status}`);
       const settings = await settingsRes.json();
       if(!['standard','stateful'].includes(settings.llm_mode))throw new Error('서버의 LLM 연결 모드를 확인하세요.');
       const chatPayload=(prompts,phase)=>{
         const isAmbient=!options.chatSession;
-        const body={model:config.model,stream:true};
+        const role=llmRequestRole({mode:activeMode,chatSession:options.chatSession,translated:!!chromeText});
+        const model=resolveRoleModel(role,modelConfig);
+        if(!model)throw Error('설정에서 기본 모델 또는 해당 역할의 LLM 모델을 선택하세요.');
+        const body={model,stream:true};
         if(isAmbient)body.glasses_client=true;
         if(chromeText){body.glasses_hint=true;body.glasses_hint_phase='answer';body.hint_research={source:'internal'};}
         if(isAmbient && (options.hint || options.directQuestion)){body.glasses_hint=true;body.glasses_hint_phase=options.directQuestion?'direct':phase;}
@@ -1528,7 +1602,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         els.hintStatus.textContent='보충할 정보 찾는 중';
         const planRes=await gatewayFetch(`${config.serverUrl}/api/chat`,{
           method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),signal:controller.signal,
-          body:JSON.stringify(chatPayload(cuePrompts(prompt,conversationContext,options.category,hintGate.shownTopics(),{preferWeb:config.hintWebSearch!==false}),'plan'))
+          body:JSON.stringify(chatPayload(cuePrompts(prompt,conversationContext,options.category,hintGate.diversityContext(),{preferWeb:config.hintWebSearch!==false}),'plan'))
         });
         const cue=parseCueResponse(await readHintPlanResponse(planRes),[conversationContext,prompt].join('\n'));
         if(cue)els.hintStatus.textContent=`주제: ${cue.topic} · ${cue.question || '내부 지식 힌트'}`;
@@ -1542,7 +1616,8 @@ import { LocalAgreement } from './local-agreement.mjs';
         els.hintStatus.textContent=enrichmentPlan.source==='web'?'웹에서 근거 찾는 중':enrichmentPlan.source==='memory'?'기억에서 근거 찾는 중':'내부 지식에서 정보 찾는 중';
       }
       if(options.hint && enrichmentPlan?.source==='web'){els.hintStatus.textContent='선별한 내용 웹검색 중';}
-      const prompts=options.hint ? hintAnswerPrompts(enrichmentPlan) : chromeText?translationReplyPrompts(prompt,chromeText,chromeSource,targetLang || config.translateTargetLang):buildModePrompts(activeMode,{
+      const separateLLMReplies=activeMode==='translate' && !chromeText && resolveRoleModel('translation',modelConfig)!==resolveRoleModel('translationReply',modelConfig);
+      const prompts=options.hint ? hintAnswerPrompts(enrichmentPlan,hintGate.diversityContext()) : separateLLMReplies?translationOnlyPrompts(prompt,chromeSource,targetLang || config.translateTargetLang,conversationContext):chromeText?translationReplyPrompts(prompt,chromeText,chromeSource,targetLang || config.translateTargetLang):buildModePrompts(activeMode,{
         chatSession:options.chatSession===true,conciseMode:config.conciseMode,targetLang:targetLang || config.translateTargetLang || 'ko',prompt,
         conversationContext:options.chatSession?chatContext:conversationContext
       });
@@ -1564,7 +1639,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         els.hintStatus.textContent='웹검색 사용 불가 · 내부 지식 확인';
         const fallback=await gatewayFetch(`${config.serverUrl}/api/chat`,{
           method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),signal:controller.signal,
-          body:JSON.stringify(chatPayload(cuePrompts(prompt,conversationContext,options.category,hintGate.shownTopics()),'plan'))
+          body:JSON.stringify(chatPayload(cuePrompts(prompt,conversationContext,options.category,hintGate.diversityContext()),'plan'))
         });
         const cue=parseCueResponse(await readHintPlanResponse(fallback),[conversationContext,prompt].join('\n'));
         if(!showCue(cue,'웹검색 사용 불가 · 내부 지식 힌트'))els.hintStatus.textContent='웹 근거 조회 실패 · 전사 계속';
@@ -1582,6 +1657,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         if(activeMode==='translate') {
           const previousTranslation=translationDisplay.translation;
           const parsedTranslation=parseTranslationDisplay(raw);
+          if(separateLLMReplies){parsedTranslation.positive='';parsedTranslation.negative='';}
           if(commitReplies && !chromeText && (!parsedTranslation.translation || ['…','...'].includes(parsedTranslation.translation)))throw Error('LLM에서 번역문을 받지 못했습니다.');
           translationDisplay=mergeTranslationDisplay(translationDisplay,parsedTranslation,{commitReplies});
           if(commitReplies && hasCompleteTranslationReplies(parsedTranslation))repliesReplaced=true;
@@ -1592,6 +1668,7 @@ import { LocalAgreement } from './local-agreement.mjs';
           els.chatOutput.textContent=translationPhoneText(translationDisplay);
         } else {
           const visible=stripSourcesForGlasses(raw);
+          if(visible)receivedVisibleAnswer=true;
           if(visible || commitReplies)answerText=visible;
           els.chatOutput.textContent=answerText;
         }
@@ -1731,6 +1808,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         }
         while (true) {
           const { done, value } = await reader.read();
+          if(value?.length)deadline.touch();
           buffered += decoder.decode(value, { stream: !done });
           const lines = buffered.split('\n');
           buffered = lines.pop();
@@ -1756,10 +1834,14 @@ import { LocalAgreement } from './local-agreement.mjs';
       if(options.hint){answerText=fitCue(enrichedFact);cueDisplayed=true;cueTopic=enrichmentPlan.topic;els.chatQuestion.textContent=cueTopic?`💡 자동 힌트 · ${cueTopic}`:'💡 자동 힌트';}else setVisibleAnswer(rawAnswer,true);
       if(options.hint)els.hintStatus.textContent=enrichmentPlan.source==='web'?'웹검색 근거로 보충한 정보':enrichmentPlan.source==='memory'?'저장된 기억으로 보충한 정보':'내부 지식으로 보충한 정보';
       els.chatOutput.textContent = activeMode==='translate'?translationPhoneText(translationDisplay):answerText;
-      if(chromeText)els.chromeTranslationStatus.textContent=repliesReplaced?`${localLabel()} 로컬 번역 · 답변 예시 완료`:hasCompleteTranslationReplies(translationDisplay)?`${localLabel()} 번역 완료 · 이전 답변 예시 유지`:`${localLabel()} 번역 완료 · 답변 예시를 받지 못했습니다`;
+      if(chromeText)els.chromeTranslationStatus.textContent=repliesReplaced?`${options.translatedBy || localLabel()} 번역 · 답변 예시 완료`:hasCompleteTranslationReplies(translationDisplay)?`${options.translatedBy || localLabel()} 번역 완료 · 이전 답변 예시 유지`:`${options.translatedBy || localLabel()} 번역 완료 · 답변 예시를 받지 못했습니다`;
       renderLiveHUD();
       if(!answerText.trim())throw new Error('LLM에서 답변 본문을 받지 못했습니다. 서버의 모델 상태를 확인하세요.');
 
+      if(separateLLMReplies){
+        els.chromeTranslationStatus.textContent='LLM 번역 완료 · 지정한 번역 답변 모델로 생성 중';
+        enqueueAI(newID(),prompt,conversationContext,'translate',targetLang || config.translateTargetLang,{replyOnly:true,chromeTranslationText:answerText,chromeAttempted:true,translationSource:chromeSource,translationToken:options.translationToken,translationHistoryId:options.translationHistoryId,translationRevisionId:options.translationRevisionId,translatedBy:'LLM'});
+      }
       if(options.chatSession && requestChatScope===chatScope()){
         chatMemory.remember(requestChatScope,prompt,answerText);
         els.hintStatus.textContent='직접 질문 답변 완료 · 계속 듣는 중';
@@ -1774,19 +1856,22 @@ import { LocalAgreement } from './local-agreement.mjs';
       if (controller.signal.aborted && aiAbortedByModeSwitch) {
         return;
       }
+      const failure=chatFailureMessage(err,deadline);
       if(options.hint && controller.signal.aborted && pendingAI.some(job=>job.directQuestion))return;
-      if(options.hint){els.hintStatus.textContent=`힌트 생성 실패 · 전사 계속 (${err.message})`;return;}
-      if(chromeText){els.chromeTranslationStatus.textContent=`번역 완료 · 답변 예시 생성 실패 (${err.message})`;els.chatOutput.textContent=translationPhoneText(translationDisplay);renderLiveHUD();return;}
+      if(options.hint){els.hintStatus.textContent=`힌트 생성 실패 · 전사 계속 (${failure})`;return;}
+      if(chromeText){els.chromeTranslationStatus.textContent=`번역 완료 · 답변 예시 생성 실패 (${failure})`;els.chatOutput.textContent=translationPhoneText(translationDisplay);renderLiveHUD();return;}
       if(activeMode==='translate'){
         translationFailure='번역 오류';answerText=translationDisplay.translation;
-        els.chromeTranslationStatus.textContent=`LLM 번역 실패 · ${answerText?'이전 번역 유지':'새 번역 대기'} (${err.message})`;
+        els.chromeTranslationStatus.textContent=`LLM 번역 실패 · ${answerText?'이전 번역 유지':'새 번역 대기'} (${failure})`;
         els.chatOutput.textContent=translationPhoneText(translationDisplay);renderLiveHUD();return;
       }
       console.error('Chat error:', err);
-      answerText = `AI 오류: ${err.message}`; els.chatOutput.textContent=answerText; renderLiveHUD();
+      els.hintStatus.textContent=`AI 채팅 중단 · ${failure}`;
+      if(!receivedVisibleAnswer)answerText=`AI 오류: ${failure}`;
+      els.chatOutput.textContent=receivedVisibleAnswer?`${answerText}\n\n응답 중단: ${failure}`:answerText;renderLiveHUD();
     } finally {
       if(options.hint)hintGate.complete(options,{displayed:cueDisplayed,text:cueDisplayed?answerText:'',topic:cueTopic});
-      clearTimeout(timeout);
+      deadline.stop();
       if (aiAbortController === controller) aiAbortController = null;
       isThinking = false;
       stopThinkingAnimation();
@@ -1895,6 +1980,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       }
       alert('로그인 성공!');
       await fetchModelList();
+      autoPrepareEngines();
     } catch (err) {
       const networkFailure = err instanceof TypeError || /load failed|failed to fetch/i.test(err.message);
       alert(networkFailure
@@ -1922,6 +2008,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         els.loginStatusLabel.textContent = `인증됨 (${config.username || 'User'})`;
         els.loginStatusLabel.style.color = 'var(--accent-green)';
         fetchModelList();
+        autoPrepareEngines();
       } else if (requestedToken && status.authenticated === false) {
         config.authToken = '';
         await persistSettings();
@@ -1938,6 +2025,17 @@ import { LocalAgreement } from './local-agreement.mjs';
       document.getElementById('translation-option-apple').disabled=!response.ok || !status.available;
     }catch{}
   }
+  function renderRoleModelSelectors(){
+    for(const role of ROLE_MODEL_KEYS){
+      const select=els.roleModels[role],selected=config.roleModels?.[role] || '';
+      if(!select)continue;
+      select.innerHTML='';
+      for(const model of roleModelOptions(availableModels,config.model,selected)){
+        const option=document.createElement('option');option.value=model.id;option.textContent=model.label;select.appendChild(option);
+      }
+      select.value=selected;
+    }
+  }
   async function fetchModelList() {
     const url = (els.serverUrl.value || '').trim().replace(/\/+$/, '');
     try {
@@ -1949,6 +2047,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       const data = await res.json();
       fetchAppleCapabilities();
       const models = normalizeModels(data);
+      availableModels=models;
       const previousModel = els.modelSelect.value || config.model;
 
       els.modelSelect.innerHTML = '';
@@ -1966,6 +2065,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         els.modelSelect.innerHTML = '<option value="">등록된 모델 없음</option>';
         config.model = '';
       }
+      renderRoleModelSelectors();
     } catch (e) {
       console.warn('Failed to fetch models:', e);
     }
@@ -1977,7 +2077,8 @@ import { LocalAgreement } from './local-agreement.mjs';
       event.preventDefault();
       const prompt=els.chatInput.value.trim();
       if(!prompt)return;
-      if(!config.model){els.chatOutput.textContent='설정에서 LLM 모델을 선택하고 저장하세요.';return;}
+      const role=llmRequestRole({mode:normalizeGlassesMode(config.glassesMode),chatSession:true,translated:normalizeGlassesMode(config.glassesMode)==='translate' && localEngine()!=='llm'});
+      if(!resolveRoleModel(role,config)){els.chatOutput.textContent='설정에서 기본 모델 또는 해당 역할의 LLM 모델을 선택하세요.';return;}
       if(pendingAI.length>=8){els.chatOutput.textContent='대기 중인 질문이 많습니다. 답변 후 다시 보내주세요.';return;}
       els.chatInput.value='';
       if(processingAI)els.chatOutput.textContent='질문을 대기열에 추가했습니다.';
@@ -1999,6 +2100,11 @@ import { LocalAgreement } from './local-agreement.mjs';
     if (els.btnTestConnection) els.btnTestConnection.addEventListener('click', testServerConnection);
     if (els.btnLogin) els.btnLogin.addEventListener('click', login);
     if (els.btnRefreshModels) els.btnRefreshModels.addEventListener('click', fetchModelList);
+    els.modelSelect.addEventListener('change',()=>{settingsEdited=true;config.model=els.modelSelect.value;renderRoleModelSelectors();persistSettings().catch(console.warn);});
+    for(const role of ROLE_MODEL_KEYS)els.roleModels[role]?.addEventListener('change',()=>{
+      settingsEdited=true;config.roleModels={...normalizeRoleModels(config.roleModels),[role]:els.roleModels[role].value};persistSettings().catch(console.warn);
+    });
+
     if (els.btnSaveSettings) els.btnSaveSettings.addEventListener('click', saveSettings);
     if (els.voiceBtn) els.voiceBtn.addEventListener('click', toggleVoiceRecording);
     if (els.modeBtnAi) els.modeBtnAi.addEventListener('click', () => setGlassesMode('ai', true));
@@ -2035,35 +2141,18 @@ import { LocalAgreement } from './local-agreement.mjs';
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
       }
     });
-    els.sttEngine.addEventListener('change',()=>{settingsEdited=true;config.sttEngine=els.sttEngine.value;persistSettings().catch(console.warn);});
+    els.sttEngine.addEventListener('change',()=>{settingsEdited=true;config.sttEngine=els.sttEngine.value;autoPrepareEngines();persistSettings().catch(console.warn);});
     els.sttFallback.addEventListener('change',()=>{settingsEdited=true;config.sttFallback=els.sttFallback.checked;persistSettings().catch(console.warn);});
-    els.btnPrepareStt.addEventListener('click',async()=>{
-      if(els.sttEngine.value==='whisper'){els.sttEngineStatus.textContent='Apple 또는 Chrome STT 모드를 먼저 선택하세요';return;}
-      if(els.btnPrepareStt.disabled)return;els.btnPrepareStt.disabled=true;
-      const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),185000);
-      try{await prepareChromeStt(controller.signal);}catch(error){els.sttEngineStatus.textContent=`STT 준비 실패 · ${error.message}`;}
-      finally{clearTimeout(timer);els.btnPrepareStt.disabled=false;}
-    });
-    els.chromeTranslation?.addEventListener('change',()=>{settingsEdited=true;config.chromeTranslation=els.chromeTranslation.checked;config.translationEngine=config.chromeTranslation?'chrome':'llm';els.translationEngine.value=config.translationEngine;persistSettings().catch(console.warn);});
+    els.btnPrepareStt.addEventListener('click',()=>prepareSelectedStt(undefined,true).catch(()=>{}));
+    els.chromeTranslation?.addEventListener('change',()=>{settingsEdited=true;config.chromeTranslation=els.chromeTranslation.checked;config.translationEngine=config.chromeTranslation?'chrome':'llm';els.translationEngine.value=config.translationEngine;autoPrepareEngines();persistSettings().catch(console.warn);});
     els.translationEngine?.addEventListener('change',()=>{
       settingsEdited=true;config.translationEngine=els.translationEngine.value;
       config.chromeTranslation=config.translationEngine!=='llm';els.chromeTranslation.checked=config.chromeTranslation;
-      liveTranslationDraft=false;liveTranslations.reset();persistSettings().catch(console.warn);
+      liveTranslationDraft=false;liveTranslations.reset();stableTranslation.reset();autoPrepareEngines();persistSettings().catch(console.warn);
     });
-    els.btnPrepareChrome?.addEventListener('click',async()=>{
-      if(els.btnPrepareChrome.disabled)return;
+    els.btnPrepareChrome?.addEventListener('click',()=>{
       if(localEngine()==='llm'){els.chromeTranslationStatus.textContent='LLM 번역은 별도 언어팩 준비가 필요 없습니다';return;}
-      const engine=localEngine(),label=localLabel();
-      els.btnPrepareChrome.disabled=true;els.translationEngine.disabled=true;els.chromeTranslationStatus.textContent=engine==='apple'?'Apple 언어팩 준비 중 · Mac의 준비 창을 확인해 주세요':'Chrome 언어팩 준비 중 · 처음에는 다운로드가 필요합니다';
-      const prepareAbort=new AbortController();const prepareTimer=setTimeout(()=>prepareAbort.abort(),185000);
-      try{
-        const source=resolveTranslateSourceLang({sourceLang:els.translateSourceLang.value,targetLang:els.translateTargetLang.value});
-        const response=await gatewayFetch(`${config.serverUrl}/api/translate/${engine}/prepare`,{method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),signal:prepareAbort.signal,body:JSON.stringify({source,target:els.translateTargetLang.value})});
-        const result=await response.json();
-        if(!response.ok || result.status!=='ready')throw Error(result.error || `HTTP ${response.status}`);
-        els.chromeTranslationStatus.textContent=`${label} 로컬 번역 준비 완료 · ${source} → ${els.translateTargetLang.value}`;
-      }catch(error){els.chromeTranslationStatus.textContent=`번역 준비 실패 · 기존 LLM 번역 사용 (${error.message})`;}
-      finally{clearTimeout(prepareTimer);els.btnPrepareChrome.disabled=false;els.translationEngine.disabled=false;}
+      return prepareSelectedTranslation(undefined,true).catch(()=>{});
     });
     els.hintWebSearch?.addEventListener('change',()=>{settingsEdited=true;config.hintWebSearch=els.hintWebSearch.checked;persistSettings().catch(console.warn);});
     els.translateExcludeSelf?.addEventListener('change',()=>{

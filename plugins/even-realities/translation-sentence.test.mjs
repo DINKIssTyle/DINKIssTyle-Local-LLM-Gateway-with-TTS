@@ -26,6 +26,7 @@ bounded.update(job('a','123456',0,1000));
 assert.equal(bounded.update(job('b','7890123',1200,2000)).prompt,'7890123');
 assert.equal(bounded.update(job('c','span',2200,6000)).prompt,'span');
 assert.deepEqual(speechSegmentOptions('whisper','translate'),{});
+assert.deepEqual(speechSegmentOptions('apple','translate'),{snapshotMinMs:250,snapshotVoicedMs:150,silenceMs:900,maxMs:8000});
 const vad=new SpeechSegmenter(speechSegmentOptions('chrome-online','translate'));
 const speech=new Uint8Array(3200);const view=new DataView(speech.buffer);for(let i=0;i<speech.length;i+=2)view.setInt16(i,5000,true);
 for(let i=0;i<6;i++)vad.push(speech);

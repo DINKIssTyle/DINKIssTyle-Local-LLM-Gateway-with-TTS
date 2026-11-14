@@ -13,6 +13,6 @@
     },
     "bundleid": "com.dinkisstyle.llmchat",
     "postBuildHooks": {
-        "darwin/*": "scripts/build-apple-runtime.sh"
+        "darwin/*": "/bin/sh ../../scripts/build-apple-runtime.sh"
     }
 }
