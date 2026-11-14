@@ -1,3 +1,4 @@
+import {HeadGesture,imuVector,poseSample,makeHeadCalibration,validHeadCalibration,blankHeadPage} from './head-gesture.mjs';
 import {HintLifetime,secondsPerHintLine,timedHintLines,hintCountdownWindow} from './hint-autoclose.mjs';
 import {adaptiveHUD,hintWindow} from './adaptive-hud.mjs';
 import {JEV_ONLY,normalizeHintBudget,requestHintJudgment,suggestedHintJudge} from './hint-judge.mjs';
@@ -51,6 +52,8 @@ import { LocalAgreement } from './local-agreement.mjs';
     hideTranscript:false,
     hintAutoClose:false,
     hintSecondsPerLine:3,
+    headGestureEnabled:false,
+    headGestureCalibration:null,
     glassesMode: 'ai',
     translateSourceLang: 'auto',
     translateTargetLang: 'ko',
@@ -83,6 +86,10 @@ import { LocalAgreement } from './local-agreement.mjs';
   let captureGeneration = 0;
   let captureAbort = null;
   let captureTask=null,inputSwitchPromise=null;
+  let headPaused=false,headResumeWanted=false,headTransition=null,nativeHeadBlank=false;
+  let headImuActive=false,headImuWanted=false,headImuPromise=null;
+  let headCalibrationPhase='idle',headCapture=null,headNeutral=null,headCalibrationTimer=null;
+  const headDetector=new HeadGesture();
   let pendingSettings={}, resumeAfterSettings=false, recognitionEpoch=0;
   let settingsPicker=null, nativePickerKey='',nativeMenuSource='';
   let pendingMicOpen = null;
@@ -209,6 +216,8 @@ import { LocalAgreement } from './local-agreement.mjs';
     hintSensitivity: document.getElementById('hint-sensitivity'),
     hintWebSearch: document.getElementById('hint-web-search'),
     hideTranscript:document.getElementById('hide-transcript'),
+    headGestureEnabled:document.getElementById('head-gesture-enabled'),
+    headCalibrate:document.getElementById('head-calibrate'),headStatus:document.getElementById('head-gesture-status'),headResume:document.getElementById('btn-head-resume'),
     hintAutoClose:document.getElementById('hint-auto-close'),
     hintSecondsPerLine:document.getElementById('hint-seconds-per-line'),
     hintStatus: document.getElementById('hint-status'),
@@ -411,7 +420,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     els.hudTriggerKeyword.textContent=layout.wake?.content || '';els.hudTriggerKeyword.hidden=translate;
     const brightness=wakeBrightness();els.hudTriggerKeyword.style.opacity=String(brightness/4);
     els.hudHeaderMessage.textContent=currentHUDHeader(true);
-    if(!displayReady)return;
+    if(!displayReady || headPaused)return;
     if(translate){pendingHUD.delete(8);lastWakeBrightness=null;}
     else if(force || lastWakeBrightness!==brightness){lastWakeBrightness=brightness;pendingHUD.set(8,{containerID:8,containerName:'wake-word',textColor:brightness});}
     if(typeof bridge.updateImageRawData!=='function')hudImagesDisabled=true;
@@ -496,6 +505,9 @@ import { LocalAgreement } from './local-agreement.mjs';
     if(els.chromeTranslation)els.chromeTranslation.checked=config.chromeTranslation;
     const now = new Date();
     els.transcriptDate.value = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+    config.headGestureEnabled=config.headGestureEnabled===true;els.headGestureEnabled.checked=config.headGestureEnabled;
+    headDetector.configure(config.headGestureCalibration);updateHeadControls();
+    if(displayReady)syncHeadIMU().catch(headGestureError);
     syncModeUI();
   }
 
@@ -687,6 +699,93 @@ import { LocalAgreement } from './local-agreement.mjs';
     }
   }
 
+  function headGestureError(error){els.headStatus.textContent=`헤드 제스처 오류 · ${error.message}`;}
+  function updateHeadControls(){
+    els.headCalibrate.disabled=!config.headGestureEnabled || !headImuActive || !!headCapture;
+    els.headCalibrate.textContent=headCalibrationPhase==='readyRaised'?'올린 자세 저장':'제스처 보정 · 정면 저장';
+    els.headResume.hidden=!headPaused;
+    els.voiceBtn?.setAttribute?.('aria-label',headPaused?'화면/STT 재개':capturePreparing?'녹음 준비 취소':isRecording?'녹음 정지':'녹음 시작');
+  }
+  function cancelHeadCalibration(){clearTimeout(headCalibrationTimer);headCalibrationTimer=null;headCapture=null;headNeutral=null;headCalibrationPhase='idle';headDetector.reset();updateHeadControls();}
+  async function syncHeadIMU(){
+    headImuWanted=displayReady && config.headGestureEnabled;
+    if(headImuPromise)return headImuPromise;
+    const work=(async()=>{
+      await Promise.resolve();
+      if(typeof bridge?.imuControl!=='function'){if(headImuWanted)throw Error('현재 Even 앱이 IMU를 지원하지 않습니다');return;}
+      while(headImuActive!==headImuWanted){
+        const wanted=headImuWanted;
+        if(!await bridge.imuControl(wanted,100))throw Error('안경 IMU 보고 설정을 확인하지 못했습니다');
+        headImuActive=wanted;
+      }
+      updateHeadControls();
+      if(headImuActive && headCalibrationPhase==='idle')els.headStatus.textContent=headPaused?'화면/STT 일시정지 · 같은 제스처로 재개':validHeadCalibration(config.headGestureCalibration)?'준비됨 · 고개를 올렸다 정면으로 돌아오면 토글':'처음 한 번 정면·올린 자세를 보정하세요';
+    })();headImuPromise=work;
+    try{await work;}finally{if(headImuPromise===work)headImuPromise=null;updateHeadControls();}
+  }
+  async function setHeadGestureEnabled(){
+    settingsEdited=true;config.headGestureEnabled=els.headGestureEnabled.checked===true;cancelHeadCalibration();
+    headDetector.configure(config.headGestureCalibration);
+    try{await syncHeadIMU();await persistSettings();if(!config.headGestureEnabled){els.headStatus.textContent='헤드 제스처 꺼짐';if(headTransition)await headTransition.catch(()=>{});if(!config.headGestureEnabled && headPaused)await resumeHeadSession();}}
+    catch(error){headGestureError(error);}
+  }
+  async function startHeadCalibration(){
+    try{
+      if(!config.headGestureEnabled)return;
+      await syncHeadIMU();if(!headImuActive)throw Error('안경 IMU 연결을 확인하세요');
+      const raised=headCalibrationPhase==='readyRaised';
+      headCapture={raised,values:[],started:null};headCalibrationPhase=raised?'raised':'neutral';
+      els.headStatus.textContent=raised?'고개를 올린 자세를 잠시 유지하세요':'정면을 보고 잠시 자세를 유지하세요';updateHeadControls();
+      clearTimeout(headCalibrationTimer);headCalibrationTimer=setTimeout(()=>{cancelHeadCalibration();els.headStatus.textContent='보정 시간 초과 · 안경 연결/IMU 수신을 확인하고 다시 시작하세요';},10000);
+    }catch(error){headGestureError(error);}
+  }
+  function handleHeadIMU(data,at=Date.now()){
+    if(!config.headGestureEnabled || !headImuActive || !displayReady)return;
+    const vector=imuVector(data);if(!vector)return;
+    if(headCapture){
+      const sample=headCapture;if(sample.started===null)sample.started=at;sample.values.push(vector);if(sample.values.length>256)sample.values.shift();
+      if(sample.values.length<8 || at-sample.started<600)return;
+      clearTimeout(headCalibrationTimer);headCalibrationTimer=null;headCapture=null;
+      try{
+        const pose=poseSample(sample.values);
+        if(!sample.raised){headNeutral=pose;headCalibrationPhase='readyRaised';els.headStatus.textContent='고개를 위로 올려 유지한 뒤 ‘올린 자세 저장’을 누르세요';}
+        else{config.headGestureCalibration=makeHeadCalibration(headNeutral,pose);headDetector.configure(config.headGestureCalibration);headCalibrationPhase='idle';headNeutral=null;settingsEdited=true;persistSettings().catch(console.warn);els.headStatus.textContent='보정 완료 · 정면으로 돌아온 뒤 새 제스처부터 동작합니다';}
+      }catch(error){cancelHeadCalibration();headGestureError(error);}
+      updateHeadControls();return;
+    }
+    if(headCalibrationPhase!=='idle' || headTransition)return;
+    if(headDetector.consume(data,at))toggleHeadSession();
+  }
+  async function toggleHeadSession(){if(headTransition)return headTransition.catch(()=>{});return headPaused?resumeHeadSession():pauseHeadSession();}
+  async function pauseHeadSession(){
+    if(headTransition)return headTransition.catch(()=>{});
+    headResumeWanted=isRecording || capturePreparing || resumeAfterSettings;
+    headPaused=true;settingsPicker=null;recognitionEpoch++;hintGate.reset();hintLifetime.clear();
+    aiAbortedByModeSwitch=true;aiAbortController?.abort();pendingAI.length=0;voiceWakeJobs.clear();pendingTrigger=false;
+    updateHeadControls();renderLiveHUD();flushHUD();
+    const work=(async()=>{
+      await Promise.resolve();const starting=captureTask;
+      await stopVoiceRecording(true);if(starting)await starting.catch(()=>{});
+      if(micMayBeOpen || pendingMicOpen || micCloseUncertain || pendingMicCloses.size)throw Error('마이크 종료 확인이 필요합니다. 재개 버튼으로 다시 확인하세요');
+      resetQueuesForModeSwitch(config.glassesMode,true);els.headStatus.textContent='화면/STT 일시정지 · 같은 제스처로 재개';renderLiveHUD();
+    })();headTransition=work;
+    try{await work;}catch(error){headGestureError(error);}finally{if(headTransition===work)headTransition=null;updateHeadControls();}
+  }
+  async function resumeHeadSession(){
+    if(headTransition)return headTransition.catch(()=>{});if(!headPaused)return;
+    const work=(async()=>{
+      await Promise.resolve();
+      if(inputSwitchPromise)await inputSwitchPromise;
+      if(micMayBeOpen || pendingMicOpen || micCloseUncertain || pendingMicCloses.size)await stopVoiceRecording(false);
+      if(micMayBeOpen || pendingMicOpen || micCloseUncertain || pendingMicCloses.size)throw Error('기존 마이크 종료를 확인하지 못했습니다');
+      recognitionEpoch++;headPaused=false;updateHeadControls();renderLiveHUD();flushHUD();
+      const resumeRecording=headResumeWanted;
+      if(resumeRecording)await toggleVoiceRecording({fromHeadResume:true});
+      headResumeWanted=false;els.headStatus.textContent=resumeRecording && !isRecording?'화면 재개 · 마이크 시작 실패, 권한과 연결 상태를 확인하세요':config.headGestureEnabled?'재개됨 · 같은 제스처로 다시 일시정지':'헤드 제스처 꺼짐';
+    })();headTransition=work;
+    try{await work;}catch(error){headGestureError(error);}finally{if(headTransition===work)headTransition=null;updateHeadControls();}
+  }
+
   // --- Even Realities SDK Bridge ---
   function hudPage(translate,layout=currentHeaderLayout(translate),body=currentBodyLayout()){return {
         containerTotalNum: translate?6:6+Number(body.show)+Number(body.showTranscript),
@@ -756,6 +855,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       updateConnectionState(true, 'G2 화면 연결됨');
       setupBridgeEvents();
       startHUDStatus();
+      syncHeadIMU().catch(headGestureError);
     } catch (err) {
       console.warn('Even Realities Bridge init notice:', err);
       updateConnectionState(false, `G2 연결 실패: ${err.message}`);
@@ -769,6 +869,11 @@ import { LocalAgreement } from './local-agreement.mjs';
     if (typeof bridge.onEvenHubEvent === 'function') {
       bridge.onEvenHubEvent((event) => {
         if (!event) return;
+        if(event.sysEvent?.imuData || event.sysEvent?.eventType===8){handleHeadIMU(event.sysEvent?.imuData);return;}
+        if(headPaused){
+          if(event.menuItemClickEvent?.itemID===91 || (event.sysEvent || event.textEvent) && (event.sysEvent?.eventType ?? event.textEvent?.eventType ?? 0)===0)resumeHeadSession();
+          return;
+        }
 
         // Handle Audio Events
         if (event.audioEvent && isRecording) {
@@ -984,6 +1089,14 @@ import { LocalAgreement } from './local-agreement.mjs';
     sendingHUD = true;
     try {
       while (displayReady) {
+        if(headPaused){
+          if(!nativeHeadBlank){
+            if(!await bridge.rebuildPageContainer(blankHeadPage()))throw Error('빈 화면 전환 실패');
+            nativeHeadBlank=true;nativePickerKey='';nativeBodyLayoutKey='';nativeHeaderLayoutKey='';lastHudIconKeys.clear();
+          }
+          pendingHUD.clear();if(!headPaused)continue;break;
+        }
+        if(nativeHeadBlank){nativeHeadBlank=false;nativeBodyLayoutKey='';nativeHeaderLayoutKey='';}
         if(settingsPicker){
           const picker=settingsPicker;
           if(nativePickerKey!==picker.pageKey){
@@ -1079,6 +1192,10 @@ import { LocalAgreement } from './local-agreement.mjs';
   }
   function transcriptNotice() { setHUDNotice(); }
   function renderLiveHUD(overridePageInfo) {
+    if(headPaused){
+      els.hudScreen.innerHTML='<div class="hud-head-paused">화면/STT 일시정지 · 고개 제스처 또는 재개 버튼으로 다시 켜기</div>';
+      els.headResume.hidden=false;flushHUD();return;
+    }
     queueHudIcons();
     const chromeTranslateMode=normalizeGlassesMode(config.glassesMode)==='translate' && config.chromeTranslation!==false;
     const notice=currentHUDHeader();if(els.hudNotice.textContent!==notice)setHUDNotice(notice);
@@ -1121,8 +1238,8 @@ import { LocalAgreement } from './local-agreement.mjs';
 
   function applyGlassesStatus(status) {
     if (!glassesSN || status?.sn !== glassesSN) return;
-    if (status.connectType === 'disconnected' || status.connectType === 'none') glassesBattery = null;
-    else if (typeof status.batteryLevel === 'number') glassesBattery = status.batteryLevel;
+    if (status.connectType === 'disconnected' || status.connectType === 'none'){glassesBattery = null;headImuActive=false;headDetector.reset();}
+    else{if (typeof status.batteryLevel === 'number') glassesBattery = status.batteryLevel;if(config.headGestureEnabled && displayReady)syncHeadIMU().catch(headGestureError);}
     renderHUDStatus();
   }
   async function refreshGlassesBattery() {
@@ -1154,7 +1271,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     window.addEventListener?.('pagehide', () => {
       clearTimeout(statusTimer);
       unsubscribeDeviceStatus?.();
-      displayReady = false;
+      displayReady = false;cancelHeadCalibration();syncHeadIMU().catch(()=>{});
       pendingHUD.clear();
     }, {once:true});
   }
@@ -1203,7 +1320,8 @@ import { LocalAgreement } from './local-agreement.mjs';
     }
   }
 
-  async function toggleVoiceRecording({fromSourceSwitch=false}={}) {
+  async function toggleVoiceRecording({fromSourceSwitch=false,fromHeadResume=false}={}) {
+    if(headPaused && !fromHeadResume){if(!fromSourceSwitch)return resumeHeadSession();return;}
     if(inputSwitchPromise && !fromSourceSwitch){resumeAfterSettings=false;await stopVoiceRecording();return;}
     // Stop has priority even while warmup or microphone-open is awaiting a reply.
     if (isRecording || capturePreparing || pendingMicOpen || micCloseUncertain || pendingMicCloses.size) {
@@ -1635,7 +1753,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         const time = new Date(clip.startedAt).toLocaleTimeString();
         transcriptText += `[${time}] ${text}\n`;
         els.transcriptLog.textContent = transcriptText;
-        if(clip.epoch!==undefined && clip.epoch!==recognitionEpoch)continue;
+        if(headPaused || clip.epoch!==undefined && clip.epoch!==recognitionEpoch)continue;
         captionFinal=text;transcriptStatusMessage='';
         transcriptContext.push(text);if(transcriptContext.length>8)transcriptContext.shift();
         const clipMode = normalizeGlassesMode(clip.mode || config.glassesMode);
@@ -2391,6 +2509,7 @@ import { LocalAgreement } from './local-agreement.mjs';
   function bindEvents() {
     els.chatForm.addEventListener('submit',event=>{
       event.preventDefault();
+      if(headPaused){els.chatOutput.textContent='화면/STT 일시정지 중입니다. 재개 후 질문하세요.';return;}
       const prompt=els.chatInput.value.trim();
       if(!prompt)return;
       const role=llmRequestRole({mode:normalizeGlassesMode(config.glassesMode),chatSession:true,translated:normalizeGlassesMode(config.glassesMode)==='translate' && localEngine()!=='llm'});
@@ -2473,6 +2592,9 @@ import { LocalAgreement } from './local-agreement.mjs';
       return prepareSelectedTranslation(undefined,true).catch(()=>{});
     });
     els.hintContextTokens.addEventListener('change',()=>{settingsEdited=true;config.hintContextTokens=normalizeHintBudget(els.hintContextTokens.value);els.hintContextTokens.value=String(config.hintContextTokens);hintGate.reset();persistSettings().catch(console.warn);});
+    els.headGestureEnabled.addEventListener('change',setHeadGestureEnabled);
+    els.headCalibrate.addEventListener('click',startHeadCalibration);
+    els.headResume.addEventListener('click',resumeHeadSession);
     els.hintAutoClose.addEventListener('change',updateHintLifetimeSettings);
     els.hintSecondsPerLine.addEventListener('change',updateHintLifetimeSettings);
     els.hideTranscript.addEventListener('change',()=>setTranscriptHidden(els.hideTranscript.checked));

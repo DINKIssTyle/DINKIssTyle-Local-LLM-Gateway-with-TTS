@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const src = fs.readFileSync('plugin.js','utf8').replace(/^import .*\n/gm, '').replace('  function enqueueClip(', `  window.__queueTest={ai(){resetQueuesForModeSwitch('ai');config.glassesMode='ai';captureFailure='';isRecording=true;segmenter=new SpeechSegmenter();},refreshIcons(){queueHudIcons(true);},lifetime:hintLifetime,showHint(title,text,transcript){answerAutoCloseEligible=!!text;answerTitle=title;answerText=text;captionFinal=transcript;captionStable=captionDraft='';startHintLifetime();renderLiveHUD();},settings:applyLiveSettings,hintGate,liveTranslations,translationHistory,enqueueClip,drainClips,stopVoiceRecording,reset(){resetQueuesForModeSwitch('translate');config.glassesMode='translate';},state(){return{answer:answerText,title:answerTitle,ids:pendingClips.map(c=>c.segmentId),failure:captureFailure,recording:isRecording,engine:activeSttEngine,mode:config.glassesMode,active:activeUtterance?.id,previewBusy};},record(){isRecording=true;segmenter=new SpeechSegmenter();}};
+const src = fs.readFileSync('plugin.js','utf8').replace(/^import .*\n/gm, '').replace('  function enqueueClip(', `  window.__queueTest={ai(){resetQueuesForModeSwitch('ai');config.glassesMode='ai';captureFailure='';isRecording=true;segmenter=new SpeechSegmenter();},refreshIcons(){queueHudIcons(true);},headIMU:handleHeadIMU,headWait(){return headTransition?.catch(()=>{});},headState(){return {paused:headPaused,imu:headImuActive,phase:headCalibrationPhase,uncertain:micCloseUncertain};},lifetime:hintLifetime,showHint(title,text,transcript){answerAutoCloseEligible=!!text;answerTitle=title;answerText=text;captionFinal=transcript;captionStable=captionDraft='';startHintLifetime();renderLiveHUD();},settings:applyLiveSettings,hintGate,liveTranslations,translationHistory,enqueueClip,drainClips,stopVoiceRecording,reset(){resetQueuesForModeSwitch('translate');config.glassesMode='translate';},state(){return{answer:answerText,title:answerTitle,ids:pendingClips.map(c=>c.segmentId),failure:captureFailure,recording:isRecording,engine:activeSttEngine,mode:config.glassesMode,active:activeUtterance?.id,previewBusy};},record(){isRecording=true;segmenter=new SpeechSegmenter();}};
   function enqueueClip(`);
 const elements = new Map();
 function element(id) {
@@ -29,8 +29,8 @@ let judgeReply={hint:false},judgeError=false;
 let nativeSaved = '';
 const documentHandlers = {};
 let deviceHandler;
-let handler; const audioCalls=[]; const updates=[]; const requests=[]; let startup; let shutdown;let nativePage,validatePage=()=>{};const rebuilds=[];const imageUpdates=[];
-const bridge={async getDeviceInfo(){return{model:'g2',sn:'glasses-1',status:{sn:'glasses-1',connectType:'connected',batteryLevel:82}};},onDeviceStatusChanged(fn){deviceHandler=fn;return()=>{};},async getLocalStorage(){return nativeSaved;},async setLocalStorage(key,value){nativeSaved=value;return true;},async createStartUpPageContainer(p){validatePage(p);startup=nativePage=p;return 0;},async rebuildPageContainer(p){validatePage(p);nativePage=p;rebuilds.push(p);return true;},onEvenHubEvent(fn){handler=fn;},async textContainerUpgrade(p){const container=nativePage.textObject.find(c=>c.containerID===p.containerID);assert.ok(container,`text update targets missing container ${p.containerID}`);if(p.content!==undefined)container.content=p.content;if(p.textColor!==undefined)container.textColor=p.textColor;updates.push(p);return true;},async updateImageRawData(p){imageUpdates.push(p);return 'success';},async audioControl(...args){audioCalls.push(args);return true;},async shutDownPageContainer(mode){shutdown=mode;return true;}};
+let handler; const imuCalls=[];const audioCalls=[]; const updates=[]; const requests=[]; let startup; let shutdown;let nativePage,validatePage=()=>{};const rebuilds=[];const imageUpdates=[];
+const bridge={async imuControl(open,pace){imuCalls.push([open,pace]);return true;},async getDeviceInfo(){return{model:'g2',sn:'glasses-1',status:{sn:'glasses-1',connectType:'connected',batteryLevel:82}};},onDeviceStatusChanged(fn){deviceHandler=fn;return()=>{};},async getLocalStorage(){return nativeSaved;},async setLocalStorage(key,value){nativeSaved=value;return true;},async createStartUpPageContainer(p){validatePage(p);startup=nativePage=p;return 0;},async rebuildPageContainer(p){validatePage(p);nativePage=p;rebuilds.push(p);return true;},onEvenHubEvent(fn){handler=fn;},async textContainerUpgrade(p){const container=nativePage.textObject.find(c=>c.containerID===p.containerID);assert.ok(container,`text update targets missing container ${p.containerID}`);if(p.content!==undefined)container.content=p.content;if(p.textColor!==undefined)container.textColor=p.textColor;updates.push(p);return true;},async updateImageRawData(p){imageUpdates.push(p);return 'success';},async audioControl(...args){audioCalls.push(args);return true;},async shutDownPageContainer(mode){shutdown=mode;return true;}};
 const chunks=['data: {"choices":[{"delta":{"con','tent":"안녕"}}]}\n\ndata: {"choices":[{"delta":{"content":"하세요"}}]}\n\ndata: [DONE]\n\n'];
 const context={DKST_DEFAULT_SERVER_URL:'https://192.168.1.4:2806',waitForEvenAppBridge:async()=>bridge,AudioInputSource:{Glasses:'glasses',Phone:'phone'},OsEventTypeList:{CLICK_EVENT:0,DOUBLE_CLICK_EVENT:3},console,TextDecoder,Uint8Array,URL,AbortController,setTimeout:(fn,ms)=>{const timer=setTimeout(fn,ms);if(ms>=1000)timer.unref();return timer;},clearTimeout,alert(){},localStorage:{getItem(){return null;},setItem(){}},window:{location:{origin:'https://192.168.1.4:2806',hostname:'192.168.1.4'},btoa:s=>Buffer.from(s,'binary').toString('base64')},document:{body:{style:{overflow:''}},activeElement:{focus(){}},addEventListener(type,fn){documentHandlers[type]=fn;},readyState:'complete',getElementById:element,createElement:()=>({})},fetch:async(url,opts={})=>{
  requests.push({url,opts});
@@ -76,6 +76,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
 (async()=>{
  const {validateEvenHubPageContainer}=await import('@evenrealities/even_hub_sdk');
  validatePage=page=>{const result=validateEvenHubPageContainer(page);assert.equal(result.valid,true,JSON.stringify(result));};
+ Object.assign(context,await import('./head-gesture.mjs'));
  const autoCloseModule=await import('./hint-autoclose.mjs');Object.assign(context,autoCloseModule);
  context.HintLifetime=class extends autoCloseModule.HintLifetime{constructor(options){super({...options,now:()=>hintClock,schedule:fn=>{hintJobs.push(fn);return hintJobs.length;},cancel:()=>{}});}};
  Object.assign(context,await import('./adaptive-hud.mjs'));
@@ -1185,10 +1186,76 @@ const tick=()=>new Promise(r=>setImmediate(r));
  element('hint-auto-close').checked=true;await element('hint-auto-close').handlers.change();
  assert.equal(JSON.parse(nativeSaved).hintAutoClose,true);assert.equal(JSON.parse(nativeSaved).hintSecondsPerLine,2.5);
  await queue.stopVoiceRecording(false);
+ // Calibrate in arbitrary SDK coordinates; IMU reports must never be mistaken for a tap.
+ const beforeDisabledIMU=audioCalls.length;handler({sysEvent:{eventType:8,imuData:{x:5,y:0,z:0}}});await tick();
+ assert.equal(audioCalls.length,beforeDisabledIMU);assert.equal(imuCalls.length,0,'disabled head gesture must not stream IMU');
+ element('head-gesture-enabled').checked=true;await element('head-gesture-enabled').handlers.change();
+ assert.deepEqual(imuCalls.at(-1),[true,100]);assert.equal(element('head-calibrate').disabled,false);
+ let headAt=0;
+ const imuSamples=(y,count=4)=>{for(let i=0;i<count;i++){headAt+=100;queue.headIMU({x:5,y,z:0},headAt);}};
+ await element('head-calibrate').handlers.click();imuSamples(0,8);
+ assert.equal(queue.headState().phase,'readyRaised');assert.match(element('head-calibrate').textContent,/올린 자세/);
+ await element('head-calibrate').handlers.click();imuSamples(30,8);
+ assert.equal(queue.headState().phase,'idle');assert.deepEqual(JSON.parse(nativeSaved).headGestureCalibration,{neutral:[5,0,0],raised:[5,30,0]});
+ imuSamples(0);assert.equal(queue.headState().paused,false,'lowering after calibration must not toggle');
+ const headWave=async()=>{headAt+=2000;imuSamples(0);imuSamples(30);imuSamples(0);await queue.headWait();await tick();};
+ const idleHeadOpens=audioCalls.filter(call=>call[0]).length;
+ await headWave();
+ for(let i=0;i<150 && nativePage.textObject[0]?.containerName!=='head-blank';i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(queue.headState().paused,true);assert.equal(nativePage.containerTotalNum,1);assert.equal(nativePage.textObject[0].content,'');assert.equal(nativePage.imageObject,undefined);
+ assert.equal(queue.headState().imu,true,'IMU stays live while the display is blank');assert.equal(queue.state().recording,false);
+ const blankUpdates=updates.length;queue.refreshIcons();deviceHandler({sn:'glasses-1',connectType:'connected',batteryLevel:78});await new Promise(resolve=>setTimeout(resolve,250));
+ assert.equal(updates.length,blankUpdates,'status/image updates must not repaint the sleeping screen');
+ await headWave();
+ for(let i=0;i<150 && nativePage.textObject[0]?.containerName==='head-blank';i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(queue.headState().paused,false);assert.equal(queue.state().recording,false,'waking an idle app must not start a microphone');assert.equal(audioCalls.filter(call=>call[0]).length,idleHeadOpens);
+ // Wake during an outstanding blank-page acknowledgement must still restore the normal page.
+ const headRebuild=bridge.rebuildPageContainer;let releaseBlankAck;
+ bridge.rebuildPageContainer=async page=>{const result=await headRebuild(page);if(page.textObject[0]?.containerName==='head-blank')await new Promise(resolve=>{releaseBlankAck=resolve;});return result;};
+ await headWave();
+ for(let i=0;i<150 && !releaseBlankAck;i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(typeof releaseBlankAck,'function');await element('btn-head-resume').handlers.click();releaseBlankAck();
+ for(let i=0;i<150 && nativePage.textObject[0]?.containerName==='head-blank';i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.notEqual(nativePage.textObject[0]?.containerName,'head-blank');assert.equal(queue.headState().paused,false);bridge.rebuildPageContainer=headRebuild;
+ // A late IMU-enable acknowledgement must not undo a subsequent option-off request.
+ element('head-gesture-enabled').checked=false;await element('head-gesture-enabled').handlers.change();
+ const headIMUControl=bridge.imuControl;let releaseIMUEnable;
+ bridge.imuControl=async(open,pace)=>{imuCalls.push([open,pace]);if(open)await new Promise(resolve=>{releaseIMUEnable=resolve;});return true;};
+ element('head-gesture-enabled').checked=true;const enablingHead=element('head-gesture-enabled').handlers.change();await tick();
+ element('head-gesture-enabled').checked=false;const disablingHead=element('head-gesture-enabled').handlers.change();releaseIMUEnable();await enablingHead;await disablingHead;
+ assert.equal(queue.headState().imu,false);assert.deepEqual(imuCalls.at(-1),[false,100]);bridge.imuControl=headIMUControl;
+ element('head-gesture-enabled').checked=true;await element('head-gesture-enabled').handlers.change();
+ // Pausing active capture closes the source, archives the final segment, and cancels optional AI work.
+ handler({sysEvent:{eventType:0}});await tick();await tick();await tick();assert.equal(queue.state().recording,true);
+ nextTranscript='고개 제스처 직전의 저장 음성';for(let i=0;i<8;i++)handler({audioEvent:{audioPcm:speech,source:'phone'}});await tick();
+ holdChat=true;chatReply=null;element('chat-input').value='일시정지로 취소할 질문';element('text-chat-form').handlers.submit({preventDefault(){}});await tick();await tick();
+ const activePauseCalls=audioCalls.length;await headWave();for(let i=0;i<8;i++)await tick();
+ assert.equal(queue.headState().paused,true);assert.equal(queue.state().recording,false);assert.equal(audioCalls[activePauseCalls][0],false);
+ assert.match(element('transcript-log').textContent,/고개 제스처 직전의 저장 음성/,'the captured tail must be archived even while blank');
+ const pausedStt=requests.filter(r=>/\/api\/stt\/(?:preview|transcribe)$/.test(r.url)).length;
+ for(let i=0;i<12;i++)handler({audioEvent:{audioPcm:speech,source:'phone'}});await tick();
+ assert.equal(requests.filter(r=>/\/api\/stt\/(?:preview|transcribe)$/.test(r.url)).length,pausedStt,'no new STT audio while paused');
+ await headWave();assert.equal(queue.headState().paused,false);assert.equal(queue.state().recording,true);assert.deepEqual(audioCalls.filter(call=>call[0]).at(-1),[true,'phone']);
+ // A failed native close never permits a second microphone to open on wake.
+ const headAudioControl=bridge.audioControl;
+ bridge.audioControl=async(open,...args)=>{audioCalls.push([open,...args]);return open;};
+ await headWave();assert.equal(queue.headState().paused,true);assert.equal(queue.headState().uncertain,true);
+ const blockedHeadOpens=audioCalls.filter(call=>call[0]).length;await element('btn-head-resume').handlers.click();
+ assert.equal(queue.headState().paused,true);assert.equal(audioCalls.filter(call=>call[0]).length,blockedHeadOpens);
+ bridge.audioControl=headAudioControl;await element('btn-head-resume').handlers.click();
+ assert.equal(queue.headState().paused,false);assert.equal(queue.state().recording,true);
+ // Disabling while paused restores the screen/capture before removing the only motion wake path.
+ await headWave();assert.equal(queue.headState().paused,true);
+ element('head-gesture-enabled').checked=false;await element('head-gesture-enabled').handlers.change();
+ assert.equal(queue.headState().paused,false);assert.equal(queue.state().recording,true);assert.equal(queue.headState().imu,false);assert.deepEqual(imuCalls.at(-1),[false,100]);
+ await queue.stopVoiceRecording(false);
+ element('head-gesture-enabled').checked=true;await element('head-gesture-enabled').handlers.change();
+ assert.equal(JSON.parse(nativeSaved).headGestureEnabled,true);
  const restoredPrepareStart=requests.length;
  elements.clear();
  vm.runInNewContext(src,context);await tick();await tick();
  assert.equal(element('server-url').value,'https://192.168.1.4:2806');
+ assert.equal(element('head-gesture-enabled').checked,true);assert.equal(context.window.__queueTest.headState().imu,true,'saved head gesture starts IMU after startup');
  assert.match(element('login-status-label').textContent,/인증됨/,'new WebView with empty browser storage must restore native login');
  assert.equal(element('auth-password').value,'');
  assert.equal(element('hide-transcript').checked,false,'transcript visibility restores from native storage');

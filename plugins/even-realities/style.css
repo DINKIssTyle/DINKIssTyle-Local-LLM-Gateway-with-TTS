@@ -542,3 +542,6 @@ label:has(> #hint-web-search) { display: flex; align-items: flex-start; gap: 8px
 .hud-hint-last-line { display:flex; justify-content:space-between; gap:8px; }
 .hud-hint-last-line > span:first-child { min-width:0; }
 .hud-hint-countdown { flex:none; white-space:nowrap; font-variant-numeric:tabular-nums; opacity:.8; }
+
+#btn-head-resume[hidden] { display:none; }
+.hud-head-paused { color:var(--text-secondary);font-size:13px;padding:12px 0; }

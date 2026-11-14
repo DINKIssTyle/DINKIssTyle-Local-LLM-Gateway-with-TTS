@@ -198,6 +198,11 @@
         <label for="hint-seconds-per-line">한 줄당 표시 시간 (초)</label>
         <input type="number" id="hint-seconds-per-line" value="3" min="1" max="30" step="0.5" disabled>
         <p style="font-size:12px;color:var(--text-secondary)">안경 본문 전체 줄 수 × 초/줄로 계산합니다(제목 제외). 답변 끝줄 오른쪽에 남은 시간을 표시합니다. 변경하면 현재 힌트·완료된 AI 답변의 표시 시간을 다시 계산합니다. 답변 생성 중·호출어 질문 대기·번역에는 적용하지 않습니다.</p>
+        <label class="toggle-label"><input type="checkbox" id="head-gesture-enabled"><span>헤드 제스처로 화면·STT 토글</span></label>
+        <button id="head-calibrate" type="button" class="btn btn-secondary" disabled>제스처 보정 · 정면 저장</button>
+        <p id="head-gesture-status" role="status">처음 한 번 정면·고개를 올린 자세를 보정하세요. 고개를 올렸다 정면으로 돌아오면 일시정지/재개합니다.</p>
+        <button id="btn-head-resume" type="button" class="btn btn-primary" hidden>화면/STT 다시 켜기</button>
+        <p style="font-size:12px;color:var(--text-secondary)">일시정지 중에도 다음 제스처 감지를 위해 IMU는 켜 둡니다. 녹음 중이었다면 재개 시 마이크를 다시 켭니다. 옵션을 끄면 일반 화면으로 돌아옵니다.</p>
         <label for="hint-sensitivity">힌트 적극성</label>
         <select id="hint-sensitivity"><option value="quiet">조용하게</option><option value="balanced" selected>균형</option><option value="active">적극적으로</option></select>
       </div>
