@@ -194,6 +194,10 @@
         <label class="toggle-label"><input type="checkbox" id="hint-web-search" checked><span>정보 힌트는 웹검색 우선</span></label>
         <label class="toggle-label"><input type="checkbox" id="hide-transcript"><span>전사문 숨기기</span></label>
         <p style="font-size:12px;color:var(--text-secondary)">AI 모드의 전사 표시만 숨깁니다. 음성 인식·저장은 계속되며 안경 메뉴에서도 변경할 수 있습니다.</p>
+        <label class="toggle-label"><input type="checkbox" id="hint-auto-close"><span>AI 힌트·답변 자동 닫기</span></label>
+        <label for="hint-seconds-per-line">한 줄당 표시 시간 (초)</label>
+        <input type="number" id="hint-seconds-per-line" value="3" min="1" max="30" step="0.5" disabled>
+        <p style="font-size:12px;color:var(--text-secondary)">안경 본문 전체 줄 수 × 초/줄로 계산합니다(제목 제외). 답변 끝줄 오른쪽에 남은 시간을 표시합니다. 변경하면 현재 힌트·완료된 AI 답변의 표시 시간을 다시 계산합니다. 답변 생성 중·호출어 질문 대기·번역에는 적용하지 않습니다.</p>
         <label for="hint-sensitivity">힌트 적극성</label>
         <select id="hint-sensitivity"><option value="quiet">조용하게</option><option value="balanced" selected>균형</option><option value="active">적극적으로</option></select>
       </div>

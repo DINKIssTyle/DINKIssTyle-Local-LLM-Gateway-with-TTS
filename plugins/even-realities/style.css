@@ -538,3 +538,7 @@ label:has(> #hint-web-search) { display: flex; align-items: flex-start; gap: 8px
 
 .hud-ai-mode .hud-transcript-label { font-size: 10px; line-height: 12px; }
 .hud-ai-mode .hud-transcript-body { flex: 0 1 auto; line-height: 18px; max-height: 54px; }
+
+.hud-hint-last-line { display:flex; justify-content:space-between; gap:8px; }
+.hud-hint-last-line > span:first-child { min-width:0; }
+.hud-hint-countdown { flex:none; white-space:nowrap; font-variant-numeric:tabular-nums; opacity:.8; }

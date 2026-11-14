@@ -1,3 +1,4 @@
+import {HintLifetime,secondsPerHintLine,timedHintLines,hintCountdownWindow} from './hint-autoclose.mjs';
 import {adaptiveHUD,hintWindow} from './adaptive-hud.mjs';
 import {JEV_ONLY,normalizeHintBudget,requestHintJudgment,suggestedHintJudge} from './hint-judge.mjs';
 import {SETTINGS_MENUS,settingsMenuItems,settingsPickerPage} from './settings-menu.mjs';
@@ -48,6 +49,8 @@ import { LocalAgreement } from './local-agreement.mjs';
     hintSensitivity: 'balanced',
     hintWebSearch: true,
     hideTranscript:false,
+    hintAutoClose:false,
+    hintSecondsPerLine:3,
     glassesMode: 'ai',
     translateSourceLang: 'auto',
     translateTargetLang: 'ko',
@@ -116,6 +119,7 @@ import { LocalAgreement } from './local-agreement.mjs';
   let captionDraft = '';
   let answerText = '';
   let answerTitle = '';
+  let answerAutoCloseEligible=false;
   let translationDisplay={translation:'',positive:'',negative:''};
   let translationToken=0,translating=false,liveTranslationDraft=false,translationFailure='';
   let answerHoldUntil = 0;
@@ -125,13 +129,17 @@ import { LocalAgreement } from './local-agreement.mjs';
   const pendingAI = [];
   const knownAIJobs = new Set();
   let pendingTrigger = false;
+  const voiceWakeJobs=new Set();let nextWakeJob=0,lastWakeBrightness=null;
+  function wakeBrightness(){return pendingTrigger || voiceWakeJobs.size?4:2;}
+  function finishWakeJob(token){if(token!==undefined)voiceWakeJobs.delete(token);queueHudIcons();}
   let transcriptText = '';
   const transcriptContext = [];
   const chatMemory=new ChatMemory();
   let chatEpoch=1;
   function chatScope(){return [config.serverUrl,config.username,resolveRoleModel('chat',config)].join('\0');}
   let availableModels=[];
-  function currentBodyLayout(){return adaptiveHUD({mode:normalizeGlassesMode(config.glassesMode),title:answerTitle,text:answerText,hideTranscript:config.hideTranscript});}
+  function aiPresentationText(){return hintLifetime.active?timedHintLines(answerText).join('\n'):answerText;}
+  function currentBodyLayout(){return adaptiveHUD({mode:normalizeGlassesMode(config.glassesMode),title:answerTitle,text:aiPresentationText(),hideTranscript:config.hideTranscript});}
   function aiVisibleLines(){return currentBodyLayout().contentLines || 6;}
   let nativeTranslateLayout=false,nativeHeaderLayoutKey='',nativeBodyLayoutKey='';
   const AI_SCROLL_START_MS = 5000;
@@ -201,6 +209,8 @@ import { LocalAgreement } from './local-agreement.mjs';
     hintSensitivity: document.getElementById('hint-sensitivity'),
     hintWebSearch: document.getElementById('hint-web-search'),
     hideTranscript:document.getElementById('hide-transcript'),
+    hintAutoClose:document.getElementById('hint-auto-close'),
+    hintSecondsPerLine:document.getElementById('hint-seconds-per-line'),
     hintStatus: document.getElementById('hint-status'),
     chatForm: document.getElementById('text-chat-form'),
     chatInput: document.getElementById('chat-input'),
@@ -225,6 +235,24 @@ import { LocalAgreement } from './local-agreement.mjs';
     actionHint: document.getElementById('action-hint')
   };
 
+  const hintLifetime=new HintLifetime({
+    onTick:()=>renderLiveHUD(),
+    onClose:hint=>{
+      if(answerTitle!==hint.title || answerText!==hint.text)return;
+      answerText=answerTitle='';answerAutoCloseEligible=false;aiScrollOffset=0;answerHoldUntil=0;
+      stopAIAutoScroll();clearTimeout(answerTimer);renderLiveHUD();
+    }
+  });
+  function startHintLifetime(){
+    hintLifetime.show({text:answerText,title:answerTitle,enabled:config.hintAutoClose===true && answerAutoCloseEligible,secondsPerLine:config.hintSecondsPerLine});
+  }
+  function updateHintLifetimeSettings(){
+    settingsEdited=true;config.hintAutoClose=els.hintAutoClose.checked===true;
+    config.hintSecondsPerLine=secondsPerHintLine(els.hintSecondsPerLine.value);
+    els.hintSecondsPerLine.value=String(config.hintSecondsPerLine);els.hintSecondsPerLine.disabled=!config.hintAutoClose;
+    if(answerAutoCloseEligible && answerText)startHintLifetime();else hintLifetime.clear();
+    renderLiveHUD();persistSettings().catch(console.warn);
+  }
   const hintGate=new HintGate({
     decide:async(job,signal)=>{
       const model=resolveRoleModel('hintDecision',config);
@@ -381,12 +409,16 @@ import { LocalAgreement } from './local-agreement.mjs';
     const layout=currentHeaderLayout(translate);
     els.hudModeLabel.textContent=layout.prefix.content;
     els.hudTriggerKeyword.textContent=layout.wake?.content || '';els.hudTriggerKeyword.hidden=translate;
+    const brightness=wakeBrightness();els.hudTriggerKeyword.style.opacity=String(brightness/4);
     els.hudHeaderMessage.textContent=currentHUDHeader(true);
     if(!displayReady)return;
+    if(translate){pendingHUD.delete(8);lastWakeBrightness=null;}
+    else if(force || lastWakeBrightness!==brightness){lastWakeBrightness=brightness;pendingHUD.set(8,{containerID:8,containerName:'wake-word',textColor:brightness});}
     if(typeof bridge.updateImageRawData!=='function')hudImagesDisabled=true;
     if(hudImagesDisabled){
       const content=nativeHUDNotice();
-      if(content!==lastFallbackHeader){lastFallbackHeader=content;pendingHUD.set(3,{containerID:3,containerName:'notice',content});flushHUD();}
+      if(content!==lastFallbackHeader){lastFallbackHeader=content;pendingHUD.set(3,{containerID:3,containerName:'notice',content});}
+      if(pendingHUD.size)flushHUD();
       return;
     }
     const icons=[[5,'mic-state',mic.key],...(!translate?[[6,'ai-trigger','ai-trigger']]:[])];
@@ -438,6 +470,8 @@ import { LocalAgreement } from './local-agreement.mjs';
     els.hintSensitivity.value=config.hintSensitivity || 'balanced';
     if(els.hintWebSearch)els.hintWebSearch.checked=config.hintWebSearch!==false;
     config.hideTranscript=config.hideTranscript===true;els.hideTranscript.checked=config.hideTranscript;
+    config.hintAutoClose=config.hintAutoClose===true;els.hintAutoClose.checked=config.hintAutoClose;
+    config.hintSecondsPerLine=secondsPerHintLine(config.hintSecondsPerLine);els.hintSecondsPerLine.value=String(config.hintSecondsPerLine);els.hintSecondsPerLine.disabled=!config.hintAutoClose;
     if (els.optConciseMode) els.optConciseMode.checked = config.conciseMode !== false;
     if (els.optEnableTts) els.optEnableTts.checked = config.enableTTS !== false;
     config.glassesMode = normalizeGlassesMode(config.glassesMode);
@@ -485,6 +519,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     gatewayFetch(`${config.serverUrl}/api/stt/${activeSttEngine==='apple'?'apple':'chrome'}/stop`,{method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),body:JSON.stringify({sessionId,segmentId:id})}).catch(()=>{});
   }
   function resetQueuesForModeSwitch(nextMode, preserveAudio=false, preserveDisplay=false) {
+    hintLifetime.clear();answerAutoCloseEligible=false;voiceWakeJobs.clear();
     chatEpoch++;translationFailure='';translationSentence.reset();if(!preserveDisplay)translationHistory.reset();stableTranslation.reset();
     stopChromeSegment(activeUtterance?.id);
     liveTranslationDraft=false;liveTranslations.reset();
@@ -589,6 +624,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     config.hintSensitivity=els.hintSensitivity.value || 'balanced';
     config.hintWebSearch=els.hintWebSearch?.checked!==false;
     config.hideTranscript=els.hideTranscript.checked===true;
+    config.hintAutoClose=els.hintAutoClose.checked===true;config.hintSecondsPerLine=secondsPerHintLine(els.hintSecondsPerLine.value);
     hintGate.reset();
     config.enableTTS = els.optEnableTts.checked;
     if (els.glassesMode?.value) config.glassesMode = normalizeGlassesMode(els.glassesMode.value);
@@ -676,7 +712,7 @@ import { LocalAgreement } from './local-agreement.mjs';
           content: lastTranscriptHUDContent || '',
           isEventCapture: body.show?0:1,
         }]:[]),{containerID:7,containerName:'mode-label',xPosition:layout.prefix.x,yPosition:0,width:layout.prefix.width,height:27,paddingLength:0,borderWidth:0,content:layout.prefix.content,isEventCapture:0},
-        ...(!translate?[{containerID:8,containerName:'wake-word',xPosition:layout.wake.x,yPosition:0,width:layout.wake.width,height:27,paddingLength:0,borderWidth:0,content:layout.wake.content,isEventCapture:0}]:[])],
+        ...(!translate?[{containerID:8,containerName:'wake-word',xPosition:layout.wake.x,yPosition:0,width:layout.wake.width,height:27,paddingLength:0,borderWidth:0,content:layout.wake.content,textColor:wakeBrightness(),isEventCapture:0}]:[])],
         menuObject: {
           menuItems: [
             { itemID: 1, itemName: 'AI 모드' },
@@ -790,7 +826,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         } else if (evType === (OsEventTypeList.SCROLL_BOTTOM_EVENT ?? 2)) {
           if (answerText) {
             stopAIAutoScroll();
-            const win = sliceHUDWindow(answerText, aiScrollOffset, aiVisibleLines(), AI_BOX_WIDTH_PX);
+            const win = sliceHUDWindow(aiPresentationText(), aiScrollOffset, aiVisibleLines(), AI_BOX_WIDTH_PX);
             if(normalizeGlassesMode(config.glassesMode)==='translate')translationHistory.scroll(1);
             else aiScrollOffset = Math.min(win.maxOffset, aiScrollOffset + 1);
             renderLiveHUD();
@@ -858,16 +894,16 @@ import { LocalAgreement } from './local-agreement.mjs';
         aiScrollTimer = null;
         return;
       }
-      const win = sliceHUDWindow(answerText, aiScrollOffset, aiVisibleLines(), AI_BOX_WIDTH_PX);
+      const win = sliceHUDWindow(aiPresentationText(), aiScrollOffset, aiVisibleLines(), AI_BOX_WIDTH_PX);
       if (aiScrollOffset < win.maxOffset) {
         aiScrollOffset += 1;
         renderLiveHUD();
-        aiScrollTimer = setTimeout(stepScroll, AI_SCROLL_LINE_MS);
+        aiScrollTimer = setTimeout(stepScroll, hintLifetime.active?Math.min(AI_SCROLL_LINE_MS,hintLifetime.seconds*1000):AI_SCROLL_LINE_MS);
       } else {
         aiScrollTimer = null;
       }
     }
-    aiScrollTimer = setTimeout(stepScroll, AI_SCROLL_START_MS);
+    aiScrollTimer = setTimeout(stepScroll, hintLifetime.active?Math.min(AI_SCROLL_START_MS,aiVisibleLines()*hintLifetime.seconds*1000):AI_SCROLL_START_MS);
   }
 
   function buildTranscriptSectionText() {
@@ -893,15 +929,22 @@ import { LocalAgreement } from './local-agreement.mjs';
     const bottomPhoneText=translateMode?translationReplyText(translationDisplay):transcriptFullText;
     if (els.hudScreen) {
       els.hudScreen.classList.toggle('hud-ai-mode',!translateMode);
-      const aiCursor = (isThinking || processingAI) && !(translateMode && config.chromeTranslation!==false) ? '<span class="hud-cursor"></span>' : '';
+      const aiCursor = !body.hint && !hintLifetime.active && (isThinking || processingAI) && !(translateMode && config.chromeTranslation!==false) ? '<span class="hud-cursor"></span>' : '';
       const txCursor = (!translateMode && !isThinking && !processingAI && isRecording) ? '<span class="hud-cursor"></span>' : '';
+      let previewBody=escapeHtml(aiFullText);
+      if(!translateMode && hintLifetime.active){
+        const lines=timedHintLines(answerText);
+        previewBody=lines.map((line,index)=>index===lines.length-1?
+          `<div class="hud-hint-last-line"><span>${escapeHtml(line)}</span><span class="hud-hint-countdown">${hintLifetime.remaining}초</span></div>`:
+          `<div>${escapeHtml(line)}</div>`).join('');
+      }
       els.hudScreen.innerHTML =
         (body.show?`<div class="hud-ai-box${body.hint?' hud-hint-box':''}"${!translateMode?` style="flex:0 0 auto;--hud-content-lines:${body.contentLines}"`:''}>` +
           `<div class="hud-ai-header">` +
             `<span id="hud-ai-badge" class="hud-ai-badge">${escapeHtml(body.hint?body.title:badgeLabel)}</span>` +
             `<span id="hud-ai-meta" class="hud-ai-meta">${escapeHtml(body.hint || translateMode && config.chromeTranslation!==false?'':aiMetaLabel)}</span>` +
           `</div>` +
-          `<div id="hud-ai-body" class="hud-ai-body">${escapeHtml(aiFullText)}${aiCursor}</div>` +
+          `<div id="hud-ai-body" class="hud-ai-body">${previewBody}${aiCursor}</div>` +
         `</div>`:'') +
         (body.showTranscript?`<div class="hud-transcript-box${translateMode?' hud-translation-replies':''}">` +
           `<div class="hud-transcript-label">${translateMode?'예상 답변':'전사'}</div>` +
@@ -1054,7 +1097,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     }
 
     if (answerText) {
-      const win = body.hint?hintWindow(answerText,answerTitle,aiScrollOffset,config.hideTranscript):sliceHUDWindow(answerText, chromeTranslateMode && liveTranslationDraft?Infinity:aiScrollOffset, aiVisibleLines(), AI_BOX_WIDTH_PX);
+      const win = !chromeTranslateMode && normalizeGlassesMode(config.glassesMode)==='ai' && hintLifetime.active?hintCountdownWindow(answerText,answerTitle,aiScrollOffset,config.hideTranscript,hintLifetime.remaining):body.hint?hintWindow(answerText,answerTitle,aiScrollOffset,config.hideTranscript):sliceHUDWindow(aiPresentationText(), chromeTranslateMode && liveTranslationDraft?Infinity:aiScrollOffset, aiVisibleLines(), AI_BOX_WIDTH_PX);
       const pageInfo = overridePageInfo || `P ${win.page}/${win.totalPages}`;
       const ratio = win.maxOffset > 0 ? win.offsetLine / win.maxOffset : 0;
       const meta = win.maxOffset > 0
@@ -1258,6 +1301,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     config.hintSensitivity=els.hintSensitivity.value || 'balanced';
     config.hintWebSearch=els.hintWebSearch?.checked!==false;
     config.hideTranscript=els.hideTranscript.checked===true;
+    config.hintAutoClose=els.hintAutoClose.checked===true;config.hintSecondsPerLine=secondsPerHintLine(els.hintSecondsPerLine.value);
     if (els.glassesMode?.value) config.glassesMode = normalizeGlassesMode(els.glassesMode.value);
     if (els.translateSourceLang?.value) config.translateSourceLang = els.translateSourceLang.value;
     if (els.translateTargetLang?.value) config.translateTargetLang = els.translateTargetLang.value;
@@ -1523,6 +1567,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     if(!flush)stopChromeSegment(segmentId);
     activeUtterance=null;abortPendingPreview();
     const clip=hadCapture ? (continuousCapture?segmenter?.flush():mergePCM(audioBuffer)) : null;
+    if(pendingTrigger && (!flush || !clip || clip.length<3200))pendingTrigger=false;
     audioBuffer=[];
     if((!flush || !clip) && liveTranslations.hasDraft()){liveTranslationDraft=false;liveTranslations.reset();}
     setHUDNotice('마이크 정지 중');
@@ -1597,18 +1642,19 @@ import { LocalAgreement } from './local-agreement.mjs';
         const clipTargetLang = clip.targetLang || config.translateTargetLang || 'ko';
         let prompt = '';
         let directIntent={direct:false,search:false};
-        let chatSession=false;
+        let chatSession=false,wakeToken;
         if(clipMode==='ai') {
           const route=routeAIUtterance(data,{waiting:pendingTrigger,name:triggerLabels()[0] || data.matchedTrigger || 'AI'});
           pendingTrigger=route.waiting;
           if(route.kind==='ack'){
+            voiceWakeJobs.clear();
             chatEpoch++;hintGate.reset();aiAbortController?.abort();pendingAI.length=0;
-            answerTitle='';answerText=route.ack;els.chatOutput.textContent=route.ack;
+            hintLifetime.clear();answerAutoCloseEligible=false;answerTitle='';answerText=route.ack;els.chatOutput.textContent=route.ack;
             els.hintStatus.textContent='호출어 확인 · 다음 문장을 AI 채팅 질문으로 받습니다';
             setHUDNotice('질문 대기');renderLiveHUD();continue;
           }
           if(route.kind==='chat'){
-            chatSession=true;prompt=route.prompt;
+            chatSession=true;prompt=route.prompt;wakeToken=++nextWakeJob;voiceWakeJobs.add(wakeToken);
             directIntent={...directQuestionIntent(prompt),direct:true};
             hintGate.reset();if(activeAIJob?.hint)aiAbortController?.abort();
             els.hintStatus.textContent='AI 채팅 · 이전 질문·답변 참조';
@@ -1621,7 +1667,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         if (prompt) {
           const context=chatSession?'':clip.continuous?transcriptContext.slice(0,-1).slice(-2).join('\n').slice(-800):'';
           if(clipMode==='translate')enqueueTranslation(clip.segmentId,prompt,context,resolveTranslateSourceLang(clip),clipTargetLang,{sessionId:clip.sessionId,joinSentence:String(clip.engine||'').startsWith('chrome-') && clip.continuous,startedAt:clip.startedAt,endedAt:clip.endedAt});
-          else enqueueAI(clip.segmentId,prompt,context,clipMode,clipTargetLang,directIntent.direct?{directQuestion:true,forceSearch:directIntent.search,chatSession,chatEpoch:chatSession?chatEpoch:undefined}:{});
+          else enqueueAI(clip.segmentId,prompt,context,clipMode,clipTargetLang,directIntent.direct?{directQuestion:true,forceSearch:directIntent.search,chatSession,wakeToken,chatEpoch:chatSession?chatEpoch:undefined}:{});
         } else {
           if (pendingTrigger) setHUDNotice('AI 호출됨 · 질문을 말씀하세요');
           else transcriptNotice('전사 저장됨');
@@ -1636,6 +1682,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     } finally {
       activeFinalClip=null;
       draining = false;
+      if(!isRecording && !pendingClips.length)pendingTrigger=false;
       renderLiveHUD();
       if (!isRecording && !pendingClips.length && !micStopPromise && !pendingMicOpen && !micCloseUncertain && !pendingMicCloses.size) setVoiceHint('마이크 꺼짐 · 전사 저장 완료');
       if (pendingPreview) drainPreview();
@@ -1716,7 +1763,7 @@ import { LocalAgreement } from './local-agreement.mjs';
 
   function enqueueAI(id, prompt, context, mode = config.glassesMode, targetLang = config.translateTargetLang, options = {}) {
     if(options.replyOnly && pendingAI.some(job=>job.mode==='translate' && !job.replyOnly))return;
-    if (knownAIJobs.has(id)) return;
+    if (knownAIJobs.has(id)){finishWakeJob(options.wakeToken);return;}
     knownAIJobs.add(id);
     if (knownAIJobs.size>1000) knownAIJobs.delete(knownAIJobs.values().next().value);
     const normMode = normalizeGlassesMode(mode);
@@ -1724,7 +1771,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     if(options.chatSession){
       for(const dropped of pendingAI)if(dropped.hint)hintGate.complete(dropped);
       pendingAI.splice(0,pendingAI.length,...pendingAI.filter(job=>job.chatSession));
-      if(pendingAI.length>=8){els.hintStatus.textContent='AI 채팅 질문 8개 대기 중 · 답변 후 다시 말씀하세요';return;}
+      if(pendingAI.length>=8){finishWakeJob(options.wakeToken);els.hintStatus.textContent='AI 채팅 질문 8개 대기 중 · 답변 후 다시 말씀하세요';return;}
     }else if(pendingAI.some(job=>job.chatSession)){
       if(options.hint)hintGate.complete(options);
       return;
@@ -1751,7 +1798,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         const job = pendingAI.shift();
         if(job.hint && !hintGate.fresh(job)){hintGate.complete(job);continue;}
         activeAIJob=job;
-        if(job.translationToken && job.translationToken!==translationToken || job.chatEpoch && job.chatEpoch!==chatEpoch)continue;
+        if(job.translationToken && job.translationToken!==translationToken || job.chatEpoch && job.chatEpoch!==chatEpoch){finishWakeJob(job.wakeToken);continue;}
         if(job.mode==='translate')translationFailure='';
         aiScrollOffset = 0;
         aiPhaseTitle = job.mode === 'translate' ? '번역 및 답변 생성 중' : '생각 중';
@@ -1759,15 +1806,15 @@ import { LocalAgreement } from './local-agreement.mjs';
         aiReasoningPreview = '';
         if(!job.hint && !captureFailure)setHUDNotice(isRecording ? 'AI 답변 중 · 전사 계속' : '녹음 정지 · AI 답변 중');
         renderLiveHUD();
-        await queryDKSTChat(job.prompt, job.context, job.mode, job.targetLang,job);
-        activeAIJob=null;
+        try{await queryDKSTChat(job.prompt, job.context, job.mode, job.targetLang,job);}
+        finally{finishWakeJob(job.wakeToken);activeAIJob=null;}
       }
     } finally {
       activeAIJob=null;
       processingAI = false;
       stopThinkingAnimation();
       if (!aiAbortedByModeSwitch) {
-        const win = sliceHUDWindow(answerText, 0, aiVisibleLines(), AI_BOX_WIDTH_PX);
+        const win = sliceHUDWindow(aiPresentationText(), 0, aiVisibleLines(), AI_BOX_WIDTH_PX);
         aiScrollOffset = 0;
         const holdMs = Math.max(8000, AI_SCROLL_START_MS + win.maxOffset * AI_SCROLL_LINE_MS + 4000);
         answerHoldUntil = Date.now() + holdMs;
@@ -1805,7 +1852,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     function showCue(cue,status){
       const fitted=cue?.fact?fitHintContent(cue.fact):'';
       if(!fitted || !hintGate.relevant(options,cue.topic) || hintGate.duplicateCue(fitted) || hintGate.duplicateTopic(cue.topic))return false;
-      answerTitle=cue.topic || '힌트';answerText=fitted;cueDisplayed=true;cueTopic=cue.topic;
+      answerTitle=cue.topic || '힌트';answerText=fitted;cueDisplayed=true;cueTopic=cue.topic;answerAutoCloseEligible=true;startHintLifetime();
       els.chatQuestion.textContent=cue.topic?`💡 자동 힌트 · ${cue.topic}`:'💡 자동 힌트';
       els.chatOutput.textContent=fitted;els.hintStatus.textContent=status;renderLiveHUD();return true;
     }
@@ -1931,7 +1978,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         } else {
           const visible=stripSourcesForGlasses(raw);
           if(visible)receivedVisibleAnswer=true;
-          if(visible || commitReplies){answerText=visible;answerTitle='';}
+          if(visible || commitReplies){hintLifetime.clear();answerAutoCloseEligible=false;answerText=visible;answerTitle='';}
           els.chatOutput.textContent=answerText;
         }
       }
@@ -2093,7 +2140,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       if(options.translationToken && options.translationToken!==translationToken || options.chatEpoch && options.chatEpoch!==chatEpoch)return;
       const enrichedFact=options.hint?extractHintFact(rawAnswer,[conversationContext,prompt].join('\n'),enrichmentPlan):'';
       if(options.hint && (!hintGate.relevant(options,enrichmentPlan.topic) || !fitHintContent(enrichedFact) || hintGate.duplicateCue(fitHintContent(enrichedFact)) || hintGate.duplicateTopic(enrichmentPlan.topic))){els.hintStatus.textContent='현재 대화에 필요한 새 정보 없음 · 생략';return;}
-      if(options.hint){answerTitle=enrichmentPlan.topic || '힌트';answerText=fitHintContent(enrichedFact);cueDisplayed=true;cueTopic=enrichmentPlan.topic;els.chatQuestion.textContent=cueTopic?`💡 자동 힌트 · ${cueTopic}`:'💡 자동 힌트';}else setVisibleAnswer(rawAnswer,true);
+      if(options.hint){answerTitle=enrichmentPlan.topic || '힌트';answerText=fitHintContent(enrichedFact);cueDisplayed=true;cueTopic=enrichmentPlan.topic;answerAutoCloseEligible=true;startHintLifetime();els.chatQuestion.textContent=cueTopic?`💡 자동 힌트 · ${cueTopic}`:'💡 자동 힌트';}else setVisibleAnswer(rawAnswer,true);
       if(options.hint)els.hintStatus.textContent=enrichmentPlan.source==='web'?'웹검색 근거로 보충한 정보':enrichmentPlan.source==='memory'?'저장된 기억으로 보충한 정보':'내부 지식으로 보충한 정보';
       els.chatOutput.textContent = activeMode==='translate'?translationPhoneText(translationDisplay):answerText;
       if(chromeText)els.chromeTranslationStatus.textContent=repliesReplaced?`${options.translatedBy || localLabel()} 번역 · 답변 예시 완료`:hasCompleteTranslationReplies(translationDisplay)?`${options.translatedBy || localLabel()} 번역 완료 · 이전 답변 예시 유지`:`${options.translatedBy || localLabel()} 번역 완료 · 답변 예시를 받지 못했습니다`;
@@ -2106,6 +2153,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       }
       if(options.chatSession && requestChatScope===chatScope()){
         chatMemory.remember(requestChatScope,prompt,answerText);
+        answerAutoCloseEligible=true;startHintLifetime();
         els.hintStatus.textContent='직접 질문 답변 완료 · 계속 듣는 중';
       }
 
@@ -2129,7 +2177,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       }
       console.error('Chat error:', err);
       els.hintStatus.textContent=`AI 채팅 중단 · ${failure}`;
-      if(!receivedVisibleAnswer){answerTitle='';answerText=`AI 오류: ${failure}`;}
+      if(!receivedVisibleAnswer){hintLifetime.clear();answerAutoCloseEligible=false;answerTitle='';answerText=`AI 오류: ${failure}`;}
       els.chatOutput.textContent=receivedVisibleAnswer?`${answerText}\n\n응답 중단: ${failure}`:answerText;renderLiveHUD();
     } finally {
       if(options.hint)hintGate.complete(options,{displayed:cueDisplayed,text:cueDisplayed?answerText:'',topic:cueTopic});
@@ -2425,6 +2473,8 @@ import { LocalAgreement } from './local-agreement.mjs';
       return prepareSelectedTranslation(undefined,true).catch(()=>{});
     });
     els.hintContextTokens.addEventListener('change',()=>{settingsEdited=true;config.hintContextTokens=normalizeHintBudget(els.hintContextTokens.value);els.hintContextTokens.value=String(config.hintContextTokens);hintGate.reset();persistSettings().catch(console.warn);});
+    els.hintAutoClose.addEventListener('change',updateHintLifetimeSettings);
+    els.hintSecondsPerLine.addEventListener('change',updateHintLifetimeSettings);
     els.hideTranscript.addEventListener('change',()=>setTranscriptHidden(els.hideTranscript.checked));
     els.hintWebSearch?.addEventListener('change',()=>{settingsEdited=true;config.hintWebSearch=els.hintWebSearch.checked;persistSettings().catch(console.warn);});
     els.translateExcludeSelf?.addEventListener('change',()=>{
