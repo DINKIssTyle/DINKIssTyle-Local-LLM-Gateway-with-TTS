@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const src = fs.readFileSync('plugin.js','utf8').replace(/^import .*\n/gm, '').replace('  function enqueueClip(', `  window.__queueTest={ai(){resetQueuesForModeSwitch('ai');config.glassesMode='ai';captureFailure='';isRecording=true;segmenter=new SpeechSegmenter();},refreshIcons(){queueHudIcons(true);},hintGate,liveTranslations,translationHistory,enqueueClip,drainClips,stopVoiceRecording,reset(){resetQueuesForModeSwitch('translate');config.glassesMode='translate';},state(){return{ids:pendingClips.map(c=>c.segmentId),failure:captureFailure,recording:isRecording,engine:activeSttEngine,mode:config.glassesMode,active:activeUtterance?.id,previewBusy};},record(){isRecording=true;segmenter=new SpeechSegmenter();}};
+const src = fs.readFileSync('plugin.js','utf8').replace(/^import .*\n/gm, '').replace('  function enqueueClip(', `  window.__queueTest={ai(){resetQueuesForModeSwitch('ai');config.glassesMode='ai';captureFailure='';isRecording=true;segmenter=new SpeechSegmenter();},refreshIcons(){queueHudIcons(true);},settings:applyLiveSettings,hintGate,liveTranslations,translationHistory,enqueueClip,drainClips,stopVoiceRecording,reset(){resetQueuesForModeSwitch('translate');config.glassesMode='translate';},state(){return{ids:pendingClips.map(c=>c.segmentId),failure:captureFailure,recording:isRecording,engine:activeSttEngine,mode:config.glassesMode,active:activeUtterance?.id,previewBusy};},record(){isRecording=true;segmenter=new SpeechSegmenter();}};
   function enqueueClip(`);
 const elements = new Map();
 function element(id) {
@@ -11,6 +11,7 @@ function element(id) {
   }
   return elements.get(id);
 }
+let modelFailure=false;
 let modelCatalog=[{key:'test-model',display_name:'Test Model'}];
 let llmMode='standard', chatReply=null, cueReply=null, chromeText=null, appleText='Apple 번역 결과';
 let nextTranscript = '이븐 테스트';let nextPreviewText=null;
@@ -40,6 +41,7 @@ const context={DKST_DEFAULT_SERVER_URL:'https://192.168.1.4:2806',waitForEvenApp
  if(url.endsWith('/api/config'))return{ok:true,json:async()=>({llm_mode:llmMode,context_strategy:'retrieval'})};
  if(url.endsWith('/api/auth/check'))return{ok:true,json:async()=>({authenticated:opts.headers?.Authorization==='Bearer test-session'})};
  if(url.endsWith('/api/login'))return{ok:true,json:async()=>({token:'test-session'})};
+ if(url.endsWith('/api/models') && modelFailure)return{ok:false,status:503};
  if(url.endsWith('/api/models'))return{ok:true,json:async()=>({models:modelCatalog})};
  if(url.includes('/api/stt/transcripts?'))return{ok:true,json:async()=>({entries:[{startedAt:'2026-11-12T05:00:00Z',endedAt:'2026-11-12T05:00:01Z',text:'긴 전사 기록 '.repeat(10000)}]})};
  if(url.endsWith('/api/stt/warmup')){const response={ok:true,json:async()=>({ready:true,preview:true})};if(holdWarmup){holdWarmup=false;return await new Promise(resolve=>{releaseWarmup=()=>resolve(response);});}return response;}
@@ -67,6 +69,7 @@ const context={DKST_DEFAULT_SERVER_URL:'https://192.168.1.4:2806',waitForEvenApp
 }};
 const tick=()=>new Promise(r=>setImmediate(r));
 (async()=>{
+ Object.assign(context,await import('./settings-menu.mjs'));
  Object.assign(context,await import('./role-models.mjs'));
  Object.assign(context,await import('./live-translation.mjs'));
  Object.assign(context,await import('./stable-translation.mjs'));
@@ -197,7 +200,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
 
  assert.equal(startup.textObject.find(c=>c.containerName==='transcript').containerID,4);
  assert.equal(startup.textObject.find(c=>c.containerName==='transcript').yPosition,195);
- assert.deepEqual(Array.from(startup.menuObject.menuItems,m=>m.itemName),['AI 모드','번역 모드','입력 소스 전환']);
+ assert.deepEqual(Array.from(startup.menuObject.menuItems,m=>m.itemName),['AI 모드','번역 모드','입력 소스 전환','인식 언어','번역 언어','번역 엔진','음성 인식 엔진','내 목소리 제외','안경 입력 감지 민감도']);
  assert.equal(startup.textObject.find(c=>c.containerName==='notice').yPosition,0);
  assert.ok(startup.textObject.find(c=>c.containerName==='notice').width<=startup.textObject.find(c=>c.containerName==='status').xPosition);
  assert.equal(startup.textObject.filter(c=>c.isEventCapture===1).length,1);
@@ -359,7 +362,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  handler({sysEvent:{eventType:0}});await tick();await tick();
  // Hint mode classifies saved finals without blocking the transcript queue.
  handler({sysEvent:{eventType:0}});await tick();await tick();
- element('hint-web-search').checked=false;element('hint-web-search').handlers.change();
+ element('hint-web-search').checked=false;await element('hint-web-search').handlers.change();
  handler({sysEvent:{eventType:0}});await tick();await tick();
  context.window.__queueTest.hintGate.settleMs=0;
  const beforeHints=requests.filter(r=>r.url.endsWith('/api/chat')).length;
@@ -396,7 +399,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  cueReply=null;
  // Web preference first extracts the actual topic and an independent lookup question.
  context.window.__queueTest.hintGate.reset();
- element('hint-web-search').checked=true;element('hint-web-search').handlers.change();
+ element('hint-web-search').checked=true;await element('hint-web-search').handlers.change();
  hintDecision={hint:true,category:'background',focus:'맥북 에어 M4의 무게 얘기야'};
  cueReply=JSON.stringify({topic:'맥북 에어 M4',question:'MacBook Air M4 13인치와 15인치의 무게는 각각 얼마인가?',knownFacts:[],source:'web'});
  chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({fact:'검색 근거에서 확인한 모델 무게 정보입니다.',adds_information:true})})+'\n\n');
@@ -414,7 +417,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  nextTranscript='맥북 에어 M4의 무게 얘기야';utterance();await tick();await tick();await tick();await tick();
  assert.match(element('hint-status').textContent,/웹검색 사용 불가 · 내부 지식 힌트/);
  assert.match(element('chat-output').textContent,/휴대성/);cueReply=null;
- element('hint-web-search').checked=false;element('hint-web-search').handlers.change();
+ element('hint-web-search').checked=false;await element('hint-web-search').handlers.change();
  // Ambient questions and requests remain observed data, never direct AI chat.
  context.window.__queueTest.hintGate.reset();hintDecision={hint:false};
  const directStart=requests.filter(r=>r.url.endsWith('/api/chat')).length;
@@ -483,7 +486,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  assert.equal(Math.floor((translationBox.height-6)/27),5);
  assert.ok(replyBox.height>=4*27);assert.equal(translationBox.yPosition+translationBox.height,replyBox.yPosition);
  assert.equal(replyBox.yPosition+replyBox.height,288);
- assert.equal(translatedLayout.menuObject.menuItems.length,3);
+ assert.equal(translatedLayout.menuObject.menuItems.length,9);
  assert.match(element('hud-screen').innerHTML,/번역 · 추천 답변/);
  chatReply=sseReply('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify({translation:"커피 드시겠어요?",positive:"네, 주세요.\nYes, please.",negative:"괜찮습니다.\nNo, thank you."})}}]})+'\n\ndata: [DONE]\n\n');
  nextTranscript='Would you like some coffee?';
@@ -501,7 +504,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
 
  // Default LLM translation keeps the previous box while preparing/streaming,
  // including a reply-first JSON stream, empty output and generation failure.
- element('chrome-translation').checked=false;element('chrome-translation').handlers.change();
+ element('chrome-translation').checked=false;await element('chrome-translation').handlers.change();
  let llmTranslationRead=0,finishLLMTranslation;
  chatReply={ok:true,body:{getReader:()=>({read:async()=>{
    if(llmTranslationRead++===0)return{done:false,value:Buffer.from('data: '+JSON.stringify({type:'prompt_processing.progress',progress:.32})+'\n\n')};
@@ -523,9 +526,9 @@ const tick=()=>new Promise(r=>setImmediate(r));
  nextTranscript='Empty next sentence';utterance('other');await tick();await tick();await tick();
  assert.match(element('hud-screen').innerHTML,/hud-ai-body">[\s\S]*다음 번역문입니다/);
  assert.match(element('chrome-translation-status').textContent,/번역문을 받지 못했습니다/);
- element('chrome-translation').checked=true;element('chrome-translation').handlers.change();
+ element('chrome-translation').checked=true;await element('chrome-translation').handlers.change();
 
- element('translate-source-lang').value='ja';element('translate-source-lang').handlers.change();await tick();
+ element('translate-source-lang').value='ja';await element('translate-source-lang').handlers.change();await tick();
  chatReply=sseReply('data: {"choices":[{"delta":{"content":"[번역] 안녕하세요.\\n[긍정] こんにちは — 안녕하세요\\n[부정] すみません — 죄송합니다\\n[중립] はい — 네"}}]}\n\ndata: [DONE]\n\n');
  nextTranscript='こんにちは';
  utterance();await tick();await tick();await tick();
@@ -566,7 +569,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  releaseProgress();await tick();await tick();await tick();
  // Live Chrome hypotheses reach the translation box before the final endpoint.
  await context.window.__queueTest.stopVoiceRecording(false);
- element('stt-engine').value='chrome-online';element('stt-engine').handlers.change();
+ element('stt-engine').value='chrome-online';await element('stt-engine').handlers.change();
  context.window.__queueTest.liveTranslations.intervalMs=0;
  handler({sysEvent:{eventType:0}});await tick();await tick();await tick();
  assert.equal(context.window.__queueTest.state().engine,'chrome-online');assert.equal(context.window.__queueTest.state().recording,true);
@@ -595,7 +598,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  assert.equal(JSON.parse(requests.filter(r=>r.url.endsWith('/api/translate/chrome')).at(-1).opts.body).text,'authoritative final phrase today?','the translator must receive the whole sentence across short audio endpoints');
  assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,liveChatStart+1,'continued drafts must not generate reply examples');
  nextPreviewText=null;await context.window.__queueTest.stopVoiceRecording(false);
- element('stt-engine').value='whisper';element('stt-engine').handlers.change();
+ element('stt-engine').value='whisper';await element('stt-engine').handlers.change();
  handler({sysEvent:{eventType:0}});await tick();await tick();await tick();
  chromeText=null;
  handler({sysEvent:{eventType:0}});await tick();await tick();
@@ -628,8 +631,8 @@ const tick=()=>new Promise(r=>setImmediate(r));
  assert.deepEqual(sentIDs,Array.from({length:6},(_,i)=>`queue-${i}`),'every queued clip must be processed once in order');
  // Slow archive persistence must not block the latest Apple live caption.
  queue.reset();
- element('stt-engine').value='apple';element('stt-engine').handlers.change();
- element('translation-engine').value='apple';element('translation-engine').handlers.change();
+ element('stt-engine').value='apple';await element('stt-engine').handlers.change();
+ element('translation-engine').value='apple';await element('translation-engine').handlers.change();
  handler({menuItemClickEvent:{itemID:2}});await tick();await tick();
  handler({sysEvent:{eventType:0}});await tick();await tick();await tick();
  assert.equal(queue.state().engine,'apple');assert.equal(queue.state().recording,true);
@@ -647,8 +650,8 @@ const tick=()=>new Promise(r=>setImmediate(r));
  releaseFinal();await tick();await tick();await tick();
  assert.equal(queue.state().ids.length,0);assert.match(element('hud-screen').innerHTML,/저장을 기다리지 않는 최신 번역/,'late saved audio must not replace newer live text');
  await queue.stopVoiceRecording(false);queue.reset();nextPreviewText=null;
- element('stt-engine').value='whisper';element('stt-engine').handlers.change();
- element('translation-engine').value='chrome';element('translation-engine').handlers.change();
+ element('stt-engine').value='whisper';await element('stt-engine').handlers.change();
+ element('translation-engine').value='chrome';await element('translation-engine').handlers.change();
  const retryStart=requests.length;
  sttReplies=[{ok:false,status:503,text:async()=>'temporarily busy'},savedResponse];
  queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'retry-same-id');
@@ -707,14 +710,14 @@ const tick=()=>new Promise(r=>setImmediate(r));
  assert.equal(queue.state().recording,true);assert.equal(queue.state().ids.length,0);assert.equal(queue.state().failure,'');
  await queue.stopVoiceRecording(false);queue.reset();
  // Chrome uses the same save/trigger pipeline without requiring Whisper warmup.
- element('stt-engine').value='chrome-online';element('stt-engine').handlers.change();
+ element('stt-engine').value='chrome-online';await element('stt-engine').handlers.change();
  const warmupsBeforeChrome=requests.filter(r=>r.url.endsWith('/api/stt/warmup')).length;
- handler({menuItemClickEvent:{itemID:1}});element('voice-mode').value='continuous';
+ handler({menuItemClickEvent:{itemID:1}});await tick();await tick();element('voice-mode').value='continuous';
  handler({sysEvent:{eventType:0}});await tick();await tick();await tick();
  assert.equal(queue.state().recording,true);
  assert.equal(requests.filter(r=>r.url.endsWith('/api/stt/warmup')).length,warmupsBeforeChrome);
  assert.ok(requests.some(r=>r.url.endsWith('/api/stt/chrome/prepare')));
- assert.equal(element('stt-engine').disabled,true);
+ assert.equal(element('stt-engine').disabled,false);
  nextTranscript='크롬 엔진 전사';utterance('other');await tick();await tick();await tick();
  assert.equal(JSON.parse(requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).at(-1).opts.body).engine,'chrome-online');
  assert.equal(JSON.parse(requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).at(-1).opts.body).fallback,true);
@@ -723,7 +726,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  // Translation scrollback follows the newest five of thirty rows and supports
  // actual glasses scroll events without snapping back on the next translation.
  handler({menuItemClickEvent:{itemID:2}});await tick();
- element('chrome-translation').checked=false;element('chrome-translation').handlers.change();
+ element('chrome-translation').checked=false;await element('chrome-translation').handlers.change();
  for(let i=0;i<35;i++){
    chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({translation:`기록 ${i}`,positive:'네',negative:'아니요'})})+'\n\n');
    element('chat-input').value=`문장 ${i}`;element('text-chat-form').handlers.submit({preventDefault(){}});
@@ -764,8 +767,8 @@ const tick=()=>new Promise(r=>setImmediate(r));
  // Apple uses native prepare/STT and local translation without Whisper warmup.
  await queue.stopVoiceRecording(false);
  handler({menuItemClickEvent:{itemID:2}});await tick();
- element('translation-engine').value='apple';element('translation-engine').handlers.change();
- element('stt-engine').value='apple';element('stt-engine').handlers.change();
+ element('translation-engine').value='apple';await element('translation-engine').handlers.change();
+ element('stt-engine').value='apple';await element('stt-engine').handlers.change();
  const beforeAppleWarmup=requests.filter(r=>r.url.endsWith('/api/stt/warmup')).length;
  handler({sysEvent:{eventType:0}});await tick();await tick();await tick();
  assert.equal(queue.state().engine,'apple');assert.equal(queue.state().recording,true);
@@ -787,8 +790,8 @@ const tick=()=>new Promise(r=>setImmediate(r));
  nextPreviewText=null;await queue.stopVoiceRecording(false);
  await element('prepare-chrome-translation').handlers.click();
  assert.ok(requests.some(r=>r.url.endsWith('/api/translate/apple/prepare')));
- element('translation-engine').value='chrome';element('translation-engine').handlers.change();
- element('stt-engine').value='whisper';element('stt-engine').handlers.change();
+ element('translation-engine').value='chrome';await element('translation-engine').handlers.change();
+ element('stt-engine').value='whisper';await element('stt-engine').handlers.change();
  // Independent LLM assignments: chat, hint, translation, and reply models.
  modelCatalog.push(...['chat-role','hint-role','translate-role','reply-role','new-base'].map(key=>({key,display_name:key})));
  await element('btn-refresh-models').handlers.click();
@@ -802,7 +805,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  element('chat-input').value='모델별 채팅 질문';element('text-chat-form').handlers.submit({preventDefault(){}});await tick();await tick();await tick();
  assert.equal(JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body).model,'chat-role');
  queue.ai();queue.hintGate.reset();queue.hintGate.settleMs=0;queue.hintGate.intervalMs=0;
- element('hint-web-search').checked=false;element('hint-web-search').handlers.change();hintDecision={hint:true,category:'background'};
+ element('hint-web-search').checked=false;await element('hint-web-search').handlers.change();hintDecision={hint:true,category:'background'};
  cueReply=JSON.stringify({topic:'RAG',question:'RAG의 구조는?',knownFacts:[],source:'internal'});
  chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({fact:'RAG는 관련 문서를 검색해 그 근거를 바탕으로 답변을 생성하는 방식입니다.',adds_information:true})})+'\n\n');
  const roleHintsStart=requests.filter(r=>r.url.endsWith('/api/chat')).length;
@@ -811,7 +814,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  assert.equal(roleHints.length,2);assert.ok(roleHints.every(r=>r.model==='hint-role'),'hint plan and final answer must use the assigned hint model');
  cueReply=null;await queue.stopVoiceRecording(false);
  handler({menuItemClickEvent:{itemID:2}});await tick();
- element('translation-engine').value='llm';element('translation-engine').handlers.change();
+ element('translation-engine').value='llm';await element('translation-engine').handlers.change();
  let replyReads=0,releaseRoleReply;
  const heldRoleReply={ok:true,body:{getReader:()=>({read:async()=>{
    if(replyReads++===0)return await new Promise(resolve=>{releaseRoleReply=()=>resolve({done:false,value:Buffer.from('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({positive:'답변 모델의 긍정',negative:'답변 모델의 부정'})})+'\n\n')});});
@@ -826,14 +829,14 @@ const tick=()=>new Promise(r=>setImmediate(r));
  assert.match(roleTranslations[0].messages[0].content,/답변 예시를 만들지 마세요/);
  releaseRoleReply();await tick();await tick();await tick();
  assert.match(element('hud-screen').innerHTML,/답변 모델의 긍정/);assert.match(element('chrome-translation-status').textContent,/LLM 번역/);
- element('translation-engine').value='apple';element('translation-engine').handlers.change();appleText='Apple 번역은 LLM 번역 모델을 호출하지 않음';
+ element('translation-engine').value='apple';await element('translation-engine').handlers.change();appleText='Apple 번역은 LLM 번역 모델을 호출하지 않음';
  chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({positive:'네',negative:'아니요'})})+'\n\n');
  const nativeRoleStart=requests.filter(r=>r.url.endsWith('/api/chat')).length;
  element('chat-input').value='Native translation';element('text-chat-form').handlers.submit({preventDefault(){}});await tick();await tick();await tick();
  assert.deepEqual(requests.filter(r=>r.url.endsWith('/api/chat')).slice(nativeRoleStart).map(r=>JSON.parse(r.opts.body).model),['reply-role']);
- element('model-select').value='new-base';element('model-select').handlers.change();
+ element('model-select').value='new-base';await element('model-select').handlers.change();
  assert.match(element('model-ai-chat').options[0].textContent,/new-base/);assert.equal(element('model-ai-chat').value,'chat-role','base change must not reset pinned models');
- element('model-ai-hint').value='';element('model-ai-hint').handlers.change();
+ element('model-ai-hint').value='';await element('model-ai-hint').handlers.change();
  queue.ai();queue.hintGate.reset();hintDecision={hint:true,category:'background'};
  cueReply=JSON.stringify({topic:'양자역학',cue_type:'concept',source:'internal',fact:'양자역학에서는 입자의 상태를 확률 진폭으로 기술하며 측정 결과는 확률로 예측합니다.',adds_information:true});
  nextTranscript='양자역학의 의미를 알려줘';utterance();await tick();await tick();await tick();
@@ -858,30 +861,30 @@ const tick=()=>new Promise(r=>setImmediate(r));
  assert.match(element('hud-screen').innerHTML,/이미 받은 유용한 답변/,'network failure must preserve answer already received');
  assert.match(element('chat-output').textContent,/응답 중단/);assert.match(element('hint-status').textContent,/연결 오류/);
  handler({menuItemClickEvent:{itemID:2}});
- element('translate-source-lang').value='en';element('translate-source-lang').handlers.change();
- element('translate-target-lang').value='ko';element('translate-target-lang').handlers.change();
- element('translation-engine').value='chrome';element('translation-engine').handlers.change();
- element('stt-engine').value='chrome-online';element('stt-engine').handlers.change();
+ element('translate-source-lang').value='en';await element('translate-source-lang').handlers.change();
+ element('translate-target-lang').value='ko';await element('translate-target-lang').handlers.change();
+ element('translation-engine').value='chrome';await element('translation-engine').handlers.change();
+ element('stt-engine').value='chrome-online';await element('stt-engine').handlers.change();
  await tick();await tick();await tick();
  const autoStart=requests.length;
- element('translate-source-lang').value='ja';element('translate-source-lang').handlers.change();
+ element('translate-source-lang').value='ja';await element('translate-source-lang').handlers.change();
  await tick();await tick();await tick();
  assert.ok(requests.slice(autoStart).some(r=>r.url.endsWith('/api/translate/chrome/prepare') && JSON.parse(r.opts.body).source==='ja' && JSON.parse(r.opts.body).target==='ko'));
  assert.ok(requests.slice(autoStart).some(r=>r.url.endsWith('/api/stt/chrome/prepare') && JSON.parse(r.opts.body).language==='ja'));
  const appleAutoStart=requests.length;
- element('translation-engine').value='apple';element('translation-engine').handlers.change();
- element('stt-engine').value='apple';element('stt-engine').handlers.change();
+ element('translation-engine').value='apple';await element('translation-engine').handlers.change();
+ element('stt-engine').value='apple';await element('stt-engine').handlers.change();
  await tick();await tick();await tick();
  assert.ok(requests.slice(appleAutoStart).some(r=>r.url.endsWith('/api/translate/apple/prepare') && JSON.parse(r.opts.body).source==='ja'));
  assert.ok(requests.slice(appleAutoStart).some(r=>r.url.endsWith('/api/stt/apple/prepare') && JSON.parse(r.opts.body).language==='ja'));
  const targetAutoStart=requests.length;
- element('translate-target-lang').value='en';element('translate-target-lang').handlers.change();
+ element('translate-target-lang').value='en';await element('translate-target-lang').handlers.change();
  await tick();await tick();
  assert.ok(requests.slice(targetAutoStart).some(r=>r.url.endsWith('/api/translate/apple/prepare') && JSON.parse(r.opts.body).target==='en'));
  assert.equal(requests.slice(targetAutoStart).filter(r=>r.url.endsWith('/api/stt/apple/prepare')).length,0,'explicit source unchanged: target-only change must reuse STT preparation');
- element('translate-source-lang').value='auto';element('translate-source-lang').handlers.change();await tick();await tick();
+ element('translate-source-lang').value='auto';await element('translate-source-lang').handlers.change();await tick();await tick();
  const autoSourceStart=requests.length;
- element('translate-target-lang').value='ko';element('translate-target-lang').handlers.change();await tick();await tick();
+ element('translate-target-lang').value='ko';await element('translate-target-lang').handlers.change();await tick();await tick();
  assert.ok(requests.slice(autoSourceStart).some(r=>r.url.endsWith('/api/stt/apple/prepare') && JSON.parse(r.opts.body).language==='en'),'automatic source must be prepared again when target changes its inferred language');
  assert.match(element('hud-notice').textContent,/^\[번역\] AUTO→KO /,'header must show the selected automatic source, not the engine fallback language');
  const modeAutoStart=requests.length;
@@ -891,11 +894,11 @@ const tick=()=>new Promise(r=>setImmediate(r));
  assert.equal(element('prepare-chrome-stt').disabled,false);assert.equal(element('prepare-chrome-translation').disabled,false);
  // Glasses-only quiet capture and gain use one immutable PCM pass.
  assert.equal(element('glasses-sensitivity').value,'high');assert.equal(element('glasses-gain').value,'1');
- element('glasses-gain').value='2';element('glasses-gain').handlers.change();await tick();
+ element('glasses-gain').value='2';await element('glasses-gain').handlers.change();await tick();
  assert.equal(JSON.parse(nativeSaved).glassesInput.gain,2);
  handler({sysEvent:{eventType:0}});await tick();await tick();await tick();
- assert.equal(element('glasses-sensitivity').disabled,true);assert.equal(element('glasses-gain').disabled,true);
- element('glasses-gain').value='4';element('glasses-gain').handlers.change();assert.equal(element('glasses-gain').value,'2','capture gain cannot change inside cumulative native STT snapshots');
+ assert.equal(element('glasses-sensitivity').disabled,false);assert.equal(element('glasses-gain').disabled,true);
+ element('glasses-gain').value='4';await element('glasses-gain').handlers.change();assert.equal(element('glasses-gain').value,'2','capture gain cannot change inside cumulative native STT snapshots');
  const quietInput=Buffer.alloc(3200);for(let i=0;i<quietInput.length;i+=2)quietInput.writeInt16LE(150,i);
  const quietOriginal=Buffer.from(quietInput),quietPreviewStart=requests.filter(r=>r.url.endsWith('/api/stt/preview')).length;
  nextPreviewText='작은 목소리 테스트';
@@ -906,24 +909,26 @@ const tick=()=>new Promise(r=>setImmediate(r));
  for(const r of quietPreviews){const pcm=Buffer.from(JSON.parse(r.opts.body).audio,'base64');for(let i=0;i<pcm.length;i+=2)assert.equal(pcm.readInt16LE(i),300,'preview audio must be amplified once, not again on each cumulative request');}
  assert.deepEqual(quietInput,quietOriginal);assert.match(element('glasses-input-level').textContent,/-47 dBFS.*-41 dBFS/);
  handler({menuItemClickEvent:{itemID:2}});await tick();await tick();await new Promise(resolve=>setTimeout(resolve,160));
- element('translate-exclude-self').checked=true;element('translate-exclude-self').handlers.change();
+ element('translate-exclude-self').checked=true;await element('translate-exclude-self').handlers.change();
  const excludedStart=requests.filter(r=>r.url.endsWith('/api/stt/preview')).length;
  for(let i=0;i<6;i++)handler({audioEvent:{audioPcm:speech,source:'glasses',speakerRole:'self'}});
  await tick();await tick();assert.equal(requests.filter(r=>r.url.endsWith('/api/stt/preview')).length,excludedStart,'boosting must not bypass explicit self-speech exclusion');
  assert.match(element('glasses-input-level').textContent,/화자 필터로 제외/);
  await queue.stopVoiceRecording(false);await tick();nextPreviewText=null;handler({menuItemClickEvent:{itemID:1}});await tick();
  assert.equal(element('glasses-sensitivity').disabled,false);assert.equal(element('glasses-gain').disabled,false);
- element('glasses-sensitivity').value='very_high';element('glasses-sensitivity').handlers.change();element('glasses-gain').value='4';element('glasses-gain').handlers.change();await tick();
+ element('glasses-sensitivity').value='very_high';await element('glasses-sensitivity').handlers.change();element('glasses-gain').value='4';await element('glasses-gain').handlers.change();await tick();
  // Phone input uses the same PCM/STT pipeline, with source pinned until stop.
- element('audio-input-source').value='phone';element('audio-input-source').handlers.change();await tick();
+ element('audio-input-source').value='phone';await element('audio-input-source').handlers.change();await tick();
  assert.equal(JSON.parse(nativeSaved).audioInputSource,'phone');
  assert.equal(element('glasses-input-settings').hidden,true);
  handler({sysEvent:{eventType:0}});await tick();await tick();await tick();
  assert.deepEqual(audioCalls.filter(call=>call[0]).at(-1),[true,'phone']);
  assert.ok(element('hud-mic-icon').src.endsWith('phone-mic-on.png'),'image must reflect the confirmed phone microphone, not AI processing');
- assert.equal(element('audio-input-source').disabled,true);
- element('audio-input-source').value='glasses';element('audio-input-source').handlers.change();
- assert.equal(element('audio-input-source').value,'phone','active microphone source cannot be changed mid-recording');
+ assert.equal(element('audio-input-source').disabled,false);
+ element('audio-input-source').value='glasses';await element('audio-input-source').handlers.change();
+ assert.equal(element('audio-input-source').value,'glasses','active source changes close and reopen the microphone');
+ assert.equal(queue.state().recording,true);
+ element('audio-input-source').value='phone';await element('audio-input-source').handlers.change();
  const phonePreviewStart=requests.filter(r=>r.url.endsWith('/api/stt/preview')).length;
  for(let i=0;i<6;i++)handler({audioEvent:{audioPcm:quietInput,source:'phone',speakerRole:'unknown'}});
  await tick();assert.equal(requests.filter(r=>r.url.endsWith('/api/stt/preview')).length,phonePreviewStart,'phone keeps the original gate even when glasses sensitivity/gain are maximum');
@@ -961,6 +966,89 @@ const tick=()=>new Promise(r=>setImmediate(r));
  context.setTimeout=beforeNoAudioTimer;assert.equal(typeof noPhoneAudio,'function');
  noPhoneAudio();await tick();await tick();await tick();
  assert.equal(queue.state().recording,false);assert.match(queue.state().failure,/휴대폰 마이크 입력이 없습니다/);assert.match(queue.state().failure,/iOS/);
+ // A failed model catalog must not prevent independent Apple capability discovery.
+ const capabilitiesBefore=requests.filter(r=>r.url.endsWith('/api/apple/status')).length;
+ modelFailure=true;await element('btn-refresh-models').handlers.click();await tick();modelFailure=false;
+ assert.ok(requests.filter(r=>r.url.endsWith('/api/apple/status')).length>capabilitiesBefore);
+ // Native engine menus must retain Apple while capability controls are initially disabled/unavailable.
+ for(const [id,option] of [[6,'translation-option-apple'],[7,'stt-option-apple']]){
+   element(option).disabled=true;
+   handler({menuItemClickEvent:{itemID:id}});
+   for(let i=0;i<150 && rebuilds.at(-1)?.textObject?.[0]?.content!==(id===6?'번역 엔진':'음성 인식 엔진');i++)await new Promise(resolve=>setTimeout(resolve,20));
+   assert.equal(rebuilds.at(-1).listObject[0].itemContainer.itemCount,3);
+   assert.ok(rebuilds.at(-1).listObject[0].itemContainer.itemName.some(label=>label.includes('Apple 로컬')));
+   handler({menuItemClickEvent:{itemID:90}});await tick();element(option).disabled=false;
+ }
+ // Native selection pages must not apply a value on scroll or accidentally start capture.
+ const menuOpens=audioCalls.filter(call=>call[0]).length;
+ handler({menuItemClickEvent:{itemID:4}});
+ for(let i=0;i<100 && !rebuilds.at(-1)?.listObject;i++)await new Promise(resolve=>setTimeout(resolve,20));
+ const pickerPage=rebuilds.at(-1);
+ assert.equal(pickerPage.listObject[0].itemContainer.itemCount,10);
+ assert.equal(pickerPage.textObject[0].content,'인식 언어');
+ const beforePickerLanguage=JSON.parse(nativeSaved).translateSourceLang;
+ handler({listEvent:{containerID:30,eventType:2,currentSelectItemIndex:3}});await tick();
+ assert.equal(JSON.parse(nativeSaved).translateSourceLang,beforePickerLanguage,'scrolling only moves selection');
+ handler({listEvent:{containerID:30,currentSelectItemIndex:3}});await tick();await tick();await tick();
+ assert.equal(JSON.parse(nativeSaved).translateSourceLang,'ja','omitted zero click event selects the native row');
+ assert.equal(audioCalls.filter(call=>call[0]).length,menuOpens,'idle selection must not open a mic');
+ for(const [id,key,index,want] of [[5,'translateTargetLang',1,'en'],[6,'translationEngine',0,'llm'],[7,'sttEngine',0,'whisper'],[8,'translateExcludeSelf',1,false]]){
+   handler({menuItemClickEvent:{itemID:id}});
+   handler({listEvent:{containerID:30,eventType:0,currentSelectItemIndex:index}});
+   await tick();await tick();await tick();
+   assert.equal(JSON.parse(nativeSaved)[key],want);
+ }
+ await queue.settings({audioInputSource:'glasses'});
+ handler({menuItemClickEvent:{itemID:9}});
+ handler({listEvent:{containerID:30,currentSelectItemIndex:0}});await tick();await tick();await tick();
+ assert.equal(JSON.parse(nativeSaved).glassesInput.sensitivity,'standard');
+ handler({menuItemClickEvent:{itemID:4}});handler({sysEvent:{eventType:9}});await tick();
+ assert.equal(shutdown,1,'picker back must not exit the app');
+ // Record, change each phone setting, and verify a confirmed close precedes one resumed open.
+ handler({sysEvent:{eventType:0}});await tick();await tick();await tick();
+ assert.equal(queue.state().recording,true);
+ for(const patch of [{translateSourceLang:'ko'},{translateTargetLang:'ja'},{translationEngine:'apple'},{sttEngine:'apple'},{translateExcludeSelf:true},{glassesInput:{sensitivity:'very_high',gain:4}}]){
+   const calls=audioCalls.length;
+   await queue.settings(patch);
+   assert.equal(queue.state().recording,true);
+   assert.equal(audioCalls[calls][0],false,'settings transaction confirms the old microphone off first');
+   assert.equal(audioCalls.slice(calls).filter(call=>call[0]).length,1);
+ }
+ const noOpCalls=audioCalls.length;await queue.settings({sttEngine:'apple'});
+ assert.equal(audioCalls.length,noOpCalls,'selecting the current setting must not restart');
+ // Audio in flight retains the old engine/language and is archived without routing under new settings.
+ let finishOld;
+ sttReplies=[()=>new Promise(resolve=>{finishOld=()=>resolve({ok:true,json:async()=>({text:'이전 설정 보관 음성',saved:true})});})];
+ const oldRequests=requests.length;
+ queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'old-settings');await tick();
+ await queue.settings({sttEngine:'whisper',translateSourceLang:'en'});
+ finishOld();await tick();await tick();
+ const oldBody=JSON.parse(requests.slice(oldRequests).find(r=>r.url.endsWith('/api/stt/transcribe')).opts.body);
+ assert.equal(oldBody.engine,'apple');assert.equal(oldBody.language,'ko');
+ assert.match(element('transcript-log').textContent,/이전 설정 보관 음성/);
+ assert.equal(queue.state().recording,true);
+ // Rapid updates during warmup coalesce; an explicit tap prevents automatic restart.
+ holdWarmup=true;
+ const firstChange=queue.settings({translateSourceLang:'ja'});await tick();await tick();await tick();
+ assert.equal(typeof releaseWarmup,'function');
+ const latestChange=queue.settings({translateSourceLang:'en'});
+ handler({sysEvent:{eventType:0}});releaseWarmup();
+ await firstChange;await latestChange;await tick();
+ assert.equal(queue.state().recording,false,'manual stop during settings preparation cancels resume');
+ assert.equal(JSON.parse(nativeSaved).translateSourceLang,'en','latest language wins');
+ // Failed native close must leave the old setting selected and never open a replacement mic.
+ handler({sysEvent:{eventType:0}});await tick();await tick();await tick();
+ assert.equal(queue.state().recording,true);
+ const beforeFailedChange=audioCalls.filter(call=>call[0]).length;
+ const sourceBeforeFailure=JSON.parse(nativeSaved).audioInputSource;
+ bridge.audioControl=async(open,...args)=>{audioCalls.push([open,...args]);return open;};
+ await queue.settings({audioInputSource:'phone'});
+ assert.equal(audioCalls.filter(call=>call[0]).length,beforeFailedChange);
+ assert.equal(JSON.parse(nativeSaved).audioInputSource,sourceBeforeFailure);
+ assert.match(element('hint-status').textContent,/설정 변경 실패/);
+ bridge.audioControl=normalAudioControl;await queue.stopVoiceRecording(false);
+ // Keep persisted settings expected by the restore tests below.
+ await queue.settings({audioInputSource:'phone',sttEngine:'apple',translationEngine:'apple'});
  const originalImageUpdate=bridge.updateImageRawData;
  bridge.updateImageRawData=async()=> 'sendFailed';
  queue.refreshIcons();

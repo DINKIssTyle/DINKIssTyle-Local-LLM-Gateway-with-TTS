@@ -20,13 +20,17 @@ type glassesHintRequest struct {
 	Context     string   `json:"context"`
 	Sensitivity string   `json:"sensitivity"`
 	Shown       []string `json:"shown,omitempty"`
+	ShownInfo   string   `json:"shownInfo,omitempty"`
 }
 type glassesHintDecision struct {
-	Hint     bool   `json:"hint"`
-	Category string `json:"category,omitempty"`
-	Reason   string `json:"reason"`
-	Backend  string `json:"backend,omitempty"`
-	Focus    string `json:"focus,omitempty"`
+	Hint           bool    `json:"hint"`
+	Category       string  `json:"category,omitempty"`
+	Reason         string  `json:"reason"`
+	Backend        string  `json:"backend,omitempty"`
+	Focus          string  `json:"focus,omitempty"`
+	Keyword        string  `json:"keyword,omitempty"`
+	KeywordSurface string  `json:"keywordSurface,omitempty"`
+	Score          float64 `json:"score,omitempty"`
 }
 
 var glassesHintCriteria = map[string]string{
@@ -252,6 +256,15 @@ func classifyGlassesHint(req glassesHintRequest) (glassesHintDecision, error) {
 // JEV selects a short current span first. Only selected spans reach the LLM;
 // topic naming and lookup planning are done there, never on every audio frame.
 func decideGlassesHint(req glassesHintRequest, choice func(string, map[string]string, string) (jevReply, error)) (glassesHintDecision, error) {
+	if decision, ok, err := decideKeywordHint(req, choice); err != nil {
+		return glassesHintDecision{}, err
+	} else if ok {
+		return decision, nil
+	}
+	return decideLegacyGlassesHint(req, choice)
+}
+
+func decideLegacyGlassesHint(req glassesHintRequest, choice func(string, map[string]string, string) (jevReply, error)) (glassesHintDecision, error) {
 	candidates := hintFocusCandidates(req.Text)
 	unseen := candidates[:0]
 	for _, candidate := range candidates {
@@ -328,7 +341,7 @@ func handleGlassesHintDecision(auth *AuthManager) http.HandlerFunc {
 			return
 		}
 		var req glassesHintRequest
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32*1024)).Decode(&req); err != nil || len([]rune(req.Text)) > 1600 || len([]rune(req.Context)) > 4000 || strings.TrimSpace(req.Text) == "" || len(req.Shown) > 4 {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32*1024)).Decode(&req); err != nil || len([]rune(req.Text)) > 1600 || len([]rune(req.Context)) > 4000 || strings.TrimSpace(req.Text) == "" || len(req.Shown) > 4 || len([]rune(req.ShownInfo)) > 1600 {
 			http.Error(w, "Invalid hint input", 400)
 			return
 		}

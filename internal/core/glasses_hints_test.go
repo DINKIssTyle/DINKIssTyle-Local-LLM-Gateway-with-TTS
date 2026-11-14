@@ -400,7 +400,7 @@ func TestGlassesHintShortTopicPipeline(t *testing.T) {
 		{"피라미드 얘기야\n청동기 시대", []string{"피라미드 얘기야"}, "청동기 시대"},
 	} {
 		calls := 0
-		decision, err := decideGlassesHint(glassesHintRequest{Text: tc.text, Shown: tc.shown}, func(text string, criteria map[string]string, instructions string) (jevReply, error) {
+		decision, err := decideLegacyGlassesHint(glassesHintRequest{Text: tc.text, Shown: tc.shown}, func(text string, criteria map[string]string, instructions string) (jevReply, error) {
 			calls++
 			if _, focus := criteria["focus_0"]; focus {
 				t.Fatal("filler/shown spans should have been removed before choice")

@@ -53,3 +53,4 @@ assert.doesNotMatch(cuePrompts('거절하고 싶어','','reply','',{preferWeb:tr
 assert.equal(parseCueResponse('다음은 결과입니다:\n'+JSON.stringify(cue),'전사').topic,'제안');
 assert.equal(extractHintFact('확인 결과:\n'+JSON.stringify({suggestion:'금요일까지 검토 후 회신드리겠습니다.',adds_information:true}),observed,plan),'금요일까지 검토 후 회신드리겠습니다.');
 assert.equal(extractHintFact(JSON.stringify({fact:'네, 질문하신 기자의 대피라미드는 쿠푸왕의 무덤입니다. 도움이 되셨길 바랍니다.',adds_information:true}),observed,plan),'기자의 대피라미드는 쿠푸왕의 무덤입니다.');
+for(const preferWeb of [false,true])assert.match(cuePrompts('청동기 시대에는 청동을 사용했대.','','background','',{preferWeb,keyword:'청동기시대'}).userPrompt,/사전·JEV가 선별한 명칭.*청동기시대/);

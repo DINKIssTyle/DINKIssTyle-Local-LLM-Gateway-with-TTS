@@ -46,3 +46,4 @@ all_funcs.txt
 !internal/core/chrome_profile_unix_test.go
 
 !internal/core/apple_runtime_test.go
+!internal/core/glasses_keywords_test.go

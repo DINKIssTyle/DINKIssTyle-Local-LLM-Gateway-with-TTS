@@ -1,0 +1,7 @@
+{
+  "source": "https://dumps.wikimedia.org/kowiki/latest/kowiki-latest-all-titles-in-ns0.gz",
+  "source_sha256": "673fb96d5f9ea34012e7922fb337277ba7bffc0e477e5ba95f993c3aef41629e",
+  "entries": 1325725,
+  "uncompressed_bytes": 51048978,
+  "format": "normalized key TAB display title LF; UTF-8, sorted; article titles only"
+}

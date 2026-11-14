@@ -113,3 +113,12 @@ diversityNow+=12000;assert.deepEqual(diversity.shownFocus(),[],'old source utter
 diversity.observe('피라미드의 건립 목적에 대해 이야기했어',{id:'revisit'});await tick();
 assert.equal(diverse.length,3,'revisited source may supply another fact after short repetition window');diversity.reset();
 console.log('PASS: ongoing topics allow new aspects after cooldown while duplicate facts, short repeats, and memory bounds remain protected');
+let keywordJob;
+const keywordGate=new HintGate({generationIntervalMs:0,settleMs:0,intervalMs:0,cooldownMs:0,
+ decide:async()=>({hint:true,category:'background',focus:'청동기 시대에는 청동을 썼대.',keyword:'청동기시대',keywordSurface:'청동기 시대'}),onHint:job=>{keywordJob=job;}});
+keywordGate.observe('청동기 시대에는 청동을 썼대.',{id:'dictionary'});await tick();
+assert.equal(keywordJob.keyword,'청동기시대');assert.match(keywordJob.text,/청동을 썼대/);keywordGate.reset();
+const inventedGate=new HintGate({generationIntervalMs:0,settleMs:0,intervalMs:0,cooldownMs:0,
+ decide:async()=>({hint:true,category:'background',keyword:'없는명칭',keywordSurface:'등장하지않음'}),onHint:job=>{keywordJob=job;}});
+inventedGate.observe('피라미드 이야기를 들었어.',{id:'invented'});await tick();assert.equal(keywordJob.keyword,undefined);inventedGate.reset();
+console.log('PASS: canonical dictionary keyword retains original evidence; unobserved keyword evidence is rejected');

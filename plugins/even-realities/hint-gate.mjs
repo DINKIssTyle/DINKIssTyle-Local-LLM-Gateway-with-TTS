@@ -69,7 +69,8 @@ export class HintGate {
       this.recent=this.recent.filter(e=>now-e.at<180000);
       for(const [key,candidate] of this.generating)if(!this.fresh(candidate))this.generating.delete(key);
       const focus=typeof decision.focus==='string' && job.text.includes(decision.focus.trim())?decision.focus.trim():'';
-      const focusedJob=focus?{...job,text:focus,focusText:focus,context:[job.context,job.text].filter(Boolean).join('\n').slice(-1200)}:job;
+      let focusedJob=focus?{...job,text:focus,focusText:focus,context:[job.context,job.text].filter(Boolean).join('\n').slice(-1200)}:job;
+      if(typeof decision.keyword==='string' && decision.keyword.length<=80 && typeof decision.keywordSurface==='string' && decision.keywordSurface.trim() && job.text.includes(decision.keywordSurface.trim()))focusedJob={...focusedJob,keyword:decision.keyword,keywordSurface:decision.keywordSurface};
       for(const [k,until] of this.failed)if(until<=this.now())this.failed.delete(k);
       const focusKey=normalized(focusedJob.focusText || focusedJob.text).join('');
       if(decision.hint && focusKey && (this.failed.get(focusKey) || 0)>this.now()) {
