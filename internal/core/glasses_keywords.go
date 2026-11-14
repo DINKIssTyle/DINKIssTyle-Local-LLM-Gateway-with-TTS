@@ -80,8 +80,11 @@ var hintWordPattern = regexp.MustCompile(`[\p{L}\p{N}]+(?:[+._-][\p{L}\p{N}+]+)*
 var hintParticles = []string{"으로부터는", "에서부터는", "에게서는", "으로서는", "에서는", "으로부터", "에서부터", "에게서", "으로는", "이랑은", "이라는", "이라고", "이라면", "이라서", "이어서", "에는", "으로", "에서", "에게", "한테", "까지", "부터", "처럼", "보다", "하고", "이랑", "이라", "이며", "이고", "은", "는", "이", "가", "을", "를", "의", "에", "도", "와", "과", "로", "랑"}
 
 type hintKeywordCandidate struct {
-	Term, Surface, Evidence string
-	Start, End              int
+	Term     string `json:"term"`
+	Surface  string `json:"surface"`
+	Evidence string `json:"evidence"`
+	Start    int    `json:"-"`
+	End      int    `json:"-"`
 }
 
 func hintKeywordEvidence(text string, start, end int) string {

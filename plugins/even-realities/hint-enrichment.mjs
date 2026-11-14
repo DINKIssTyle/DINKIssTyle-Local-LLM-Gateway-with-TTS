@@ -13,7 +13,13 @@ export function hintPlanPrompts(text,context,category) {
 }
 function parseObject(raw) {
   const text=String(raw).trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'');
-  try {return JSON.parse(text);}catch {
+  try {
+    let value=JSON.parse(text);
+    for(let depth=0;depth<3 && value && typeof value==='object' && !Array.isArray(value) && value.result!==undefined;depth++){
+      value=typeof value.result==='string'?JSON.parse(value.result.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'')):value.result;
+    }
+    return value;
+  }catch {
     const start=text.indexOf('{'),end=text.lastIndexOf('}');
     if(start>=0 && end>start){try{return JSON.parse(text.slice(start,end+1));}catch{}}
     return null;

@@ -4383,6 +4383,10 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		promptProfile = "glasses"
 	}
 	hintPhase, _ := hintEnvelope["glasses_hint_phase"].(string)
+	hintJudge := glassesHint && hintPhase == "judge"
+	if hintJudge {
+		promptProfile = "glasses-judge"
+	}
 	var hintResearch hintResearchRequest
 	if raw, ok := hintEnvelope["hint_research"]; ok {
 		data, _ := json.Marshal(raw)
@@ -4400,6 +4404,14 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		body, _ = json.Marshal(hintEnvelope)
 	}
 
+	if hintJudge {
+		// A bounded, tool-free classifier always uses a stateless chat completion,
+		// even when the user's interactive chat uses LM Studio's native stateful API.
+		hintEnvelope["max_tokens"] = 192
+		delete(hintEnvelope, "max_completion_tokens")
+		hintEnvelope["chat_template_kwargs"] = map[string]any{"enable_thinking": false}
+		body, _ = json.Marshal(hintEnvelope)
+	}
 	var llmURL string
 
 	// Default configuration (Global)
@@ -4440,7 +4452,11 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	if glassesRequest {
 		baseChatCtx = r.Context()
 	}
-	chatCtx, chatCancel := context.WithTimeout(baseChatCtx, 5*time.Minute)
+	chatTimeout := 5 * time.Minute
+	if hintJudge {
+		chatTimeout = 6 * time.Second
+	}
+	chatCtx, chatCancel := context.WithTimeout(baseChatCtx, chatTimeout)
 	defer chatCancel()
 	if !glassesRequest && strings.TrimSpace(userID) != "" {
 		registerCurrentChatCancel(userID, chatCancel)
@@ -4501,7 +4517,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	}
 	if glassesHint {
 		disabledTools = readOnlyHintTools(disabledTools)
-		if hintPhase == "plan" {
+		if hintPhase == "plan" || hintJudge {
 			enableTools = false
 			enableMemory = false
 			contextStrategy = "none"
@@ -4517,6 +4533,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 	if glassesRequest {
 		contextStrategy = "none"
+	}
+	if hintJudge {
+		llmMode = "standard"
 	}
 
 	toolExecCtx := toolruntime.ExecutionContext{
@@ -4685,7 +4704,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		"instruction_chars": len([]rune(skillCompilation.Prompt)),
 	})
 
-	if glassesHint && hintPhase != "plan" && hintResearch.Source != "" {
+	if glassesHint && hintPhase != "plan" && !hintJudge && hintResearch.Source != "" {
 		evidence, researchErr := loadHintEvidence(chatCtx, toolruntime.Default, toolExecCtx, enableTools, hintResearch)
 		if researchErr != nil {
 			http.Error(w, "힌트 근거 조회 실패: "+researchErr.Error(), http.StatusFailedDependency)
@@ -5130,6 +5149,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	maxToolTurns := 10
 	if bulkToolTestRequest {
 		maxToolTurns = 24
+	}
+	if hintJudge {
+		maxToolTurns = 1
 	}
 	for turn := 0; turn < maxToolTurns; turn++ {
 		turnStart := time.Now()
@@ -6300,7 +6322,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				if strings.HasPrefix(line, "{") && strings.Contains(line, "\"error\"") {
 					log.Printf("[handleChat] Detected Raw JSON Error in stream: %s", line)
 					if strings.Contains(line, "Context size has been exceeded") || strings.Contains(line, "context_length_exceeded") {
-						if strings.TrimSpace(reasoningResponse) != "" && !reasoningOnlyFinalRecoveryUsed && turn < maxToolTurns-1 {
+						if !hintJudge && strings.TrimSpace(reasoningResponse) != "" && !reasoningOnlyFinalRecoveryUsed && turn < maxToolTurns-1 {
 							log.Printf("[handleChat] Context exceeded during reasoning. Attempting recovery from summarized reasoning...")
 							break
 						}
@@ -6734,7 +6756,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			}
 		}
 
-		shouldRecoverReasoning := strings.TrimSpace(reasoningResponse) != "" && !toolExecutedThisTurn && !reasoningOnlyFinalRecoveryUsed && turn < maxToolTurns-1 && strings.TrimSpace(fullResponse) == ""
+		shouldRecoverReasoning := !hintJudge && strings.TrimSpace(reasoningResponse) != "" && !toolExecutedThisTurn && !reasoningOnlyFinalRecoveryUsed && turn < maxToolTurns-1 && strings.TrimSpace(fullResponse) == ""
 		if shouldRecoverReasoning {
 			reasoningOnlyFinalRecoveryUsed = true
 			var recoveryErr error

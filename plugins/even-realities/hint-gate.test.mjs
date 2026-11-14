@@ -122,3 +122,12 @@ const inventedGate=new HintGate({generationIntervalMs:0,settleMs:0,intervalMs:0,
  decide:async()=>({hint:true,category:'background',keyword:'없는명칭',keywordSurface:'등장하지않음'}),onHint:job=>{keywordJob=job;}});
 inventedGate.observe('피라미드 이야기를 들었어.',{id:'invented'});await tick();assert.equal(keywordJob.keyword,undefined);inventedGate.reset();
 console.log('PASS: canonical dictionary keyword retains original evidence; unobserved keyword evidence is rejected');
+let busy=true,deferredHint;
+const deferGate=new HintGate({generationIntervalMs:0,settleMs:0,intervalMs:0,cooldownMs:0,decide:async()=>busy?{hint:false,defer:true}:{hint:true,category:'background',plan:{topic:'피라미드',question:'건립 시기',source:'web',knownFacts:[]}},onHint:job=>{deferredHint=job;}});
+deferGate.observe('피라미드가 왕의 무덤이래.',{id:'deferred'});await tick();assert.ok(deferGate.pending);assert.equal(deferredHint,undefined);
+busy=false;clearTimeout(deferGate.timer);deferGate.pending.due=0;await deferGate.pump();assert.equal(deferredHint.hintPlan.topic,'피라미드');deferGate.reset();
+let aspect='건립 시기',aspectTime=Date.now(),aspectJobs=[];
+const aspectGate=new HintGate({now:()=>aspectTime,generationIntervalMs:0,settleMs:0,intervalMs:0,cooldownMs:0,decide:async()=>({hint:true,category:'background',focus:'피라미드',plan:{topic:'피라미드',question:aspect,source:'web',knownFacts:[]}}),onHint:job=>{aspectJobs.push(job);}});
+aspectGate.observe('피라미드 건립에 관한 대화',{id:'aspect1'});await tick();aspectGate.complete(aspectJobs.at(-1),{displayed:true,text:'기자의 대피라미드 건립 시기',topic:'피라미드'});
+aspectTime+=1000;aspect='석재 운반에 사용한 기술과 공법';aspectGate.observe('피라미드 돌을 운반한 방법',{id:'aspect2'});await tick();assert.equal(aspectJobs.length,2,'same quoted name must allow a genuinely different research aspect');aspectGate.complete(aspectJobs.at(-1),{displayed:true,text:'경사로와 수로 활용',topic:'피라미드'});
+aspectTime+=1000;aspectGate.observe('피라미드 돌 운반 기술',{id:'aspect3'});await tick();assert.equal(aspectJobs.length,2,'same research aspect must still coalesce');aspectGate.reset();

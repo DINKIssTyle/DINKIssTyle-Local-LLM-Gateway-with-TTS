@@ -49,7 +49,8 @@ func PrepareRequest(input RequestInput) (PreparedRequest, error) {
 		Token:    sanitizeToken(input.TokenRaw),
 	}
 	contextStrategy := normalizeContextStrategy(input.LLMMode, input.ContextStrategy)
-	glassesProfile := input.PromptProfile == "glasses"
+	judgeProfile := input.PromptProfile == "glasses-judge"
+	glassesProfile := input.PromptProfile == "glasses" || judgeProfile
 	if glassesProfile {
 		contextStrategy = "none"
 	}
@@ -63,6 +64,17 @@ func PrepareRequest(input RequestInput) (PreparedRequest, error) {
 	if glassesProfile {
 		delete(reqMap, "previous_response_id")
 		reqMap["store"] = false
+	}
+	if judgeProfile {
+		// No tools, memory or runtime boilerplate in the small classification window.
+		delete(reqMap, "integrations")
+		removeProviderToolControls(reqMap)
+		prepared.Body, _ = json.Marshal(reqMap)
+		prepared.ReqMap = reqMap
+		prepared.InitialUserInputText = extractChatInputText(reqMap)
+		prepared.UpstreamURL = buildUpstreamURL(prepared.Endpoint, input.LLMMode)
+		prepared.ModelID = extractModelID(reqMap)
+		return prepared, nil
 	}
 	prepared.ReqMap = reqMap
 	prepared.InitialUserInputText = extractChatInputText(reqMap)

@@ -1,3 +1,5 @@
+import {adaptiveHUD,hintWindow} from './adaptive-hud.mjs';
+import {JEV_ONLY,normalizeHintBudget,requestHintJudgment,suggestedHintJudge} from './hint-judge.mjs';
 import {SETTINGS_MENUS,settingsMenuItems,settingsPickerPage} from './settings-menu.mjs';
 import {GlassesInputProcessor,normalizeGlassesInput,inputSegmentOptions,levelDb,GLASSES_THRESHOLDS} from './glasses-input.mjs';
 import {headerLayout} from './header-layout.mjs';
@@ -37,12 +39,15 @@ import { LocalAgreement } from './local-agreement.mjs';
     username: '',
     apiKey: '',
     model: '',
-    roleModels:{},
+    roleModels:{hintDecision:JEV_ONLY},
+    hintDecisionAuto:true,
+    hintContextTokens:600,
     connectionMode: 'sse',
     conciseMode: true,
     aiHintMode: true,
     hintSensitivity: 'balanced',
     hintWebSearch: true,
+    hideTranscript:false,
     glassesMode: 'ai',
     translateSourceLang: 'auto',
     translateTargetLang: 'ko',
@@ -110,6 +115,7 @@ import { LocalAgreement } from './local-agreement.mjs';
   let captionStable = '';
   let captionDraft = '';
   let answerText = '';
+  let answerTitle = '';
   let translationDisplay={translation:'',positive:'',negative:''};
   let translationToken=0,translating=false,liveTranslationDraft=false,translationFailure='';
   let answerHoldUntil = 0;
@@ -125,13 +131,14 @@ import { LocalAgreement } from './local-agreement.mjs';
   let chatEpoch=1;
   function chatScope(){return [config.serverUrl,config.username,resolveRoleModel('chat',config)].join('\0');}
   let availableModels=[];
-  function aiVisibleLines(){return normalizeGlassesMode(config.glassesMode)==='translate'?5:6;}
-  let nativeTranslateLayout=false,nativeHeaderLayoutKey='';
+  function currentBodyLayout(){return adaptiveHUD({mode:normalizeGlassesMode(config.glassesMode),title:answerTitle,text:answerText,hideTranscript:config.hideTranscript});}
+  function aiVisibleLines(){return currentBodyLayout().contentLines || 6;}
+  let nativeTranslateLayout=false,nativeHeaderLayoutKey='',nativeBodyLayoutKey='';
   const AI_SCROLL_START_MS = 5000;
   const AI_SCROLL_LINE_MS = 2500;
   // Inner width: 576 - 2 × (2px padding + 1px border).
   const AI_BOX_WIDTH_PX = 570;
-  const TRANSCRIPT_VISIBLE_LINES = 3;
+
   const TRANSCRIPT_WIDTH_PX = 576;
   let aiPhaseTitle = '';
   let aiPhaseDetail = '';
@@ -162,7 +169,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     loginStatusLabel: document.getElementById('login-status-label'),
     apiKey: document.getElementById('api-key'),
     modelSelect: document.getElementById('model-select'),
-    roleModels:{chat:document.getElementById('model-ai-chat'),hint:document.getElementById('model-ai-hint'),translation:document.getElementById('model-translation'),translationReply:document.getElementById('model-translation-reply')},
+    roleModels:{chat:document.getElementById('model-ai-chat'),hintDecision:document.getElementById('model-hint-decision'),hint:document.getElementById('model-ai-hint'),translation:document.getElementById('model-translation'),translationReply:document.getElementById('model-translation-reply')},
     btnRefreshModels: document.getElementById('btn-refresh-models'),
     connectionMode: document.getElementById('connection-mode'),
     optConciseMode: document.getElementById('opt-concise-mode'),
@@ -189,8 +196,11 @@ import { LocalAgreement } from './local-agreement.mjs';
     modeBtnTranslate: document.getElementById('mode-btn-translate'),
     modeDescription: document.getElementById('mode-description'),
     voiceMode: document.getElementById('voice-mode'),
+    hintContextTokens:document.getElementById('hint-context-tokens'),
+    hintJudgeStatus:document.getElementById('hint-judge-status'),
     hintSensitivity: document.getElementById('hint-sensitivity'),
     hintWebSearch: document.getElementById('hint-web-search'),
+    hideTranscript:document.getElementById('hide-transcript'),
     hintStatus: document.getElementById('hint-status'),
     chatForm: document.getElementById('text-chat-form'),
     chatInput: document.getElementById('chat-input'),
@@ -217,12 +227,38 @@ import { LocalAgreement } from './local-agreement.mjs';
 
   const hintGate=new HintGate({
     decide:async(job,signal)=>{
-      const res=await gatewayFetch(`${config.serverUrl}/api/glasses/hint-decision`,{
-        method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),signal,
-        body:JSON.stringify({text:job.text,context:job.context,sensitivity:config.hintSensitivity,shown:hintGate.shownFocus(),shownInfo:hintGate.diversityContext()})
-      });
-      if(!res.ok)throw new Error(`HTTP ${res.status}${res.status===404?' · 게이트웨이 업데이트 필요':''}`);
-      return res.json();
+      const model=resolveRoleModel('hintDecision',config);
+      const useLLM=!!model && model!==JEV_ONLY;
+      hintGate.intervalMs=useLLM?3000:2000;
+      const readAdvice=async(advisory,adviceSignal)=>{
+        const res=await gatewayFetch(`${config.serverUrl}/api/glasses/hint-decision`,{
+          method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),signal:adviceSignal,
+          body:JSON.stringify({text:job.text,context:job.context,sensitivity:config.hintSensitivity,shown:hintGate.shownFocus(),shownInfo:hintGate.diversityContext(),advisory})
+        });
+        if(!res.ok)throw new Error(`HTTP ${res.status}${res.status===404?' · 게이트웨이 업데이트 필요':''}`);
+        return res.json();
+      };
+      if(!useLLM)return readAdvice(false,signal);
+      if(processingAI)return {hint:false,defer:true,reason:'answer_priority'};
+      if(pendingTrigger || activeAIJob && !activeAIJob.hint || pendingAI.some(job=>job.chatSession))return {hint:false,reason:'chat_priority'};
+      // Advice is optional: false, busy, unavailable and slow JEV must never block LLM selection.
+      const adviceController=new AbortController();const cancelAdvice=()=>adviceController.abort();
+      signal.addEventListener('abort',cancelAdvice,{once:true});
+      let timer,advisory={};
+      try{
+        advisory=await Promise.race([readAdvice(true,adviceController.signal).catch(()=>({})),new Promise(resolve=>{timer=setTimeout(()=>{adviceController.abort();resolve({});},350);})]);
+      }finally{clearTimeout(timer);signal.removeEventListener('abort',cancelAdvice);}
+      if(signal.aborted)return {hint:false,reason:'cancelled'};
+      try{
+        els.hintJudgeStatus.textContent=`${model} · 토픽 판별 중`;
+        const result=await requestHintJudgment({fetch:gatewayFetch,server:config.serverUrl,headers:getAuthHeaders({'Content-Type':'application/json'}),model,job,shown:hintGate.diversityContext(),advisory,limit:config.hintContextTokens,signal,preferWeb:config.hintWebSearch!==false,sensitivity:config.hintSensitivity});
+        els.hintJudgeStatus.textContent=`${result.hint?`주제: ${result.plan.topic}`:'보충할 정보 없음'} · 문맥 약 ${result.contextEstimatedTokens}/${result.contextBudget}토큰`;
+        return result;
+      }catch(error){
+        if(signal.aborted)throw error;
+        els.hintJudgeStatus.textContent=`판별 LLM 지연/오류 · 전사 계속 · ${error.message}`;
+        return advisory.hint?advisory:{hint:false,reason:'judge_unavailable'};
+      }
     },
     onHint:job=>{
       if(!isRecording || config.glassesMode!=='ai' || pendingTrigger || (activeAIJob && !activeAIJob.hint) || pendingAI.some(job=>!job.hint))return false;
@@ -379,6 +415,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         const incoming=JSON.parse(saved);
         config = { ...config, ...incoming };
         config.roleModels=normalizeRoleModels(incoming.roleModels);
+        if(!Object.prototype.hasOwnProperty.call(incoming.roleModels || {},'hintDecision'))config.roleModels.hintDecision=JEV_ONLY;
         config.audioInputSource=incoming.audioInputSource==='phone'?'phone':'glasses';
         config.glassesInput=normalizeGlassesInput(incoming.glassesInput);
         if(!Object.prototype.hasOwnProperty.call(incoming,'translationEngine'))config.translationEngine=incoming.chromeTranslation===false?'llm':'chrome';
@@ -397,8 +434,10 @@ import { LocalAgreement } from './local-agreement.mjs';
     if (els.apiKey) els.apiKey.value = config.apiKey || '';
     if (els.connectionMode) els.connectionMode.value = config.connectionMode || 'sse';
     config.aiHintMode=true;config.voiceMode='continuous';
+    config.hintContextTokens=normalizeHintBudget(config.hintContextTokens);els.hintContextTokens.value=String(config.hintContextTokens);
     els.hintSensitivity.value=config.hintSensitivity || 'balanced';
     if(els.hintWebSearch)els.hintWebSearch.checked=config.hintWebSearch!==false;
+    config.hideTranscript=config.hideTranscript===true;els.hideTranscript.checked=config.hideTranscript;
     if (els.optConciseMode) els.optConciseMode.checked = config.conciseMode !== false;
     if (els.optEnableTts) els.optEnableTts.checked = config.enableTTS !== false;
     config.glassesMode = normalizeGlassesMode(config.glassesMode);
@@ -472,7 +511,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     answerHoldUntil = 0;
     stopAIAutoScroll();
     stopThinkingAnimation();
-    if(!preserveDisplay){answerText = '';aiScrollOffset = 0;}
+    if(!preserveDisplay){answerText = '';answerTitle='';aiScrollOffset = 0;}
     aiPhaseTitle = '';
     aiPhaseDetail = '';
     aiReasoningPreview = '';
@@ -546,8 +585,10 @@ import { LocalAgreement } from './local-agreement.mjs';
     config.connectionMode = els.connectionMode.value;
     config.conciseMode = els.optConciseMode.checked;
     config.aiHintMode=true;
+    config.hintContextTokens=normalizeHintBudget(els.hintContextTokens.value);
     config.hintSensitivity=els.hintSensitivity.value || 'balanced';
     config.hintWebSearch=els.hintWebSearch?.checked!==false;
+    config.hideTranscript=els.hideTranscript.checked===true;
     hintGate.reset();
     config.enableTTS = els.optEnableTts.checked;
     if (els.glassesMode?.value) config.glassesMode = normalizeGlassesMode(els.glassesMode.value);
@@ -611,30 +652,30 @@ import { LocalAgreement } from './local-agreement.mjs';
   }
 
   // --- Even Realities SDK Bridge ---
-  function hudPage(translate,layout=currentHeaderLayout(translate)){return {
-        containerTotalNum: translate?6:8,
+  function hudPage(translate,layout=currentHeaderLayout(translate),body=currentBodyLayout()){return {
+        containerTotalNum: translate?6:6+Number(body.show)+Number(body.showTranscript),
         imageObject:[{containerID:5,containerName:'mic-state',xPosition:layout.micIconX,yPosition:1,width:24,height:24},...(!translate?[{containerID:6,containerName:'ai-trigger',xPosition:layout.wakeIconX,yPosition:1,width:24,height:24}]:[])],
-        textObject: [{
-          xPosition: 0, yPosition: 27, width: 576, height: translate?141:168,
+        textObject: [...(body.show?[{
+          xPosition: 0, yPosition: 27, width: 576, height: body.height,
           borderWidth: 1, borderColor: 4, borderRadius: 4, paddingLength: 2,
           containerID: 1, containerName: 'gateway',
           content: lastAIHUDContent || '',
           isEventCapture: 1,
-        }, {
+        }]:[]), {
           xPosition: 400, yPosition: 0, width: 176, height: 27,
           paddingLength: 0, borderWidth: 0,
           containerID: 2, containerName: 'status', content: rightAlignedStatusText(glassesBattery), isEventCapture: 0,
         }, {
           xPosition: layout.x, yPosition: 0, width: layout.width, height: 27,
           paddingLength: 0, borderWidth: 0,
-          containerID: 3, containerName: 'notice', content: nativeHUDNotice(), isEventCapture: 0,
-        }, {
-          xPosition: 0, yPosition: translate?168:195, width: 576, height: translate?120:93,
+          containerID: 3, containerName: 'notice', content: nativeHUDNotice(), isEventCapture:!body.show && !body.showTranscript?1:0,
+        }, ...(body.showTranscript?[{
+          xPosition: 0, yPosition: body.transcriptY, width: 576, height: body.transcriptHeight,
           paddingLength: 0, borderWidth: 0,
           containerID: 4, containerName: 'transcript',
           content: lastTranscriptHUDContent || '',
-          isEventCapture: 0,
-        },{containerID:7,containerName:'mode-label',xPosition:layout.prefix.x,yPosition:0,width:layout.prefix.width,height:27,paddingLength:0,borderWidth:0,content:layout.prefix.content,isEventCapture:0},
+          isEventCapture: body.show?0:1,
+        }]:[]),{containerID:7,containerName:'mode-label',xPosition:layout.prefix.x,yPosition:0,width:layout.prefix.width,height:27,paddingLength:0,borderWidth:0,content:layout.prefix.content,isEventCapture:0},
         ...(!translate?[{containerID:8,containerName:'wake-word',xPosition:layout.wake.x,yPosition:0,width:layout.wake.width,height:27,paddingLength:0,borderWidth:0,content:layout.wake.content,isEventCapture:0}]:[])],
         menuObject: {
           menuItems: [
@@ -658,7 +699,9 @@ import { LocalAgreement } from './local-agreement.mjs';
   function selectSettingsPicker(index){
     const picker=settingsPicker;
     if(!picker || !Number.isInteger(index) || !picker.options[index])return;
-    const value=picker.options[index][0];closeSettingsPicker();
+    const value=picker.options[index][0];
+    if(picker.key==='hideTranscript'){settingsPicker=null;setTranscriptHidden(value);return;}
+    closeSettingsPicker();
     applyLiveSettings({[picker.key]:picker.key==='glassesInput'?{...config.glassesInput,sensitivity:value}:value});
   }
 
@@ -669,9 +712,10 @@ import { LocalAgreement } from './local-agreement.mjs';
       restoreNativeSettings();
       nativeTranslateLayout=normalizeGlassesMode(config.glassesMode)==='translate';
       const initialHeaderLayout=currentHeaderLayout(nativeTranslateLayout);
-      const result = await bridge.createStartUpPageContainer(hudPage(nativeTranslateLayout,initialHeaderLayout));
+      const initialBody=currentBodyLayout();
+      const result = await bridge.createStartUpPageContainer(hudPage(nativeTranslateLayout,initialHeaderLayout,initialBody));
       if (result !== 0) throw new Error(`안경 화면 생성 실패: ${result}`);
-      displayReady = true;nativeHeaderLayoutKey=initialHeaderLayout.key;nativeMenuSource=config.audioInputSource;
+      displayReady = true;nativeHeaderLayoutKey=initialHeaderLayout.key;nativeMenuSource=config.audioInputSource;nativeBodyLayoutKey=initialBody.key;
       queueHudIcons(true);
       updateConnectionState(true, 'G2 화면 연결됨');
       setupBridgeEvents();
@@ -845,22 +889,24 @@ import { LocalAgreement } from './local-agreement.mjs';
   function renderHUDContainers(aiFullText, aiWindowText, aiMetaLabel, transcriptFullText, pageInfo = 'P 1/1', scrollRatio = 0) {
     const badgeLabel = glassesModeBadgeText(config.glassesMode, config.translateTargetLang);
     const translateMode=normalizeGlassesMode(config.glassesMode)==='translate';
+    const body=currentBodyLayout();
     const bottomPhoneText=translateMode?translationReplyText(translationDisplay):transcriptFullText;
     if (els.hudScreen) {
+      els.hudScreen.classList.toggle('hud-ai-mode',!translateMode);
       const aiCursor = (isThinking || processingAI) && !(translateMode && config.chromeTranslation!==false) ? '<span class="hud-cursor"></span>' : '';
       const txCursor = (!translateMode && !isThinking && !processingAI && isRecording) ? '<span class="hud-cursor"></span>' : '';
       els.hudScreen.innerHTML =
-        `<div class="hud-ai-box">` +
+        (body.show?`<div class="hud-ai-box${body.hint?' hud-hint-box':''}"${!translateMode?` style="flex:0 0 auto;--hud-content-lines:${body.contentLines}"`:''}>` +
           `<div class="hud-ai-header">` +
-            `<span id="hud-ai-badge" class="hud-ai-badge">${escapeHtml(badgeLabel)}</span>` +
-            `<span id="hud-ai-meta" class="hud-ai-meta">${escapeHtml(translateMode && config.chromeTranslation!==false?'':aiMetaLabel)}</span>` +
+            `<span id="hud-ai-badge" class="hud-ai-badge">${escapeHtml(body.hint?body.title:badgeLabel)}</span>` +
+            `<span id="hud-ai-meta" class="hud-ai-meta">${escapeHtml(body.hint || translateMode && config.chromeTranslation!==false?'':aiMetaLabel)}</span>` +
           `</div>` +
           `<div id="hud-ai-body" class="hud-ai-body">${escapeHtml(aiFullText)}${aiCursor}</div>` +
-        `</div>` +
-        `<div class="hud-transcript-box${translateMode?' hud-translation-replies':''}">` +
+        `</div>`:'') +
+        (body.showTranscript?`<div class="hud-transcript-box${translateMode?' hud-translation-replies':''}">` +
           `<div class="hud-transcript-label">${translateMode?'예상 답변':'전사'}</div>` +
           `<div id="hud-transcript-body" class="hud-transcript-body">${escapeHtml(bottomPhoneText)}${txCursor}</div>` +
-        `</div>`;
+        `</div>`:'');
       const aiBodyEl = typeof document.getElementById === 'function' ? document.getElementById('hud-ai-body') : null;
       if (aiBodyEl && typeof aiBodyEl.scrollHeight === 'number' && typeof aiBodyEl.clientHeight === 'number') {
         const maxScroll = Math.max(0, aiBodyEl.scrollHeight - aiBodyEl.clientHeight);
@@ -871,18 +917,16 @@ import { LocalAgreement } from './local-agreement.mjs';
       els.hudPageIndicator.textContent = pageInfo;
     }
 
-    if (displayReady) {
-      const nextAI = String(aiWindowText || '').slice(0, 2000);
-      const nextTx = String(transcriptFullText || '').slice(0, 2000);
-      if (nextAI !== lastAIHUDContent) {
-        lastAIHUDContent = nextAI;
-        pendingHUD.set(1, { containerID: 1, containerName: 'gateway', content: nextAI });
-      }
-      if (nextTx !== lastTranscriptHUDContent) {
-        lastTranscriptHUDContent = nextTx;
-        pendingHUD.set(4, { containerID: 4, containerName: 'transcript', content: nextTx });
-      }
-      if (pendingHUD.size || nativeTranslateLayout!==translateMode) flushHUD();
+    const nextAI=body.show?String(aiWindowText || '').slice(0,2000):'';
+    const nextTx=body.showTranscript?String(transcriptFullText || '').slice(0,2000):'';
+    const aiChanged=nextAI!==lastAIHUDContent,txChanged=nextTx!==lastTranscriptHUDContent;
+    lastAIHUDContent=nextAI;lastTranscriptHUDContent=nextTx;
+    if(displayReady){
+      if(body.show && aiChanged)pendingHUD.set(1,{containerID:1,containerName:'gateway',content:nextAI});
+      if(!body.show)pendingHUD.delete(1);
+      if(!body.showTranscript)pendingHUD.delete(4);
+      if(body.showTranscript && txChanged)pendingHUD.set(4,{containerID:4,containerName:'transcript',content:nextTx});
+      if(pendingHUD.size || nativeTranslateLayout!==translateMode || nativeBodyLayoutKey!==body.key)flushHUD();
     }
   }
 
@@ -908,10 +952,13 @@ import { LocalAgreement } from './local-agreement.mjs';
         }
         const translate=normalizeGlassesMode(config.glassesMode)==='translate';
         const header=currentHeaderLayout(translate);
-        if(nativePickerKey || nativeMenuSource!==config.audioInputSource || nativeTranslateLayout!==translate || nativeHeaderLayoutKey!==header.key){
-          const success=await bridge.rebuildPageContainer(hudPage(translate,header));
+        const body=currentBodyLayout();
+        if(nativeBodyLayoutKey!==body.key || nativePickerKey || nativeMenuSource!==config.audioInputSource || nativeTranslateLayout!==translate || nativeHeaderLayoutKey!==header.key){
+          const success=await bridge.rebuildPageContainer(hudPage(translate,header,body));
           if(!success)throw new Error('안경 화면 배치 변경 실패');
-          nativePickerKey='';nativeMenuSource=config.audioInputSource;nativeTranslateLayout=translate;nativeHeaderLayoutKey=header.key;
+          nativePickerKey='';nativeMenuSource=config.audioInputSource;nativeTranslateLayout=translate;nativeHeaderLayoutKey=header.key;nativeBodyLayoutKey=body.key;
+          if(!body.show)pendingHUD.delete(1);
+          if(!body.showTranscript)pendingHUD.delete(4);
           lastHudIconKeys.clear();pendingHUD.delete(5);pendingHUD.delete(6);queueHudIcons(true);
           continue;
         }
@@ -993,9 +1040,10 @@ import { LocalAgreement } from './local-agreement.mjs';
     const chromeTranslateMode=normalizeGlassesMode(config.glassesMode)==='translate' && config.chromeTranslation!==false;
     const notice=currentHUDHeader();if(els.hudNotice.textContent!==notice)setHUDNotice(notice);
     const transcriptRaw = buildTranscriptSectionText();
-    const transcriptWin = sliceHUDWindow(transcriptRaw, Infinity, TRANSCRIPT_VISIBLE_LINES, TRANSCRIPT_WIDTH_PX);
+    const body=currentBodyLayout();
+    const transcriptWin = sliceHUDWindow(transcriptRaw, Infinity, Math.max(1,body.transcriptLines), TRANSCRIPT_WIDTH_PX);
     const transcriptGlassesText = normalizeGlassesMode(config.glassesMode)==='translate'
-      ? translationReplyText(translationDisplay,TRANSCRIPT_WIDTH_PX) : transcriptWin.visibleText || transcriptRaw;
+      ? translationReplyText(translationDisplay,TRANSCRIPT_WIDTH_PX) : body.showTranscript?(transcriptWin.visibleText || transcriptRaw):'';
 
 
     if(normalizeGlassesMode(config.glassesMode)==='translate' && translationHistory.entries.length){
@@ -1006,7 +1054,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     }
 
     if (answerText) {
-      const win = sliceHUDWindow(answerText, chromeTranslateMode && liveTranslationDraft?Infinity:aiScrollOffset, aiVisibleLines(), AI_BOX_WIDTH_PX);
+      const win = body.hint?hintWindow(answerText,answerTitle,aiScrollOffset,config.hideTranscript):sliceHUDWindow(answerText, chromeTranslateMode && liveTranslationDraft?Infinity:aiScrollOffset, aiVisibleLines(), AI_BOX_WIDTH_PX);
       const pageInfo = overridePageInfo || `P ${win.page}/${win.totalPages}`;
       const ratio = win.maxOffset > 0 ? win.offsetLine / win.maxOffset : 0;
       const meta = win.maxOffset > 0
@@ -1147,6 +1195,11 @@ import { LocalAgreement } from './local-agreement.mjs';
     }
   }
 
+  function setTranscriptHidden(hidden){
+    settingsEdited=true;config.hideTranscript=!!hidden;els.hideTranscript.checked=config.hideTranscript;
+    renderLiveHUD();persistSettings().catch(console.warn);
+  }
+  function fitHintContent(text){return fitCue(text,AI_BOX_WIDTH_PX,config.hideTranscript?8:6);}
   function syncCaptureSettings(){
     syncModeUI();syncGlassesInputUI();
     els.audioInputSource.value=config.audioInputSource;
@@ -1201,8 +1254,10 @@ import { LocalAgreement } from './local-agreement.mjs';
     abortPendingPreview();
     hintGate.reset();
     config.aiHintMode=true;
+    config.hintContextTokens=normalizeHintBudget(els.hintContextTokens.value);
     config.hintSensitivity=els.hintSensitivity.value || 'balanced';
     config.hintWebSearch=els.hintWebSearch?.checked!==false;
+    config.hideTranscript=els.hideTranscript.checked===true;
     if (els.glassesMode?.value) config.glassesMode = normalizeGlassesMode(els.glassesMode.value);
     if (els.translateSourceLang?.value) config.translateSourceLang = els.translateSourceLang.value;
     if (els.translateTargetLang?.value) config.translateTargetLang = els.translateTargetLang.value;
@@ -1548,7 +1603,7 @@ import { LocalAgreement } from './local-agreement.mjs';
           pendingTrigger=route.waiting;
           if(route.kind==='ack'){
             chatEpoch++;hintGate.reset();aiAbortController?.abort();pendingAI.length=0;
-            answerText=route.ack;els.chatOutput.textContent=route.ack;
+            answerTitle='';answerText=route.ack;els.chatOutput.textContent=route.ack;
             els.hintStatus.textContent='호출어 확인 · 다음 문장을 AI 채팅 질문으로 받습니다';
             setHUDNotice('질문 대기');renderLiveHUD();continue;
           }
@@ -1748,9 +1803,9 @@ import { LocalAgreement } from './local-agreement.mjs';
     let chromeText=options.chromeTranslationText || '';let chromeSource=options.translationSource || resolveTranslateSourceLang({targetLang});
     let cueDisplayed=false;let cueTopic='';
     function showCue(cue,status){
-      const fitted=cue?.fact?fitCue(cue.fact):'';
+      const fitted=cue?.fact?fitHintContent(cue.fact):'';
       if(!fitted || !hintGate.relevant(options,cue.topic) || hintGate.duplicateCue(fitted) || hintGate.duplicateTopic(cue.topic))return false;
-      answerText=fitted;cueDisplayed=true;cueTopic=cue.topic;
+      answerTitle=cue.topic || '힌트';answerText=fitted;cueDisplayed=true;cueTopic=cue.topic;
       els.chatQuestion.textContent=cue.topic?`💡 자동 힌트 · ${cue.topic}`:'💡 자동 힌트';
       els.chatOutput.textContent=fitted;els.hintStatus.textContent=status;renderLiveHUD();return true;
     }
@@ -1804,11 +1859,14 @@ import { LocalAgreement } from './local-agreement.mjs';
       if(options.hint) {
         aiPhaseTitle='정보 조회 중';aiPhaseDetail='';setHUDNotice();
         els.hintStatus.textContent='보충할 정보 찾는 중';
-        const planRes=await gatewayFetch(`${config.serverUrl}/api/chat`,{
-          method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),signal:controller.signal,
-          body:JSON.stringify(chatPayload(cuePrompts(prompt,conversationContext,options.category,hintGate.diversityContext(),{preferWeb:config.hintWebSearch!==false,keyword:options.keyword || ''}),'plan'))
-        });
-        const cue=parseCueResponse(await readHintPlanResponse(planRes),[conversationContext,prompt].join('\n'));
+        let cue=options.hintPlan;
+        if(!cue){
+          const planRes=await gatewayFetch(`${config.serverUrl}/api/chat`,{
+            method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),signal:controller.signal,
+            body:JSON.stringify(chatPayload(cuePrompts(prompt,conversationContext,options.category,hintGate.diversityContext(),{preferWeb:config.hintWebSearch!==false,keyword:options.keyword || ''}),'plan'))
+          });
+          cue=parseCueResponse(await readHintPlanResponse(planRes),[conversationContext,prompt].join('\n'));
+        }
         if(cue)els.hintStatus.textContent=`주제: ${cue.topic} · ${cue.question || '내부 지식 힌트'}`;
         enrichmentPlan=cue;
         if(cue?.fact){showCue(cue,'대화 도움 표시 · 계속 듣는 중');return;}
@@ -1873,7 +1931,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         } else {
           const visible=stripSourcesForGlasses(raw);
           if(visible)receivedVisibleAnswer=true;
-          if(visible || commitReplies)answerText=visible;
+          if(visible || commitReplies){answerText=visible;answerTitle='';}
           els.chatOutput.textContent=answerText;
         }
       }
@@ -2034,8 +2092,8 @@ import { LocalAgreement } from './local-agreement.mjs';
 
       if(options.translationToken && options.translationToken!==translationToken || options.chatEpoch && options.chatEpoch!==chatEpoch)return;
       const enrichedFact=options.hint?extractHintFact(rawAnswer,[conversationContext,prompt].join('\n'),enrichmentPlan):'';
-      if(options.hint && (!hintGate.relevant(options,enrichmentPlan.topic) || !fitCue(enrichedFact) || hintGate.duplicateCue(fitCue(enrichedFact)) || hintGate.duplicateTopic(enrichmentPlan.topic))){els.hintStatus.textContent='현재 대화에 필요한 새 정보 없음 · 생략';return;}
-      if(options.hint){answerText=fitCue(enrichedFact);cueDisplayed=true;cueTopic=enrichmentPlan.topic;els.chatQuestion.textContent=cueTopic?`💡 자동 힌트 · ${cueTopic}`:'💡 자동 힌트';}else setVisibleAnswer(rawAnswer,true);
+      if(options.hint && (!hintGate.relevant(options,enrichmentPlan.topic) || !fitHintContent(enrichedFact) || hintGate.duplicateCue(fitHintContent(enrichedFact)) || hintGate.duplicateTopic(enrichmentPlan.topic))){els.hintStatus.textContent='현재 대화에 필요한 새 정보 없음 · 생략';return;}
+      if(options.hint){answerTitle=enrichmentPlan.topic || '힌트';answerText=fitHintContent(enrichedFact);cueDisplayed=true;cueTopic=enrichmentPlan.topic;els.chatQuestion.textContent=cueTopic?`💡 자동 힌트 · ${cueTopic}`:'💡 자동 힌트';}else setVisibleAnswer(rawAnswer,true);
       if(options.hint)els.hintStatus.textContent=enrichmentPlan.source==='web'?'웹검색 근거로 보충한 정보':enrichmentPlan.source==='memory'?'저장된 기억으로 보충한 정보':'내부 지식으로 보충한 정보';
       els.chatOutput.textContent = activeMode==='translate'?translationPhoneText(translationDisplay):answerText;
       if(chromeText)els.chromeTranslationStatus.textContent=repliesReplaced?`${options.translatedBy || localLabel()} 번역 · 답변 예시 완료`:hasCompleteTranslationReplies(translationDisplay)?`${options.translatedBy || localLabel()} 번역 완료 · 이전 답변 예시 유지`:`${options.translatedBy || localLabel()} 번역 완료 · 답변 예시를 받지 못했습니다`;
@@ -2071,7 +2129,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       }
       console.error('Chat error:', err);
       els.hintStatus.textContent=`AI 채팅 중단 · ${failure}`;
-      if(!receivedVisibleAnswer)answerText=`AI 오류: ${failure}`;
+      if(!receivedVisibleAnswer){answerTitle='';answerText=`AI 오류: ${failure}`;}
       els.chatOutput.textContent=receivedVisibleAnswer?`${answerText}\n\n응답 중단: ${failure}`:answerText;renderLiveHUD();
     } finally {
       if(options.hint)hintGate.complete(options,{displayed:cueDisplayed,text:cueDisplayed?answerText:'',topic:cueTopic});
@@ -2234,7 +2292,9 @@ import { LocalAgreement } from './local-agreement.mjs';
       const select=els.roleModels[role],selected=config.roleModels?.[role] || '';
       if(!select)continue;
       select.innerHTML='';
-      for(const model of roleModelOptions(availableModels,config.model,selected)){
+      const options=roleModelOptions(availableModels,config.model,selected).filter(option=>role!=='hintDecision' || option.id!==JEV_ONLY);
+      if(role==='hintDecision' && !options.some(option=>option.id===JEV_ONLY))options.splice(1,0,{id:JEV_ONLY,label:'사전·JEV만 사용 (판별 LLM 끔)'});
+      for(const model of options){
         const option=document.createElement('option');option.value=model.id;option.textContent=model.label;select.appendChild(option);
       }
       select.value=selected;
@@ -2252,6 +2312,10 @@ import { LocalAgreement } from './local-agreement.mjs';
       const data = await res.json();
       const models = normalizeModels(data);
       availableModels=models;
+      if(config.hintDecisionAuto!==false){
+        const suggested=suggestedHintJudge(models);
+        if(suggested && config.roleModels.hintDecision===JEV_ONLY){config.roleModels.hintDecision=suggested;persistSettings().catch(console.warn);}
+      }
       const previousModel = els.modelSelect.value || config.model;
 
       els.modelSelect.innerHTML = '';
@@ -2306,7 +2370,9 @@ import { LocalAgreement } from './local-agreement.mjs';
     if (els.btnRefreshModels) els.btnRefreshModels.addEventListener('click', fetchModelList);
     els.modelSelect.addEventListener('change',()=>{settingsEdited=true;config.model=els.modelSelect.value;renderRoleModelSelectors();persistSettings().catch(console.warn);});
     for(const role of ROLE_MODEL_KEYS)els.roleModels[role]?.addEventListener('change',()=>{
-      settingsEdited=true;config.roleModels={...normalizeRoleModels(config.roleModels),[role]:els.roleModels[role].value};persistSettings().catch(console.warn);
+      settingsEdited=true;config.roleModels={...normalizeRoleModels(config.roleModels),[role]:els.roleModels[role].value};
+      if(role==='hintDecision'){config.hintDecisionAuto=false;hintGate.reset();els.hintJudgeStatus.textContent='새 판별 모델 적용 · 다음 전사 대기';}
+      persistSettings().catch(console.warn);
     });
 
     if (els.btnSaveSettings) els.btnSaveSettings.addEventListener('click', saveSettings);
@@ -2358,6 +2424,8 @@ import { LocalAgreement } from './local-agreement.mjs';
       if(localEngine()==='llm'){els.chromeTranslationStatus.textContent='LLM 번역은 별도 언어팩 준비가 필요 없습니다';return;}
       return prepareSelectedTranslation(undefined,true).catch(()=>{});
     });
+    els.hintContextTokens.addEventListener('change',()=>{settingsEdited=true;config.hintContextTokens=normalizeHintBudget(els.hintContextTokens.value);els.hintContextTokens.value=String(config.hintContextTokens);hintGate.reset();persistSettings().catch(console.warn);});
+    els.hideTranscript.addEventListener('change',()=>setTranscriptHidden(els.hideTranscript.checked));
     els.hintWebSearch?.addEventListener('change',()=>{settingsEdited=true;config.hintWebSearch=els.hintWebSearch.checked;persistSettings().catch(console.warn);});
     els.translateExcludeSelf?.addEventListener('change',()=>{
       return applyLiveSettings({translateExcludeSelf:els.translateExcludeSelf.checked});

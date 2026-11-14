@@ -1,5 +1,6 @@
 // Use the same labels and values as the phone settings. SDK menus have no submenus.
 export const SETTINGS_MENUS={
+  10:{title:'전사문 숨기기',key:'hideTranscript',options:[[false,'표시 · 최대 3줄'],[true,'숨김 · 전사와 저장은 계속']]},
   4:{title:'인식 언어',key:'translateSourceLang',options:[['auto','자동 (상대 언어)'],['en','영어 (English)'],['ko','한국어 (Korean)'],['ja','일본어 (Japanese)'],['zh','중국어 (Chinese)'],['es','스페인어 (Spanish)'],['fr','프랑스어 (French)'],['de','독일어 (German)'],['vi','베트남어 (Vietnamese)'],['th','태국어 (Thai)']]},
   5:{title:'번역 언어',key:'translateTargetLang',options:[['ko','한국어 (Korean)'],['en','영어 (English)'],['ja','일본어 (Japanese)'],['zh','중국어 (Chinese)'],['es','스페인어 (Spanish)'],['fr','프랑스어 (French)'],['de','독일어 (German)'],['vi','베트남어 (Vietnamese)'],['th','태국어 (Thai)']]},
   6:{title:'번역 엔진',key:'translationEngine',options:[['llm','LLM 번역'],['chrome','Chrome 로컬 번역'],['apple','Apple 로컬 번역 · macOS 26+']]},

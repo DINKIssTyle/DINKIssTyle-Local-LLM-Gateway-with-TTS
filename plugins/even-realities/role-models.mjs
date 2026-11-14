@@ -1,4 +1,4 @@
-export const ROLE_MODEL_KEYS=['chat','hint','translation','translationReply'];
+export const ROLE_MODEL_KEYS=['chat','hintDecision','hint','translation','translationReply'];
 export function normalizeRoleModels(value){
   return Object.fromEntries(ROLE_MODEL_KEYS.map(role=>[role,typeof value?.[role]==='string'?value[role].trim():'']));
 }

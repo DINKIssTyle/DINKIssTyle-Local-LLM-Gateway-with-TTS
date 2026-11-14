@@ -161,6 +161,10 @@
 
       <div class="form-group role-model-settings">
         <label for="model-ai-chat">AI 채팅</label><select id="model-ai-chat"><option value="">기본 모델 사용</option></select>
+        <label for="model-hint-decision">AI 힌트 판별</label><select id="model-hint-decision"><option value="__jev__">사전·JEV만 사용 (판별 LLM 끔)</option></select>
+        <label for="hint-context-tokens">힌트 판별 문맥 (토큰)</label><select id="hint-context-tokens"><option value="300">300</option><option value="400">400</option><option value="500">500</option><option value="600" selected>600</option><option value="700">700</option><option value="800">800</option></select>
+        <p style="font-size:12px;color:var(--text-secondary)">실제 비교에서 안정적이었던 Gemma 4 E2B가 서버 목록에 있으면 최초 자동 선택합니다. 0.8B 등 다른 모델도 직접 선택할 수 있습니다. 문맥은 최신 전사 우선이며, 다국어 토큰 수를 보수적으로 추산합니다. 시스템 지침·출력 한도는 별도입니다.</p>
+        <p id="hint-judge-status" role="status" style="font-size:12px;color:var(--text-secondary)">새 전사에서 토픽을 판별합니다.</p>
         <label for="model-ai-hint">AI 힌트</label><select id="model-ai-hint"><option value="">기본 모델 사용</option></select>
         <label for="model-translation">번역</label><select id="model-translation"><option value="">기본 모델 사용</option></select>
         <label for="model-translation-reply">번역 답변</label><select id="model-translation-reply"><option value="">기본 모델 사용</option></select>
@@ -188,6 +192,8 @@
       <div class="form-group">
         <p>평소에는 EmbeddingGemma 2 + JEV로 힌트를 선별합니다. 호출어만 말하면 말씀하시라는 응답 후 다음 문장을 AI 채팅 질문으로 받습니다.</p>
         <label class="toggle-label"><input type="checkbox" id="hint-web-search" checked><span>정보 힌트는 웹검색 우선</span></label>
+        <label class="toggle-label"><input type="checkbox" id="hide-transcript"><span>전사문 숨기기</span></label>
+        <p style="font-size:12px;color:var(--text-secondary)">AI 모드의 전사 표시만 숨깁니다. 음성 인식·저장은 계속되며 안경 메뉴에서도 변경할 수 있습니다.</p>
         <label for="hint-sensitivity">힌트 적극성</label>
         <select id="hint-sensitivity"><option value="quiet">조용하게</option><option value="balanced" selected>균형</option><option value="active">적극적으로</option></select>
       </div>

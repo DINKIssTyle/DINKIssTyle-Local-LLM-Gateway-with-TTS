@@ -16,6 +16,7 @@ import (
 )
 
 type glassesHintRequest struct {
+	Advisory    bool     `json:"advisory,omitempty"`
 	Text        string   `json:"text"`
 	Context     string   `json:"context"`
 	Sensitivity string   `json:"sensitivity"`
@@ -23,14 +24,15 @@ type glassesHintRequest struct {
 	ShownInfo   string   `json:"shownInfo,omitempty"`
 }
 type glassesHintDecision struct {
-	Hint           bool    `json:"hint"`
-	Category       string  `json:"category,omitempty"`
-	Reason         string  `json:"reason"`
-	Backend        string  `json:"backend,omitempty"`
-	Focus          string  `json:"focus,omitempty"`
-	Keyword        string  `json:"keyword,omitempty"`
-	KeywordSurface string  `json:"keywordSurface,omitempty"`
-	Score          float64 `json:"score,omitempty"`
+	Candidates     []hintKeywordCandidate `json:"candidates,omitempty"`
+	Hint           bool                   `json:"hint"`
+	Category       string                 `json:"category,omitempty"`
+	Reason         string                 `json:"reason"`
+	Backend        string                 `json:"backend,omitempty"`
+	Focus          string                 `json:"focus,omitempty"`
+	Keyword        string                 `json:"keyword,omitempty"`
+	KeywordSurface string                 `json:"keywordSurface,omitempty"`
+	Score          float64                `json:"score,omitempty"`
 }
 
 var glassesHintCriteria = map[string]string{
@@ -366,6 +368,13 @@ func handleGlassesHintDecision(auth *AuthManager) http.HandlerFunc {
 		var err error
 		if !disabled {
 			decision, err = classifyGlassesHint(req)
+		}
+		if req.Advisory {
+			decision.Candidates = hintKeywords(req.Text)
+			if err != nil {
+				decision.Reason = "jev_unavailable"
+				err = nil
+			}
 		}
 		if r.Context().Err() != nil {
 			return

@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const src = fs.readFileSync('plugin.js','utf8').replace(/^import .*\n/gm, '').replace('  function enqueueClip(', `  window.__queueTest={ai(){resetQueuesForModeSwitch('ai');config.glassesMode='ai';captureFailure='';isRecording=true;segmenter=new SpeechSegmenter();},refreshIcons(){queueHudIcons(true);},settings:applyLiveSettings,hintGate,liveTranslations,translationHistory,enqueueClip,drainClips,stopVoiceRecording,reset(){resetQueuesForModeSwitch('translate');config.glassesMode='translate';},state(){return{ids:pendingClips.map(c=>c.segmentId),failure:captureFailure,recording:isRecording,engine:activeSttEngine,mode:config.glassesMode,active:activeUtterance?.id,previewBusy};},record(){isRecording=true;segmenter=new SpeechSegmenter();}};
+const src = fs.readFileSync('plugin.js','utf8').replace(/^import .*\n/gm, '').replace('  function enqueueClip(', `  window.__queueTest={ai(){resetQueuesForModeSwitch('ai');config.glassesMode='ai';captureFailure='';isRecording=true;segmenter=new SpeechSegmenter();},refreshIcons(){queueHudIcons(true);},showHint(title,text,transcript){answerTitle=title;answerText=text;captionFinal=transcript;captionStable=captionDraft='';renderLiveHUD();},settings:applyLiveSettings,hintGate,liveTranslations,translationHistory,enqueueClip,drainClips,stopVoiceRecording,reset(){resetQueuesForModeSwitch('translate');config.glassesMode='translate';},state(){return{ids:pendingClips.map(c=>c.segmentId),failure:captureFailure,recording:isRecording,engine:activeSttEngine,mode:config.glassesMode,active:activeUtterance?.id,previewBusy};},record(){isRecording=true;segmenter=new SpeechSegmenter();}};
   function enqueueClip(`);
 const elements = new Map();
 function element(id) {
@@ -24,11 +24,12 @@ let holdWarmup=false, releaseWarmup=null;
 let rejectAutoLang=false;
 let sttReplies=[];
 let hintDecision={hint:false,reason:'no_hint'};
+let judgeReply={hint:false},judgeError=false;
 let nativeSaved = '';
 const documentHandlers = {};
 let deviceHandler;
-let handler; const audioCalls=[]; const updates=[]; const requests=[]; let startup; let shutdown;const rebuilds=[];const imageUpdates=[];
-const bridge={async getDeviceInfo(){return{model:'g2',sn:'glasses-1',status:{sn:'glasses-1',connectType:'connected',batteryLevel:82}};},onDeviceStatusChanged(fn){deviceHandler=fn;return()=>{};},async getLocalStorage(){return nativeSaved;},async setLocalStorage(key,value){nativeSaved=value;return true;},async createStartUpPageContainer(p){startup=p;return 0;},async rebuildPageContainer(p){rebuilds.push(p);return true;},onEvenHubEvent(fn){handler=fn;},async textContainerUpgrade(p){updates.push(p);return true;},async updateImageRawData(p){imageUpdates.push(p);return 'success';},async audioControl(...args){audioCalls.push(args);return true;},async shutDownPageContainer(mode){shutdown=mode;return true;}};
+let handler; const audioCalls=[]; const updates=[]; const requests=[]; let startup; let shutdown;let nativePage,validatePage=()=>{};const rebuilds=[];const imageUpdates=[];
+const bridge={async getDeviceInfo(){return{model:'g2',sn:'glasses-1',status:{sn:'glasses-1',connectType:'connected',batteryLevel:82}};},onDeviceStatusChanged(fn){deviceHandler=fn;return()=>{};},async getLocalStorage(){return nativeSaved;},async setLocalStorage(key,value){nativeSaved=value;return true;},async createStartUpPageContainer(p){validatePage(p);startup=nativePage=p;return 0;},async rebuildPageContainer(p){validatePage(p);nativePage=p;rebuilds.push(p);return true;},onEvenHubEvent(fn){handler=fn;},async textContainerUpgrade(p){const container=nativePage.textObject.find(c=>c.containerID===p.containerID);assert.ok(container,`text update targets missing container ${p.containerID}`);container.content=p.content;updates.push(p);return true;},async updateImageRawData(p){imageUpdates.push(p);return 'success';},async audioControl(...args){audioCalls.push(args);return true;},async shutDownPageContainer(mode){shutdown=mode;return true;}};
 const chunks=['data: {"choices":[{"delta":{"con','tent":"안녕"}}]}\n\ndata: {"choices":[{"delta":{"content":"하세요"}}]}\n\ndata: [DONE]\n\n'];
 const context={DKST_DEFAULT_SERVER_URL:'https://192.168.1.4:2806',waitForEvenAppBridge:async()=>bridge,AudioInputSource:{Glasses:'glasses',Phone:'phone'},OsEventTypeList:{CLICK_EVENT:0,DOUBLE_CLICK_EVENT:3},console,TextDecoder,Uint8Array,URL,AbortController,setTimeout:(fn,ms)=>{const timer=setTimeout(fn,ms);if(ms>=1000)timer.unref();return timer;},clearTimeout,alert(){},localStorage:{getItem(){return null;},setItem(){}},window:{location:{origin:'https://192.168.1.4:2806',hostname:'192.168.1.4'},btoa:s=>Buffer.from(s,'binary').toString('base64')},document:{body:{style:{overflow:''}},activeElement:{focus(){}},addEventListener(type,fn){documentHandlers[type]=fn;},readyState:'complete',getElementById:element,createElement:()=>({})},fetch:async(url,opts={})=>{
  requests.push({url,opts});
@@ -61,7 +62,10 @@ const context={DKST_DEFAULT_SERVER_URL:'https://192.168.1.4:2806',waitForEvenApp
   const word=reqBody.triggerWord; const triggered=!!word && nextTranscript.includes(word);
   return{ok:true,json:async()=>({text:nextRejected?'':nextTranscript,saved:!nextRejected,rejected:nextRejected,triggered:nextRejected?false:triggered,prompt:triggered ? nextTranscript.split(word).slice(1).join(word).trim() : ''})};
  }
- if(url.endsWith('/api/chat')){if(JSON.parse(opts.body).glasses_hint_phase==='plan'){
+ if(url.endsWith('/api/chat')){if(JSON.parse(opts.body).glasses_hint_phase==='judge'){
+ if(judgeError)return{ok:false,status:503};
+ let done=false;return{ok:true,body:{getReader:()=>({read:async()=>done?{done:true}:(done=true,{value:Buffer.from('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify(judgeReply)}}]})+'\n\ndata: [DONE]\n\n'),done:false})})}};
+ }if(JSON.parse(opts.body).glasses_hint_phase==='plan'){
  const content=(Array.isArray(cueReply)?cueReply.shift():cueReply) || JSON.stringify({topic:'묵시적 갱신',question:'묵시적 갱신은 무엇을 뜻하나요?',knownFacts:['계약서에 묵시적 갱신이 나옴'],source:'internal'});
  let done=false;return{ok:true,body:{getReader:()=>({read:async()=>done?{done:true}:(done=true,{value:Buffer.from('data: '+JSON.stringify({type:'message.delta',content})+'\n\n'),done:false})})}};
  }if(chatReply){const reply=Array.isArray(chatReply)?chatReply.shift():chatReply;if(!Array.isArray(chatReply) || !chatReply.length)chatReply=null;return reply;}if(holdChat){holdChat=false;await new Promise((resolve,reject)=>{const aborted=()=>{const err=new Error('aborted');err.name='AbortError';reject(err);};opts.signal?.addEventListener('abort',aborted,{once:true});releaseChat=()=>{opts.signal?.removeEventListener('abort',aborted);resolve();};});}let i=0;return{ok:true,body:{getReader:()=>({read:async()=>i<chunks.length?{value:Buffer.from(chunks[i++]),done:false}:{done:true}})}};}
@@ -69,6 +73,10 @@ const context={DKST_DEFAULT_SERVER_URL:'https://192.168.1.4:2806',waitForEvenApp
 }};
 const tick=()=>new Promise(r=>setImmediate(r));
 (async()=>{
+ const {validateEvenHubPageContainer}=await import('@evenrealities/even_hub_sdk');
+ validatePage=page=>{const result=validateEvenHubPageContainer(page);assert.equal(result.valid,true,JSON.stringify(result));};
+ Object.assign(context,await import('./adaptive-hud.mjs'));
+ Object.assign(context,await import('./hint-judge.mjs'));
  Object.assign(context,await import('./settings-menu.mjs'));
  Object.assign(context,await import('./role-models.mjs'));
  Object.assign(context,await import('./live-translation.mjs'));
@@ -182,25 +190,21 @@ const tick=()=>new Promise(r=>setImmediate(r));
  assert.deepEqual(normalizeModels({models:[{name:{bad:true}},{id:'[object Object]'}]}),[]);
  vm.runInNewContext(src,context);
  await tick();
- assert.equal(startup.textObject[0].isEventCapture,1);
- assert.equal(startup.containerTotalNum,8);
+ assert.equal(startup.containerTotalNum,7,'waiting must not reserve an empty AI box');
  assert.equal(startup.imageObject.length,2);
  assert.equal(startup.imageObject.find(c=>c.containerID===5).width,24);
  assert.equal(startup.imageObject.find(c=>c.containerID===6).height,24);
  const hp=startup.textObject.find(c=>c.containerID===7),hw=startup.textObject.find(c=>c.containerID===8),hi=startup.imageObject.find(c=>c.containerID===6),hm=startup.imageObject.find(c=>c.containerID===5),hn=startup.textObject.find(c=>c.containerID===3);
  assert.equal(hp.content,'[AI');assert.ok(hi.xPosition>=hp.xPosition+hp.width);assert.ok(hw.xPosition>=hi.xPosition+hi.width);assert.ok(hm.xPosition>=hw.xPosition+hw.width);assert.ok(hn.xPosition>=hm.xPosition+hm.width);assert.match(hn.content,/^\|/);
- assert.equal(startup.textObject[0].yPosition,27);
- assert.equal(startup.textObject[0].height,168);
- assert.equal(startup.textObject[0].borderWidth,1);
- assert.equal(Math.floor((startup.textObject[0].height-2*(startup.textObject[0].paddingLength+startup.textObject[0].borderWidth))/27),6,'AI area must fit six native text rows');
- const aiArea=startup.textObject[0],txArea=startup.textObject.find(c=>c.containerName==='transcript');
- assert.equal(aiArea.yPosition,27);assert.equal(aiArea.yPosition+aiArea.height,txArea.yPosition,'body sections must have no unused gap');
- assert.equal(txArea.yPosition+txArea.height,288,'transcript must reach the supported canvas bottom');
+ assert.ok(!startup.textObject.some(c=>c.containerID===1));
+ const txArea=startup.textObject.find(c=>c.containerName==='transcript');
+ assert.equal(txArea.yPosition,27);assert.equal(txArea.height,81);assert.equal(txArea.isEventCapture,1);
+ assert.equal(txArea.yPosition+txArea.height,108,'compact waiting display must leave the lower canvas blank');
  for(const box of startup.textObject){assert.ok(box.yPosition+box.height<=288);assert.ok(box.xPosition+box.width<=576);}
 
  assert.equal(startup.textObject.find(c=>c.containerName==='transcript').containerID,4);
- assert.equal(startup.textObject.find(c=>c.containerName==='transcript').yPosition,195);
- assert.deepEqual(Array.from(startup.menuObject.menuItems,m=>m.itemName),['AI 모드','번역 모드','입력 소스 전환','인식 언어','번역 언어','번역 엔진','음성 인식 엔진','내 목소리 제외','안경 입력 감지 민감도']);
+ assert.equal(startup.textObject.find(c=>c.containerName==='transcript').yPosition,27);
+ assert.deepEqual(Array.from(startup.menuObject.menuItems,m=>m.itemName),['AI 모드','번역 모드','입력 소스 전환','인식 언어','번역 언어','번역 엔진','음성 인식 엔진','내 목소리 제외','안경 입력 감지 민감도','전사문 숨기기']);
  assert.equal(startup.textObject.find(c=>c.containerName==='notice').yPosition,0);
  assert.ok(startup.textObject.find(c=>c.containerName==='notice').width<=startup.textObject.find(c=>c.containerName==='status').xPosition);
  assert.equal(startup.textObject.filter(c=>c.isEventCapture===1).length,1);
@@ -232,7 +236,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  assert.equal(JSON.parse(requests.find(r=>r.url.endsWith('/api/chat')).opts.body).model,'test-model');
  assert.match(element('hud-screen').innerHTML,/안녕하세요/,'fragmented SSE must be reassembled');
 
- await new Promise(r=>setTimeout(r,350));
+ for(let i=0;i<150 && !updates.some(update=>update.containerID===1 && update.content.includes('안녕하세요'));i++)await new Promise(resolve=>setTimeout(resolve,20));
  const originalChatCount=requests.filter(r=>r.url.endsWith('/api/chat')).length;
  element('voice-mode').value='continuous'; element('trigger-word').value='이븐';
  handler({sysEvent:{eventType:0}}); await tick();await tick();
@@ -486,7 +490,7 @@ const tick=()=>new Promise(r=>setImmediate(r));
  assert.equal(Math.floor((translationBox.height-6)/27),5);
  assert.ok(replyBox.height>=4*27);assert.equal(translationBox.yPosition+translationBox.height,replyBox.yPosition);
  assert.equal(replyBox.yPosition+replyBox.height,288);
- assert.equal(translatedLayout.menuObject.menuItems.length,9);
+ assert.equal(translatedLayout.menuObject.menuItems.length,10);
  assert.match(element('hud-screen').innerHTML,/번역 · 추천 답변/);
  chatReply=sseReply('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify({translation:"커피 드시겠어요?",positive:"네, 주세요.\nYes, please.",negative:"괜찮습니다.\nNo, thank you."})}}]})+'\n\ndata: [DONE]\n\n');
  nextTranscript='Would you like some coffee?';
@@ -1047,6 +1051,30 @@ const tick=()=>new Promise(r=>setImmediate(r));
  assert.equal(JSON.parse(nativeSaved).audioInputSource,sourceBeforeFailure);
  assert.match(element('hint-status').textContent,/설정 변경 실패/);
  bridge.audioControl=normalAudioControl;await queue.stopVoiceRecording(false);
+ // Small-model judgment bypasses negative/missing JEV gating and feeds the writer without re-planning.
+ queue.ai();queue.hintGate.intervalMs=0;queue.hintGate.settleMs=0;queue.hintGate.generationIntervalMs=0;
+ element('model-hint-decision').value='judge-role';await element('model-hint-decision').handlers.change();
+ element('model-ai-hint').value='hint-role';await element('model-ai-hint').handlers.change();
+ element('hint-context-tokens').value='300';await element('hint-context-tokens').handlers.change();
+ hintDecision={hint:false};judgeReply={hint:true,topic:'피라미드',evidence:'피라미드',question:'기자 피라미드 건립 시기와 건축 기술',source:'internal'};
+ chatReply=sseReply('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify({fact:'기자의 대피라미드는 쿠푸왕을 위해 건립됐으며 석회암 블록으로 쌓았습니다.',adds_information:true})}}]})+'\n\ndata: [DONE]\n\n');
+ const smallJudgeStart=requests.length;
+ queue.hintGate.observe('피라미드가 왕의 무덤이래.',{id:'judge-end-to-end'});
+ for(let i=0;i<15;i++)await tick();
+ const judgedBodies=requests.slice(smallJudgeStart).filter(r=>r.url.endsWith('/api/chat')).map(r=>JSON.parse(r.opts.body));
+ assert.ok(judgedBodies.some(b=>b.glasses_hint_phase==='judge' && b.model==='judge-role'));
+ assert.ok(judgedBodies.some(b=>b.glasses_hint_phase==='answer' && b.model==='hint-role'));
+ assert.ok(!judgedBodies.some(b=>b.glasses_hint_phase==='plan'),'do not spend another writer request planning');
+ assert.match(element('chat-output').textContent,/쿠푸왕/);assert.match(element('hint-judge-status').textContent,/300토큰/);
+ queue.hintGate.reset();judgeReply={hint:false};const smallJudgeSkipStart=requests.length;
+ queue.hintGate.observe('점심 맛있었어. 내일 만나자.',{id:'judge-skip'});for(let i=0;i<10;i++)await tick();
+ assert.ok(!requests.slice(smallJudgeSkipStart).some(r=>r.url.endsWith('/api/chat') && JSON.parse(r.opts.body).glasses_hint_phase==='answer'));
+ queue.hintGate.reset();judgeError=true;hintDecision={error:true};
+ queue.hintGate.observe('청동기 시대에는 청동을 사용했대.',{id:'judge-error'});for(let i=0;i<10;i++)await tick();
+ assert.equal(queue.state().recording,true,'judge errors must never stop transcription');assert.match(element('hint-judge-status').textContent,/지연\/오류/);
+ judgeError=false;hintDecision={hint:false};
+ element('model-hint-decision').value='__jev__';await element('model-hint-decision').handlers.change();
+ await queue.stopVoiceRecording(false);
  // Keep persisted settings expected by the restore tests below.
  await queue.settings({audioInputSource:'phone',sttEngine:'apple',translationEngine:'apple'});
  const originalImageUpdate=bridge.updateImageRawData;
@@ -1056,12 +1084,53 @@ const tick=()=>new Promise(r=>setImmediate(r));
  assert.ok(updates.some(u=>u.containerID===3 && u.content.startsWith('[폰 꺼짐]')),'image failure must retain text updates with explicit source/mic state');
  bridge.updateImageRawData=originalImageUpdate;
 
+ // AI uses its content height; transcription stays at most three rows with blank space below.
+ const adaptiveSnapshots=[];
+ for(const [title,text,height] of [['','',0],['피라미드','기자의 대피라미드는 쿠푸왕을 위해 건립됐습니다.',60],['청동기 시대','첫 번째 줄\n두 번째 줄\n세 번째 줄',114],['긴 힌트','1줄\n2줄\n3줄\n4줄\n5줄\n6줄',168]]){
+   queue.showHint(title,text,'전사 기록 '.repeat(200));
+   for(let i=0;i<150 && ((nativePage.textObject.find(c=>c.containerID===1)?.height || 0)!==height || (title && !nativePage.textObject.find(c=>c.containerID===1)?.content.startsWith(title+'\n')));i++)await new Promise(resolve=>setTimeout(resolve,20));
+   const hintBox=nativePage.textObject.find(c=>c.containerID===1),tx=nativePage.textObject.find(c=>c.containerID===4);
+   assert.equal(hintBox?.height || 0,height);assert.equal(tx.yPosition,27+height);assert.equal(tx.height,81);assert.ok(tx.yPosition+tx.height<=288);
+   if(title){
+     assert.ok(hintBox.content.startsWith(title+'\n'),'native hint must show title before content');
+     assert.ok(element('hud-screen').innerHTML.includes('>'+title+'</span>'),'phone preview uses the actual hint title');
+   }else assert.ok(!element('hud-screen').innerHTML.includes('hud-ai-box'),'waiting must hide the empty AI box');
+   assert.ok(tx.content.split('\n').length<=3,'transcript must never show more than three native rows');
+   adaptiveSnapshots.push({title,html:element('hud-screen').innerHTML});
+ }
+ await new Promise(resolve=>setTimeout(resolve,1200));
+ const sameHeightRebuilds=rebuilds.length;
+ queue.showHint('다른 제목','a\nb\nc\nd\ne\nf','전사 기록 '.repeat(200));await new Promise(resolve=>setTimeout(resolve,1200));
+ assert.equal(rebuilds.length,sameHeightRebuilds,'same height only upgrades content, avoiding needless native page rebuilds');
+ fs.writeFileSync('/private/tmp/dkst-adaptive-snapshots.json',JSON.stringify(adaptiveSnapshots));
+ // Display-only hiding never stops recognition or transcript storage.
+ queue.record();const hidingMicCalls=audioCalls.length;
+ element('hide-transcript').checked=true;await element('hide-transcript').handlers.change();
+ queue.showHint('','','전사 기록 '.repeat(200));
+ for(let i=0;i<150 && nativePage.textObject.some(c=>c.containerID===4 || c.containerID===1);i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.ok(!nativePage.textObject.some(c=>c.containerID===4));assert.ok(!nativePage.textObject.some(c=>c.containerID===1));
+ assert.equal(nativePage.textObject.find(c=>c.containerID===3).isEventCapture,1,'header receives taps when both content boxes are hidden');
+ assert.ok(!element('hud-screen').innerHTML.includes('hud-transcript-box'));
+ assert.equal(queue.state().recording,true);assert.equal(audioCalls.length,hidingMicCalls);
+ nextTranscript='숨긴 상태에서도 저장되는 전사';queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'hidden-transcript');for(let i=0;i<8;i++)await tick();
+ assert.match(element('transcript-log').textContent,/숨긴 상태에서도 저장되는 전사/);assert.equal(queue.state().recording,true);
+ queue.showHint('넓은 힌트','1줄\n2줄\n3줄\n4줄\n5줄\n6줄\n7줄\n8줄','숨김');
+ for(let i=0;i<150 && nativePage.textObject.find(c=>c.containerID===1)?.height!==249;i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(nativePage.textObject.find(c=>c.containerID===1).height,249,'hidden transcript allows up to eight hint body rows');
+ const callsBeforeMenu=audioCalls.length;
+ handler({menuItemClickEvent:{itemID:10}});handler({listEvent:{containerID:30,currentSelectItemIndex:0}});
+ for(let i=0;i<150 && !nativePage.textObject.some(c=>c.containerID===4);i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(element('hide-transcript').checked,false);assert.equal(nativePage.textObject.find(c=>c.containerID===4).height,81);
+ assert.equal(queue.state().recording,true);assert.equal(audioCalls.length,callsBeforeMenu,'native hide/show setting must not restart the microphone');
+ element('hide-transcript').checked=true;await element('hide-transcript').handlers.change();await tick();
+ assert.equal(JSON.parse(nativeSaved).hideTranscript,true);await queue.stopVoiceRecording(false);
  const restoredPrepareStart=requests.length;
  elements.clear();
  vm.runInNewContext(src,context);await tick();await tick();
  assert.equal(element('server-url').value,'https://192.168.1.4:2806');
  assert.match(element('login-status-label').textContent,/인증됨/,'new WebView with empty browser storage must restore native login');
  assert.equal(element('auth-password').value,'');
+ assert.equal(element('hide-transcript').checked,true,'transcript visibility restores from native storage');
  assert.equal(element('model-ai-chat').value,'chat-role');assert.equal(element('model-translation-reply').value,'reply-role');
  assert.equal(element('audio-input-source').value,'phone','phone source must survive native settings restore');
  assert.equal(element('glasses-sensitivity').value,'very_high');assert.equal(element('glasses-gain').value,'4');

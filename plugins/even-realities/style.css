@@ -525,3 +525,16 @@ label:has(> #hint-web-search) { display: flex; align-items: flex-start; gap: 8px
 .glasses-input-settings label:not(:first-child) { margin-top:12px; }
 .glasses-input-settings p { font-size:12px; color:var(--text-secondary); line-height:1.5; margin-top:8px; }
 #glasses-input-meter { width:100%; height:12px; display:block; }
+
+/* Compact AI content; transcript is capped at three rows without filling empty space. */
+.hud-screen.hud-ai-mode { height: auto; min-height: 0; gap: 0; }
+.hud-ai-mode .hud-ai-box { min-height: 0; box-sizing: border-box; overflow: hidden; }
+.hud-ai-mode .hud-ai-body { min-height: 0; max-height: calc(var(--hud-content-lines, 6) * 1.4em); flex: 0 1 auto; }
+.hud-ai-mode .hud-transcript-box { flex: 0 0 auto; min-height: 0; overflow: hidden; }
+.hud-ai-mode .hud-transcript-body { min-height: 0; max-height: none; flex: 1; }
+.hud-hint-box .hud-ai-header { font-size: inherit; opacity: 1; border-bottom: 0; padding-bottom: 0; }
+.hud-hint-box .hud-ai-badge { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: 0; }
+.hud-hint-box .hud-ai-meta { display: none; }
+
+.hud-ai-mode .hud-transcript-label { font-size: 10px; line-height: 12px; }
+.hud-ai-mode .hud-transcript-body { flex: 0 1 auto; line-height: 18px; max-height: 54px; }
