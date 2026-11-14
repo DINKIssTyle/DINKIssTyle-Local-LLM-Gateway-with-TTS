@@ -10,7 +10,7 @@ export function glassesBatteryText(level) {
 }
 
 export function hudStatusText(level, date = new Date()) {
-  return `${clockText(date)} / ${glassesBatteryText(level)}`;
+  return `${clockText(date)} | ${glassesBatteryText(level)}`;
 }
 
 // The native SDK exposes no text alignment. Pad using the same firmware glyph
@@ -22,15 +22,15 @@ export function rightAlignedStatusText(level,date=new Date(),width=176){
   return padding+text;
 }
 
-export function hudNoticeText(message) {
+export function hudNoticeText(message,width=396) {
   const text=String(message).replace(/\s+/gu,' ').trim();
-  if(getTextWidth(text)<=396)return text;
+  if(getTextWidth(text)<=width)return text;
   const chars=Array.from(text);let lo=0,hi=chars.length;
-  while(lo<hi){const mid=Math.ceil((lo+hi)/2);if(getTextWidth(chars.slice(0,mid).join('')+'…')<=396)lo=mid;else hi=mid-1;}
+  while(lo<hi){const mid=Math.ceil((lo+hi)/2);if(getTextWidth(chars.slice(0,mid).join('')+'…')<=width)lo=mid;else hi=mid-1;}
   return chars.slice(0,lo).join('').trimEnd()+'…';
 }
 
-export function modeHeaderText({mode='ai',hint=true,source='en',target='ko',running=false,listening=running,phase='',phaseDetail='',translating=false,error='',detail='',trigger=''}={}){
+export function modeHeaderText({mode='ai',hint=true,source='en',target='ko',running=false,listening=running,phase='',phaseDetail='',translating=false,error='',detail='',trigger='',imageIcons=false,messageOnly=false}={}){
   detail=error || detail || (listening?'듣는중':'-');
   if(!error && translating)detail='번역 처리';
   else if(!error && phase){
@@ -66,9 +66,10 @@ export function modeHeaderText({mode='ai',hint=true,source='en',target='ko',runn
       if(compactDetail)detail+=` (${compactDetail.slice(0,18)}${compactDetail.length>18?'…':''})`;
     }
   }
-  const runIcon=running?'●':'○';
-  const label=mode==='translate'?`[번역] ${String(source).toUpperCase()}→${String(target).toUpperCase()}`:(trigger?`[AI ▶${trigger}]`:'[AI]');
-  return `${label} ${runIcon} | ${detail}`;
+  if(messageOnly)return `| ${detail}`;
+  const runIcon=imageIcons?'':running?'●':'○';
+  const label=mode==='translate'?`[번역] ${String(source).toUpperCase()}→${String(target).toUpperCase()}`:(trigger?`[AI ${imageIcons?'':'▶'}${trigger}]`:'[AI]');
+  return `${label}${runIcon?' '+runIcon:''} | ${detail}`;
 }
 
 export function translationHeaderText(options={}){

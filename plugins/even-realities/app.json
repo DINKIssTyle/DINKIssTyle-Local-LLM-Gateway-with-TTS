@@ -2,7 +2,7 @@
   "package_id": "com.dinkisstyle.evenrealities.gateway",
   "edition": "202601",
   "name": "DKST AI Gateway",
-  "version": "2.2.6",
+  "version": "2.4.0",
   "min_app_version": "2.2.10",
   "min_sdk_version": "0.0.16",
   "entrypoint": "index.html",
@@ -17,6 +17,10 @@
     {
       "name": "g2-microphone",
       "desc": "G2 마이크로 녹음한 음성을 DKST 서버에서 텍스트로 변환합니다."
+    },
+    {
+      "name": "phone-microphone",
+      "desc": "사용자가 휴대폰 입력을 선택하면 휴대폰 마이크 음성을 DKST 서버로 보내 전사·번역·AI 기능에 사용합니다."
     }
   ],
   "supported_languages": [

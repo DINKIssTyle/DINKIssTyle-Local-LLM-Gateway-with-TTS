@@ -207,7 +207,7 @@ body {
   font-size: 13px;
 }
 
-#hud-notice { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#hud-header-message { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 #hud-status-text { flex: 0 0 auto; margin-left: auto; padding-left: 12px; text-align: right; }
 
 .hud-cursor {
@@ -514,3 +514,14 @@ label:has(> #hint-web-search) { display: flex; align-items: flex-start; gap: 8px
 #stt-engine-status { font-size: 12px; color: var(--text-secondary); overflow-wrap: anywhere; }
 
 .role-model-settings label:not(:first-child) { margin-top: 12px; }
+
+.hud-notice-group { display:flex; align-items:center; gap:4px; min-width:0; overflow:hidden; }
+.hud-icon { display:block; flex:none; object-fit:contain; filter:brightness(0) saturate(100%) invert(83%) sepia(79%) saturate(1624%) hue-rotate(79deg); }
+.hud-icon[hidden], #hud-trigger-keyword[hidden], #hud-notice[hidden] { display:none; }
+#hud-mode-label, #hud-trigger-keyword { flex:none; white-space:nowrap; }
+
+.glasses-input-settings { min-width:0; max-width:100%; display:flex; flex-direction:column; gap:8px; margin-top:12px; padding:12px; border:1px solid var(--border-color,#2b3a50); border-radius:10px; }
+.glasses-input-settings[hidden] { display:none; }
+.glasses-input-settings label:not(:first-child) { margin-top:12px; }
+.glasses-input-settings p { font-size:12px; color:var(--text-secondary); line-height:1.5; margin-top:8px; }
+#glasses-input-meter { width:100%; height:12px; display:block; }

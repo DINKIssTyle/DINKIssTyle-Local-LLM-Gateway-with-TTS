@@ -30,10 +30,10 @@ export class SpeechSegmenter {
     this.reset();
   }
   reset() { this.parts = []; this.preRoll = []; this.preMs = 0; this.ms = 0; this.silence = 0; this.voiced = 0; }
-  push(bytes) {
+  push(bytes,level=pcmLevel(bytes)) {
     if (!bytes.length || bytes.length % 2) throw new Error('잘못된 PCM16 오디오 프레임');
     const ms = bytes.length / 32;
-    const speech = pcmLevel(bytes) >= this.threshold;
+    const speech = level >= this.threshold;
     if (!this.parts.length && !speech) {
       this.preRoll.push(bytes); this.preMs += ms;
       while (this.preMs > 250 && this.preRoll.length > 1) this.preMs -= this.preRoll.shift().length / 32;

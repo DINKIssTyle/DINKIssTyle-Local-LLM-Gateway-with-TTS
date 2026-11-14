@@ -1,5 +1,5 @@
 import { build } from 'esbuild';
-import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, cp, mkdir, readFile, writeFile } from 'node:fs/promises';
 
 const serverIndex = process.argv.indexOf('--server');
 let serverUrl = '';
@@ -22,6 +22,7 @@ await build({
   define: { DKST_DEFAULT_SERVER_URL: JSON.stringify(serverUrl) },
 });
 await mkdir('dist', { recursive: true });
+await cp('assets/hud-icons','dist/assets/hud-icons',{recursive:true});
 for (const file of ['index.html', 'style.css', 'bundle.js']) {
   await copyFile(file, `dist/${file}`);
 }

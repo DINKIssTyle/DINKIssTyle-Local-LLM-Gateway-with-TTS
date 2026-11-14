@@ -37,10 +37,13 @@ for (const battery of [0, 9, 75, 100, undefined]) {
     assert.ok(text.startsWith(' '));
     assert.ok(getTextWidth(text) <= 174);
     assert.ok(174 - getTextWidth(text) < getTextWidth(' ') + .01, 'right edge must remain within one native space glyph');
-    assert.match(text.trim(), /^16:14 \/ /);
+    assert.match(text.trim(), /^16:14 \| /);
 }
 
 assert.equal(stripToolTagsForGlasses('<tool_call>{"name":"search_web","arguments":{"query":"날씨"}}</tool_call>서울은 맑음입니다.'), '서울은 맑음입니다.');
 assert.equal(stripToolTagsForGlasses('<search_web>{"query":"환율"}</search_web>'), '');
 assert.equal(stripToolTagsForGlasses('잠시 확인 중<tool_call><function=read_web_page><parameter=url>https://a.b'), '잠시 확인 중');
 assert.equal(stripSourcesForGlasses('<|call:search_web|>{"query":"test"}<|end|>결과는 10입니다.'), '결과는 10입니다.');
+
+assert.equal(modeHeaderText({mode:"ai",trigger:"이븐",running:true,imageIcons:true}),"[AI 이븐] | 듣는중");
+assert.equal(translationHeaderText({source:"auto",target:"ko",imageIcons:true}),"[번역] AUTO→KO | -");

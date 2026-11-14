@@ -1,3 +1,6 @@
+import {GlassesInputProcessor,normalizeGlassesInput,inputSegmentOptions,levelDb,GLASSES_THRESHOLDS} from './glasses-input.mjs';
+import {headerLayout} from './header-layout.mjs';
+import {HudIconStore,microphoneIcon,hudIconPath} from './hud-icons.mjs';
 import {EnginePreparation,waitForPreparation} from './engine-preparation.mjs';
 import {chatDeadline,chatFailureMessage} from './chat-deadline.mjs';
 import {ROLE_MODEL_KEYS,normalizeRoleModels,resolveRoleModel,llmRequestRole,roleModelOptions,translationOnlyPrompts} from './role-models.mjs';
@@ -14,7 +17,7 @@ import { cuePrompts, parseCueResponse, fitCue, hintPlanPrompts, parseHintPlan, h
 import { HintGate } from './hint-gate.mjs';
 import { waitForEvenAppBridge, AudioInputSource, OsEventTypeList } from '@evenrealities/even_hub_sdk';
 import { normalizeModels } from './model-list.mjs';
-import { speechSegmentOptions, SpeechSegmenter, mergePCM, pcmLevel } from './audio-segments.mjs';
+import { SpeechSegmenter, mergePCM } from './audio-segments.mjs';
 import { modeHeaderText, translationHeaderText, rightAlignedStatusText, hudStatusText, hudNoticeText, withAnimatedDots, extractVisibleAndReasoning, stripSourcesForGlasses, formatToolStatusText, sliceHUDWindow, normalizeGlassesMode, nextGlassesMode, glassesModeMenuIdToMode, targetLanguageLabel, glassesModeShortLabel, glassesModeBadgeText, buildModePrompts } from './hud-status.mjs';
 import { LocalAgreement } from './local-agreement.mjs';
 
@@ -49,6 +52,8 @@ import { LocalAgreement } from './local-agreement.mjs';
     triggerWord: '이븐',
     speechFilter: 'strict',
     sttEngine: 'whisper',
+    audioInputSource:'glasses',
+    glassesInput:{sensitivity:'high',gain:1},
     sttFallback: true,
     speakerScope: 'conversation',
     enableTTS: false,
@@ -56,6 +61,8 @@ import { LocalAgreement } from './local-agreement.mjs';
   };
 
   let activeSttEngine='whisper';
+  let activeAudioInputSource=AudioInputSource.Glasses;
+  let activeGlassesInput=normalizeGlassesInput(config.glassesInput),activeInputProcessor=new GlassesInputProcessor(activeGlassesInput),lastInputMeterAt=0;
   let bridge = null;
   let settingsEdited = false;
   let pendingNativeSave = false;
@@ -66,6 +73,7 @@ import { LocalAgreement } from './local-agreement.mjs';
   let capturePreparing = false;
   let captureGeneration = 0;
   let captureAbort = null;
+  let captureTask=null,inputSwitchPromise=null;
   let pendingMicOpen = null;
   let micStopPromise = null;
   let micMayBeOpen = false;
@@ -115,7 +123,7 @@ import { LocalAgreement } from './local-agreement.mjs';
   function chatScope(){return [config.serverUrl,config.username,resolveRoleModel('chat',config)].join('\0');}
   let availableModels=[];
   function aiVisibleLines(){return normalizeGlassesMode(config.glassesMode)==='translate'?5:6;}
-  let nativeTranslateLayout=false;
+  let nativeTranslateLayout=false,nativeHeaderLayoutKey='';
   const AI_SCROLL_START_MS = 5000;
   const AI_SCROLL_LINE_MS = 2500;
   // Inner width: 576 - 2 × (2px padding + 1px border).
@@ -162,6 +170,8 @@ import { LocalAgreement } from './local-agreement.mjs';
     hudScreen: document.getElementById('hud-screen'),
     hudStatus: document.getElementById('hud-status-text'),
     hudNotice: document.getElementById('hud-notice'),
+    hudMicIcon:document.getElementById('hud-mic-icon'),hudTriggerIcon:document.getElementById('hud-trigger-icon'),
+    hudModeLabel:document.getElementById('hud-mode-label'),hudTriggerKeyword:document.getElementById('hud-trigger-keyword'),hudHeaderMessage:document.getElementById('hud-header-message'),
     hudPageIndicator: document.getElementById('hud-page-indicator'),
     glassesMode: document.getElementById('glasses-mode'),
     translateExcludeSelf: document.getElementById('translate-exclude-self'),
@@ -186,6 +196,8 @@ import { LocalAgreement } from './local-agreement.mjs';
     triggerWord: document.getElementById('trigger-word'),
     speechFilter: document.getElementById('speech-filter'),
     sttEngine: document.getElementById('stt-engine'),
+    audioInputSource:document.getElementById('audio-input-source'),
+    glassesInputSettings:document.getElementById('glasses-input-settings'),glassesSensitivity:document.getElementById('glasses-sensitivity'),glassesGain:document.getElementById('glasses-gain'),glassesInputMeter:document.getElementById('glasses-input-meter'),glassesInputLevel:document.getElementById('glasses-input-level'),
     sttFallback: document.getElementById('stt-fallback'),
     sttEngineStatus: document.getElementById('stt-engine-status'),
     btnPrepareStt: document.getElementById('prepare-chrome-stt'),
@@ -309,6 +321,43 @@ import { LocalAgreement } from './local-agreement.mjs';
     onBusy:busy=>{translating=busy || liveTranslationDraft;renderLiveHUD();}
   });
 
+  const hudIcons=new HudIconStore(),lastHudIconKeys=new Map();
+  let hudImagesDisabled=false,lastFallbackHeader='';
+  function hudMicrophoneState(){
+    const active=isRecording || capturePreparing || micMayBeOpen || pendingMicOpen || micCloseUncertain;
+    const source=active?(activeAudioInputSource===AudioInputSource.Phone?'phone':'glasses'):config.audioInputSource;
+    const on=isRecording && !capturePreparing && !pendingMicOpen && !micCloseUncertain;
+    return {source,on,key:microphoneIcon(source,on)};
+  }
+  function currentHeaderLayout(translate=normalizeGlassesMode(config.glassesMode)==='translate'){return headerLayout(translate,{trigger:triggerLabels()[0] || '',source:config.translateSourceLang || 'auto',target:config.translateTargetLang || 'ko'});}
+  function nativeHUDNotice(){
+    const {source,on}=hudMicrophoneState(),translate=normalizeGlassesMode(config.glassesMode)==='translate';
+    const fallback=hudImagesDisabled?`[${source==='phone'?'폰':'안경'} ${on?'녹음':'꺼짐'}] `:'';
+    return hudNoticeText(fallback+currentHUDHeader(true),currentHeaderLayout(translate).width);
+  }
+  function queueHudIcons(force=false){
+    const mic=hudMicrophoneState(),translate=normalizeGlassesMode(config.glassesMode)==='translate';
+    if(els.hudMicIcon){els.hudMicIcon.src=hudIconPath(mic.key);els.hudMicIcon.alt=`${mic.source==='phone'?'휴대폰':'안경'} 마이크 ${mic.on?'켜짐':'꺼짐'}`;}
+    if(els.hudTriggerIcon)els.hudTriggerIcon.hidden=translate;
+    const layout=currentHeaderLayout(translate);
+    els.hudModeLabel.textContent=layout.prefix.content;
+    els.hudTriggerKeyword.textContent=layout.wake?.content || '';els.hudTriggerKeyword.hidden=translate;
+    els.hudHeaderMessage.textContent=currentHUDHeader(true);
+    if(!displayReady)return;
+    if(typeof bridge.updateImageRawData!=='function')hudImagesDisabled=true;
+    if(hudImagesDisabled){
+      const content=nativeHUDNotice();
+      if(content!==lastFallbackHeader){lastFallbackHeader=content;pendingHUD.set(3,{containerID:3,containerName:'notice',content});flushHUD();}
+      return;
+    }
+    const icons=[[5,'mic-state',mic.key],...(!translate?[[6,'ai-trigger','ai-trigger']]:[])];
+    if(translate){pendingHUD.delete(6);lastHudIconKeys.delete(6);}
+    for(const [id,name,key] of icons)if(force || lastHudIconKeys.get(id)!==key){
+      lastHudIconKeys.set(id,key);pendingHUD.set(id,{containerID:id,containerName:name,icon:key});
+    }
+    if(pendingHUD.size)flushHUD();
+  }
+
   // --- Lifecycle & Initialization ---
   async function init() {
     loadSettings();
@@ -327,6 +376,8 @@ import { LocalAgreement } from './local-agreement.mjs';
         const incoming=JSON.parse(saved);
         config = { ...config, ...incoming };
         config.roleModels=normalizeRoleModels(incoming.roleModels);
+        config.audioInputSource=incoming.audioInputSource==='phone'?'phone':'glasses';
+        config.glassesInput=normalizeGlassesInput(incoming.glassesInput);
         if(!Object.prototype.hasOwnProperty.call(incoming,'translationEngine'))config.translationEngine=incoming.chromeTranslation===false?'llm':'chrome';
       }
       if (/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(config.serverUrl) &&
@@ -357,6 +408,9 @@ import { LocalAgreement } from './local-agreement.mjs';
     els.triggerWord.value = config.triggerWord;
     els.speechFilter.value = config.speechFilter;
     config.roleModels=normalizeRoleModels(config.roleModels);renderRoleModelSelectors();
+    config.audioInputSource=config.audioInputSource==='phone'?'phone':'glasses';
+    els.audioInputSource.value=config.audioInputSource;
+    config.glassesInput=normalizeGlassesInput(config.glassesInput);syncGlassesInputUI();
     els.sttEngine.value=config.sttEngine || 'whisper';els.sttFallback.checked=config.sttFallback!==false;
     els.speakerScope.value = config.speakerScope;
     if(els.translateExcludeSelf)els.translateExcludeSelf.checked=config.translateExcludeSelf!==false;
@@ -424,7 +478,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       audioBuffer = [];
       recordedBytes = 0;
       recordingStarted = Date.now();
-      segmenter = new SpeechSegmenter(speechSegmentOptions(activeSttEngine,nextMode));
+      segmenter = new SpeechSegmenter(inputSegmentOptions(activeSttEngine,nextMode,activeAudioInputSource,activeGlassesInput));
       clearTimeout(manualTimer);
       manualTimer = null;
       if (!isContinuousCaptureMode(nextMode)) {
@@ -499,6 +553,8 @@ import { LocalAgreement } from './local-agreement.mjs';
     config.voiceMode = 'continuous';
     config.triggerWord = els.triggerWord.value.trim();
     config.speechFilter = els.speechFilter.value === 'standard' ? 'standard' : 'strict';
+    config.audioInputSource=els.audioInputSource.value==='phone'?'phone':'glasses';
+    config.glassesInput=readGlassesInputControls();
     config.sttEngine=['chrome-online','apple'].includes(els.sttEngine.value)?els.sttEngine.value:'whisper';config.sttFallback=els.sttFallback.checked!==false;
     config.speakerScope = els.speakerScope.value === 'self' ? 'self' : 'conversation';
     config.translateExcludeSelf=els.translateExcludeSelf?.checked!==false;
@@ -552,8 +608,9 @@ import { LocalAgreement } from './local-agreement.mjs';
   }
 
   // --- Even Realities SDK Bridge ---
-  function hudPage(translate){return {
-        containerTotalNum: 4,
+  function hudPage(translate,layout=currentHeaderLayout(translate)){return {
+        containerTotalNum: translate?6:8,
+        imageObject:[{containerID:5,containerName:'mic-state',xPosition:layout.micIconX,yPosition:1,width:24,height:24},...(!translate?[{containerID:6,containerName:'ai-trigger',xPosition:layout.wakeIconX,yPosition:1,width:24,height:24}]:[])],
         textObject: [{
           xPosition: 0, yPosition: 27, width: 576, height: translate?141:168,
           borderWidth: 1, borderColor: 4, borderRadius: 4, paddingLength: 2,
@@ -565,20 +622,22 @@ import { LocalAgreement } from './local-agreement.mjs';
           paddingLength: 0, borderWidth: 0,
           containerID: 2, containerName: 'status', content: rightAlignedStatusText(glassesBattery), isEventCapture: 0,
         }, {
-          xPosition: 0, yPosition: 0, width: 396, height: 27,
+          xPosition: layout.x, yPosition: 0, width: layout.width, height: 27,
           paddingLength: 0, borderWidth: 0,
-          containerID: 3, containerName: 'notice', content: hudNoticeText(els.hudNotice.textContent || '대기'), isEventCapture: 0,
+          containerID: 3, containerName: 'notice', content: nativeHUDNotice(), isEventCapture: 0,
         }, {
           xPosition: 0, yPosition: translate?168:195, width: 576, height: translate?120:93,
           paddingLength: 0, borderWidth: 0,
           containerID: 4, containerName: 'transcript',
           content: lastTranscriptHUDContent || '',
           isEventCapture: 0,
-        }],
+        },{containerID:7,containerName:'mode-label',xPosition:layout.prefix.x,yPosition:0,width:layout.prefix.width,height:27,paddingLength:0,borderWidth:0,content:layout.prefix.content,isEventCapture:0},
+        ...(!translate?[{containerID:8,containerName:'wake-word',xPosition:layout.wake.x,yPosition:0,width:layout.wake.width,height:27,paddingLength:0,borderWidth:0,content:layout.wake.content,isEventCapture:0}]:[])],
         menuObject: {
           menuItems: [
             { itemID: 1, itemName: 'AI 모드' },
             { itemID: 2, itemName: '번역 모드' },
+            { itemID: 3, itemName: '입력 소스 전환' },
           ],
         },
       };}
@@ -589,9 +648,11 @@ import { LocalAgreement } from './local-agreement.mjs';
       bridge = await waitForEvenAppBridge();
       restoreNativeSettings();
       nativeTranslateLayout=normalizeGlassesMode(config.glassesMode)==='translate';
-      const result = await bridge.createStartUpPageContainer(hudPage(nativeTranslateLayout));
+      const initialHeaderLayout=currentHeaderLayout(nativeTranslateLayout);
+      const result = await bridge.createStartUpPageContainer(hudPage(nativeTranslateLayout,initialHeaderLayout));
       if (result !== 0) throw new Error(`안경 화면 생성 실패: ${result}`);
-      displayReady = true;
+      displayReady = true;nativeHeaderLayoutKey=initialHeaderLayout.key;
+      queueHudIcons(true);
       updateConnectionState(true, 'G2 화면 연결됨');
       setupBridgeEvents();
       startHUDStatus();
@@ -611,6 +672,8 @@ import { LocalAgreement } from './local-agreement.mjs';
 
         // Handle Audio Events
         if (event.audioEvent && isRecording) {
+          const source=event.audioEvent.source;
+          if([AudioInputSource.Glasses,AudioInputSource.Phone].includes(source) && source!==activeAudioInputSource)return;
           const pcm = event.audioEvent.audioPcm;
           if (pcm && pcm.length > 0) {
             receivePCM(new Uint8Array(pcm), event.audioEvent.speakerRole);
@@ -620,6 +683,7 @@ import { LocalAgreement } from './local-agreement.mjs';
 
         // Handle Glasses Contextual Menu (전사 / AI / 번역 모드 선택)
         if (event.menuItemClickEvent) {
+          if(event.menuItemClickEvent.itemID===3){switchAudioInputSource();return;}
           const selectedMode = glassesModeMenuIdToMode(event.menuItemClickEvent.itemID);
           if (selectedMode) {
             setGlassesMode(selectedMode, true);
@@ -799,17 +863,30 @@ import { LocalAgreement } from './local-agreement.mjs';
     try {
       while (displayReady) {
         const translate=normalizeGlassesMode(config.glassesMode)==='translate';
-        if(nativeTranslateLayout!==translate){
-          const success=await bridge.rebuildPageContainer(hudPage(translate));
+        const header=currentHeaderLayout(translate);
+        if(nativeTranslateLayout!==translate || nativeHeaderLayoutKey!==header.key){
+          const success=await bridge.rebuildPageContainer(hudPage(translate,header));
           if(!success)throw new Error('안경 화면 배치 변경 실패');
-          nativeTranslateLayout=translate;
+          nativeTranslateLayout=translate;nativeHeaderLayoutKey=header.key;
+          lastHudIconKeys.clear();pendingHUD.delete(5);pendingHUD.delete(6);queueHudIcons(true);
           continue;
         }
         if(!pendingHUD.size)break;
         const [id, update] = pendingHUD.entries().next().value;
         pendingHUD.delete(id);
-        const success = await bridge.textContainerUpgrade(update);
-        if (!success) throw new Error('안경 화면 갱신 실패');
+        if(update.icon){
+          try{
+            const imageData=await hudIcons.load(update.icon);
+            const result=await bridge.updateImageRawData({containerID:update.containerID,containerName:update.containerName,imageData});
+            if(result!=='success')throw Error(`아이콘 전송 실패: ${result}`);
+          }catch(error){
+            console.warn('HUD image unavailable; keeping text updates:',error);
+            hudImagesDisabled=true;pendingHUD.delete(5);pendingHUD.delete(6);queueHudIcons();
+          }
+        }else{
+          const success = await bridge.textContainerUpgrade(update);
+          if (!success) throw new Error('안경 화면 갱신 실패');
+        }
         await new Promise(resolve => setTimeout(resolve, 150));
       }
     } catch (err) {
@@ -831,29 +908,30 @@ import { LocalAgreement } from './local-agreement.mjs';
     lastStatus = text;
   }
 
-  function currentTranslationHeader(){
-    return translationHeaderText({source:config.translateSourceLang || 'auto',target:config.translateTargetLang,
+  function currentTranslationHeader(messageOnly=false){
+    return translationHeaderText({messageOnly,imageIcons:true,source:config.translateSourceLang || 'auto',target:config.translateTargetLang,
       running:isRecording || capturePreparing || processingAI || isThinking || translating,
       phase:(isThinking || processingAI)?aiPhaseTitle:'',phaseDetail:(isThinking || processingAI)?aiPhaseDetail:'',translating,
       error:captureFailure || micCloseUncertain?'오류':translationFailure});
   }
   function setHUDNotice(message) {
+    queueHudIcons();
     message=currentHUDHeader();
     if(els.hudNotice.textContent===message)return;
     els.hudNotice.textContent = message;
     // The left header is bounded so a long wake word cannot wrap into the body.
-    const content = hudNoticeText(message);
+    const content = nativeHUDNotice();
     if (displayReady) {
       pendingHUD.set(3, {containerID:3,containerName:'notice',content});
       flushHUD();
     }
   }
-  function currentHUDHeader(){
+  function currentHUDHeader(messageOnly=false){
     const mode=normalizeGlassesMode(config.glassesMode);
-    if(mode==='translate')return currentTranslationHeader();
+    if(mode==='translate')return currentTranslationHeader(messageOnly);
     const error=micCloseUncertain?'마이크 종료 확인 실패':captureFailure?'전사 오류':'';
     const detail=micStopPromise || pendingMicCloses.size?'마이크 정지중':capturePreparing?'녹음 준비중':pendingTrigger?'질문 대기':draining || pendingClips.length?'전사 처리':'';
-    return modeHeaderText({mode,hint:config.aiHintMode!==false,listening:isRecording,
+    return modeHeaderText({mode,messageOnly,imageIcons:true,hint:config.aiHintMode!==false,listening:isRecording,
       running:isRecording || capturePreparing || processingAI || isThinking || draining || pendingClips.length>0,
       phase:(isThinking || processingAI)?aiPhaseTitle:'',phaseDetail:(isThinking || processingAI)?aiPhaseDetail:'',error,detail,trigger:triggerLabels()[0] || ''});
   }
@@ -867,6 +945,7 @@ import { LocalAgreement } from './local-agreement.mjs';
   }
   function transcriptNotice() { setHUDNotice(); }
   function renderLiveHUD(overridePageInfo) {
+    queueHudIcons();
     const chromeTranslateMode=normalizeGlassesMode(config.glassesMode)==='translate' && config.chromeTranslation!==false;
     const notice=currentHUDHeader();if(els.hudNotice.textContent!==notice)setHUDNotice(notice);
     const transcriptRaw = buildTranscriptSectionText();
@@ -965,7 +1044,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     els.voiceBtn?.classList.remove('active');
     els.voiceBtn?.setAttribute?.('aria-pressed','false');
     els.voiceBtn?.setAttribute?.('aria-label','녹음 시작');
-    els.voiceMode.disabled=false;els.triggerWord.disabled=false;els.sttEngine.disabled=false;
+    els.voiceMode.disabled=false;els.triggerWord.disabled=false;els.sttEngine.disabled=false;els.audioInputSource.disabled=!!inputSwitchPromise;syncGlassesInputUI();
     if (!captureFailure && !micCloseUncertain) transcriptStatusMessage = '';
     setHUDNotice(pendingClips.length || draining ? '녹음 정지 · 남은 전사 처리 중' : '녹음 정지');
     setVoiceHint(pendingClips.length || draining ? '마이크 꺼짐 · 남은 음성만 처리 중' : '마이크 꺼짐 · 탭하면 녹음 시작');
@@ -978,7 +1057,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     closing.then(()=>pendingMicCloses.delete(closing),()=>pendingMicCloses.delete(closing));
     const closed = await microphoneCall(closing);
     if(generation!==captureGeneration)return;
-    if (!closed) throw new Error('G2가 마이크 종료를 확인하지 않았습니다.');
+    if (!closed) throw new Error('Even 앱이 마이크 종료를 확인하지 않았습니다.');
     if (pendingMicOpen) {
       micCloseUncertain=true;
       setHUDNotice('마이크 정지 확인 중');
@@ -989,12 +1068,12 @@ import { LocalAgreement } from './local-agreement.mjs';
     }
   }
 
-  async function toggleVoiceRecording() {
+  async function toggleVoiceRecording({fromSourceSwitch=false}={}) {
     // Stop has priority even while warmup or microphone-open is awaiting a reply.
     if (isRecording || capturePreparing || pendingMicOpen || micCloseUncertain || pendingMicCloses.size) {
       await stopVoiceRecording();return;
     }
-    if (micBusy || micStopPromise) return;
+    if (micBusy || micStopPromise || (inputSwitchPromise && !fromSourceSwitch)) return;
     if (!displayReady) { updateHUD('Even 앱에서 G2에 연결한 뒤 시작하세요.'); return; }
     micBusy=true;capturePreparing=true;
     const generation=++captureGeneration;
@@ -1002,8 +1081,10 @@ import { LocalAgreement } from './local-agreement.mjs';
     els.voiceBtn?.classList.add('active');
     els.voiceBtn?.setAttribute?.('aria-label','녹음 준비 취소');
     setHUDNotice('녹음 준비 중 · 탭하면 취소');
+    let startingTask;
     try {
-      await startVoiceRecording(generation,controller.signal);
+      startingTask=startVoiceRecording(generation,controller.signal);
+      captureTask=startingTask;await startingTask;
     } catch (err) {
       if(generation!==captureGeneration || controller.signal.aborted){
         if(pendingMicOpen){micCloseUncertain=true;setHUDNotice('마이크 상태 확인 필요');setVoiceHint('마이크 시작 응답이 없습니다. 앱을 완전히 닫아주세요.');}
@@ -1017,7 +1098,28 @@ import { LocalAgreement } from './local-agreement.mjs';
     } finally {
       if(captureAbort===controller)captureAbort=null;
       capturePreparing=false;micBusy=false;
+      if(captureTask===startingTask)captureTask=null;
     }
+  }
+
+  async function switchAudioInputSource(){
+    if(inputSwitchPromise)return inputSwitchPromise;
+    const next=config.audioInputSource==='phone'?'glasses':'phone';
+    const resume=isRecording || capturePreparing;
+    const starting=captureTask;els.audioInputSource.disabled=true;
+    const work=(async()=>{
+      try{
+        if(resume || micMayBeOpen || pendingMicOpen || micCloseUncertain || pendingMicCloses.size)await stopVoiceRecording(true);
+        if(starting)await starting.catch(()=>{});
+        if(micMayBeOpen || pendingMicOpen || micCloseUncertain || pendingMicCloses.size)throw Error('기존 마이크 종료를 확인한 뒤 다시 전환해 주세요.');
+        settingsEdited=true;config.audioInputSource=next;els.audioInputSource.value=next;syncGlassesInputUI();
+        await persistSettings();renderLiveHUD();
+        setVoiceHint(`입력 소스: ${next==='phone'?'휴대폰':'안경'}${resume?' · 녹음 다시 시작':' · 탭하면 녹음 시작'}`);
+        if(resume)await toggleVoiceRecording({fromSourceSwitch:true});
+      }catch(error){els.hintStatus.textContent=`입력 소스 전환 실패 · ${error.message}`;setVoiceHint(`입력 전환 실패 · ${error.message}`);}
+    })();
+    inputSwitchPromise=work;
+    try{await work;}finally{if(inputSwitchPromise===work){inputSwitchPromise=null;if(!isRecording && !capturePreparing && !pendingMicOpen && !micMayBeOpen && !micCloseUncertain && !pendingMicCloses.size)els.audioInputSource.disabled=false;syncGlassesInputUI();}}
   }
 
 
@@ -1034,6 +1136,8 @@ import { LocalAgreement } from './local-agreement.mjs';
     config.voiceMode = 'continuous';
     config.triggerWord = els.triggerWord.value.trim();
     config.speechFilter = els.speechFilter.value === 'standard' ? 'standard' : 'strict';
+    config.audioInputSource=els.audioInputSource.value==='phone'?'phone':'glasses';
+    config.glassesInput=readGlassesInputControls();
     config.sttEngine=['chrome-online','apple'].includes(els.sttEngine.value)?els.sttEngine.value:'whisper';config.sttFallback=els.sttFallback.checked!==false;
     config.speakerScope = els.speakerScope.value === 'self' ? 'self' : 'conversation';
     config.translateExcludeSelf=els.translateExcludeSelf?.checked!==false;
@@ -1043,6 +1147,10 @@ import { LocalAgreement } from './local-agreement.mjs';
     const labels = triggerLabels();
     if (mode === 'ai' && (labels.length>8 || labels.some(label=>Array.from(label.replace(/\s/gu,'')).length>40))) throw new Error('AI 호출어는 최대 8개, 각각 40자 이하로 입력하세요.');
     activeSttEngine=config.sttEngine;els.sttEngine.disabled=true;
+    activeAudioInputSource=config.audioInputSource==='phone'?AudioInputSource.Phone:AudioInputSource.Glasses;
+    activeGlassesInput=normalizeGlassesInput(config.glassesInput);activeInputProcessor=new GlassesInputProcessor(activeGlassesInput);lastInputMeterAt=0;
+    els.glassesInputMeter.value=-72;els.glassesInputLevel.textContent='오디오 수신 대기';
+    const captureAudioSource=activeAudioInputSource;els.audioInputSource.disabled=true;syncGlassesInputUI();
     if(activeSttEngine!=='whisper'){
       try{await prepareSelectedStt(signal,true);}
       catch(error){if(signal.aborted)throw error;if(!config.sttFallback)throw error;const failedEngine=activeSttEngine;activeSttEngine='whisper';els.sttEngineStatus.textContent=`${failedEngine==='apple'?'Apple':'Chrome'} 준비 실패 · Whisper 사용 (${error.message})`;}
@@ -1059,7 +1167,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     captionStable = captionDraft = ''; captionFinal = '';
     transcriptNotice(continuousCapture ? '실시간 전사 중' : '녹음 중');
     audioBuffer = []; recordedBytes = 0; recordingStarted = Date.now();
-    segmenter = new SpeechSegmenter(speechSegmentOptions(activeSttEngine,mode));
+    segmenter = new SpeechSegmenter(inputSegmentOptions(activeSttEngine,mode,activeAudioInputSource,activeGlassesInput));
     isRecording = true;
     els.voiceMode.disabled = true; els.triggerWord.disabled = true;els.sttEngine.disabled=true;
     els.voiceBtn?.classList.add('active');
@@ -1067,7 +1175,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       ? '말씀하세요. 말하는 동안 자막이 갱신됩니다.' : '말씀하세요. 다시 탭하면 전송합니다.');
     micMayBeOpen=true;
     setHUDNotice('마이크 여는 중 · 탭하면 취소');
-    const opening = Promise.resolve().then(()=>bridge.audioControl(true, AudioInputSource.Glasses));
+    const opening = Promise.resolve().then(()=>bridge.audioControl(true,captureAudioSource));
     pendingMicOpen=opening;
     // A delayed successful open must never undo a newer stop request.
     opening.then(async opened=>{
@@ -1084,27 +1192,49 @@ import { LocalAgreement } from './local-agreement.mjs';
     },()=>{if(pendingMicOpen===opening)pendingMicOpen=null;});
     const opened = await microphoneCall(opening);
     if(generation!==captureGeneration || signal.aborted)return;
-    if (!opened) { els.voiceMode.disabled = false; els.triggerWord.disabled = false; throw new Error('G2 마이크를 켤 수 없습니다. 앱을 다시 열고 마이크 권한을 확인하세요.'); }
+    if (!opened) { els.voiceMode.disabled = false; els.triggerWord.disabled = false; throw new Error(`${captureAudioSource===AudioInputSource.Phone?'휴대폰':'안경'} 마이크를 켤 수 없습니다. Even 앱의 마이크 권한을 확인하세요.`); }
     capturePreparing=false;micCloseUncertain=false;
     els.voiceBtn?.setAttribute?.('aria-pressed','true');
     els.voiceBtn?.setAttribute?.('aria-label','녹음 정지');
     transcriptNotice(continuousCapture?'실시간 전사 중':'녹음 중');
     captureTimer = setTimeout(() => {
       if (isRecording && !recordedBytes) {
-        stopVoiceRecording().catch(console.warn);
-        updateHUD('마이크는 열렸지만 오디오가 오지 않습니다.\nG2 연결과 마이크 권한을 확인하고 앱을 다시 여세요.');
+        captureFailure=captureAudioSource===AudioInputSource.Phone?'휴대폰 마이크 입력이 없습니다.\niOS 설정에서 Even 앱의 마이크 권한을 확인한 뒤 휴대폰의 녹음 버튼으로 다시 시작해 주세요.':'마이크는 열렸지만 오디오가 오지 않습니다.\nG2 연결과 마이크 권한을 확인하고 앱을 다시 여세요.';
+        stopVoiceRecording().then(()=>setVoiceHint(captureFailure)).catch(console.warn);
+        updateHUD(captureFailure);
       }
     }, 6000);
     if (!continuousCapture) manualTimer = setTimeout(() => stopVoiceRecording().catch(console.warn), 25000);
-    setVoiceHint('마이크 켜짐 · 오디오 수신 대기');
+    setVoiceHint(`${captureAudioSource===AudioInputSource.Phone?'휴대폰':'안경'} 마이크 켜짐 · 오디오 수신 대기`);
     if (pendingClips.length) drainClips();
+  }
+
+  function glassesInputLocked(){return isRecording || capturePreparing || pendingMicOpen || micMayBeOpen || micCloseUncertain || pendingMicCloses.size || inputSwitchPromise;}
+  function readGlassesInputControls(){return normalizeGlassesInput({sensitivity:els.glassesSensitivity.value,gain:els.glassesGain.value});}
+  function syncGlassesInputUI(){
+    const settings=normalizeGlassesInput(config.glassesInput);
+    els.glassesInputSettings.hidden=config.audioInputSource!=='glasses';
+    els.glassesSensitivity.value=settings.sensitivity;els.glassesGain.value=String(settings.gain);
+    els.glassesSensitivity.disabled=!!glassesInputLocked();els.glassesGain.disabled=!!glassesInputLocked();
+  }
+  function updateGlassesInputMeter(signal,excluded){
+    if(activeAudioInputSource!==AudioInputSource.Glasses || Date.now()-lastInputMeterAt<150)return;
+    lastInputMeterAt=Date.now();
+    const db=value=>Number.isFinite(levelDb(value))?`${Math.round(levelDb(value))} dBFS`:'무음';
+    els.glassesInputMeter.value=Math.max(-72,Math.min(0,levelDb(signal.outputLevel)));
+    const detected=signal.rawLevel>=GLASSES_THRESHOLDS[activeGlassesInput.sensitivity];
+    els.glassesInputLevel.textContent=`수신 ${db(signal.rawLevel)} → 적용 후 ${db(signal.outputLevel)} · ${excluded?'화자 필터로 제외':detected?'입력 감지':'감지 기준 미만'}${signal.limited?' · 큰 소리 증폭 제한':''}`;
   }
 
   function receivePCM(bytes, speakerRole = 'unknown') {
     // Preserve the audio clock and silence boundaries when excluding a speaker.
-    bytes=filterSpeakerPCM(bytes,speakerRole,config);
+    const signal=activeInputProcessor.process(bytes,activeAudioInputSource);
+    bytes=filterSpeakerPCM(signal.bytes,speakerRole,config);
+    const excluded=bytes!==signal.bytes;
+    // Gain changes STT input volume, not which background frames count as speech.
+    const level=excluded?0:signal.rawLevel;
+    updateGlassesInputMeter(signal,excluded);
     recordedBytes += bytes.length;
-    const level = pcmLevel(bytes);
     const continuousCapture = isContinuousCaptureMode();
     setVoiceHint(`${continuousCapture ? '연속 감지 중' : '녹음 중'} · ${(recordedBytes/32000).toFixed(1)}초 · 음량 ${Math.round(level*1000)} · 대기 ${pendingClips.length}`);
     if (!continuousCapture) {
@@ -1119,7 +1249,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       }
       return;
     }
-    const clip = segmenter.push(bytes);
+    const clip = segmenter.push(bytes,level);
     if (clip) {
       const id = activeUtterance?.id || newID();
       activeUtterance = null; abortPendingPreview();
@@ -2140,6 +2270,14 @@ import { LocalAgreement } from './local-agreement.mjs';
         if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
       }
+    });
+    for(const control of [els.glassesSensitivity,els.glassesGain])control.addEventListener('change',()=>{
+      if(glassesInputLocked()){syncGlassesInputUI();return;}
+      settingsEdited=true;config.glassesInput=readGlassesInputControls();syncGlassesInputUI();persistSettings().catch(console.warn);
+    });
+    els.audioInputSource.addEventListener('change',()=>{
+      if(inputSwitchPromise || isRecording || capturePreparing || pendingMicOpen || micCloseUncertain || pendingMicCloses.size){els.audioInputSource.value=config.audioInputSource;return;}
+      settingsEdited=true;config.audioInputSource=els.audioInputSource.value==='phone'?'phone':'glasses';syncGlassesInputUI();renderLiveHUD();persistSettings().catch(console.warn);
     });
     els.sttEngine.addEventListener('change',()=>{settingsEdited=true;config.sttEngine=els.sttEngine.value;autoPrepareEngines();persistSettings().catch(console.warn);});
     els.sttFallback.addEventListener('change',()=>{settingsEdited=true;config.sttFallback=els.sttFallback.checked;persistSettings().catch(console.warn);});
