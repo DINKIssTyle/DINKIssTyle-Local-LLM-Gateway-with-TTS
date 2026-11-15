@@ -23,20 +23,24 @@ var errChromeTranslationBusy = errors.New("Chrome 번역 처리 중입니다")
 var chromeTranslation = newChromeTranslator("")
 
 type chromeTranslationRequest struct {
-	Text   string `json:"text"`
-	Source string `json:"source"`
-	Target string `json:"target"`
+	RequestID string `json:"requestId,omitempty"`
+	Text      string `json:"text"`
+	Source    string `json:"source"`
+	Target    string `json:"target"`
 }
 type chromeTranslationResult struct {
-	Text    string `json:"text,omitempty"`
-	Source  string `json:"source"`
-	Target  string `json:"target"`
-	Status  string `json:"status"`
-	Backend string `json:"backend"`
-	Error   string `json:"error,omitempty"`
+	Timings map[string]float64 `json:"timings,omitempty"`
+	Text    string             `json:"text,omitempty"`
+	Source  string             `json:"source"`
+	Target  string             `json:"target"`
+	Status  string             `json:"status"`
+	Backend string             `json:"backend"`
+	Error   string             `json:"error,omitempty"`
 }
 type chromeTranslator struct {
-	mu              sync.Mutex
+	mu              sync.RWMutex
+	translationMu   sync.Mutex
+	speechMu        sync.Mutex
 	profile         string
 	profileLock     *os.File
 	tab             context.Context
@@ -254,28 +258,35 @@ func (s *chromeTranslator) run(ctx context.Context, req chromeTranslationRequest
 		result.Status = "ready"
 		return result, nil
 	}
-	if !s.mu.TryLock() {
+	if !s.translationMu.TryLock() {
 		return result, errChromeTranslationBusy
 	}
-	defer s.mu.Unlock()
-	if err := ctx.Err(); err != nil {
+	defer s.translationMu.Unlock()
+	tab, release, err := s.leaseBrowser(ctx)
+	if err != nil {
 		return result, err
 	}
-	if err := s.startLocked(); err != nil {
-		return result, err
-	}
-	task, cancel := context.WithCancel(s.tab)
+	defer release()
+
+	task, cancel := context.WithCancel(tab)
 	defer cancel()
 	stop := context.AfterFunc(ctx, cancel)
 	defer stop()
+	req.RequestID = fmt.Sprintf("translate-%d", time.Now().UnixNano())
 	payload, _ := json.Marshal(req)
+	idJSON, _ := json.Marshal(req.RequestID)
+	stopOperation := context.AfterFunc(ctx, func() {
+		cancelCtx, stop := context.WithTimeout(tab, time.Second)
+		defer stop()
+		_ = chromedp.Run(cancelCtx, chromedp.Evaluate("window.chromeTranslation.cancel("+string(idJSON)+")", nil))
+	})
+	defer stopOperation()
 	method := "translate"
 	if prepare {
 		method = "prepare"
 	}
 	restore := s.preparedPairs()[req.Source+">"+req.Target]
 	expression := "window.chromeTranslation." + method + "(" + string(payload) + "," + fmt.Sprint(restore) + ")"
-	var err error
 	for attempt := 0; attempt < 4; attempt++ {
 		result = chromeTranslationResult{Source: req.Source, Target: req.Target, Backend: "chrome-translator"}
 		err = chromedp.Run(task, chromedp.ActionFunc(func(ctx context.Context) error {
@@ -305,9 +316,8 @@ func (s *chromeTranslator) run(ctx context.Context, req chromeTranslationRequest
 	}
 
 	if err != nil {
-		if !errors.Is(ctx.Err(), context.Canceled) {
-			s.closeLocked()
-		}
+		// A failed translation must not tear down a live speech stream.
+		// A lost browser is detected and restarted by the next lifecycle lease.
 		return result, err
 	}
 	if result.Error != "" {
@@ -347,7 +357,9 @@ func handleChromeTranslation(service *chromeTranslator, prepare bool) http.Handl
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), limit)
 		defer cancel()
+		started := time.Now()
 		result, err := service.run(ctx, req, prepare)
+		result.Timings = map[string]float64{"server_ms": float64(time.Since(started).Microseconds()) / 1000}
 		w.Header().Set("Content-Type", "application/json")
 		if err != nil {
 			result.Error = err.Error()
@@ -366,7 +378,7 @@ func handleChromeTranslation(service *chromeTranslator, prepare bool) http.Handl
 
 const chromeTranslationPage = `<!doctype html><meta charset="utf-8"><title>DKST Local Translator</title><body><script>
 (() => {
-const cache=new Map();
+const controllers=new Map();const cache=new Map();
 const result=(p,extra)=>({source:p.source,target:p.target,backend:'chrome-translator',...extra});
 function discard(p){const key=p.source+'>'+p.target;const translator=cache.get(key);cache.delete(key);try{translator?.destroy();}catch{}}
 async function get(p,prepare){
@@ -385,7 +397,51 @@ async function get(p,prepare){
 }
 window.chromeTranslation={
  async prepare(p){try{return await get(p,true);}catch(e){discard(p);return result(p,{status:'unavailable',error:e.name+': '+e.message});}},
- async translate(p,restore){try{const state=await get(p,restore===true);if(state.status!=='ready')return state;return result(p,{status:'ready',text:await cache.get(p.source+'>'+p.target).translate(p.text)});}catch(e){discard(p);return result(p,{status:'unavailable',error:e.name+': '+e.message});}}
+ cancel(id){controllers.get(id)?.abort();},
+ async translate(p,restore){const controller=new AbortController();controllers.set(p.requestId,controller);try{const state=await get(p,restore===true);if(state.status!=='ready')return state;return result(p,{status:'ready',text:await cache.get(p.source+'>'+p.target).translate(p.text,{signal:controller.signal})});}catch(e){if(e.name!=='AbortError')discard(p);return result(p,{status:e.name==='AbortError'?'cancelled':'unavailable',error:e.name+': '+e.message});}finally{controllers.delete(p.requestId);}}
 };
 })();
 </script>`
+
+func (s *chromeTranslator) leaseBrowser(ctx context.Context) (context.Context, func(), error) {
+	deadline := time.Now().Add(250 * time.Millisecond)
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		if s.mu.TryRLock() {
+			healthy := s.tab != nil && s.tab.Err() == nil
+			if healthy {
+				browser := chromedp.FromContext(s.tab).Browser
+				healthy = browser != nil
+				if healthy {
+					select {
+					case <-browser.LostConnection:
+						healthy = false
+					default:
+					}
+				}
+			}
+			if healthy {
+				return s.tab, s.mu.RUnlock, nil
+			}
+			s.mu.RUnlock()
+			if s.mu.TryLock() {
+				err := s.startLocked()
+				s.mu.Unlock()
+				if err != nil {
+					return nil, nil, err
+				}
+				continue
+			}
+		}
+		if time.Now().After(deadline) {
+			return nil, nil, errChromeTranslationBusy
+		}
+		select {
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}

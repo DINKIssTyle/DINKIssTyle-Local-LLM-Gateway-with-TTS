@@ -93,6 +93,7 @@ struct PreparationView:View {
 }
 
 @MainActor final class RuntimeController {
+ var operations=[Int:Task<Void,Never>]()
  var sessions=[String:SpeechSession](),order=[String](),active:SpeechSession?
  var translators=[String:TranslationSession](),preparation:Preparation?
  var speechWork:Task<[String:Any],Error>?
@@ -146,7 +147,10 @@ struct PreparationView:View {
   if !s.finished {
    guard let data=Data(base64Encoded:p["audio"] as? String ?? "") else{throw RuntimeError(message:"잘못된 PCM 데이터")}
    try s.append(data)
-   if p["final"] as? Bool == true {await s.finish()}
+   if p["final"] as? Bool == true {
+    await withTaskCancellationHandler(operation:{await s.finish()},onCancel:{Task{@MainActor in await s.stop()}})
+    try Task.checkCancellation()
+   }
   }
   return s.snapshot()
  }
@@ -176,9 +180,9 @@ struct PreparationView:View {
   case "sttPrepare":return try await prepareSpeech(p["language"] as? String ?? "ko")
   case "sttPush","sttRead","sttStop":
    let previous=speechWork
-   let work=Task{@MainActor in if let previous {_ = try? await previous.value};return try await self.speech(p)}
+   let work=Task{@MainActor in if let previous {_ = try? await previous.value};try Task.checkCancellation();return try await self.speech(p)}
    speechWork=work
-   return try await work.value
+   return try await withTaskCancellationHandler(operation:{try await work.value},onCancel:{work.cancel()})
   case "translationPrepare","translate":
    let source=p["source"] as? String ?? "",target=p["target"] as? String ?? "",key=source+">"+target
    if source==target {return ["status":"ready","text":p["text"] as? String ?? ""]}
@@ -187,8 +191,9 @@ struct PreparationView:View {
     guard await LanguageAvailability().status(from:Locale.Language(identifier:source),to:Locale.Language(identifier:target)) == .installed else {throw RuntimeError(message:"Mac에서 Apple 번역 준비를 먼저 실행해 주세요")}
     translators[key]=TranslationSession(installedSource:Locale.Language(identifier:source),target:Locale.Language(identifier:target))
    }
+   try Task.checkCancellation()
    do {let response=try await translators[key]!.translate(p["text"] as? String ?? "");return ["status":"ready","text":response.targetText]}
-   catch {translators.removeValue(forKey:key)?.cancel();throw error}
+   catch {if !Task.isCancelled {translators.removeValue(forKey:key)?.cancel()};throw error}
   default:throw RuntimeError(message:"잘못된 Apple 엔진 명령")
   }
  }
@@ -202,10 +207,16 @@ struct PreparationView:View {
    while let line=readLine(){
     guard line.utf8.count<8*1024*1024,let data=line.data(using:.utf8),let request=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any] else{continue}
     Task{@MainActor in
-     var response:[String:Any]
-     do{response=try await controller.handle(request)}catch{response=["status":"error","error":error.localizedDescription]}
-     response["id"]=request["id"]
-     if let data=try? JSONSerialization.data(withJSONObject:response),let text=String(data:data,encoding:.utf8){print(text);fflush(stdout)}
+     if request["op"] as? String == "cancel",let id=request["cancelID"] as? Int {controller.operations[id]?.cancel();return}
+     guard let id=request["id"] as? Int else{return}
+     let work=Task{@MainActor in
+      var response:[String:Any]
+      do{try Task.checkCancellation();response=try await controller.handle(request)}catch{response=["status":"error","error":error.localizedDescription]}
+      response["id"]=id
+      if let data=try? JSONSerialization.data(withJSONObject:response),let text=String(data:data,encoding:.utf8){print(text);fflush(stdout)}
+      controller.operations.removeValue(forKey:id)
+     }
+     controller.operations[id]=work
     }
    }
    Task{@MainActor in NSApp.terminate(nil)}

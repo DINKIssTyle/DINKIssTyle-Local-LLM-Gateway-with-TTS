@@ -11,6 +11,7 @@ import (
 	wavcodec "github.com/go-audio/wav"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -189,5 +190,132 @@ func TestAppleHTTPValidation(t *testing.T) {
 	worker := &appleRuntimeWorker{}
 	if _, err := worker.request(ctx, map[string]any{"op": "status"}); err == nil || worker.cmd != nil {
 		t.Fatal("cancelled request started native engine")
+	}
+}
+
+func TestAppleTranslationRequestCancellation(t *testing.T) {
+	if os.Getenv("DKST_APPLE_CANCEL_TEST") != "1" {
+		t.Skip("explicit installed native translation test")
+	}
+	worker := &appleRuntimeWorker{}
+	defer worker.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := worker.request(ctx, map[string]any{"op": "translationPrepare", "source": "en", "target": "ko"}); err != nil {
+		t.Fatal(err)
+	}
+	small, stop := context.WithTimeout(ctx, 25*time.Millisecond)
+	_, err := worker.request(small, map[string]any{"op": "translate", "source": "en", "target": "ko", "text": strings.Repeat("The meeting is on Friday. ", 200)})
+	stop()
+	if err == nil {
+		t.Log("translation completed before cancellation")
+	}
+	result, err := worker.request(ctx, map[string]any{"op": "translate", "source": "en", "target": "ko", "text": "Please bring your laptop."})
+	if err != nil || result["status"] != "ready" {
+		t.Fatalf("cancel killed shared runtime: %+v %v", result, err)
+	}
+	t.Log("cancelled old translation; next translation succeeded without runtime restart")
+}
+
+// An in-memory JSON-lines input verifies cancellation reaches the native task,
+// without opening a microphone, launching a helper or installing language packs.
+type appleCancelInput struct{ writes chan []byte }
+
+func (w *appleCancelInput) Write(p []byte) (int, error) {
+	w.writes <- append([]byte(nil), p...)
+	return len(p), nil
+}
+func (w *appleCancelInput) Close() error { return nil }
+func TestAppleSpeechCancellationProtocol(t *testing.T) {
+	for _, op := range []string{"sttPush", "sttRead", "translate"} {
+		t.Run(op, func(t *testing.T) {
+			input := &appleCancelInput{writes: make(chan []byte, 2)}
+			worker := &appleRuntimeWorker{cmd: &exec.Cmd{}, input: input, pending: make(map[uint64]chan []byte)}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { _, err := worker.request(ctx, map[string]any{"op": op}); done <- err }()
+			var request map[string]any
+			select {
+			case raw := <-input.writes:
+				if err := json.Unmarshal(raw, &request); err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("missing request")
+			}
+			cancel()
+			select {
+			case err := <-done:
+				if err != context.Canceled {
+					t.Fatal(err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("request did not cancel")
+			}
+			select {
+			case raw := <-input.writes:
+				var control map[string]any
+				if err := json.Unmarshal(raw, &control); err != nil {
+					t.Fatal(err)
+				}
+				if control["op"] != "cancel" || control["cancelID"] != request["id"] {
+					t.Fatalf("wrong native cancellation: %s", raw)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("timed-out native work was left running")
+			}
+			if len(worker.pending) != 0 {
+				t.Fatal("leaked canceled waiter")
+			}
+		})
+	}
+}
+
+func TestAppleSpeechNativeCancellationRecovery(t *testing.T) {
+	if os.Getenv("DKST_APPLE_SPEECH_CANCEL_TEST") != "1" {
+		t.Skip("explicit installed native speech test")
+	}
+	// Use only installed Korean assets and synthetic file PCM. No preparation,
+	// downloads, microphone capture or connection to the user's running gateway.
+	f, err := os.Open("/private/tmp/even-chrome-stt-ko.wav")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	audio, err := wavcodec.NewDecoder(f).FullPCMBuffer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pcm := make([]byte, len(audio.Data)*2)
+	for i, sample := range audio.Data {
+		binary.LittleEndian.PutUint16(pcm[i*2:], uint16(int16(sample)))
+	}
+	worker := &appleRuntimeWorker{}
+	defer worker.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	defer cancel()
+	for i := 0; i < 3; i++ {
+		id := fmt.Sprintf("cancel-%d", i)
+		first, err := worker.request(ctx, map[string]any{"op": "sttPush", "session": id, "owner": "isolated-cancel-test", "language": "ko", "audio": base64.StdEncoding.EncodeToString(pcm[:8000])})
+		if err != nil || first["status"] != "ready" {
+			t.Fatalf("installed speech startup: %v %v", first, err)
+		}
+		process := worker.cmd
+		small, stop := context.WithTimeout(ctx, 25*time.Millisecond)
+		_, err = worker.request(small, map[string]any{"op": "sttPush", "session": id, "owner": "isolated-cancel-test", "language": "ko", "audio": base64.StdEncoding.EncodeToString(pcm), "final": true})
+		stop()
+		if err == nil {
+			t.Log("finalization completed before cancellation")
+		}
+		started := time.Now()
+		next, err := worker.request(ctx, map[string]any{"op": "sttPush", "session": id + "-next", "owner": "isolated-cancel-test", "language": "ko", "audio": base64.StdEncoding.EncodeToString(pcm), "final": true})
+		if err != nil || next["status"] != "ready" || strings.TrimSpace(fmt.Sprint(next["text"])) == "" {
+			t.Fatalf("speech did not recover: %v %v", next, err)
+		}
+		if worker.cmd != process {
+			t.Fatal("cancellation restarted the shared helper")
+		}
+		t.Logf("canceled finalization; next synthetic segment completed in %s", time.Since(started))
 	}
 }

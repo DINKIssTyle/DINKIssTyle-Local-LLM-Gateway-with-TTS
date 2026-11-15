@@ -43,3 +43,15 @@ assert.equal(obsoleteSignal.aborted,true);assert.deepEqual(latestShown,['current
 assert.equal(fresh.submit(job('late saved final',{id:'old',draft:false,startedAt:'2026-11-14T01:00:00Z'})),false,'archived old audio cannot move live display backwards');
 oldFinish({ok:true,text:'late old translation'});await tick();assert.deepEqual(latestShown,['current']);fresh.reset();
 console.log('PASS: obsolete translation aborts immediately and late archive finals cannot displace newer live captions');
+// Throttle starts, not finishes: an 800ms translation doesn't add another 500ms.
+let clock=0,releaseSlow,started=[];
+const startLimited=new LiveTranslationQueue({intervalMs:250,now:()=>clock,translate:j=>{started.push(clock);if(j.prompt==='slow')return new Promise(r=>releaseSlow=r);return Promise.resolve({ok:true,text:j.prompt});},onText:()=>{},onFinal:()=>{}});
+startLimited.submit(job('slow'));clock=100;startLimited.submit(job('next'));clock=800;releaseSlow({ok:true,text:'slow'});await tick();assert.deepEqual(started,[0,800]);startLimited.reset();
+let busyCalls=0,busyFinals=[];const busyClock={value:0};
+const busyQueue=new LiveTranslationQueue({now:()=>busyClock.value,intervalMs:0,translate:async()=>++busyCalls===1?{ok:false,busy:true}:{ok:true,text:'done'},onText:()=>{},onFinal:(j,r)=>busyFinals.push(r)});
+busyQueue.submit(job('final',{draft:false}));await tick();assert.equal(busyFinals.length,0,'busy must not prematurely invoke fallback LLM');
+busyClock.value=151;clearTimeout(busyQueue.timer);busyQueue.timer=null;await busyQueue.pump();assert.equal(busyFinals[0].ok,true);busyQueue.reset();
+let stalePublish,releaseStale,seen=[];
+const partialQueue=new LiveTranslationQueue({intervalMs:0,translate:(j,s,publish)=>{if(j.id==='old'){stalePublish=publish;return new Promise(r=>releaseStale=r);}return Promise.resolve({ok:true,text:'new'});},onText:(j,t)=>seen.push(t),onFinal:()=>{}});
+partialQueue.submit(job('old',{id:'old'}));partialQueue.submit(job('new',{id:'new'}));await tick();stalePublish('obsolete');releaseStale({ok:true,text:'obsolete'});await tick();assert.deepEqual(seen,['new']);partialQueue.reset();
+console.log('PASS: start-based throttle, final busy retry and stale streamed text suppression');

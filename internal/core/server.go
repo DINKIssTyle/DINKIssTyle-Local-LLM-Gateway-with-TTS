@@ -2921,6 +2921,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	mux.HandleFunc("/api/translate/apple/prepare", AuthMiddleware(authMgr, handleAppleOperation("translationPrepare")))
 	mux.HandleFunc("/api/translate/chrome", AuthMiddleware(authMgr, handleChromeTranslation(chromeTranslation, false)))
 	mux.HandleFunc("/api/translate/chrome/prepare", AuthMiddleware(authMgr, handleChromeTranslation(chromeTranslation, true)))
+	mux.HandleFunc("/api/glasses/hint-events", AuthMiddleware(authMgr, handleGlassesHintEvents()))
 	mux.HandleFunc("/api/glasses/hint-decision", AuthMiddleware(authMgr, handleGlassesHintDecision(authMgr)))
 	mux.HandleFunc("/api/glasses/hint-compare", AuthMiddleware(authMgr, handleGlassesHintCompare(authMgr)))
 	mux.HandleFunc("/api/stt/chrome/stop", AuthMiddleware(authMgr, handleChromeSpeechStop()))
@@ -4379,9 +4380,15 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	glassesHint, _ := hintEnvelope["glasses_hint"].(bool)
 	glassesClient, _ := hintEnvelope["glasses_client"].(bool)
 	glassesRequest := glassesHint || glassesClient
+	task, _ := hintEnvelope["glasses_task"].(string)
+	translationTask := glassesRequest && (task == "translation" || task == "translation_preview" || task == "translation_replies")
+	delete(hintEnvelope, "glasses_task")
 	promptProfile := "chat"
 	if glassesRequest {
 		promptProfile = "glasses"
+		if translationTask {
+			promptProfile = "glasses-translation"
+		}
 	}
 	hintPhase, _ := hintEnvelope["glasses_hint_phase"].(string)
 	hintJudge := glassesHint && hintPhase == "judge"
@@ -4405,10 +4412,16 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		body, _ = json.Marshal(hintEnvelope)
 	}
 
-	if hintJudge {
+	if hintJudge || translationTask {
 		// A bounded, tool-free classifier always uses a stateless chat completion,
 		// even when the user's interactive chat uses LM Studio's native stateful API.
 		hintEnvelope["max_tokens"] = 192
+		if translationTask {
+			hintEnvelope["max_tokens"] = 1024
+			if task == "translation_replies" {
+				hintEnvelope["max_tokens"] = 384
+			}
+		}
 		delete(hintEnvelope, "max_completion_tokens")
 		hintEnvelope["chat_template_kwargs"] = map[string]any{"enable_thinking": false}
 		body, _ = json.Marshal(hintEnvelope)
@@ -4454,6 +4467,12 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		baseChatCtx = r.Context()
 	}
 	chatTimeout := 5 * time.Minute
+	if translationTask {
+		chatTimeout = 45 * time.Second
+		if task == "translation_preview" {
+			chatTimeout = 15 * time.Second
+		}
+	}
 	if hintJudge {
 		chatTimeout = 6 * time.Second
 	}
@@ -4538,7 +4557,12 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	if glassesRequest {
 		contextStrategy = "none"
 	}
-	if hintJudge {
+	if translationTask {
+		enableTools = false
+		enableMemory = false
+		contextStrategy = "none"
+	}
+	if hintJudge || translationTask {
 		llmMode = "standard"
 	}
 

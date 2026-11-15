@@ -24,6 +24,7 @@ type chromeSpeechRequest struct {
 	Final    bool   `json:"final,omitempty"`
 }
 type chromeSpeechResult struct {
+	LockMS     float64                `json:"-"`
 	StableText string                 `json:"stableText"`
 	DraftText  string                 `json:"draftText"`
 	Text       string                 `json:"text"`
@@ -38,13 +39,14 @@ func chromeSTTEngine(engine string) bool {
 }
 func (s *chromeTranslator) speech(ctx context.Context, req chromeSpeechRequest, op string) (chromeSpeechResult, error) {
 	var result chromeSpeechResult
+	lockStarted := time.Now()
 	if !chromeSTTEngine(req.Engine) {
 		return result, errors.New("잘못된 Chrome STT 엔진")
 	}
 	if len(req.Language) != 2 {
 		return result, errors.New("Chrome STT 인식 언어를 선택하세요")
 	}
-	locked := s.mu.TryLock()
+	locked := s.speechMu.TryLock()
 	if !locked {
 		deadline := time.Now().Add(200 * time.Millisecond)
 		for time.Now().Before(deadline) {
@@ -53,7 +55,7 @@ func (s *chromeTranslator) speech(ctx context.Context, req chromeSpeechRequest, 
 				return result, ctx.Err()
 			case <-time.After(25 * time.Millisecond):
 			}
-			if s.mu.TryLock() {
+			if s.speechMu.TryLock() {
 				locked = true
 				break
 			}
@@ -62,17 +64,29 @@ func (s *chromeTranslator) speech(ctx context.Context, req chromeSpeechRequest, 
 	if !locked {
 		return result, errSTTBusy
 	}
-	defer s.mu.Unlock()
+	defer s.speechMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	if op == "stop" && s.tab == nil {
-		return chromeSpeechResult{Status: "ready"}, nil
+	if op == "stop" {
+		s.mu.RLock()
+		empty := s.tab == nil
+		s.mu.RUnlock()
+		if empty {
+			return chromeSpeechResult{Status: "ready"}, nil
+		}
 	}
-	if err := s.startLocked(); err != nil {
+	tab, release, err := s.leaseBrowser(ctx)
+	if err != nil {
+		if errors.Is(err, errChromeTranslationBusy) {
+			return result, errSTTBusy
+		}
 		return result, err
 	}
-	task, cancel := context.WithCancel(s.tab)
+	defer release()
+	lockMS := float64(time.Since(lockStarted).Microseconds()) / 1000
+
+	task, cancel := context.WithCancel(tab)
 	defer cancel()
 	stop := context.AfterFunc(ctx, cancel)
 	defer stop()
@@ -90,7 +104,8 @@ func (s *chromeTranslator) speech(ctx context.Context, req chromeSpeechRequest, 
 		}
 		return json.Unmarshal(value.Value, &result)
 	})
-	err := chromedp.Run(task, action)
+	err = chromedp.Run(task, action)
+	result.LockMS = lockMS
 	if err != nil {
 		return result, err
 	}
@@ -123,6 +138,7 @@ func handleChromeSpeechPrepare() http.HandlerFunc {
 }
 func runChromeSpeech(ctx context.Context, metadata STTTranscribeRequest, audio []byte, preview bool, user string) (sttWorkerReply, error) {
 	var output sttWorkerReply
+	started := time.Now()
 	if metadata.Format != "" && metadata.Format != "pcm" {
 		return output, errors.New("Chrome STT는 PCM16 입력이 필요합니다")
 	}
@@ -137,6 +153,7 @@ func runChromeSpeech(ctx context.Context, metadata STTTranscribeRequest, audio [
 		req.Language = "ko"
 	}
 	result, err := chromeTranslation.speech(ctx, req, "push")
+	output.LockMS += result.LockMS
 	if err != nil {
 		return output, err
 	}
@@ -156,12 +173,14 @@ func runChromeSpeech(ctx context.Context, metadata STTTranscribeRequest, audio [
 			if pollErr != nil {
 				return output, pollErr
 			}
+			output.LockMS += next.LockMS
 			result = next
 		}
 		if !result.Finished {
 			return output, errors.New("Chrome STT 최종 결과 지연")
 		}
 	}
+	output.EngineMS = float64(time.Since(started).Microseconds())/1000 - output.LockMS
 	output.Text = strings.TrimSpace(result.Text)
 	output.StableText = result.StableText
 	output.DraftText = result.DraftText

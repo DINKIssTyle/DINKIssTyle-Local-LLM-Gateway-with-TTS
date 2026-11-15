@@ -284,6 +284,7 @@
                 안경 입력 감지 민감도
               </label>
               <select id="glasses-sensitivity">
+                <option value="auto">자동 · 주변 음량에 맞춤</option>
                 <option value="standard">
                   표준 · 기존 감지 기준
                 </option>
@@ -303,6 +304,7 @@
                 안경 입력 증폭
               </label>
               <select id="glasses-gain">
+                <option value="auto">자동 · 1~4배</option>
                 <option value="1" selected>
                   없음 · 1배
                 </option>
@@ -314,7 +316,7 @@
                 </option>
               </select>
               <p class="setting-help">
-                작은 음성을 키웁니다. 녹음을 멈춘 뒤 변경하세요.
+                작은 음성을 키웁니다. 녹음 중에도 변경할 수 있습니다. 자동은 조용한 구간의 증폭을 줄입니다.
               </p>
             </div>
             <div class="form-group">
@@ -820,6 +822,18 @@
             <summary>최근 힌트 · 표시 이유</summary>
             <p class="setting-help">이번 실행에서 표시한 최근 12개의 분류와 근거입니다.</p>
             <pre id="hint-evidence-log" class="hint-evidence-log">아직 표시한 힌트가 없습니다.</pre>
+          </details>
+          <details class="settings-advanced">
+            <summary>힌트 처리 이력</summary>
+            <p class="setting-help">판별·생략 이유와 생성한 힌트를 전사와 따로 보관합니다. 최대 14일·최근 5,000개이며 다음 대화의 문맥에는 넣지 않습니다.</p>
+            <button type="button" id="btn-hint-history" class="btn btn-secondary">최근 처리 이력 보기</button>
+            <p id="hint-history-status" class="setting-status" role="status">서버 연결 후 자동 기록됩니다.</p>
+            <pre id="hint-history-log" class="hint-evidence-log">최근 100개를 조회할 수 있습니다.</pre>
+          </details>
+          <details class="settings-advanced">
+            <summary>번역 처리 시간</summary>
+            <p class="setting-help">최근 번역의 단계별 시간과 오디오 전송량입니다. 문장 내용은 기록하지 않습니다.</p>
+            <p id="translation-latency" class="setting-status" role="status">번역 지연 측정 대기 중입니다.</p>
           </details>
           <details class="settings-advanced">
             <summary>음성 질문 처리 시간</summary>

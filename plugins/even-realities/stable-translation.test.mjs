@@ -39,3 +39,12 @@ const longTail=new StableTranslation(async j=>{if(j.prompt==='Keep this.')commit
 for(let i=0;i<50;i++)await longTail.run(job('Keep this. Tail '+i,'Keep this.'),signal);
 assert.equal(committedCalls,1,'frequent tail revisions must not evict the committed sentence');
 console.log('PASS: stable sentence translations survive growing tails, final correction, language/reset isolation, cancellation, bounded cache and failed retry');
+let streamed=[],streamRequests=[];
+const streamCache=new StableTranslation(async(job)=>{streamRequests.push(job.prompt);job.onChunk?.('partial '+job.prompt);return {ok:true,text:'translated '+job.prompt};});
+const streaming={engine:'llm',source:'en',target:'ko',id:'stream',draft:true,prompt:'First. Tail',stableText:'First.',onPartial:t=>streamed.push(t),cacheScope:'model-a'};
+await streamCache.run(streaming,new AbortController().signal);
+await streamCache.run({...streaming,prompt:'First. Second.',stableText:'First. Second.'},new AbortController().signal);
+assert.deepEqual(streamRequests,['First.','Tail','Second.'],'committed first sentence is reused while a new sentence streams');
+assert.equal(streamed.at(-1),'translated First. partial Second.');
+await streamCache.run({...streaming,prompt:'First.',stableText:'First.',cacheScope:'model-b'},new AbortController().signal);
+assert.equal(streamRequests.at(-1),'First.','changing the role model invalidates committed-sentence cache');

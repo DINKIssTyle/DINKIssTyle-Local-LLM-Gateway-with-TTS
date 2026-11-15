@@ -6,7 +6,7 @@ export const SETTINGS_MENUS={
   6:{title:'번역 엔진',key:'translationEngine',options:[['llm','LLM 번역'],['chrome','Chrome 로컬 번역'],['apple','Apple 로컬 번역 · macOS 26+']]},
   7:{title:'음성 인식 엔진',key:'sttEngine',options:[['whisper','Whisper'],['chrome-online','Chrome 온라인 STT · Google로 음성 전송'],['apple','Apple 로컬 STT · macOS 26+']]},
   8:{title:'내 목소리 제외',key:'translateExcludeSelf',options:[[true,'켬 · 번역 중 내 목소리 제외'],[false,'끔 · 모든 목소리 번역']]},
-  9:{title:'안경 입력 감지 민감도',key:'glassesInput',options:[['standard','표준 · 기존 감지 기준'],['high','높음 · 작은 목소리 감지'],['very_high','매우 높음 · 조용한 환경']]},
+  9:{title:'안경 입력 감지 민감도',key:'glassesInput',options:[['standard','표준 · 기존 감지 기준'],['high','높음 · 작은 목소리 감지'],['very_high','매우 높음 · 조용한 환경'],['auto','자동 · 주변 음량에 맞춤']]},
 };
 export function settingsMenuItems(glasses=true){return Object.entries(SETTINGS_MENUS).filter(([id])=>glasses || id!=='9').map(([id,menu])=>({itemID:Number(id),itemName:menu.title}));}
 export function settingsPickerPage(picker){

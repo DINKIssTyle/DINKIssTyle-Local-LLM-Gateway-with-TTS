@@ -50,7 +50,8 @@ func PrepareRequest(input RequestInput) (PreparedRequest, error) {
 	}
 	contextStrategy := normalizeContextStrategy(input.LLMMode, input.ContextStrategy)
 	judgeProfile := input.PromptProfile == "glasses-judge"
-	glassesProfile := input.PromptProfile == "glasses" || judgeProfile
+	translationProfile := input.PromptProfile == "glasses-translation"
+	glassesProfile := input.PromptProfile == "glasses" || judgeProfile || translationProfile
 	if glassesProfile {
 		contextStrategy = "none"
 	}
@@ -65,8 +66,8 @@ func PrepareRequest(input RequestInput) (PreparedRequest, error) {
 		delete(reqMap, "previous_response_id")
 		reqMap["store"] = false
 	}
-	if judgeProfile {
-		// No tools, memory or runtime boilerplate in the small classification window.
+	if judgeProfile || translationProfile {
+		// Classification and translation use only their bounded task prompts.
 		delete(reqMap, "integrations")
 		removeProviderToolControls(reqMap)
 		prepared.Body, _ = json.Marshal(reqMap)

@@ -17,9 +17,9 @@ export class HintStack {
     this.retime();this.onChange();
   }
   deadline(text){return this.autoClose?this.now()+Math.max(1,timedHintLines(text).length)*this.seconds*1000:0;}
-  add({title,text}){
+  add({title,text,auditMeta=null}){
     text=String(text || '').trim().slice(0,2000);if(!text)return null;
-    this.expire();const card={id:`hint-${++this.nextID}`,title:String(title || '힌트').slice(0,160),text,deadline:this.deadline(text),offset:0,maxOffset:0,nextAuto:this.now()+5000};
+    this.expire();const card={id:`hint-${++this.nextID}`,title:String(title || '힌트').slice(0,160),text,auditMeta,deadline:this.deadline(text),offset:0,maxOffset:0,nextAuto:this.now()+5000};
     this.cards.unshift(card);this.cards=this.cards.slice(0,this.limit);
     this.retime();this.onChange();return card.id;
   }

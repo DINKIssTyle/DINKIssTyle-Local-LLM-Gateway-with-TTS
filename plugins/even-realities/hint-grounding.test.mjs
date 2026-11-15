@@ -35,3 +35,13 @@ assert.equal(validateHintGrounding(JSON.stringify({...schedule,points:[{text:'�
 assert.equal(validateHintGrounding(JSON.stringify({...schedule,points:[{text:'외부에서 가져온 내용',evidence:['없는 원문']}]}),conversationProof).ok,false);
 assert.equal(validateHintGrounding(JSON.stringify({...schedule,points:[{text:'예약됨',evidence:['예약이 안됩니다.']}]}),{...conversationProof,records:[{text:'예약이 안됩니다.'}]}).fact,'예약이 안됩니다.');
 assert.equal(validateHintGrounding(JSON.stringify(good),{...known,kind:'term'}).kind,'term','verified term definitions cannot silently become key');
+
+const summaryNoNewFact={...schedule,adds_information:false};
+assert.equal(validateHintGrounding(JSON.stringify(summaryNoNewFact),conversationProof).ok,true,'a grounded schedule does not need to add external facts');
+const numberedProof={...conversationProof,spans:['금요일 오후 3시에 회의해요.','장소는 2층 회의실입니다.','노트북을 가져와 주세요.']};
+const numberedSummary={points:[{text:'금요일 오후 3시 · 2층 회의실',evidence:[1,2]},{text:'노트북 지참',evidence:[3]}]};
+assert.equal(validateHintGrounding(JSON.stringify(numberedSummary),numberedProof).ok,true);
+assert.equal(validateHintGrounding(JSON.stringify({...numberedSummary,points:[{text:'임의 내용',evidence:[999]}]}),numberedProof).ok,false);
+assert.equal(validateHintGrounding(JSON.stringify({points:[{text:'회의 준비 사항',evidence:[1,2]}]}),numberedProof).fact,'금요일 오후 3시에 회의해요. / 장소는 2층 회의실입니다.');
+assert.equal(validateHintGrounding(JSON.stringify({skip:true,...numberedSummary}),numberedProof).ok,false);
+assert.equal(validateHintGrounding(JSON.stringify({...good,adds_information:false}),source).ok,false,'external facts still require explicit inclusion and verified quotes');

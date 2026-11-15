@@ -83,6 +83,8 @@ type sttWorker struct {
 	log    limitedWorkerLog
 }
 type sttWorkerReply struct {
+	LockMS     float64 `json:"-"`
+	EngineMS   float64 `json:"-"`
 	StableText string  `json:"stableText,omitempty"`
 	DraftText  string  `json:"draftText,omitempty"`
 	Ready      bool    `json:"ready"`
@@ -175,6 +177,7 @@ func startSTTWorker(python, model, root string) (*sttWorker, error) {
 var errSTTBusy = errors.New("STT engine busy")
 
 func runSTTInference(audio []byte, format, lang, speechFilter string, preview ...bool) (sttWorkerReply, error) {
+	waitStarted := time.Now()
 	if len(preview) > 0 && preview[0] {
 		if !sttLock.TryLock() {
 			return sttWorkerReply{}, errSTTBusy
@@ -183,6 +186,8 @@ func runSTTInference(audio []byte, format, lang, speechFilter string, preview ..
 		sttLock.Lock()
 	}
 	defer sttLock.Unlock()
+	lockMS := float64(time.Since(waitStarted).Microseconds()) / 1000
+	engineStarted := time.Now()
 	modelID := selectedSTTModelID()
 	if activeSTTWorker != nil && activeSTTModelID != "" && activeSTTModelID != modelID {
 		activeSTTWorker.close()
@@ -206,6 +211,8 @@ func runSTTInference(audio []byte, format, lang, speechFilter string, preview ..
 		return sttWorkerReply{}, err
 	}
 	reply, err := activeSTTWorker.read(90 * time.Second)
+	reply.LockMS = lockMS
+	reply.EngineMS = float64(time.Since(engineStarted).Microseconds()) / 1000
 	if err != nil {
 		if reply.Error == "" {
 			activeSTTWorker.close()

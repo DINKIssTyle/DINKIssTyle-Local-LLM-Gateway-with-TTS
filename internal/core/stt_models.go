@@ -136,6 +136,8 @@ type STTTranscribeRequest struct {
 	Engine       string `json:"engine"`
 	Fallback     bool   `json:"fallback"`
 	Realtime     bool   `json:"realtime"`
+	AudioDelta   bool   `json:"audioDelta,omitempty"`
+	AudioOffset  int    `json:"audioOffset,omitempty"`
 	Audio        string `json:"audio"`      // Base64 encoded audio
 	Format       string `json:"format"`     // "pcm" or "wav"
 	SampleRate   int    `json:"sampleRate"` // e.g. 16000
@@ -150,23 +152,26 @@ type STTTranscribeRequest struct {
 }
 
 type STTTranscribeResponse struct {
-	StableText     string  `json:"stableText"`
-	DraftText      string  `json:"draftText"`
-	Engine         string  `json:"engine,omitempty"`
-	Warning        string  `json:"warning,omitempty"`
-	SessionID      string  `json:"sessionId,omitempty"`
-	SegmentID      string  `json:"segmentId,omitempty"`
-	Revision       int     `json:"revision,omitempty"`
-	Stage          string  `json:"stage"`
-	Rejected       bool    `json:"rejected"`
-	Reason         string  `json:"reason,omitempty"`
-	Text           string  `json:"text"`
-	Language       string  `json:"language,omitempty"`
-	Duration       float64 `json:"duration,omitempty"`
-	Saved          bool    `json:"saved"`
-	Triggered      bool    `json:"triggered"`
-	Prompt         string  `json:"prompt,omitempty"`
-	MatchedTrigger string  `json:"matchedTrigger,omitempty"`
+	AudioDelta     bool               `json:"audioDelta,omitempty"`
+	AudioBytes     int                `json:"audioBytes,omitempty"`
+	Timings        map[string]float64 `json:"timings,omitempty"`
+	StableText     string             `json:"stableText"`
+	DraftText      string             `json:"draftText"`
+	Engine         string             `json:"engine,omitempty"`
+	Warning        string             `json:"warning,omitempty"`
+	SessionID      string             `json:"sessionId,omitempty"`
+	SegmentID      string             `json:"segmentId,omitempty"`
+	Revision       int                `json:"revision,omitempty"`
+	Stage          string             `json:"stage"`
+	Rejected       bool               `json:"rejected"`
+	Reason         string             `json:"reason,omitempty"`
+	Text           string             `json:"text"`
+	Language       string             `json:"language,omitempty"`
+	Duration       float64            `json:"duration,omitempty"`
+	Saved          bool               `json:"saved"`
+	Triggered      bool               `json:"triggered"`
+	Prompt         string             `json:"prompt,omitempty"`
+	MatchedTrigger string             `json:"matchedTrigger,omitempty"`
 }
 
 func handleSTTTranscribe(app *App) http.HandlerFunc {
@@ -180,6 +185,7 @@ func handleSTTPreview(app *App) http.HandlerFunc {
 
 func handleSTTAudio(app *App, preview bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		requestStarted := time.Now()
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -258,6 +264,22 @@ func handleSTTAudio(app *App, preview bool) http.HandlerFunc {
 			}
 		}
 
+		if len(metadata.SessionID) > 100 || len(metadata.SegmentID) > 100 || len(metadata.Engine) > 32 || len(lang) > 16 {
+			http.Error(w, "Invalid upload metadata", 400)
+			return
+		}
+		uploadedBytes := len(audioBytes)
+		if preview && format == "pcm" {
+			var assembleErr error
+			audioBytes, assembleErr = previewUploads.merge(r.Header.Get("X-User-ID"), metadata, audioBytes)
+			if assembleErr != nil {
+				http.Error(w, "audio snapshot required", http.StatusConflict)
+				return
+			}
+		} else if metadata.AudioDelta {
+			http.Error(w, "final audio requires full snapshot", 400)
+			return
+		}
 		if len(audioBytes) == 0 || len(audioBytes) > 960128 || (format != "pcm" && format != "wav") {
 			http.Error(w, "Audio must be pcm/wav and no longer than 30 seconds", http.StatusBadRequest)
 			return
@@ -313,6 +335,8 @@ func handleSTTAudio(app *App, preview bool) http.HandlerFunc {
 			http.Error(w, "unknown STT engine", 400)
 			return
 		}
+
+		inferenceStarted := time.Now()
 		var inference sttWorkerReply
 		warning := ""
 		if chromeSTTEngine(engine) || engine == "apple" {
@@ -350,7 +374,7 @@ func handleSTTAudio(app *App, preview bool) http.HandlerFunc {
 		if inference.Rejected {
 			transcribedText = ""
 		}
-		resp := STTTranscribeResponse{Engine: engine, Warning: warning, StableText: inference.StableText, DraftText: inference.DraftText,
+		resp := STTTranscribeResponse{AudioDelta: preview && format == "pcm", AudioBytes: len(audioBytes), Timings: map[string]float64{"stt_ms": float64(time.Since(inferenceStarted).Microseconds()) / 1000, "uploaded_bytes": float64(uploadedBytes), "lock_ms": inference.LockMS, "engine_ms": inference.EngineMS}, Engine: engine, Warning: warning, StableText: inference.StableText, DraftText: inference.DraftText,
 			SessionID: metadata.SessionID, SegmentID: metadata.SegmentID, Revision: metadata.Revision, Stage: "final",
 			Rejected: inference.Rejected, Reason: inference.Reason,
 			Text:     transcribedText,
@@ -358,6 +382,7 @@ func handleSTTAudio(app *App, preview bool) http.HandlerFunc {
 		}
 		if preview {
 			resp.Stage = "draft"
+			resp.Timings["server_ms"] = float64(time.Since(requestStarted).Microseconds()) / 1000
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Cache-Control", "no-store")
 			_ = json.NewEncoder(w).Encode(resp)
@@ -368,12 +393,15 @@ func handleSTTAudio(app *App, preview bool) http.HandlerFunc {
 			word := strings.TrimSpace(metadata.TriggerWord)
 			resp.Triggered, resp.Prompt, resp.MatchedTrigger = matchSTTTrigger(transcribedText, aliases)
 			entry := mcp.TranscriptEntry{UserID: r.Header.Get("X-User-ID"), SessionID: metadata.SessionID, SegmentID: metadata.SegmentID, StartedAt: start.Format(time.RFC3339Nano), EndedAt: end.Format(time.RFC3339Nano), Text: transcribedText, TriggerWord: word, Triggered: resp.Triggered}
+			saveStarted := time.Now()
 			if err := mcp.SaveTranscript(entry); err != nil {
 				http.Error(w, "Transcript could not be saved: "+err.Error(), 500)
 				return
 			}
+			resp.Timings["save_ms"] = float64(time.Since(saveStarted).Microseconds()) / 1000
 			resp.Saved = true
 		}
+		resp.Timings["server_ms"] = float64(time.Since(requestStarted).Microseconds()) / 1000
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 	}

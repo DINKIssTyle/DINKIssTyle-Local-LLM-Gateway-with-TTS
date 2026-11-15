@@ -1,3 +1,7 @@
+import {HintAudit} from './hint-audit.mjs';
+import {llmTranslation,stableTranslationPreview} from './llm-translation.mjs';
+import {TranslationMetrics} from './translation-metrics.mjs';
+import {AudioUpload} from './audio-upload.mjs';
 import {validateHintGrounding} from './hint-grounding.mjs';
 import {HintStack,hintCardCount,stackedHintPresentation} from './hint-stack.mjs';
 import {compareHintDuplicate,PreviewIntent,ChatSettingsCache,VoiceLatency} from './realtime-hints.mjs';
@@ -137,6 +141,7 @@ import { LocalAgreement } from './local-agreement.mjs';
   let updatingHintStack=false;
   let answerAutoCloseEligible=false;
   let translationDisplay={translation:'',positive:'',negative:''};
+  let translationReplyVersion=0;
   let translationToken=0,translating=false,liveTranslationDraft=false,translationFailure='';
   let answerHoldUntil = 0;
   let answerTimer = null;
@@ -269,6 +274,17 @@ import { LocalAgreement } from './local-agreement.mjs';
   const chatSettingsCache=new ChatSettingsCache();
   const recentHintNotes=[];
   let hintComparisonScope=null;
+  let currentHintAudit=null;
+  const deviceHintAcks=new Set();
+  const hintAudit=new HintAudit({fetch:gatewayFetch,spec:()=>({server:config.serverUrl,headers:getAuthHeaders({'Content-Type':'application/json'})}),version:'2.19.0',onStatus:text=>{const el=document.getElementById('hint-history-status');if(el)el.textContent=text;}});
+  function auditHint(job,stage,details={}){
+    if(!job)return;
+    const plan=job.hintPlan || {};
+    hintAudit.record({sessionId:job.auditSession || sessionId,segmentId:job.id || '',jobId:job.auditJobID || `${job.epoch ?? chatEpoch}-${job.sequence ?? job.id ?? 'manual'}`,stage,topic:plan.topic || '',kind:plan.kind || '',source:plan.source || '',evidence:plan.evidence || job.focusText || '',...details});
+  }
+  function visibleHintAudits(){return !answerIsHint?[]:hintStackActive()?hintStack.cards.map(card=>card.auditMeta).filter(Boolean):[currentHintAudit].filter(Boolean);}
+  function hintDeviceDisplayed(meta){if(!meta || deviceHintAcks.has(meta.auditJobID))return;deviceHintAcks.add(meta.auditJobID);while(deviceHintAcks.size>100)deviceHintAcks.delete(deviceHintAcks.values().next().value);auditHint(meta,'device_display',{reason:'sdk_ack'});}
+
   const voiceLatency=new VoiceLatency({onUpdate:summary=>{
     const el=document.getElementById('voice-latency');
     if(el && Object.keys(summary).length)el.textContent=Object.entries(summary).map(([label,ms])=>`${label}: ${ms}ms`).join(' · ');
@@ -312,34 +328,36 @@ import { LocalAgreement } from './local-agreement.mjs';
   const hintStack=new HintStack({onChange:()=>{if(!updatingHintStack && answerIsHint)syncHintStack();}});
   function syncHintStack(){
     const top=hintStack.cards[0];
+    currentHintAudit=top?.auditMeta || null;
     answerText=top?.text || '';answerTitle=top?.title || '';answerVoicePrompt='';
     answerIsHint=!!top;answerAutoCloseEligible=!!top;
     if(els.chatOutput)els.chatOutput.textContent=answerText;
     renderLiveHUD();
   }
-  function clearHintStack(){answerIsHint=false;hintStack.clear();}
+  function clearHintStack(){answerIsHint=false;currentHintAudit=null;hintStack.clear();}
   function displayHintCard(note,text){
     hintLifetime.clear();stopAIAutoScroll();aiScrollOffset=0;
     if(config.hintCardCount===2){
       updatingHintStack=true;
-      try{hintStack.configure({limit:2,autoClose:config.hintAutoClose===true,secondsPerLine:config.hintSecondsPerLine});hintStack.add({title:hintPresentation(note).title,text});}
+      try{hintStack.configure({limit:2,autoClose:config.hintAutoClose===true,secondsPerLine:config.hintSecondsPerLine});hintStack.add({title:hintPresentation(note).title,text,auditMeta:note.auditMeta});}
       finally{updatingHintStack=false;}
-      answerIsHint=true;syncHintStack();
+      currentHintAudit=note.auditMeta || null;answerIsHint=true;syncHintStack();
     }else{
-      clearHintStack();answerIsHint=true;answerVoicePrompt='';answerTitle=hintPresentation(note).title;answerText=text;answerAutoCloseEligible=true;startHintLifetime();
+      clearHintStack();currentHintAudit=note.auditMeta || null;answerIsHint=true;answerVoicePrompt='';answerTitle=hintPresentation(note).title;answerText=text;answerAutoCloseEligible=true;startHintLifetime();
+      renderLiveHUD();
     }
   }
   function updateHintCardCount(){
-    settingsEdited=true;stopAIAutoScroll();aiScrollOffset=0;const title=answerTitle,text=answerText,wasHint=answerIsHint;
+    settingsEdited=true;stopAIAutoScroll();aiScrollOffset=0;const title=answerTitle,text=answerText,wasHint=answerIsHint,auditMeta=currentHintAudit;
     config.hintCardCount=hintCardCount(els.hintCardCount.value);els.hintCardCount.value=String(config.hintCardCount);
     if(wasHint && text){
       hintLifetime.clear();clearHintStack();answerIsHint=true;
       if(config.hintCardCount===2){
         updatingHintStack=true;
-        try{hintStack.configure({limit:2,autoClose:config.hintAutoClose===true,secondsPerLine:config.hintSecondsPerLine});hintStack.add({title,text});}
+        try{hintStack.configure({limit:2,autoClose:config.hintAutoClose===true,secondsPerLine:config.hintSecondsPerLine});hintStack.add({title,text,auditMeta});}
         finally{updatingHintStack=false;}
         syncHintStack();
-      }else{answerText=text;answerTitle=title;answerAutoCloseEligible=true;startHintLifetime();const win=sliceHUDWindow(text,0,aiVisibleLines(),AI_BOX_WIDTH_PX);if(win.maxOffset>0)startAIAutoScroll(win.maxOffset);}
+      }else{currentHintAudit=auditMeta;answerText=text;answerTitle=title;answerAutoCloseEligible=true;startHintLifetime();const win=sliceHUDWindow(text,0,aiVisibleLines(),AI_BOX_WIDTH_PX);if(win.maxOffset>0)startAIAutoScroll(win.maxOffset);}
     }
     renderLiveHUD();persistSettings().catch(console.warn);
   }
@@ -371,6 +389,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       const model=resolveRoleModel('hintDecision',config);
       const useLLM=!!model && model!==JEV_ONLY;
       hintGate.intervalMs=useLLM?3000:2000;
+      job.auditSession=sessionId;job.auditJobID=`${sessionId}-${job.epoch}-${job.sequence}`;
       const readAdvice=async(advisory,adviceSignal)=>{
         const res=await gatewayFetch(`${config.serverUrl}/api/glasses/hint-decision`,{
           method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),signal:adviceSignal,
@@ -379,7 +398,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         if(!res.ok)throw new Error(`HTTP ${res.status}${res.status===404?' · 게이트웨이 업데이트 필요':''}`);
         return res.json();
       };
-      if(!useLLM)return readAdvice(false,signal);
+      if(!useLLM){const result=await readAdvice(false,signal);auditHint(job,'decision',{reason:result.hint?'jev_selected':result.reason || 'jev_skip',kind:result.category || ''});return result;}
       if(processingAI && !activeAIJob?.hint)return {hint:false,defer:true,reason:'answer_priority'};
       if(previewWakeId || pendingTrigger || activeAIJob && !activeAIJob.hint || pendingAI.some(job=>job.chatSession))return {hint:false,reason:'chat_priority'};
       // Advice is optional: false, busy, unavailable and slow JEV must never block LLM selection.
@@ -393,12 +412,14 @@ import { LocalAgreement } from './local-agreement.mjs';
       try{
         els.hintJudgeStatus.textContent=`${model} · 토픽 판별 중`;
         const result=await requestHintJudgment({fetch:gatewayFetch,server:config.serverUrl,headers:getAuthHeaders({'Content-Type':'application/json'}),model,job,advisory,limit:config.hintContextTokens,signal,preferWeb:config.hintWebSearch!==false,sensitivity:config.hintSensitivity});
-        if(result.hint && !hintGate.relevant({...job,focusText:result.focus},result.plan.topic))return {hint:false,reason:'past_topic'};
-        if(result.hint && result.plan.source!=='conversation' && await hintDuplicate(`${result.plan.topic}: ${result.plan.question}`,'plan',signal))return {...result,hint:false,reason:'duplicate_plan'};
+        auditHint(job,'decision',{reason:result.repairAttempts?'judge_format_repaired':result.hint?'hint_selected':result.reason || 'llm_skip',topic:result.plan?.topic || result.topic || '',kind:result.plan?.kind || '',source:result.plan?.source || '',evidence:result.focus || ''});
+        if(result.hint && !hintGate.relevant(hintGate.withEvidence(job,result),result.plan.topic)){auditHint(job,'skipped',{reason:'selection_evidence_changed'});return {hint:false,reason:'past_topic'};}
+        if(result.hint && result.plan.source!=='conversation' && await hintDuplicate(`${result.plan.topic}: ${result.plan.question}`,'plan',signal)){auditHint(job,'skipped',{reason:'duplicate_plan',topic:result.plan.topic});return {...result,hint:false,reason:'duplicate_plan'};}
         els.hintJudgeStatus.textContent=`${result.hint?`주제: ${result.plan.topic}`:'보충할 정보 없음'} · 문맥 약 ${result.contextEstimatedTokens}/${result.contextBudget}토큰`;
         return result;
       }catch(error){
         if(signal.aborted)throw error;
+        auditHint(job,'skipped',{reason:'judge_format_or_timeout'});
         els.hintJudgeStatus.textContent=`판별 LLM 지연/오류 · 전사 계속 · ${error.message}`;
         return advisory.hint?advisory:{hint:false,reason:'judge_unavailable'};
       }
@@ -406,6 +427,8 @@ import { LocalAgreement } from './local-agreement.mjs';
     onHint:job=>{
       if(!isRecording || config.glassesMode!=='ai' || previewWakeId || pendingTrigger || (activeAIJob && !activeAIJob.hint) || pendingAI.some(job=>!job.hint))return false;
       if(activeAIJob?.hint && !hintGate.relevant(activeAIJob,activeAIJob.hintPlan?.topic))aiAbortController?.abort();
+      job.auditSession=sessionId;job.auditJobID=`${sessionId}-${job.epoch}-${job.sequence}`;
+      auditHint(job,'selected',{reason:'queued'});
       enqueueAI(`${job.id}-hint-${job.sequence}`,job.text,job.context,'ai',config.translateTargetLang,{...job,hint:true});
       return true;
     },
@@ -414,6 +437,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       for(let i=pendingAI.length-1;i>=0;i--)if(pendingAI[i].hint && pendingAI[i].topicVersion!==hintGate.topicVersion){hintGate.complete(pendingAI[i]);pendingAI.splice(i,1);}
       els.hintStatus.textContent=activeAIJob?.hint && activeAIJob.generationStartedAt!==undefined?'새 주제 확인 · 생성 중인 힌트 완료 후 반영':'새 주제 확인 · 대기 후보 갱신';
     },
+    onAudit:(job,details)=>auditHint(job,details.stage,details),
     onStatus:text=>{els.hintStatus.textContent=text;}
   });
 
@@ -427,7 +451,7 @@ import { LocalAgreement } from './local-agreement.mjs';
   }
 
   function localEngine(){return config.translationEngine || (config.chromeTranslation===false?'llm':'chrome');}
-  function localLabel(){return localEngine()==='apple'?'Apple':'Chrome';}
+  function localLabel(){return ({apple:'Apple',chrome:'Chrome',llm:'LLM'})[localEngine()] || '번역';}
   function engineSpec(kind,overrides={}){
     return {kind,server:config.serverUrl,headers:getAuthHeaders({'Content-Type':'application/json'}),
       engine:kind==='stt'?config.sttEngine:localEngine(),
@@ -479,28 +503,54 @@ import { LocalAgreement } from './local-agreement.mjs';
     const spec=canonicalSpec(engineSpec('translation',{engine,source:request.source,target:request.target}));
     try{
       await waitForPreparation(translationPreparation.ensure(spec),signal);
+      const started=Date.now();
       let result=await localTranslate(gatewayFetch,spec.server,spec.headers,request,signal,8000,engine);
-      if(!result.ok){
+      if(!result.ok && result.needsPrepare){
         // Server restart or removed language assets invalidate client readiness.
         await waitForPreparation(translationPreparation.ensure(spec,{force:true}),signal);
         result=await localTranslate(gatewayFetch,spec.server,spec.headers,request,signal,8000,engine);
       }
+      if(request.traceId)translationMetrics.record(request.traceId,{translation_http_ms:Date.now()-started,translation_server_ms:result.timings?.server_ms});
       return result;
     }catch(error){if(signal?.aborted)throw error;return {ok:false,reason:error.message};}
   }
   const translationHistory=new TranslationHistory();
   const translationSentence=new TranslationSentence();
-  const stableTranslation=new StableTranslation((job,signal)=>translateLocal({text:job.prompt,source:job.source,target:job.target},signal,job.engine));
+  const stableTranslation=new StableTranslation((job,signal)=>translateLocal({text:job.prompt,source:job.source,target:job.target,traceId:job.id},signal,job.engine));
+  const llmStableTranslation=new StableTranslation(async(job,signal)=>{
+    const key=JSON.stringify([chatScope(),resolveRoleModel('translation',config),job.source,job.target,job.prompt]);
+    if(llmTranslationCache.has(key))return llmTranslationCache.get(key);
+    const result=await llmTranslation({fetch:gatewayFetch,server:config.serverUrl,headers:getAuthHeaders({'Content-Type':'application/json'}),model:resolveRoleModel('translation',config),job,signal,onPartial:job.onChunk});
+    if(result.ok && !signal.aborted){llmTranslationCache.set(key,result);while(llmTranslationCache.size>8)llmTranslationCache.delete(llmTranslationCache.keys().next().value);}
+    return result;
+  });
+  const audioUpload=new AudioUpload();
+  let translationPaint=null;
+  const translationMetrics=new TranslationMetrics({onUpdate:entry=>{
+    const el=document.getElementById('translation-latency');if(!el)return;
+    const labels={stt_http_ms:'STT 왕복',stt_server_ms:'STT 서버',stt_lock_ms:'STT 잠금 대기',stt_engine_ms:'STT 엔진',save_ms:'저장',translation_queue_ms:'번역 대기',translation_http_ms:'번역 왕복',translation_server_ms:'번역 서버',first_text_ms:'첫 번역',sdk_ms:'안경 전송'};
+    el.textContent=Object.entries(labels).filter(([key])=>entry[key]!==undefined).map(([key,label])=>`${label} ${entry[key]}ms`).join(' · ')+(entry.upload_bytes!==undefined?` · 오디오 ${entry.upload_bytes}/${entry.audio_bytes ?? '?'}B`:'');
+  }});
+  const llmTranslationCache=new Map();
   let previewRetryTimer=null;
   const liveTranslations=new LiveTranslationQueue({
-    translate:(job,signal)=>config.chromeTranslation===false?Promise.resolve({ok:false,reason:'로컬 번역 비활성'}):stableTranslation.run(job,signal),
-    onToken:token=>{
+    translate:async(job,signal,onPartial)=>{
+      if(job.engine!=='llm')return stableTranslation.run(job,signal);
+      const started=Date.now();
+      const result=await llmStableTranslation.run({...job,onPartial,cacheScope:JSON.stringify([chatScope(),resolveRoleModel('translation',config)])},signal);
+      translationMetrics.record(job.id,{translation_http_ms:Date.now()-started});return result;
+    },
+    onToken:(token,info)=>{
       translationToken=token;
-      if(activeAIJob?.translationToken)aiAbortController?.abort();
-      pendingAI.splice(0,pendingAI.length,...pendingAI.filter(job=>!job.translationToken));
+      const boundary=!info || info.final || info.pairChanged;
+      if(boundary)translationReplyVersion++;
+      const cancelReply=boundary || localEngine()==='llm';
+      if(activeAIJob?.translationToken && (!activeAIJob.replyOnly || cancelReply))aiAbortController?.abort();
+      pendingAI.splice(0,pendingAI.length,...pendingAI.filter(job=>!job.translationToken || job.replyOnly && !cancelReply));
     },
     onText:(job,text)=>{
       if(normalizeGlassesMode(config.glassesMode)!=='translate')return;
+      translationPaint={id:job.id,at:Date.now(),acked:false};
       liveTranslationDraft=job.draft;
       translationFailure='';translationDisplay={...translationDisplay,translation:text};answerText=text;
       translationHistory.update(job.historyId || job.id,text,{final:!job.draft,revision:job.id});
@@ -510,11 +560,14 @@ import { LocalAgreement } from './local-agreement.mjs';
     onFinal:(job,result)=>{
       liveTranslationDraft=false;
       if(normalizeGlassesMode(config.glassesMode)!=='translate')return;
-      enqueueAI(job.id+'-translation-'+job.token,job.prompt,job.context,'translate',job.target,{chromeTranslationText:result.ok?result.text:'',chromeAttempted:true,translationSource:job.source,translationToken:job.token,translationHistoryId:job.historyId || job.id,translationRevisionId:job.id});
+      if(!result.ok && job.engine==='llm'){translationFailure='번역 오류';els.chromeTranslationStatus.textContent=`LLM 번역 실패 · 이전 번역 유지 (${result.reason})`;renderLiveHUD();return;}
+      enqueueAI(job.id+'-translation-'+job.token,job.prompt,job.context,'translate',job.target,{replyOnly:result.ok,replyVersion:translationReplyVersion,translatedBy:job.engine==='llm'?'LLM':localLabel(),chromeTranslationText:result.ok?result.text:'',chromeAttempted:true,translationSource:job.source,translationToken:job.token,translationHistoryId:job.historyId || job.id,translationRevisionId:job.id});
     },
     onFailure:(job,reason)=>{
-      if(config.chromeTranslation!==false)els.chromeTranslationStatus.textContent=job.draft?`실시간 번역 대기 · ${reason}`:`LLM 번역 사용 · ${reason}`;
+      if(job.engine==='llm')els.chromeTranslationStatus.textContent=`LLM 번역 대기 · ${reason}`;
+      else els.chromeTranslationStatus.textContent=job.draft?`실시간 번역 대기 · ${reason}`:`LLM 번역 사용 · ${reason}`;
     },
+    onMeasure:(job,stage,ms)=>translationMetrics.record(job.id,{[stage]:ms}),
     onBusy:busy=>{translating=busy || liveTranslationDraft;renderLiveHUD();}
   });
 
@@ -654,9 +707,9 @@ import { LocalAgreement } from './local-agreement.mjs';
     gatewayFetch(`${config.serverUrl}/api/stt/${activeSttEngine==='apple'?'apple':'chrome'}/stop`,{method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),body:JSON.stringify({sessionId,segmentId:id})}).catch(()=>{});
   }
   function resetQueuesForModeSwitch(nextMode, preserveAudio=false, preserveDisplay=false) {
-    previewIntent.reset();previewWakeId='';clearTimeout(hintDrainTimer);hintDrainTimer=null;
+    previewIntent.reset();previewWakeId='';audioUpload.reset();llmTranslationCache.clear();clearTimeout(hintDrainTimer);hintDrainTimer=null;
     hintLifetime.clear();answerAutoCloseEligible=false;voiceWakeJobs.clear();
-    chatEpoch++;translationFailure='';translationSentence.reset();if(!preserveDisplay)translationHistory.reset();stableTranslation.reset();
+    chatEpoch++;translationFailure='';translationSentence.reset();if(!preserveDisplay)translationHistory.reset();stableTranslation.reset();llmStableTranslation.reset();
     stopChromeSegment(activeUtterance?.id);
     liveTranslationDraft=false;liveTranslations.reset();
     if(!preserveDisplay)translationDisplay={translation:'',positive:'',negative:''};
@@ -1164,7 +1217,9 @@ import { LocalAgreement } from './local-agreement.mjs';
       return transcriptLines.join('\n');
     }
     if (transcriptStatusMessage) return transcriptStatusMessage;
-    return isRecording
+    const status=captureStatus();
+    if(status && (capturePreparing || pendingMicOpen || isRecording))return status;
+    return captureListening()
       ? (config.voiceMode === 'continuous' ? '듣는 중... 말하는 동안 자막이 갱신됩니다.' : '듣는 중... 다시 탭하면 전송합니다.')
       : '녹음 정지';
   }
@@ -1219,7 +1274,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       if(translateMode || !body.show)pendingHUD.delete(9);
       if(body.cards?.length>1 && secondTitleChanged)pendingHUD.set(10,{containerID:10,containerName:'hint-title-older',content:nextSecondTitle});
       if(!(body.cards?.length>1))pendingHUD.delete(10);
-      if(body.show && aiChanged)pendingHUD.set(1,{containerID:1,containerName:'gateway',content:nextAI});
+      if(body.show && aiChanged)pendingHUD.set(1,{containerID:1,containerName:'gateway',content:nextAI,auditHints:visibleHintAudits()});
       if(!body.show)pendingHUD.delete(1);
       if(!body.showTranscript)pendingHUD.delete(4);
       if(body.showTranscript && txChanged)pendingHUD.set(4,{containerID:4,containerName:'transcript',content:nextTx});
@@ -1235,9 +1290,10 @@ import { LocalAgreement } from './local-agreement.mjs';
   // Serialize and coalesce updates so streamed tokens do not flood Bluetooth.
   async function flushHUD() {
     if (sendingHUD) return;
-    sendingHUD = true;
+    sendingHUD = true;let sendingHintMeta=[];
     try {
       while (displayReady) {
+        sendingHintMeta=[];
         if(headPaused){
           if(!nativeHeadBlank){
             if(!await bridge.rebuildPageContainer(blankHeadPage()))throw Error('빈 화면 전환 실패');
@@ -1259,8 +1315,11 @@ import { LocalAgreement } from './local-agreement.mjs';
         const header=currentHeaderLayout(translate);
         const body=currentBodyLayout();
         if(nativeBodyLayoutKey!==body.key || nativePickerKey || nativeMenuSource!==config.audioInputSource || nativeTranslateLayout!==translate || nativeHeaderLayoutKey!==header.key){
+          const paint=translationPaint;const shownHints=visibleHintAudits();sendingHintMeta=shownHints;
           const success=await bridge.rebuildPageContainer(hudPage(translate,header,body));
+          if(translate && body.show && paint && !paint.acked){paint.acked=true;translationMetrics.record(paint.id,{sdk_ms:Date.now()-paint.at});}
           if(!success)throw new Error('안경 화면 배치 변경 실패');
+          if(!translate && body.show)shownHints.forEach(hintDeviceDisplayed);
           nativePickerKey='';nativeMenuSource=config.audioInputSource;nativeTranslateLayout=translate;nativeHeaderLayoutKey=header.key;nativeBodyLayoutKey=body.key;
           if(!body.show)pendingHUD.delete(1);
           if(translate || !body.show)pendingHUD.delete(9);
@@ -1270,7 +1329,7 @@ import { LocalAgreement } from './local-agreement.mjs';
           continue;
         }
         if(!pendingHUD.size)break;
-        const [id, update] = pendingHUD.entries().next().value;
+        const [id, update] = pendingHUD.has(1)?[1,pendingHUD.get(1)]:pendingHUD.entries().next().value;
         pendingHUD.delete(id);
         if(update.icon){
           try{
@@ -1282,12 +1341,17 @@ import { LocalAgreement } from './local-agreement.mjs';
             hudImagesDisabled=true;pendingHUD.delete(5);pendingHUD.delete(6);queueHudIcons();
           }
         }else{
-          const success = await bridge.textContainerUpgrade(update);
+          const paint=translationPaint;
+          const {auditHints:shownHints=[],...payload}=update;sendingHintMeta=shownHints;
+          const success = await bridge.textContainerUpgrade(payload);
+          if(id===1 && translate && paint && !paint.acked){paint.acked=true;translationMetrics.record(paint.id,{sdk_ms:Date.now()-paint.at});}
           if (!success) throw new Error('안경 화면 갱신 실패');
+          shownHints.forEach(hintDeviceDisplayed);
         }
         await new Promise(resolve => setTimeout(resolve, 150));
       }
     } catch (err) {
+      sendingHintMeta.forEach(meta=>auditHint(meta,'device_error',{reason:'sdk_transport_error'}));
       console.warn('Bridge display push error:', err);
       updateConnectionState(false, err.message);
     } finally {
@@ -1309,8 +1373,19 @@ import { LocalAgreement } from './local-agreement.mjs';
   function currentTranslationHeader(messageOnly=false){
     return translationHeaderText({messageOnly,imageIcons:true,source:config.translateSourceLang || 'auto',target:config.translateTargetLang,
       running:isRecording || capturePreparing || processingAI || isThinking || translating,
+      listening:captureListening(),detail:captureStatus(),
       phase:(isThinking || processingAI)?aiPhaseTitle:'',phaseDetail:(isThinking || processingAI)?aiPhaseDetail:'',translating,
       error:captureFailure || micCloseUncertain?'오류':translationFailure});
+  }
+  function captureListening(){return isRecording && !capturePreparing && !pendingMicOpen && !micCloseUncertain && !micStopPromise;}
+  function captureStatus(){
+    if(micStopPromise || pendingMicCloses.size)return '마이크 정지중';
+    if(pendingMicOpen)return '마이크 연결중';
+    if(capturePreparing)return '음성 엔진 준비중';
+    if(!captureListening())return '대기중';
+    if(!recordedBytes)return '오디오 수신 대기';
+    if(activeFinalClip?.busyAttempts)return '전사 처리 대기';
+    return '';
   }
   function setHUDNotice(message) {
     queueHudIcons();
@@ -1328,8 +1403,8 @@ import { LocalAgreement } from './local-agreement.mjs';
     const mode=normalizeGlassesMode(config.glassesMode);
     if(mode==='translate')return currentTranslationHeader(messageOnly);
     const error=micCloseUncertain?'마이크 종료 확인 실패':captureFailure?'전사 오류':'';
-    const detail=micStopPromise || pendingMicCloses.size?'마이크 정지중':capturePreparing?'녹음 준비중':pendingTrigger?'질문 대기':draining || pendingClips.length?'전사 처리':'';
-    return modeHeaderText({mode,messageOnly,imageIcons:true,hint:config.aiHintMode!==false,listening:isRecording,
+    const detail=captureStatus() || (pendingTrigger?'질문 대기':draining || pendingClips.length?'전사 처리':'');
+    return modeHeaderText({mode,messageOnly,imageIcons:true,hint:config.aiHintMode!==false,listening:captureListening(),
       running:isRecording || capturePreparing || processingAI || isThinking || draining || pendingClips.length>0,
       phase:(isThinking || processingAI)?aiPhaseTitle:'',phaseDetail:(isThinking || processingAI)?aiPhaseDetail:'',error,detail,trigger:triggerLabels()[0] || ''});
   }
@@ -1542,6 +1617,25 @@ import { LocalAgreement } from './local-agreement.mjs';
   }
   async function applyLiveSettings(patch){
     if(!Object.entries(patch).some(([key,value])=>JSON.stringify(value)!==JSON.stringify(pendingSettings[key] ?? config[key])))return inputSwitchPromise;
+    // These controls affect only future PCM frames or translation requests.
+    // Reopening STT here flushes a segment and competes with its finalization.
+    if(!inputSwitchPromise && Object.keys(patch).every(key=>['glassesInput','translationEngine'].includes(key))){
+      Object.assign(config,patch);settingsEdited=true;config.chromeTranslation=config.translationEngine!=='llm';
+      if(patch.glassesInput){
+        activeGlassesInput=normalizeGlassesInput(config.glassesInput);
+        activeInputProcessor.configure(activeGlassesInput);
+        if(segmenter)segmenter.threshold=inputSegmentOptions(activeSttEngine,config.glassesMode,activeAudioInputSource,activeGlassesInput).threshold;
+      }
+      if(patch.translationEngine){
+        liveTranslationDraft=false;liveTranslations.reset();translationSentence.reset();stableTranslation.reset();llmStableTranslation.reset();llmTranslationCache.clear();
+        translationReplyVersion++;translationFailure='';
+        pendingAI.splice(0,pendingAI.length,...pendingAI.filter(job=>!job.translationToken));
+        if(activeAIJob?.translationToken)aiAbortController?.abort();
+        // Preparation has its own latest-settings queue and must not stop audio.
+        prepareSelectedTranslation().catch(()=>{});
+      }
+      syncCaptureSettings();await persistSettings();renderLiveHUD();return;
+    }
     pendingSettings={...pendingSettings,...patch};settingsEdited=true;
     if(inputSwitchPromise){
       // Cancel a superseded engine warmup; the transaction will open only the latest choice.
@@ -1671,21 +1765,20 @@ import { LocalAgreement } from './local-agreement.mjs';
     if (pendingClips.length) drainClips();
   }
 
-  function glassesInputLocked(){return isRecording || capturePreparing || pendingMicOpen || micMayBeOpen || micCloseUncertain || pendingMicCloses.size || inputSwitchPromise;}
   function readGlassesInputControls(){return normalizeGlassesInput({sensitivity:els.glassesSensitivity.value,gain:els.glassesGain.value});}
   function syncGlassesInputUI(){
     const settings=normalizeGlassesInput(config.glassesInput);
     els.glassesInputSettings.hidden=config.audioInputSource!=='glasses';
     els.glassesSensitivity.value=settings.sensitivity;els.glassesGain.value=String(settings.gain);
-    els.glassesSensitivity.disabled=config.audioInputSource!=='glasses';els.glassesGain.disabled=!!glassesInputLocked();
+    els.glassesSensitivity.disabled=config.audioInputSource!=='glasses';els.glassesGain.disabled=config.audioInputSource!=='glasses';
   }
   function updateGlassesInputMeter(signal,excluded){
     if(activeAudioInputSource!==AudioInputSource.Glasses || Date.now()-lastInputMeterAt<150)return;
     lastInputMeterAt=Date.now();
     const db=value=>Number.isFinite(levelDb(value))?`${Math.round(levelDb(value))} dBFS`:'무음';
     els.glassesInputMeter.value=Math.max(-72,Math.min(0,levelDb(signal.outputLevel)));
-    const detected=signal.rawLevel>=GLASSES_THRESHOLDS[activeGlassesInput.sensitivity];
-    els.glassesInputLevel.textContent=`수신 ${db(signal.rawLevel)} → 적용 후 ${db(signal.outputLevel)} · ${excluded?'화자 필터로 제외':detected?'입력 감지':'감지 기준 미만'}${signal.limited?' · 큰 소리 증폭 제한':''}`;
+    const detected=signal.rawLevel>=signal.threshold;
+    els.glassesInputLevel.textContent=`수신 ${db(signal.rawLevel)} → 적용 후 ${db(signal.outputLevel)} · ${excluded?'화자 필터로 제외':detected?'입력 감지':'감지 기준 미만'}${activeGlassesInput.sensitivity==='auto'?` · 자동 기준 ${db(signal.threshold)}`:''}${activeGlassesInput.gain==='auto'?` · 자동 증폭 ${signal.effectiveGain.toFixed(1)}배`:''}${signal.limited?' · 큰 소리 증폭 제한':''}`;
   }
 
   function receivePCM(bytes, speakerRole = 'unknown') {
@@ -1695,6 +1788,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     const excluded=bytes!==signal.bytes;
     // Gain changes STT input volume, not which background frames count as speech.
     const level=excluded?0:signal.rawLevel;
+    segmenter.threshold=signal.threshold;
     updateGlassesInputMeter(signal,excluded);
     recordedBytes += bytes.length;
     if(level>=segmenter.threshold)lastVoiceFrameAt=recordingStarted+recordedBytes/32;
@@ -1762,19 +1856,25 @@ import { LocalAgreement } from './local-agreement.mjs';
 
   async function drainPreview() {
     if (previewBusy || previewRetryTimer || !pendingPreview || !isRecording) return;
-    // Chrome recognition shares a continuous browser stream across segments;
-    // archive playback must stay ordered there. Apple can rebuild full snapshots.
-    if((pendingPreview.mode!=='translate' || String(pendingPreview.engine).startsWith('chrome-')) && (draining || pendingClips.length))return;
+    // Each engine has one recognizer. Finish the previous segment before a new
+    // preview can replace its native session or repeatedly win the same lock.
+    if((activeFinalClip && activeFinalClip.engine===pendingPreview.engine) || pendingClips.some(clip=>clip.engine===pendingPreview.engine))return;
     const snapshot = pendingPreview; pendingPreview = null; previewBusy = true;
     const controller = new AbortController();
     previewAbortController = controller;
     const timeout = setTimeout(() => controller.abort(),15000);
     try {
-      const payload = sttPayload(snapshot);
+      const upload=audioUpload.prepare(snapshot);let uploadedBytes=upload.bytes.length;
+      let payload = {...sttPayload({...snapshot,bytes:upload.bytes}),audioDelta:upload.audioDelta,audioOffset:upload.audioOffset};
+      const sttSentAt=Date.now();
       let res = await gatewayFetch(`${config.serverUrl}/api/stt/preview`, {
         method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),
         body:JSON.stringify(payload),signal:controller.signal,
       });
+      if(res.status===409){
+        audioUpload.resync(snapshot);payload=sttPayload(snapshot);uploadedBytes+=snapshot.bytes.length;
+        res=await gatewayFetch(`${config.serverUrl}/api/stt/preview`,{method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),body:JSON.stringify(payload),signal:controller.signal});
+      }
       if (!res.ok && res.status !== 429 && payload.language === 'auto') {
         autoLangUnsupported = true;
         res = await gatewayFetch(`${config.serverUrl}/api/stt/preview`, {
@@ -1795,6 +1895,8 @@ import { LocalAgreement } from './local-agreement.mjs';
       const data = await res.json();
       if (!isRecording || sessionId!==snapshot.sessionId || activeUtterance?.id!==snapshot.segmentId ||
           data.sessionId!==snapshot.sessionId || data.segmentId!==snapshot.segmentId || data.revision!==snapshot.revision) return;
+      audioUpload.acknowledge(snapshot,data);
+      if(snapshot.mode==='translate')translationMetrics.record(snapshot.segmentId,{stt_http_ms:Date.now()-sttSentAt,stt_server_ms:data.timings?.server_ms ?? data.timings?.stt_ms,stt_lock_ms:data.timings?.lock_ms,stt_engine_ms:data.timings?.engine_ms,upload_bytes:uploadedBytes,audio_bytes:snapshot.bytes.length});
       if(data.rejected){hintGate.withdraw(snapshot.segmentId);previewIntent.reset();if(previewWakeId===snapshot.segmentId)previewWakeId='';return;}
       if (!data.text?.trim()) return;
       const agreed = (data.engine==='apple' || data.engine?.startsWith('chrome-'))
@@ -1805,8 +1907,9 @@ import { LocalAgreement } from './local-agreement.mjs';
       observeAIPreview(snapshot,data,agreed);
       draftUtteranceId = snapshot.segmentId;
       captionStable = agreed.stable; captionDraft = agreed.draft;
-      if(snapshot.mode==='translate' && config.chromeTranslation!==false){
-        enqueueTranslation(snapshot.segmentId,data.text,'',resolveTranslateSourceLang(snapshot),snapshot.targetLang,{sessionId:snapshot.sessionId,draft:true,stableText:agreed.stable.trim(),revision:snapshot.revision,joinSentence:String(snapshot.engine||'').startsWith('chrome-') && isContinuousCaptureMode(),startedAt:snapshot.startedAt,endedAt:snapshot.endedAt});
+      if(snapshot.mode==='translate'){
+        const translationText=localEngine()==='llm'?stableTranslationPreview(data.text,agreed.stable.trim()):data.text;
+        if(translationText)enqueueTranslation(snapshot.segmentId,translationText,'',resolveTranslateSourceLang(snapshot),snapshot.targetLang,{sessionId:snapshot.sessionId,draft:true,stableText:agreed.stable.trim(),revision:snapshot.revision,joinSentence:String(snapshot.engine||'').startsWith('chrome-') && isContinuousCaptureMode(),startedAt:snapshot.startedAt,endedAt:snapshot.endedAt});
       }
       transcriptStatusMessage = '';
       transcriptNotice('실시간 전사 중');
@@ -1887,7 +1990,7 @@ import { LocalAgreement } from './local-agreement.mjs';
   }
 
   async function drainClips() {
-    if (previewBusy && (normalizeGlassesMode(config.glassesMode)!=='translate' || activeSttEngine.startsWith('chrome-'))) abortPendingPreview();
+    if (previewBusy) abortPendingPreview();
     if (draining) return;
     draining = true;
     try {
@@ -1903,17 +2006,25 @@ import { LocalAgreement } from './local-agreement.mjs';
           // A mode switch can clear the old request while new audio is queued.
           // Never shift a new segment in response to an old cancellation/failure.
           if(!pendingClips.includes(clip))continue;
+          if(err.busy){
+            clip.busyAttempts=(clip.busyAttempts || 0)+1;
+            if(clip.busyAttempts<=8){
+              if(clip.epoch===recognitionEpoch){setVoiceHint('음성 엔진 처리 대기 · 자동 재시도 중');setHUDNotice('전사 처리 대기');}
+              await new Promise(resolve=>setTimeout(resolve,Math.min(1000,250*clip.busyAttempts)));continue;
+            }
+          }
           if(clip.mode==='ai') {
             hintGate.withdraw(clip.segmentId);if(previewWakeId===clip.segmentId)previewWakeId='';
             pendingClips.splice(pendingClips.indexOf(clip),1);
-            els.hintStatus.textContent=`음성 처리 지연 · 해당 구간 생략, 새 대화 계속 (${err.message})`;
-            setHUDNotice('지난 음성 생략 · 계속 듣는 중');
-            setVoiceHint('실시간 AI · 처리하지 못한 구간은 버리고 최신 대화를 듣습니다.');
+            if(clip.epoch===undefined || clip.epoch===recognitionEpoch){
+              els.hintStatus.textContent=`음성 처리 지연 · 해당 구간 생략, 새 대화 계속 (${err.message})`;
+              setHUDNotice('지난 음성 생략 · 계속 듣는 중');
+              setVoiceHint('실시간 AI · 처리하지 못한 구간은 버리고 최신 대화를 듣습니다.');
+            }
             // Avoid a hot loop on repeated server failures without stopping capture.
             await new Promise(resolve=>setTimeout(resolve,200));
             continue;
           }
-          if(err.busy){await new Promise(resolve=>setTimeout(resolve,300));continue;}
           clip.attempts=(clip.attempts || 0)+1;
           if(err.retryable!==false && clip.attempts<=3) {
             setHUDNotice(`전사 재시도 ${clip.attempts}/3 · 음성 보관 중`);
@@ -2000,12 +2111,13 @@ import { LocalAgreement } from './local-agreement.mjs';
     const timeout = setTimeout(() => {timedOut=true;controller.abort();}, clip.mode==='ai'?12000:120000);
     try {
       if(clip.mode==='ai')voiceLatency.mark(clip.segmentId,'stt_sent');
+      const sttSentAt=Date.now();
       const payload = sttPayload(clip);
       let res = await gatewayFetch(`${config.serverUrl}/api/stt/transcribe`, {
         method: 'POST', headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(payload), signal: controller.signal,
       });
-      if (!res.ok && payload.language === 'auto') {
+      if (!res.ok && res.status!==429 && payload.language === 'auto') {
         autoLangUnsupported = true;
         res = await gatewayFetch(`${config.serverUrl}/api/stt/transcribe`, {
           method: 'POST', headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
@@ -2020,6 +2132,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       }
       const data = await res.json();
       if(data.warning)els.sttEngineStatus.textContent=data.warning;
+      if(clip.mode==='translate')translationMetrics.record(clip.segmentId,{stt_http_ms:Date.now()-sttSentAt,stt_server_ms:data.timings?.server_ms ?? data.timings?.stt_ms,stt_lock_ms:data.timings?.lock_ms,stt_engine_ms:data.timings?.engine_ms,save_ms:data.timings?.save_ms,upload_bytes:clip.bytes.length,audio_bytes:clip.bytes.length});
       if (data.text?.trim() && !data.saved) {
         const err=new Error('서버에서 전사 저장을 확인하지 못했습니다. 서버를 업데이트하세요.');
         err.retryable=false;throw err;
@@ -2064,6 +2177,8 @@ import { LocalAgreement } from './local-agreement.mjs';
     if(sentence)liveTranslations.submit(sentence);
   }
 
+  function translationStale(job){return job.replyOnly && job.replyVersion!==undefined?job.replyVersion!==translationReplyVersion:job.translationToken && job.translationToken!==translationToken;}
+
   function enqueueAI(id, prompt, context, mode = config.glassesMode, targetLang = config.translateTargetLang, options = {}) {
     if(options.replyOnly && pendingAI.some(job=>job.mode==='translate' && !job.replyOnly))return;
     if (knownAIJobs.has(id)){finishWakeJob(options.wakeToken);return;}
@@ -2072,7 +2187,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     const normMode = normalizeGlassesMode(mode);
     const normLang = targetLang || 'ko';
     if(options.chatSession){
-      for(const dropped of pendingAI)if(dropped.hint)hintGate.complete(dropped);
+      for(const dropped of pendingAI)if(dropped.hint){auditHint(dropped,'skipped',{reason:'pending_replaced'});hintGate.complete(dropped);}
       pendingAI.splice(0,pendingAI.length,...pendingAI.filter(job=>job.chatSession));
       if(pendingAI.length>=8){finishWakeJob(options.wakeToken);els.hintStatus.textContent='AI 채팅 질문 8개 대기 중 · 답변 후 다시 말씀하세요';return;}
     }else if(pendingAI.some(job=>job.chatSession)){
@@ -2081,7 +2196,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     }
     if (pendingAI.length > 0 && !options.chatSession) {
       const last = pendingAI[pendingAI.length - 1];
-      if(options.hint){for(const dropped of pendingAI)if(dropped.hint)hintGate.complete(dropped);pendingAI.length=0;}
+      if(options.hint){for(const dropped of pendingAI)if(dropped.hint){auditHint(dropped,'skipped',{reason:'pending_replaced'});hintGate.complete(dropped);}pendingAI.length=0;}
       else if (last.mode === normMode && last.targetLang === normLang && !last.hint && !last.replyOnly && !options.replyOnly && !options.translationToken && !last.translationToken) {
         last.prompt = `${last.prompt}\n${prompt}`.trim();
         if (context) last.context = context;
@@ -2108,10 +2223,10 @@ import { LocalAgreement } from './local-agreement.mjs';
       while (pendingAI.length) {
         if(pendingAI[0].hint && hintGate.displayDelay()>0)break;
         const job = pendingAI.shift();
-        if(job.hint && !hintGate.relevant(job,job.hintPlan?.topic)){hintGate.complete(job);continue;}
+        if(job.hint && !hintGate.relevant(job,job.hintPlan?.topic)){auditHint(job,'skipped',{reason:hintGate.rejectionReason(job)});hintGate.complete(job);continue;}
         activeAIJob=job;
         if(job.traceId)voiceLatency.mark(job.traceId,'chat_start');
-        if(job.translationToken && job.translationToken!==translationToken || job.chatEpoch && job.chatEpoch!==chatEpoch){finishWakeJob(job.wakeToken);continue;}
+        if(translationStale(job) || job.chatEpoch && job.chatEpoch!==chatEpoch){finishWakeJob(job.wakeToken);continue;}
         if(job.mode==='translate')translationFailure='';
         aiScrollOffset = 0;
         aiPhaseTitle = job.mode === 'translate' ? '번역 및 답변 생성 중' : '생각 중';
@@ -2161,7 +2276,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     let repliesReplaced=false;
     let receivedVisibleAnswer=false;
     let chromeText=options.chromeTranslationText || '';let chromeSource=options.translationSource || resolveTranslateSourceLang({targetLang});
-    let cueDisplayed=false;let cueTopic='';
+    let cueDisplayed=false;let cueTopic='';let hintSkipReason='not_completed';
     const controller = new AbortController();
     aiAbortController = controller;
     const deadline=chatDeadline(controller,{chatSession:options.chatSession===true,hint:options.hint===true,setTimer:setTimeout,clearTimer:clearTimeout});
@@ -2198,6 +2313,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         const model=resolveRoleModel(role,modelConfig);
         if(!model)throw Error('설정에서 기본 모델 또는 해당 역할의 LLM 모델을 선택하세요.');
         const body={model,stream:true};
+        if(activeMode==='translate'){body.glasses_task=chromeText?'translation_replies':'translation';body.chat_template_kwargs={enable_thinking:false};}
         if(isAmbient)body.glasses_client=true;
         if(chromeText){body.glasses_hint=true;body.glasses_hint_phase='answer';body.hint_research={source:'internal'};}
         if(isAmbient && (options.hint || options.directQuestion)){body.glasses_hint=true;body.glasses_hint_phase=options.directQuestion?'direct':phase;}
@@ -2223,6 +2339,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         if(cue?.fact)cue={...cue,fact:undefined,question:cue.question || `${cue.topic}의 확인 가능한 설명`,source:cue.source || 'internal',knownFacts:cue.knownFacts || [prompt]};
         enrichmentPlan=cue;
         if(!enrichmentPlan || !hintGate.relevant(options,enrichmentPlan.topic)){
+          hintSkipReason=enrichmentPlan?hintGate.rejectionReason(options):'no_research_plan';
           els.hintStatus.textContent='새로 보탤 도움 없음 · 계속 듣는 중';return;
         }
         aiPhaseTitle=enrichmentPlan.source==='web'?'웹에서 근거 찾는 중':enrichmentPlan.source==='memory'?'기억에서 근거 찾는 중':'내부 지식에서 정보 찾는 중';
@@ -2245,11 +2362,12 @@ import { LocalAgreement } from './local-agreement.mjs';
         renderLiveHUD();
       }
       if(options.traceId)voiceLatency.mark(options.traceId,'chat_sent');
-      if(options.hint && !hintGate.beginGeneration(options)){els.hintStatus.textContent='힌트 요청 전 취소 · 새 발화 대기';return;}
+      if(options.hint && !hintGate.beginGeneration(options)){hintSkipReason='canceled_before_generation';els.hintStatus.textContent='힌트 요청 전 취소 · 새 발화 대기';return;}
+      if(options.hint)auditHint(options,'generation',{reason:'request_sent',topic:enrichmentPlan.topic,kind:enrichmentPlan.kind || options.hintPlan?.kind || 'key',source:enrichmentPlan.source});
       const res = await gatewayFetch(`${config.serverUrl}/api/chat`, {
         method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),body:JSON.stringify(payload), signal: controller.signal
       });
-      if(options.hint && res.status===424){
+      if(options.hint && res.status===424){hintSkipReason='source_lookup_failed';
         if(options.topicVersion===hintGate.topicVersion)hintGate.currentTopic='';
         els.hintStatus.textContent='명칭·출처를 확인하지 못해 힌트 생략 · 계속 듣는 중';
         return;
@@ -2262,18 +2380,19 @@ import { LocalAgreement } from './local-agreement.mjs';
       let rawAnswer = '';
       let rawReasoning = '';
       function setVisibleAnswer(raw,commitReplies=false) {
-        if(options.translationToken && options.translationToken!==translationToken || options.chatEpoch && options.chatEpoch!==chatEpoch)return;
+        if(translationStale(options) || options.chatEpoch && options.chatEpoch!==chatEpoch)return;
         if(activeMode==='translate') {
           const previousTranslation=translationDisplay.translation;
           const parsedTranslation=parseTranslationDisplay(raw);
+          if(options.replyOnly)parsedTranslation.translation='';
           if(separateLLMReplies){parsedTranslation.positive='';parsedTranslation.negative='';}
           if(commitReplies && !chromeText && (!parsedTranslation.translation || ['…','...'].includes(parsedTranslation.translation)))throw Error('LLM에서 번역문을 받지 못했습니다.');
           translationDisplay=mergeTranslationDisplay(translationDisplay,parsedTranslation,{commitReplies});
           if(commitReplies && hasCompleteTranslationReplies(parsedTranslation))repliesReplaced=true;
           if(!translationDisplay.translation && config.chromeTranslation!==false)translationDisplay.translation=previousTranslation;
-          if(chromeText)translationDisplay.translation=chromeText;
+          if(chromeText && !options.replyOnly)translationDisplay.translation=chromeText;
           answerText=translationDisplay.translation;
-          if(chromeText || parsedTranslation.translation)translationHistory.update(options.translationHistoryId,answerText,{final:commitReplies || !!chromeText,revision:options.translationRevisionId || options.translationHistoryId});
+          if(!options.replyOnly && (chromeText || parsedTranslation.translation))translationHistory.update(options.translationHistoryId,answerText,{final:commitReplies || !!chromeText,revision:options.translationRevisionId || options.translationHistoryId});
           els.chatOutput.textContent=translationPhoneText(translationDisplay);
         } else {
           const visible=stripSourcesForGlasses(raw);
@@ -2415,7 +2534,7 @@ import { LocalAgreement } from './local-agreement.mjs';
             aiReasoningPreview = '';
           }
 
-          if(options.translationToken && options.translationToken!==translationToken || options.chatEpoch && options.chatEpoch!==chatEpoch)return;
+          if(translationStale(options) || options.chatEpoch && options.chatEpoch!==chatEpoch)return;
           if(options.hint){if(statusChanged || extracted.isInlineReasoning || extracted.visibleText)setHUDNotice();return;} // Optional hints only update header status until complete.
           setVisibleAnswer(rawAnswer);
           if(config.connectionMode==='sse' || statusChanged)renderLiveHUD();
@@ -2444,16 +2563,18 @@ import { LocalAgreement } from './local-agreement.mjs';
         }
       }
 
-      if(options.translationToken && options.translationToken!==translationToken || options.chatEpoch && options.chatEpoch!==chatEpoch)return;
+      if(translationStale(options) || options.chatEpoch && options.chatEpoch!==chatEpoch)return;
       let verifiedHint=null;
       if(options.hint){
+        auditHint(options,'generated',{reason:'model_completed',topic:enrichmentPlan?.topic || '',text:extractVisibleAndReasoning(rawAnswer).visibleText});
         const verified=validateHintGrounding(rawAnswer,hintProof);
-        if(!verified.ok){
+        if(!verified.ok){hintSkipReason=verified.reason;
           if(options.topicVersion===hintGate.topicVersion)hintGate.currentTopic='';
           els.hintStatus.textContent=verified.reason==='missing_proof'?'출처 검증 정보 없음 · 게이트웨이 업데이트 필요':'명칭·본문의 출처 근거 불일치 · 힌트 생략';return;
         }
         enrichmentPlan={...enrichmentPlan,topic:verified.topic,source:verified.source,reference:verified.reference};
         verifiedHint=verified;
+        auditHint(options,'validated',{reason:'source_validated',topic:verified.topic,kind:verified.kind || enrichmentPlan.kind,source:verified.source});
         rawAnswer=JSON.stringify({fact:verified.fact,topic:verified.topic,kind:verified.kind || enrichmentPlan.kind,adds_information:true});
         if(options.topicVersion===hintGate.topicVersion)hintGate.currentTopic=verified.topic;
       }
@@ -2461,13 +2582,13 @@ import { LocalAgreement } from './local-agreement.mjs';
       if(options.hint){
         const reason=hintGate.rejectionReason(options);
         const labels={topic_changed:'주제 전환 확인',transcript_changed:'근거 전사 수정',expired_or_canceled:'유효 시간 경과 또는 취소'};
-        if(reason){els.hintStatus.textContent=`힌트 생략 · ${labels[reason] || reason}`;return;}
-        if(!fitHintContent(enrichedFact)){els.hintStatus.textContent='힌트 생략 · 본문 형식 또는 보충 정보 없음';return;}
+        if(reason){hintSkipReason=reason;els.hintStatus.textContent=`힌트 생략 · ${labels[reason] || reason}`;return;}
+        if(!fitHintContent(enrichedFact)){hintSkipReason='empty_or_echo';els.hintStatus.textContent='힌트 생략 · 본문 형식 또는 보충 정보 없음';return;}
         const visibleHintTexts=answerIsHint?(hintStackActive()?hintStack.cards.map(card=>card.text):[answerText]):[];
-        if(hintGate.identicalCue(fitHintContent(enrichedFact),visibleHintTexts)){els.hintStatus.textContent='동일한 힌트가 이미 표시됨 · 현재 카드 유지';return;}
+        if(hintGate.identicalCue(fitHintContent(enrichedFact),visibleHintTexts)){hintSkipReason='already_visible';els.hintStatus.textContent='동일한 힌트가 이미 표시됨 · 현재 카드 유지';return;}
         if(controller.signal.aborted)return;
       }
-      if(options.hint){const note={...enrichmentPlan,kind:hintResultKind(rawAnswer,enrichmentPlan.kind),evidence:enrichmentPlan.evidence || options.focusText};rememberHint(note);displayHintCard(note,fitHintContent(enrichedFact));cueDisplayed=true;cueTopic=enrichmentPlan.topic;els.chatQuestion.textContent=cueTopic?`💡 자동 힌트 · ${cueTopic}`:'💡 자동 힌트';}else setVisibleAnswer(rawAnswer,true);
+      if(options.hint){const note={...enrichmentPlan,kind:hintResultKind(rawAnswer,enrichmentPlan.kind),evidence:enrichmentPlan.evidence || options.focusText,auditMeta:{...options,hintPlan:enrichmentPlan}};rememberHint(note);displayHintCard(note,fitHintContent(enrichedFact));cueDisplayed=true;cueTopic=enrichmentPlan.topic;auditHint(options,'phone_display',{reason:'card_rendered',topic:enrichmentPlan.topic,kind:enrichmentPlan.kind,text:fitHintContent(enrichedFact),source:enrichmentPlan.source});els.chatQuestion.textContent=cueTopic?`💡 자동 힌트 · ${cueTopic}`:'💡 자동 힌트';}else setVisibleAnswer(rawAnswer,true);
       if(options.hint)els.hintStatus.textContent=enrichmentPlan.source==='web'?'웹검색 근거로 보충한 정보':enrichmentPlan.source==='memory'?'저장된 기억으로 보충한 정보':enrichmentPlan.source==='conversation'?'최근 대화에서 요점·일정 정리':'내부 지식으로 보충한 정보';
       els.chatOutput.textContent = activeMode==='translate'?translationPhoneText(translationDisplay):answerText;
       if(chromeText)els.chromeTranslationStatus.textContent=repliesReplaced?`${options.translatedBy || localLabel()} 번역 · 답변 예시 완료`:hasCompleteTranslationReplies(translationDisplay)?`${options.translatedBy || localLabel()} 번역 완료 · 이전 답변 예시 유지`:`${options.translatedBy || localLabel()} 번역 완료 · 답변 예시를 받지 못했습니다`;
@@ -2489,15 +2610,17 @@ import { LocalAgreement } from './local-agreement.mjs';
         playTTS(answerText);
       }
     } catch (err) {
-      if(options.translationToken && options.translationToken!==translationToken || options.chatEpoch && options.chatEpoch!==chatEpoch)return;
+      if(options.hint)hintSkipReason=controller.signal.aborted?'canceled':'writer_error';
+      if(translationStale(options) || options.chatEpoch && options.chatEpoch!==chatEpoch)return;
       if (controller.signal.aborted && aiAbortedByModeSwitch) {
         return;
       }
       if(options.hint && options.cancelledByTopic)return;
+      if(options.replyOnly && controller.signal.aborted)return;
       const failure=chatFailureMessage(err,deadline);
       if(options.hint && controller.signal.aborted && pendingAI.some(job=>job.directQuestion))return;
       if(options.hint){els.hintStatus.textContent=`힌트 생성 실패 · 전사 계속 (${failure})`;return;}
-      if(chromeText){els.chromeTranslationStatus.textContent=`번역 완료 · 답변 예시 생성 실패 (${failure})`;els.chatOutput.textContent=translationPhoneText(translationDisplay);renderLiveHUD();return;}
+      if(chromeText){els.chromeTranslationStatus.textContent=`번역 유지 · 답변 예시 생성 실패 (${failure})`;els.chatOutput.textContent=translationPhoneText(translationDisplay);renderLiveHUD();return;}
       if(activeMode==='translate'){
         translationFailure='번역 오류';answerText=translationDisplay.translation;
         els.chromeTranslationStatus.textContent=`LLM 번역 실패 · ${answerText?'이전 번역 유지':'새 번역 대기'} (${failure})`;
@@ -2508,6 +2631,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       if(!receivedVisibleAnswer){clearHintStack();hintLifetime.clear();answerAutoCloseEligible=false;answerTitle='AI 오류';answerVoicePrompt=options.wakeToken!==undefined?prompt:'';answerText=`AI 오류: ${failure}`;}
       els.chatOutput.textContent=receivedVisibleAnswer?`${answerText}\n\n응답 중단: ${failure}`:answerText;renderLiveHUD();
     } finally {
+      if(options.hint && !cueDisplayed)auditHint(options,controller.signal.aborted?'canceled':'skipped',{reason:hintSkipReason,topic:enrichmentPlan?.topic || ''});
       if(options.hint)hintGate.complete(options,{displayed:cueDisplayed,text:cueDisplayed?answerText:'',topic:cueTopic});
       deadline.stop();
       if (aiAbortController === controller) aiAbortController = null;
@@ -2519,6 +2643,16 @@ import { LocalAgreement } from './local-agreement.mjs';
       if (!isRecording && !captureFailure && !micCloseUncertain && !pendingMicOpen) setVoiceHint('마이크 꺼짐 · 탭하면 녹음 시작');
     }
   }
+
+  document.getElementById('btn-hint-history')?.addEventListener('click',async()=>{
+    const el=document.getElementById('hint-history-log');const status=document.getElementById('hint-history-status');
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),5000),scope=chatScope();
+    try{const res=await gatewayFetch(`${config.serverUrl}/api/glasses/hint-events?limit=100`,{headers:getAuthHeaders(),signal:controller.signal});if(!res.ok)throw Error(`HTTP ${res.status}`);const data=await res.json();if(scope!==chatScope())return;
+      const labels={decision:'판별',selected:'선택',generation:'생성 요청',generated:'본문 생성',validated:'근거 검증 완료',skipped:'생략',phone_display:'폰 표시',device_display:'안경 전송 완료',device_error:'안경 전송 오류',canceled:'취소'};
+      const reasons={llm_skip:'보충할 도움 없음',hint_selected:'힌트 필요',judge_format_repaired:'판별 형식 재검사 완료',selection_evidence_changed:'선택한 원문이 수정됨',transcript_changed:'근거 전사 수정·철회',topic_changed:'주제 전환',source_lookup_failed:'출처 조회 실패',no_fact:'표시할 구조화된 본문 없음',unsupported_summary:'원문에 없는 요약 근거',unverified_name:'검증한 명칭과 불일치',already_visible:'같은 카드가 표시 중',sdk_ack:'안경 SDK 전송 확인',model_completed:'모델 생성 완료',source_validated:'원문 근거 확인',card_rendered:'폰 화면에 카드 표시',duplicate_candidate:'최근과 같은 조사 후보',duplicate_plan:'의미가 같은 조사 계획',candidate_expired:'대기 중 유효 시간 초과',writer_error:'본문 생성 오류',canceled:'사용자·모드·호출어에 의해 취소',judge_format_or_timeout:'판별 형식 오류 또는 시간 초과'};
+      el.textContent=data.events.map(e=>`${new Date(e.occurredAt || e.createdAt).toLocaleString()} [${labels[e.stage] || e.stage}] ${e.kind?hintPresentation({kind:e.kind,topic:e.topic}).title:e.topic || ''}\n${reasons[e.reason] || e.reason || ''}${e.text?'\n'+e.text:''}`).join('\n\n') || '저장된 이력이 없습니다.';status.textContent='최근 100개 처리 이력';
+    }catch(error){if(scope===chatScope())status.textContent=`이력 조회 실패 · ${error.message}`;}finally{clearTimeout(timer);}
+  });
 
   // --- TTS Support ---
   async function playTTS(text) {
@@ -2787,10 +2921,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       }
     });
     els.glassesSensitivity.addEventListener('change',()=>applyLiveSettings({glassesInput:readGlassesInputControls()}));
-    els.glassesGain.addEventListener('change',()=>{
-      if(glassesInputLocked()){syncGlassesInputUI();return;}
-      settingsEdited=true;config.glassesInput=readGlassesInputControls();syncGlassesInputUI();persistSettings().catch(console.warn);
-    });
+    els.glassesGain.addEventListener('change',()=>applyLiveSettings({glassesInput:readGlassesInputControls()}));
     els.audioInputSource.addEventListener('change',()=>applyLiveSettings({audioInputSource:els.audioInputSource.value==='phone'?'phone':'glasses'}));
     els.sttEngine.addEventListener('change',()=>applyLiveSettings({sttEngine:els.sttEngine.value}));
     els.sttFallback.addEventListener('change',()=>{settingsEdited=true;config.sttFallback=els.sttFallback.checked;persistSettings().catch(console.warn);});

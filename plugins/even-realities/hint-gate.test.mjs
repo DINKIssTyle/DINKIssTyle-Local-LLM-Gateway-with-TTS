@@ -239,3 +239,10 @@ let updates=[];
 const growing=new HintGate({collectContext:true,settleMs:0,collectWaitMs:0,intervalMs:0,generationIntervalMs:0,cooldownMs:0,decide:async()=>({hint:true,focus:'금요일',plan:{topic:'회의',question:'일정 정리',kind:'schedule',source:'conversation'}}),onHint:job=>updates.push(job)});
 growing.observe('금요일에 회의합니다.',{id:'first-detail'});await tick();growing.complete(updates[0],{displayed:true,text:'금요일 회의',topic:'회의'});
 growing.observe('장소는 2층이며 노트북을 준비하세요.',{id:'added-detail'});await tick();assert.equal(updates.length,2,'new schedule details must not be suppressed just because the research question is unchanged');growing.reset();
+
+// Regression: classifier selects evidence in an earlier sentence while the
+// newest sentence is a preview. Pre-queue checks must use the same sources.
+let earlierDecision;
+const earlierGate=new HintGate({collectContext:true,settleMs:1000,collectWaitMs:4000,intervalMs:0,decide:async job=>{const decision={hint:true,focus:'금요일 오후 3시',plan:{source:'conversation',kind:'schedule',topic:'회의 준비'},observedText:job.text};earlierDecision=earlierGate.withEvidence(job,decision);assert.equal(earlierGate.relevant(earlierDecision),true);return {hint:false};},onHint:()=>{}});
+earlierGate.observe('금요일 오후 3시에 회의합니다.',{id:'previous',preview:true});earlierGate.observe('노트북을 가져오세요.',{id:'current',preview:true});earlierGate.pending.due=0;clearTimeout(earlierGate.timer);await earlierGate.pump();
+earlierGate.validatePreview('previous','금요일 오후 4시에 회의합니다.');assert.equal(earlierGate.rejectionReason(earlierDecision),'transcript_changed');earlierGate.reset();

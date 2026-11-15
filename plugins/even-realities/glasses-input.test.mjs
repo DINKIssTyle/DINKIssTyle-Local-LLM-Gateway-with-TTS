@@ -38,3 +38,20 @@ assert.ok(samples(captured).every(v=>v===300));assert.deepEqual(quiet,quietBefor
 for(const snapshot of snapshots)assert.ok(samples(snapshot).every(v=>v===300),'growing preview snapshots must not amplify previously buffered PCM again');
 assert.equal(mergePCM([raw,raw]).length,raw.length*2);
 console.log('PASS: glasses-only sensitivity/gain, unchanged phone PCM/gate, immutable source, peak protection, quiet capture, raw-level gating and single-pass preview audio');
+
+assert.deepEqual(normalizeGlassesInput({sensitivity:'auto',gain:'auto'}),{sensitivity:'auto',gain:'auto'});
+const adaptive=new GlassesInputProcessor({sensitivity:'auto',gain:'auto'});
+let automatic;
+for(let i=0;i<50;i++)automatic=adaptive.process(quiet,'glasses');
+assert.ok(automatic.effectiveGain>2 && automatic.effectiveGain<=4,'quiet above-threshold input rises gradually within a bounded gain');
+assert.ok(automatic.threshold>=0.002 && automatic.threshold<=0.012);
+const loudAuto=adaptive.process(pcm(Array(1600).fill(30000)),'glasses');
+assert.ok(samples(loudAuto.bytes).every(v=>Math.abs(v)<=32700),'AGC ramps also obey the peak limiter');
+for(let i=0;i<100;i++)automatic=adaptive.process(pcm(Array(1600).fill(10)),'glasses');
+assert.ok(automatic.effectiveGain<1.01,'background below detection must not be amplified toward speech target');
+const adaptivePhone=adaptive.process(raw,'phone');assert.equal(adaptivePhone.bytes,raw);assert.equal(adaptivePhone.threshold,0.008);
+const live=new GlassesInputProcessor({gain:2});const before=live.process(quiet,'glasses');
+live.configure({gain:4,sensitivity:'auto'});const changed=live.process(quiet,'glasses');
+assert.ok(samples(changed.bytes)[0]<=301 && samples(changed.bytes).at(-1)===600,'hot gain changes ramp new PCM instead of introducing a step');
+assert.ok(samples(before.bytes).every(v=>v===300),'a setting change never rewrites previously buffered frames');
+console.log('PASS: bounded automatic sensitivity/gain, silence release, peak protection, live gain ramp and unchanged buffered/phone PCM');

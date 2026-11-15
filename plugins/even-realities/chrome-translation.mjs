@@ -11,8 +11,9 @@ export async function localTranslate(fetcher,server,headers,request,signal,timeo
   try{
     const response=await fetcher(`${server}/api/translate/${engine}`,{method:'POST',headers,body:JSON.stringify(request),signal:controller.signal});
     const data=await response.json();
-    if(!response.ok || data.status!=='ready' || typeof data.text!=='string' || !data.text.trim())return {ok:false,reason:data.error || `${label} 번역 준비가 필요합니다`};
-    return {ok:true,text:data.text.trim(),source:data.source,target:data.target};
+    if(response.status===429 || data.status==='busy')return {ok:false,busy:true,reason:data.error || '번역 처리 중'};
+    if(!response.ok || data.status!=='ready' || typeof data.text!=='string' || !data.text.trim())return {ok:false,needsPrepare:['needs_prepare','needs-prepare','downloadable','unavailable'].includes(data.status) || /준비.*먼저|언어.*설치/i.test(data.error || ''),reason:data.error || `${label} 번역 준비가 필요합니다`};
+    return {ok:true,text:data.text.trim(),source:data.source,target:data.target,timings:data.timings};
   }catch(error){
     if(signal?.aborted)throw error;
     return {ok:false,reason:controller.signal.aborted?`${label} 번역 시간 초과`:error.message};

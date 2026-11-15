@@ -158,3 +158,65 @@ func TestChromeTranslationFailedObjectEvicted(t *testing.T) {
 		t.Fatalf("cache recovery: %v %s", err, out)
 	}
 }
+
+// Opt-in browser test: synthetic JS only, no microphone or model download.
+func TestChromeTranslationSpeechConcurrency(t *testing.T) {
+	if os.Getenv("DKST_CHROME_CONCURRENCY") != "1" {
+		t.Skip("explicit isolated browser test")
+	}
+	s := newChromeTranslator(t.TempDir())
+	defer s.Close()
+	s.mu.Lock()
+	err := s.startLocked()
+	s.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	err = chromedp.Run(s.tab, chromedp.Evaluate(`window.concurrentStarted=false;window.cancelObserved=false;window.chromeTranslation.translate=async(p)=>{window.concurrentStarted=true;return await new Promise(resolve=>{window.completeTranslation=()=>resolve({status:'ready',text:'done'});});};window.chromeSpeech.read=()=>({status:'ready',text:'speech',finished:true});window.chromeTranslation.cancel=()=>{window.cancelObserved=true;window.completeTranslation();};`, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	translationCtx, stop := context.WithCancel(ctx)
+	go func() {
+		_, err := s.run(translationCtx, chromeTranslationRequest{Source: "en", Target: "ko", Text: "hello"}, false)
+		done <- err
+	}()
+	started := false
+	for i := 0; i < 100; i++ {
+		if err = chromedp.Run(s.tab, chromedp.Evaluate("window.concurrentStarted", &started)); err != nil {
+			t.Fatal(err)
+		}
+		if started {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !started {
+		t.Fatal("translation did not start")
+	}
+	speechStarted := time.Now()
+	r, err := s.speech(ctx, chromeSpeechRequest{Language: "en", Engine: "chrome-online"}, "read")
+	if err != nil || r.Text != "speech" || time.Since(speechStarted) > 500*time.Millisecond {
+		t.Fatalf("speech blocked by translator %+v %v", r, err)
+	}
+	stop()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancel blocked")
+	}
+	observed := false
+	for i := 0; i < 100; i++ {
+		_ = chromedp.Run(s.tab, chromedp.Evaluate("window.cancelObserved", &observed))
+		if observed {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !observed {
+		t.Fatal("native translation cancellation not propagated")
+	}
+}

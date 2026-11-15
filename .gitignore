@@ -51,3 +51,9 @@ all_funcs.txt
 !internal/core/glasses_judge_test.go
 
 !internal/core/glasses_hint_grounding_test.go
+
+!internal/core/stt_upload_test.go
+!internal/core/translation_policy_test.go
+
+!internal/mcp/hint_events_test.go
+!internal/core/glasses_hint_events_test.go

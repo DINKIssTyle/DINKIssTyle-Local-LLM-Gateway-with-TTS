@@ -69,3 +69,9 @@ assert.ok(numberedChoice>0);
 const chosen=parseHintJudgment(JSON.stringify({hint:true,kind:'schedule',source:'conversation',topic:'회의 준비',evidence:numberedChoice,question:'일정과 준비물 정리'}),conversation);
 assert.ok(chosen.focus.includes('금요일'));assert.equal(parseHintJudgment(JSON.stringify({...value,evidence:999}),conversation),null);
 assert.equal(sent.response_format.json_schema.schema.properties.evidence.type,'integer');
+
+let repairs=0;
+const repaired=await requestHintJudgment({server:'http://test',model:'small',job:{text:'피라미드의 큰 돌을 어떻게 옮겼을까.'},fetch:async(url,opts)=>{repairs++;const body=JSON.parse(opts.body);assert.ok(body.response_format.json_schema.schema.anyOf);return {ok:true,json:async()=>({response:JSON.stringify(repairs===1?{...value,hint:true,topic:'',evidence:0}:{...value,evidence:1})})};}});
+assert.equal(repairs,2);assert.equal(repaired.repairAttempts,1);assert.ok(repaired.focus.includes('피라미드'));
+let skippedCalls=0;const skipped=await requestHintJudgment({server:'http://test',job:{text:'응 고마워.'},fetch:async()=>{skippedCalls++;return {ok:true,json:async()=>({response:'{"hint":false}'})};}});assert.equal(skipped.hint,false);assert.equal(skippedCalls,1,'a legitimate skip must never trigger a retry');
+let badCalls=0;await assert.rejects(()=>requestHintJudgment({job:{text:'피라미드 이야기'},fetch:async()=>{badCalls++;return {ok:true,json:async()=>({response:'{"hint":true,"topic":"","evidence":0}'})};}}),/비어 있어/);assert.equal(badCalls,2,'format repair is bounded to one retry');

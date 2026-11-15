@@ -486,6 +486,9 @@ func createSchema() error {
 	CREATE UNIQUE INDEX IF NOT EXISTS stt_transcripts_segment ON stt_transcripts(user_id,segment_id) WHERE segment_id != '';
 	`
 	_, err := db.Exec(query)
+	if err == nil {
+		_, err = db.Exec(hintEventSchema)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to create schema: %w", err)
 	}

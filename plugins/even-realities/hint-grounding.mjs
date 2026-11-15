@@ -10,9 +10,10 @@ const numberKey=text=>(String(text).match(/[+-]?\d+(?:[.,]\d+)*/gu) || []).join(
 export function validateHintGrounding(raw,proof){
   if(proof?.version!==1 || !['known','quote','conversation'].includes(proof.mode))return {ok:false,reason:'missing_proof'};
   const data=unwrapHintObject(raw);
-  if(!data || data.adds_information!==true)return {ok:false,reason:'no_fact'};
-  const kind=Object.hasOwn(HINT_LABELS,proof.kind)?proof.kind:data.kind;
+  if(!data)return {ok:false,reason:'no_fact'};
   if(proof.mode==='conversation')return conversationHint(data,proof);
+  if(data.adds_information!==true)return {ok:false,reason:'no_fact'};
+  const kind=Object.hasOwn(HINT_LABELS,proof.kind)?proof.kind:data.kind;
   if(typeof data.fact!=='string' || !data.fact.trim())return {ok:false,reason:'no_fact'};
   if(proof.mode==='known'){
     if(typeof proof.topic!=='string' || !proof.topic.trim())return {ok:false,reason:'unknown_name'};
@@ -43,11 +44,15 @@ function conversationHint(data,proof){
   if(proof.source!=='conversation' || !['schedule','recap'].includes(proof.kind) || !Array.isArray(data.points) || !data.points.length || data.points.length>4)return {ok:false,reason:'invalid_summary'};
   const source=proof.records?.[0]?.text;
   if(typeof source!=='string' || !source.trim())return {ok:false,reason:'missing_summary_source'};
-  const points=[];
+  // Summary usefulness is compression/organization, not new external facts.
+  // A boolean alone cannot waive the independent source checks below.
+  if(data.skip===true)return {ok:false,reason:'explicit_skip'};
+  const points=[];let recovered=false;
   const negative=text=>/않|못|없|아니|미정|불가|안\s*(?:돼|되|됨|됩|해)|\b(?:not|never|cannot|without|no)\b/iu.test(text);
   for(const point of data.points){
     const text=typeof point?.text==='string'?point.text.trim():'';
-    const evidence=Array.isArray(point?.evidence)?point.evidence:typeof point?.evidence==='string'?[point.evidence]:[];
+    const refs=Array.isArray(point?.evidence)?point.evidence:typeof point?.evidence==='string'?[point.evidence]:[];
+    const evidence=refs.map(ref=>Number.isInteger(ref)?proof.spans?.[ref-1] || '':ref);
     if(!text || text.length>300 || !evidence.length || evidence.length>3 || evidence.some(e=>typeof e!=='string' || e.trim().length<2 || !textKey(source).includes(textKey(e))))return {ok:false,reason:'unsupported_summary'};
     const support=evidence.join(' '),numbers=new Set(numberKey(support).split('|'));
     const outputNumbers=new Set(numberKey(text).split('|'));
@@ -58,7 +63,11 @@ function conversationHint(data,proof){
     // A heading alone is not a summary. If the model omits the useful values
     // or changes critical facts, show its validated source spans instead.
     const contentPresent=overlap>=Math.min(2,sourceGrams.size) && overlap/Math.max(1,outputGrams.size)>=.18;
+    recovered ||= valuesChanged || !contentPresent;
     points.push(valuesChanged || !contentPresent?evidence.map(e=>e.trim()).join(' / '):text);
   }
-  return {ok:true,fact:points.join('\n'),topic:proof.topic,kind:proof.kind,source:'conversation'};
+  const fact=points.join('\n');
+  const generic=/^(?:대화|내용|상황|관련|자료|정보|핵심|요점|일정|회의|준비|진행|검토|사항|정리|요약|및|중|입니다|합니다|[\s·:：,./])+$/u;
+  if(points.every(p=>generic.test(p)) || (!recovered && points.length===1 && source.replace(/\s/g,'').length<60 && textKey(source)===textKey(fact)))return {ok:false,reason:'no_summary_value'};
+  return {ok:true,fact,topic:proof.topic,kind:proof.kind,source:'conversation'};
 }

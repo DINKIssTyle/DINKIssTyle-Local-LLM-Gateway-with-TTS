@@ -147,7 +147,16 @@ func (w *appleRuntimeWorker) request(ctx context.Context, p map[string]any) (map
 	}
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err() // Never kill shared STT for a cancelled translation.
+		// Cancel the native request as well as its Go wait. Otherwise a timed-out
+		// STT finalization can keep the native speech queue occupied indefinitely.
+		// Keep shared model installation alive and never kill the shared runtime.
+		if p["op"] == "translate" || p["op"] == "sttPush" || p["op"] == "sttRead" {
+			cancelData, _ := json.Marshal(map[string]any{"op": "cancel", "cancelID": id})
+			w.writeMu.Lock()
+			_, _ = input.Write(append(cancelData, '\n'))
+			w.writeMu.Unlock()
+		}
+		return nil, ctx.Err()
 	case data, ok := <-ch:
 		if !ok {
 			return nil, errors.New("Apple 엔진이 종료되었습니다: " + w.log.String())
@@ -176,6 +185,7 @@ func appleSpeechIdentity(user, session, segment string) (string, string) {
 }
 func runAppleSpeech(ctx context.Context, metadata STTTranscribeRequest, audio []byte, preview bool, user string) (sttWorkerReply, error) {
 	var output sttWorkerReply
+	started := time.Now()
 	if metadata.Format != "" && metadata.Format != "pcm" {
 		return output, errors.New("Apple STT는 PCM16 입력이 필요합니다")
 	}
@@ -183,6 +193,8 @@ func runAppleSpeech(ctx context.Context, metadata STTTranscribeRequest, audio []
 		return output, errSTTBusy
 	}
 	defer appleSpeechMu.Unlock()
+	output.LockMS = float64(time.Since(started).Microseconds()) / 1000
+	engineStarted := time.Now()
 	segment := metadata.SegmentID
 	if segment == "" {
 		segment = fmt.Sprintf("legacy-%d", time.Now().UnixNano())
@@ -196,6 +208,7 @@ func runAppleSpeech(ctx context.Context, metadata STTTranscribeRequest, audio []
 	if err != nil {
 		return output, err
 	}
+	output.EngineMS = float64(time.Since(engineStarted).Microseconds()) / 1000
 	output.Text, _ = result["text"].(string)
 	output.StableText, _ = result["stableText"].(string)
 	output.DraftText, _ = result["draftText"].(string)
@@ -281,11 +294,13 @@ func handleAppleOperation(op string) http.HandlerFunc {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
+		started := time.Now()
 		result, err := appleNative.request(ctx, p)
 		w.Header().Set("Content-Type", "application/json")
 		if result == nil {
 			result = map[string]any{}
 		}
+		result["timings"] = map[string]float64{"server_ms": float64(time.Since(started).Microseconds()) / 1000}
 		if err != nil {
 			result["error"] = err.Error()
 			result["status"] = "error"

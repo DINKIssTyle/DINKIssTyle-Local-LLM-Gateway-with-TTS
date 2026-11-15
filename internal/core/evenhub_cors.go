@@ -59,7 +59,7 @@ func evenHubCORS(next http.Handler) http.Handler {
 
 func evenHubAPIPath(path string) bool {
 	switch path {
-	case "/api/apple/status", "/api/stt/apple/prepare", "/api/stt/apple/stop", "/api/translate/apple", "/api/translate/apple/prepare", "/api/stt/chrome/stop", "/api/stt/chrome/prepare", "/api/translate/chrome", "/api/translate/chrome/prepare", "/api/glasses/hint-decision", "/api/config", "/api/login", "/api/auth/check", "/api/health", "/api/models",
+	case "/api/glasses/hint-events", "/api/apple/status", "/api/stt/apple/prepare", "/api/stt/apple/stop", "/api/translate/apple", "/api/translate/apple/prepare", "/api/stt/chrome/stop", "/api/stt/chrome/prepare", "/api/translate/chrome", "/api/translate/chrome/prepare", "/api/glasses/hint-decision", "/api/config", "/api/login", "/api/auth/check", "/api/health", "/api/models",
 		"/api/stt/transcribe", "/api/stt/preview", "/api/stt/warmup", "/api/stt/status", "/api/stt/transcripts", "/api/chat", "/api/tts":
 		return true
 	default:

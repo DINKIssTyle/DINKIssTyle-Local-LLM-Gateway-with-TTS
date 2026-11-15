@@ -24,7 +24,7 @@ export class StableTranslation {
   }
   reset(){this.scope='';this.cache=new Map();}
   async run(job,signal){
-    const scope=[job.engine,job.source,job.target,job.historyId || job.id].join('\0');
+    const scope=[job.engine,job.source,job.target,job.historyId || job.id,job.cacheScope || ''].join('\0');
     if(scope!==this.scope){this.scope=scope;this.cache=new Map();}
     // A cancelled older call must not populate a newer segment's cache.
     const cache=this.cache;
@@ -34,7 +34,7 @@ export class StableTranslation {
       let text=cache.get(source);
       if(text){cache.delete(source);cache.set(source,text);}
       if(!text){
-        const result=await this.translate({...job,prompt:source},signal);
+        const result=await this.translate({...job,prompt:source,onChunk:job.onPartial?(partial)=>job.onPartial([...texts,partial].join(' ')):undefined},signal);
         if(signal.aborted)throw new Error('번역 취소');
         if(!result.ok)return result;
         text=result.text;cache.set(source,text);

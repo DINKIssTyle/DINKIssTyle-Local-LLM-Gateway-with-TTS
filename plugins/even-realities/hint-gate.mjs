@@ -5,8 +5,8 @@ const compactTopic=text=>String(text || '').normalize('NFC').toLowerCase().repla
 const briefAcknowledgement=text=>/^(?:네|예|응|어|음|아|맞아|맞아요|그렇구나|알겠어|알겠습니다|고마워|감사합니다|okay|ok|yes|yeah|hmm)[.!?。！？\s]*$/iu.test(String(text).trim());
 // One optional decision at a time; never await this from transcription.
 export class HintGate {
-  constructor({decide,onHint,onStatus=()=>{},onTopicChange=()=>{},now=()=>Date.now(),cooldownMs=8000,generationIntervalMs=8000,intervalMs=2000,maxAgeMs=45000,displayAgeMs=45000,windowMs=8000,settleMs=500,repeatFocusMs=20000,collectContext=false,collectWaitMs=4000,minContextChars=80}) {
-    Object.assign(this,{decide,onHint,onStatus,onTopicChange,now,cooldownMs,generationIntervalMs,intervalMs,maxAgeMs,displayAgeMs,windowMs,settleMs,repeatFocusMs,collectContext,collectWaitMs,minContextChars});
+  constructor({decide,onHint,onStatus=()=>{},onTopicChange=()=>{},onAudit=()=>{},now=()=>Date.now(),cooldownMs=8000,generationIntervalMs=8000,intervalMs=2000,maxAgeMs=45000,displayAgeMs=45000,windowMs=8000,settleMs=500,repeatFocusMs=20000,collectContext=false,collectWaitMs=4000,minContextChars=80}) {
+    Object.assign(this,{decide,onHint,onStatus,onTopicChange,onAudit,now,cooldownMs,generationIntervalMs,intervalMs,maxAgeMs,displayAgeMs,windowMs,settleMs,repeatFocusMs,collectContext,collectWaitMs,minContextChars});
     this.contextFloorSequence=0;this.epoch=0;this.topicVersion=0;this.currentTopic='';this.topicDecisionSequence=0;this.entries=[];this.recent=[];this.failed=new Map();this.pending=null;this.inflight=null;
     this.generating=new Map();this.sequence=0;this.nextGeneration=-Infinity;this.lastDecision=-Infinity;this.nextHint=-Infinity;this.timer=null;
   }
@@ -99,12 +99,21 @@ export class HintGate {
     if(!before || changed || decision.continuity==='same' || compatible)this.currentTopic=topic;
     this.topicDecisionSequence=job.sequence;
   }
+  withEvidence(job,decision){
+    const focus=decision.focus || '';
+    if(!job.windowEntries)return {...job,focusText:focus || job.focusText};
+    const all=decision.plan?.source==='conversation' || decision.plan?.kind==='recap';
+    const observed=String(decision.observedText || job.text);
+    const sources=all?job.windowEntries.flatMap(e=>observed.split('\n').filter(part=>part.trim() && e.text.includes(part)).map(part=>({...e,text:part}))):job.windowEntries.filter(e=>focus && e.text.includes(focus)).map(e=>({...e,text:focus}));
+    return {...job,focusText:focus || job.focusText,evidenceEntries:sources,evidenceMissing:!sources.length};
+  }
   rejectionReason(job){
     // Once the writer starts, later speech is queued for the next card. Its
     // completion must not lose display eligibility just because time passed
     // or the classifier has already moved on to another subject.
     if(job.epoch!==this.epoch || job.generationStartedAt===undefined && !this.fresh(job))return 'expired_or_canceled';
     if(job.generationStartedAt===undefined && job.topicVersion!==undefined && job.topicVersion!==this.topicVersion)return 'topic_changed';
+    if(job.evidenceMissing)return 'transcript_changed';
     if(job.evidenceEntries){
       for(const evidence of job.evidenceEntries)if(evidence.preview){
         const current=this.entries.find(e=>e.id===evidence.id);
@@ -130,7 +139,7 @@ export class HintGate {
     const wait=Math.max(this.lastDecision+this.intervalMs,this.nextHint,this.nextGeneration,this.pending.due || 0)-now;
     if(wait>0){this.timer=setTimeout(()=>{this.timer=null;this.pump();},wait);return;}
     const job={...this.pending,topicVersion:this.topicVersion,activeTopic:this.currentTopic};this.pending=null;
-    if(!this.fresh(job)){this.pump();return;}
+    if(!this.fresh(job)){this.onAudit(job,{stage:'skipped',reason:'candidate_expired'});this.pump();return;}
     const controller=new AbortController();const token={controller};this.inflight=token;
     this.lastDecision=now;
     const timeout=setTimeout(()=>controller.abort(),8000);
@@ -147,27 +156,23 @@ export class HintGate {
       const focus=typeof decision.focus==='string' && job.text.includes(decision.focus.trim())?decision.focus.trim():'';
       const versionedJob={...job,observedText:decision.observedText || job.text,topicVersion:this.topicDecisionSequence===job.sequence?this.topicVersion:job.topicVersion};
       let focusedJob=focus?{...versionedJob,text:focus,focusText:focus,context:[job.context,job.text].filter(Boolean).join('\n').slice(-1200)}:versionedJob;
-      if(job.windowEntries){
-        const all=decision.plan?.source==='conversation' || decision.plan?.kind==='recap';
-        const sources=all?job.windowEntries.flatMap(e=>String(decision.observedText || job.text).split('\n').filter(part=>part.trim() && e.text.includes(part)).map(part=>({...e,text:part}))):job.windowEntries.filter(e=>!focus || e.text.includes(focus)).map(e=>({...e,text:focus || e.text}));
-        focusedJob={...focusedJob,context:job.text,evidenceEntries:sources};
-      }
+      if(job.windowEntries)focusedJob={...focusedJob,...this.withEvidence(versionedJob,decision),text:focusedJob.text,context:job.text};
       if(typeof decision.keyword==='string' && decision.keyword.length<=80 && typeof decision.keywordSurface==='string' && decision.keywordSurface.trim() && job.text.includes(decision.keywordSurface.trim()))focusedJob={...focusedJob,keyword:decision.keyword,keywordSurface:decision.keywordSurface};
       if(decision.plan)focusedJob={...focusedJob,decisionKey:decision.plan.source==='conversation'?`${decision.plan.kind}: ${job.text}`:`${decision.plan.topic} ${decision.plan.question}`};
-      if(!this.relevant(focusedJob,decision.plan?.topic))return;
+      if(!this.relevant(focusedJob,decision.plan?.topic)){this.onAudit(job,{stage:'skipped',reason:this.rejectionReason(focusedJob)});return;}
       for(const [k,until] of this.failed)if(until<=this.now())this.failed.delete(k);
       const focusKey=normalized(focusedJob.decisionKey || focusedJob.focusText || focusedJob.text).join('');
       if(decision.hint && focusKey && (this.failed.get(focusKey) || 0)>this.now()) {
-        this.onStatus('직전 생략 후보 · 새 발화 대기');return;
+        this.onAudit(job,{stage:'skipped',reason:'recent_failed_candidate'});this.onStatus('직전 생략 후보 · 새 발화 대기');return;
       }
       if(decision.hint && [...this.recent.filter(e=>this.now()-e.at<this.repeatFocusMs),...this.generating.values()].some(e=>decision.plan?.source==='conversation'?compactEvidence(e.decisionKey)===compactEvidence(focusedJob.decisionKey):similarHint(e.decisionKey || e.focusText || e.text,focusedJob.decisionKey || focusedJob.focusText || focusedJob.text))) {
-        this.onStatus('같은 내용 · 힌트 생략');return;
+        this.onAudit(job,{stage:'skipped',reason:'duplicate_candidate'});this.onStatus('같은 내용 · 힌트 생략');return;
       }
       if(decision.hint) {
         const candidate={...focusedJob,category:decision.category,...(decision.plan?{hintPlan:decision.plan}:{})};
         this.generating.set(job.sequence,focusedJob);
         const accepted=this.onHint(candidate);
-        if(accepted===false){this.generating.delete(job.sequence);this.onStatus('힌트 생성 대기 · 다음 대화에서 재판별');return;}
+        if(accepted===false){this.onAudit(job,{stage:'skipped',reason:'chat_or_capture_priority'});this.generating.delete(job.sequence);this.onStatus('힌트 생성 대기 · 다음 대화에서 재판별');return;}
         this.nextGeneration=this.now()+this.generationIntervalMs;
         this.onStatus(`힌트 후보 · ${focusedJob.text.slice(0,80)}`);
       } else {

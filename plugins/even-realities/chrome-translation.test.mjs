@@ -17,3 +17,9 @@ console.log('PASS: authenticated Chrome bridge, bounded fallback, cancellation a
 let appleURL;
 const apple=await localTranslate(async(url)=>{appleURL=url;return{ok:true,json:async()=>({status:'ready',text:'Apple text'})}},'https://gateway',{}, {source:'ko',target:'en',text:'안녕'},undefined,1000,'apple');
 assert.equal(appleURL,'https://gateway/api/translate/apple');assert.equal(apple.text,'Apple text');
+const busyResult=await localTranslate(async()=>({status:429,ok:false,json:async()=>({status:'busy',error:'processing'})}),'',{},{});
+assert.equal(busyResult.busy,true);assert.notEqual(busyResult.needsPrepare,true);
+const unavailable=await localTranslate(async()=>({status:503,ok:false,json:async()=>({status:'needs_prepare'})}),'',{},{});assert.equal(unavailable.needsPrepare,true);
+const transient=await localTranslate(async()=>({status:500,ok:false,json:async()=>({status:'error',error:'temporary'})}),'',{},{});assert.equal(transient.needsPrepare,false);
+
+const needsApple=await localTranslate(async()=>({status:503,ok:false,json:async()=>({status:'error',error:'서버에서 Apple 번역 준비를 먼저 실행해 주세요'})}),'',{}, {},undefined,1000,'apple');assert.equal(needsApple.needsPrepare,true);
