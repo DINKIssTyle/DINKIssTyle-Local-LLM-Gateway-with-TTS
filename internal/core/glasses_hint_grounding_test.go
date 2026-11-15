@@ -126,3 +126,41 @@ func TestHintGroundingUnknownNamesRequireEvidence(t *testing.T) {
 		t.Fatal("term definition without lookup evidence accepted")
 	}
 }
+
+func TestHintGroundingConversationNeedsNoSearchOrDictionary(t *testing.T) {
+	req := hintResearchRequest{RequireGrounding: true, Source: "conversation", Kind: "schedule", Topic: "회의 준비", Observed: "금요일 오후 3시에 회의합니다. 장소는 2층입니다. 노트북을 가져오세요.", Anchor: "금요일 오후 3시"}
+	proof, prompt, err := prepareHintGrounding(context.Background(), toolruntime.NewRegistry(), toolruntime.ExecutionContext{}, false, req)
+	if err != nil || proof.Mode != "conversation" || proof.Kind != "schedule" || proof.Records[0].Text != req.Observed || !strings.Contains(prompt, "points") {
+		t.Fatalf("%+v %v", proof, err)
+	}
+	req.Kind = "term"
+	if _, _, err = prepareHintGrounding(context.Background(), toolruntime.NewRegistry(), toolruntime.ExecutionContext{}, false, req); err == nil {
+		t.Fatal("term verification bypassed through summary path")
+	}
+	req.Kind = "recap"
+	req.Anchor = "없는 구절"
+	if _, _, err = prepareHintGrounding(context.Background(), toolruntime.NewRegistry(), toolruntime.ExecutionContext{}, false, req); err == nil {
+		t.Fatal("unobserved summary anchor accepted")
+	}
+}
+
+func TestHintGroundingConversationAPIKeepsOperationAndRawEvidence(t *testing.T) {
+	calls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		raw, _ := json.Marshal(body)
+		if _, ok := body["tools"]; ok || !strings.Contains(string(raw), "장소는 2층") || !strings.Contains(string(raw), "대화 정리 자료") {
+			t.Errorf("summary writer lost source or gained tools: %s", raw)
+		}
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"HINT_SKIP\"}}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer upstream.Close()
+	req := httptest.NewRequest("POST", "/api/chat", strings.NewReader(`{"glasses_hint":true,"glasses_hint_phase":"answer","hint_research":{"require_grounding":true,"source":"conversation","topic":"회의 준비","kind":"schedule","observed":"금요일 오후 3시에 회의합니다. 장소는 2층입니다.","anchor":"금요일 오후 3시","allow_web":false},"model":"small","messages":[{"role":"user","content":"일정 정리"}],"stream":true}`))
+	w := httptest.NewRecorder()
+	handleChat(w, req, &App{llmEndpoint: upstream.URL, llmMode: "standard"}, &AuthManager{users: map[string]*User{}})
+	if w.Code != 200 || calls != 1 || !strings.Contains(w.Body.String(), `"mode":"conversation"`) || !strings.Contains(w.Body.String(), `"kind":"schedule"`) {
+		t.Fatalf("%d calls=%d %s", w.Code, calls, w.Body.String())
+	}
+}

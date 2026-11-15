@@ -18,3 +18,20 @@ assert.equal(validateHintGrounding(JSON.stringify({...good,topic:'달무늬 소�
 const otherRecord={...source,records:[{title:'달무늬 소자',url:'https://example.com/a',text:'다른 내용의 연속된 문장입니다.'},source.records[0]]};
 assert.equal(validateHintGrounding(JSON.stringify(invented),otherRecord).ok,false,'a title in a different record cannot validate a quote');
 console.log('PASS: source-bound names and exact excerpts, no query echo/cross-source support, verified canonical names and unsupported paraphrase rejection');
+
+const punctuation={...good,support_quote:source.records[0].text.replace(/\.$/,'!')};
+assert.equal(validateHintGrounding(JSON.stringify(punctuation),source).fact,source.records[0].text,'punctuation-only edits display original source');
+assert.equal(validateHintGrounding(JSON.stringify({...good,support_quote:source.records[0].text.replace('석재','나무')}),source).ok,false,'changed words remain unsupported');
+
+const numericSource={...source,records:[{...source.records[0],text:'피라미드 모형의 높이는 1.5미터로 기록되어 있습니다.'}]};
+assert.equal(validateHintGrounding(JSON.stringify({...good,support_quote:numericSource.records[0].text.replace('1.5','15')}),numericSource).ok,false,'decimal changes are not punctuation repair');
+
+const meeting='금요일 오후 3시에 회의해요. 장소는 2층 회의실입니다. 노트북을 가져와 주세요.';
+const conversationProof={version:1,mode:'conversation',source:'conversation',topic:'회의 준비',kind:'schedule',records:[{title:'최근 대화',text:meeting}]};
+const schedule={adds_information:true,kind:'key',topic:'회의 준비',points:[{text:'회의: 금요일 오후 3시, 2층 회의실',evidence:['금요일 오후 3시에 회의해요.','장소는 2층 회의실입니다.']},{text:'준비물: 노트북',evidence:['노트북을 가져와 주세요.']}]};
+const validated=validateHintGrounding(JSON.stringify(schedule),conversationProof);
+assert.equal(validated.ok,true);assert.equal(validated.kind,'schedule','the selected operation owns the label, not writer default key');assert.match(validated.fact,/회의:.*\n준비물/s);
+assert.equal(validateHintGrounding(JSON.stringify({...schedule,points:[{text:'회의는 4시에 확정',evidence:['금요일 오후 3시에 회의해요.']}]}),conversationProof).fact,'금요일 오후 3시에 회의해요.');
+assert.equal(validateHintGrounding(JSON.stringify({...schedule,points:[{text:'외부에서 가져온 내용',evidence:['없는 원문']}]}),conversationProof).ok,false);
+assert.equal(validateHintGrounding(JSON.stringify({...schedule,points:[{text:'예약됨',evidence:['예약이 안됩니다.']}]}),{...conversationProof,records:[{text:'예약이 안됩니다.'}]}).fact,'예약이 안됩니다.');
+assert.equal(validateHintGrounding(JSON.stringify(good),{...known,kind:'term'}).kind,'term','verified term definitions cannot silently become key');

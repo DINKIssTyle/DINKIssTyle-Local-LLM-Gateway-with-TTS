@@ -36,10 +36,10 @@ const chunks=['data: {"choices":[{"delta":{"con','tent":"안녕"}}]}\n\ndata: {"
 // Simulate gateway-owned proof events; dedicated cases override this default.
 function withHintProof(reply,body){
  if(!reply.ok || body.glasses_hint_phase!=='answer' || !body.hint_research?.require_grounding)return reply;
- const proof=nextHintProof===undefined?{version:1,mode:'known',source:'internal',topic:body.hint_research.topic}:nextHintProof;
+ const proof=nextHintProof===undefined?{version:1,mode:'known',source:'internal',topic:body.hint_research.topic,kind:body.hint_research.kind}:nextHintProof;
  nextHintProof=undefined;
  if(!proof)return reply;
- if(reply.body){const original=reply.body;return {...reply,body:{getReader(){const reader=original.getReader();let first=true;return{read:async()=>first?(first=false,{done:false,value:Buffer.from('data: '+JSON.stringify({type:'hint.grounding',grounding:proof})+'\n\n')}):reader.read()};}}};}
+ if(reply.body){const original=reply.body;return {...reply,body:{getReader(){const reader=original.getReader();let first=true;return{cancel:()=>reader.cancel?.(),read:async()=>first?(first=false,{done:false,value:Buffer.from('data: '+JSON.stringify({type:'hint.grounding',grounding:proof})+'\n\n')}):reader.read()};}}};}
  return {...reply,json:async()=>({...await reply.json(),hint_grounding:proof})};
 }
 const context={DKST_DEFAULT_SERVER_URL:'https://192.168.1.4:2806',waitForEvenAppBridge:async()=>bridge,AudioInputSource:{Glasses:'glasses',Phone:'phone'},OsEventTypeList:{CLICK_EVENT:0,DOUBLE_CLICK_EVENT:3},console,TextDecoder,Uint8Array,URL,AbortController,setTimeout:(fn,ms)=>{const timer=setTimeout(fn,ms);if(ms>=1000)timer.unref();return timer;},clearTimeout,alert(){},localStorage:{getItem(){return null;},setItem(){}},window:{location:{origin:'https://192.168.1.4:2806',hostname:'192.168.1.4'},btoa:s=>Buffer.from(s,'binary').toString('base64')},document:{body:{style:{overflow:''}},activeElement:{focus(){}},addEventListener(type,fn){documentHandlers[type]=fn;},readyState:'complete',getElementById:element,createElement:()=>({})},fetch:async(url,opts={})=>{
@@ -116,7 +116,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  Object.assign(context,await import('./translation-display.mjs'));
  Object.assign(context,await import('./direct-question.mjs'));
  Object.assign(context,await import('./hint-enrichment.mjs'));
- const {HintGate}=await import('./hint-gate.mjs');context.HintGate=HintGate;
+ const {HintGate}=await import('./hint-gate.mjs');context.HintGate=class extends HintGate{constructor(options){super({...options,collectContext:false,collectWaitMs:0});}};
  const {normalizeModels} = await import('./model-list.mjs');
  const {rightAlignedStatusText,modeHeaderText,translationHeaderText,cleanHintText,clockText,glassesBatteryText,hudStatusText,hudNoticeText,animatedDots,withAnimatedDots,extractVisibleAndReasoning,stripSourcesForGlasses,formatToolStatusText,wrapHUDLines,sliceHUDWindow,normalizeGlassesMode,nextGlassesMode,glassesModeMenuIdToMode,targetLanguageLabel,glassesModeShortLabel,glassesModeBadgeText,buildModePrompts}=await import('./hud-status.mjs');
  Object.assign(context,{rightAlignedStatusText,modeHeaderText,translationHeaderText,cleanHintText,hudStatusText,hudNoticeText,withAnimatedDots,extractVisibleAndReasoning,stripSourcesForGlasses,formatToolStatusText,sliceHUDWindow,normalizeGlassesMode,nextGlassesMode,glassesModeMenuIdToMode,targetLanguageLabel,glassesModeShortLabel,glassesModeBadgeText,buildModePrompts});
@@ -386,6 +386,13 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.match(textRequest.system_prompt,/HUD/);
  assert.equal(element('chat-input').value,'');
  assert.equal(element('chat-output').textContent,'최종 답변','terminal answer must replace drafts without duplicating content, revealing reasoning, or keeping sources');
+ let terminalReads=0;
+ chatReply={ok:true,body:{getReader:()=>({read:async()=>{
+   if(terminalReads++)throw new TypeError('Load failed after request.complete');
+   return {done:false,value:Buffer.from('data: '+JSON.stringify({type:'request.complete',final_assistant_content:'완료 신호에서 즉시 표시하는 답변'})+'\n\n')};
+ }})}};
+ element('chat-input').value='완료 신호 확인';element('text-chat-form').handlers.submit({preventDefault(){}});for(let i=0;i<8;i++)await tick();
+ assert.equal(element('chat-output').textContent,'완료 신호에서 즉시 표시하는 답변');assert.equal(terminalReads,1);
  assert.equal(element('hud-trigger-keyword').style.opacity,'0.5','typed chat does not activate the voice trigger indicator');
  assert.match(element('hud-screen').innerHTML,/hud-ai-box/);
  assert.match(element('hud-screen').innerHTML,/hud-transcript-box/);
@@ -393,7 +400,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  // The unified AI mode keeps ambient speech as hints, not every-utterance chat.
  handler({menuItemClickEvent:{itemID:1}});await tick();
  assert.equal(element('glasses-mode').value,'ai');
- assert.match(element('hud-screen').innerHTML,/텍스트 질문/,'chat question becomes its pinned title');
+ assert.match(element('hud-screen').innerHTML,/완료 신호 확인/,'chat question becomes its pinned title');
  context.window.__queueTest.microphone();await tick();await tick();
  // Hint mode classifies saved finals without blocking the transcript queue.
  context.window.__queueTest.microphone();await tick();await tick();
@@ -1123,7 +1130,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  element('model-hint-decision').value='judge-role';await element('model-hint-decision').handlers.change();
  element('model-ai-hint').value='hint-role';await element('model-ai-hint').handlers.change();
  element('hint-context-tokens').value='300';await element('hint-context-tokens').handlers.change();
- hintDecision={hint:false};judgeReply={hint:true,kind:'term',topic:'피라미드',evidence:'피라미드',question:'기자 피라미드 건립 시기와 건축 기술',source:'internal'};
+ hintDecision={hint:false};judgeReply={hint:true,kind:'key',topic:'피라미드',evidence:'피라미드',question:'기자 피라미드 건립 시기와 건축 기술',source:'internal'};
  chatReply=sseReply('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify({fact:'기자의 대피라미드는 쿠푸왕을 위해 건립됐으며 석회암 블록으로 쌓았습니다.',adds_information:true,kind:'key'})}}]})+'\n\ndata: [DONE]\n\n');
  const smallJudgeStart=requests.length;
  queue.preview({mode:'ai',segmentId:'judge-end-to-end'},{text:'피라미드가 왕의 무덤이래.'},{stable:'피라미드가 왕의 무덤이래.'});
@@ -1142,10 +1149,10 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  const readyComparison=()=>{for(const item of queue.hintGate.recent)item.at=Date.now()-9000;queue.hintGate.lastDecision=-Infinity;queue.hintGate.nextHint=-Infinity;queue.hintGate.nextGeneration=-Infinity;};
  hintComparison.fact=true;readyComparison();
  judgeReply={hint:true,kind:'key',topic:'피라미드',evidence:'피라미드',question:'쿠푸왕 무덤의 석재 종류와 건축 재료',source:'internal'};
- chatReply=sseReply('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify({fact:'쿠푸왕의 왕실 무덤으로 알려진 이 건축물에는 주로 석회암이 사용됐습니다.',adds_information:true,kind:'key'})}}]})+'\n\ndata: [DONE]\n\n');
+ chatReply=sseReply('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify({fact:'대피라미드의 왕의 방에는 주변 석회암과 다른 화강암이 사용됐습니다.',adds_information:true,kind:'key'})}}]})+'\n\ndata: [DONE]\n\n');
  queue.hintGate.observe('피라미드의 돌은 어떤 재료인지 궁금하대.',{id:'semantic-fact-duplicate'});for(let i=0;i<25;i++)await tick();
- assert.equal(queue.state().answer,firstHintAnswer,'semantic duplicate must not replace the displayed hint');
- assert.ok(requests.slice(comparisonStart).some(r=>r.url.endsWith('/api/glasses/hint-compare') && JSON.parse(r.opts.body).kind==='fact'));
+ assert.match(queue.state().answer,/왕의 방.*화강암/,'a distinct finished hint must display without a second semantic veto');
+ assert.ok(!requests.slice(comparisonStart).some(r=>r.url.endsWith('/api/glasses/hint-compare') && JSON.parse(r.opts.body).kind==='fact'),'do not perform a post-generation semantic check');
  const planComparisonStart=requests.length;hintComparison={plan:true,fact:false};readyComparison();
  judgeReply={hint:true,kind:'key',topic:'피라미드',evidence:'피라미드',question:'피라미드 무덤의 주인 이름과 신분',source:'internal'};
  queue.hintGate.observe('피라미드는 누구의 무덤인지 궁금하대.',{id:'semantic-plan-duplicate'});for(let i=0;i<25;i++)await tick();
@@ -1184,7 +1191,70 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  displayClock+=8001;await queue.drainAI();for(let i=0;i<15;i++)await tick();
  assert.equal(queue.state().answer,secondVisibleFact,'distinct second hint must display after the spacing interval');
  assert.equal(requests.slice(visibilityStart).filter(r=>r.url.endsWith('/api/chat') && JSON.parse(r.opts.body).glasses_hint_phase==='answer').length,2);
+ // A started writer survives a confirmed topic switch and source-age expiry.
+ queue.hintGate.reset({forgetHistory:true});releaseChat=null;
+ const completedOldTopic='피라미드의 내부에는 무게를 분산하는 공간이 배치되어 있습니다.';
+ chunks.splice(0,chunks.length,'data: '+JSON.stringify({type:'request.complete',final_assistant_content:JSON.stringify({fact:completedOldTopic,adds_information:true,kind:'key'})})+'\n\n');
+ holdChat=true;chatReply=null;
+ judgeReply={hint:true,continuity:'unknown',kind:'key',topic:'피라미드',evidence:'피라미드',question:'피라미드 내부 공간의 구조',source:'internal'};
+ queue.hintGate.observe('피라미드 내부 구조 이야기',{id:'committed-before-switch'});for(let i=0;i<20;i++)await tick();
+ assert.equal(typeof releaseChat,'function');
+ displayClock+=46000;queue.hintGate.lastDecision=-Infinity;queue.hintGate.nextGeneration=-Infinity;
+ judgeReply={hint:false,continuity:'changed',topic:'청동기 시대',evidence:'청동기 시대'};
+ queue.hintGate.observe('이제 청동기 시대 이야기로 바뀌었어',{id:'changed-during-writer'});for(let i=0;i<20;i++)await tick();
+ assert.equal(queue.hintGate.currentTopic,'청동기 시대');
+ releaseChat();for(let i=0;i<25;i++)await tick();
+ assert.equal(queue.state().answer,completedOldTopic,'the writer already started, so show its verified completion');
+ assert.equal(queue.hintGate.currentTopic,'청동기 시대','finishing an older card must not overwrite the classifier topic');
+ // Long first sentences must scroll instead of being rejected by viewport fitting.
+ queue.hintGate.reset({forgetHistory:true});
+ const longHint='피라미드 건축의 구조와 자재 운송 및 하중 분산 원리를 자세히 설명하는 긴 문장으로 '+ '여러 석재의 배치와 경사로를 통한 운반 방법을 함께 살펴보며 '.repeat(12)+'완성됩니다.';
+ assert.ok(context.sliceHUDWindow(longHint,0,6,570).maxOffset>0);
+ judgeReply={hint:true,kind:'key',topic:'피라미드',evidence:'피라미드',question:'피라미드의 여러 건축 원리',source:'internal'};
+ let finalReads=0,finalCancels=0;
+ chatReply={ok:true,body:{getReader:()=>({cancel:async()=>{finalCancels++;},read:async()=>{
+   if(finalReads++)throw new TypeError('Load failed after completed response');
+   return {done:false,value:Buffer.from('data: '+JSON.stringify({type:'request.complete',final_assistant_content:JSON.stringify({fact:longHint,adds_information:true,kind:'key'})})+'\n\n')};
+ }})}};
+ queue.hintGate.observe('피라미드 구조를 살펴보는 중',{id:'long-completed-card'});for(let i=0;i<25;i++)await tick();
+ assert.equal(queue.state().answer,longHint,'a first sentence exceeding six lines must remain complete and scrollable');
+ assert.equal(finalReads,1,'request.complete must display without waiting for socket closure');assert.equal(finalCancels,1);
+ assert.doesNotMatch(element('hint-status').textContent,/Load failed|출처.*불일치/);
+ queue.dismiss();readyComparison();
+ judgeReply={hint:true,kind:'key',topic:'피라미드',evidence:'피라미드',question:'석재 운반 장비와 작업 인력의 조직 방식',source:'internal'};
+ chatReply=sseReply('data: '+JSON.stringify({type:'request.complete',final_assistant_content:JSON.stringify({fact:longHint,adds_information:true,kind:'key'})})+'\n\n');
+ queue.hintGate.observe('피라미드 작업 인력 이야기',{id:'finished-after-card-closed'});for(let i=0;i<25;i++)await tick();
+ assert.equal(queue.state().answer,longHint,'an already generated answer must not disappear because its identical older card is closed');
+ chunks.splice(0,chunks.length,...originalChunks);
  queue.hintGate.now=originalHintNow;await queue.stopVoiceRecording(false);
+ // Collect full sentences and render a schedule/summary without web research.
+ queue.ai();queue.hintGate.collectContext=true;queue.hintGate.windowMs=20000;queue.hintGate.settleMs=1000;queue.hintGate.collectWaitMs=4000;queue.hintGate.intervalMs=0;queue.hintGate.generationIntervalMs=0;
+ const meetingLines=['금요일 오후 3시에 회의해요.','장소는 2층 회의실입니다.','노트북을 가져와 주세요.'];
+ judgeReply={hint:true,kind:'schedule',source:'conversation',topic:'회의 준비',evidence:'금요일 오후 3시',question:'회의 일정과 준비물 모으기',continuity:'same'};
+ nextHintProof={version:1,mode:'conversation',source:'conversation',kind:'schedule',topic:'회의 준비',records:[{text:meetingLines.join('\n')}]};
+ chatReply=sseReply('data: '+JSON.stringify({type:'request.complete',final_assistant_content:JSON.stringify({adds_information:true,kind:'key',points:[{text:'금요일 오후 3시 · 2층 회의실',evidence:meetingLines.slice(0,2)},{text:'준비: 노트북 지참',evidence:[meetingLines[2]]}]})})+'\n\n');
+ const collectedStart=requests.length;
+ meetingLines.forEach((text,i)=>queue.hintGate.observe(text,{id:'meeting-'+i}));
+ assert.ok(!requests.slice(collectedStart).some(r=>r.url.endsWith('/api/chat')),'collect speech before asking the model');
+ queue.hintGate.pending.due=0;clearTimeout(queue.hintGate.timer);await queue.hintGate.pump();for(let i=0;i<25;i++)await tick();
+ const collectedWriter=JSON.parse(requests.slice(collectedStart).find(r=>r.url.endsWith('/api/chat') && JSON.parse(r.opts.body).glasses_hint_phase==='answer').opts.body);
+ assert.equal(collectedWriter.hint_research.source,'conversation');meetingLines.forEach(line=>assert.ok(collectedWriter.hint_research.observed.includes(line)));
+ assert.match(queue.state().title,/^\[일정\]/);assert.match(queue.state().answer,/금요일 오후 3시.*2층/);assert.match(queue.state().answer,/노트북/);
+ queue.hintGate.reset({forgetHistory:true});
+ const decisionLines=['A안은 싸지만 설치에 일주일 걸립니다.','B안은 비싸지만 바로 사용할 수 있습니다.','빨리 시작해야 하므로 B안을 선택했습니다.'];
+ judgeReply={hint:true,kind:'recap',source:'conversation',topic:'설치안 결정',evidence:'B안을 선택했습니다',question:'비교와 결정 이유 요약',continuity:'same'};
+ nextHintProof={version:1,mode:'conversation',source:'conversation',kind:'recap',topic:'설치안 결정',records:[{text:decisionLines.join('\n')}]};
+ chatReply=sseReply('data: '+JSON.stringify({type:'request.complete',final_assistant_content:JSON.stringify({adds_information:true,kind:'key',points:[{text:'A안: 저렴하지만 설치에 일주일 소요',evidence:[decisionLines[0]]},{text:'빠른 시작을 위해 B안 선택',evidence:[decisionLines[2]]}]})})+'\n\n');
+ decisionLines.forEach((text,i)=>queue.hintGate.observe(text,{id:'decision-'+i}));queue.hintGate.pending.due=0;clearTimeout(queue.hintGate.timer);await queue.hintGate.pump();for(let i=0;i<25;i++)await tick();
+ assert.match(queue.state().title,/^\[요약\]/);assert.match(queue.state().answer,/B안/);
+ queue.hintGate.reset({forgetHistory:true});queue.hintGate.collectContext=false;queue.hintGate.settleMs=0;
+ const definition='EBITDA는 이자와 세금, 감가상각비를 차감하기 전의 이익을 뜻합니다.';
+ judgeReply={hint:true,kind:'term',source:'web',topic:'EBITDA',evidence:'EBITDA',question:'EBITDA의 뜻',continuity:'unknown'};
+ nextHintProof={version:1,mode:'quote',source:'web',kind:'term',topic:'EBITDA',records:[{title:'EBITDA',url:'https://example.com/ebitda',text:definition}]};
+ chatReply=sseReply('data: '+JSON.stringify({type:'request.complete',final_assistant_content:JSON.stringify({adds_information:true,kind:'key',topic:'EBITDA',fact:definition,support_quote:definition})})+'\n\n');
+ queue.hintGate.observe('EBITDA가 무슨 뜻인지 모르겠어요.',{id:'term-not-key'});for(let i=0;i<25;i++)await tick();
+ assert.match(queue.state().title,/^\[용어\]/);assert.equal(queue.state().answer,definition,'writer default key must not erase a selected term definition');
+ await queue.stopVoiceRecording(false);
  element('model-hint-decision').value='__jev__';await element('model-hint-decision').handlers.change();
  await queue.stopVoiceRecording(false);
  // Keep persisted settings expected by the restore tests below.

@@ -3,7 +3,7 @@ import {cuePrompts,parseCueResponse,fitCue,hintPlanPrompts,parseHintPlan,hintAns
 const observed='피라미드 영상이 나오네. 거기 청동기 시대 얘기도 나오더라.';
 const plan=parseHintPlan(JSON.stringify({topic:'피라미드',question:'이집트 피라미드는 어떤 목적으로 건립되었나?',knownFacts:['피라미드 영상이 나옴'],source:'internal'}));
 assert.equal(plan.source,'internal');
-assert.match(hintPlanPrompts(observed,'','background').systemPrompt,/아직 없는/);
+assert.match(hintPlanPrompts(observed,'','background').systemPrompt,/요약·일정/);
 for(const prompts of [hintPlanPrompts(observed,'','background'),hintAnswerPrompts(plan),cuePrompts(observed,'','background'),cuePrompts(observed,'','background','',{preferWeb:true}),cuePrompts(observed,'','reply')]){
  assert.match(prompts.systemPrompt,/역할: 자율 정보 제공/);
  assert.match(prompts.systemPrompt,/사용자가 AI에게 보낸 질문이 아닙니다/);
@@ -18,7 +18,7 @@ for(const prompts of [cuePrompts('피라미드 건축 방식이 궁금한 대화
  assert.doesNotMatch(prompts.userPrompt,/제외할 직전 주제|다시 다루지 말 것|새로운 토픽만/,'do not exclude an entire topic');
 }
 assert.doesNotMatch(hintAnswerPrompts(plan).userPrompt,/청동기 시대 얘기도/,'raw transcript must not be the final answer task');
-assert.match(hintAnswerPrompts(plan).userPrompt,/어떤 목적으로/);
+assert.match(hintAnswerPrompts(plan).userPrompt,/조사 항목/);
 assert.equal(parseHintPlan('HINT_SKIP'),null);assert.equal(parseHintPlan('{"source":"execute_command"}'),null);
 assert.equal(extractHintFact(JSON.stringify({fact:observed,adds_information:true}),observed,plan),'','copied transcription must not be a hint');
 assert.equal(extractHintFact(JSON.stringify({fact:'피라미드에 대해 이야기하고 있습니다.',adds_information:true}),observed,plan),'','generic summaries must be suppressed');
@@ -34,7 +34,7 @@ assert.equal(await readHintPlanResponse(reply),content,'planning must handle nat
 console.log('PASS: missing-information planning, evidence routes, no raw transcript in final task, summary/echo rejection, structured fact extraction');
 
 const cue={topic:'제안',cue_type:'suggestion',source:'internal',fact:'“금요일까지 검토하고 답드려도 될까요?”라고 물어보세요.',adds_information:true};
-assert.match(cuePrompts('제안을 거절하고 싶어','','reply').userPrompt,/지금 말할 답변/);
+assert.match(cuePrompts('제안을 거절하고 싶어','','reply').userPrompt,/실제로 말할 답변/);
 assert.ok(parseCueResponse(JSON.stringify(cue),'제안을 거절하고 싶어').fact);
 assert.equal(parseCueResponse(JSON.stringify({...cue,source:'web'}),'전사'),null,'external facts require evidence research');
 assert.equal(parseCueResponse(JSON.stringify({...cue,cue_type:'unknown'}),'전사'),null);
@@ -46,9 +46,9 @@ assert.ok(!cuePrompts('최근 발화','이전 문맥','background','이미 나�
 console.log('PASS: single-pass typed cues, evidence-only research, complete sentences in six-line display');
 
 const web=cuePrompts('그 제품 무게 얘기야','맥북 에어 M4','background','',{preferWeb:true});
-assert.match(web.systemPrompt,/구체적인 주제 하나/);
+assert.match(web.systemPrompt,/작업 하나/);
 assert.match(web.systemPrompt,/source=web/);
-assert.match(web.systemPrompt,/원문 전체나 맞장구를 검색어로 사용하지 마세요/);
+assert.match(web.systemPrompt,/현재 대화|주변 대화/);
 assert.doesNotMatch(cuePrompts('거절하고 싶어','','reply','',{preferWeb:true}).systemPrompt,/웹검색 우선 설정입니다/);
 assert.equal(parseCueResponse('다음은 결과입니다:\n'+JSON.stringify(cue),'전사').topic,'제안');
 assert.equal(extractHintFact('확인 결과:\n'+JSON.stringify({suggestion:'금요일까지 검토 후 회신드리겠습니다.',adds_information:true}),observed,plan),'금요일까지 검토 후 회신드리겠습니다.');
@@ -69,9 +69,9 @@ for(const prompts of [hintPlanPrompts(observed,'','background'),hintAnswerPrompt
  assert.match(prompts.systemPrompt,/부정 표현/);
  assert.match(prompts.systemPrompt,/추가 발화를 기다린다/);
 }
-assert.match(hintAnswerPrompts(plan).systemPrompt,/판별 단계의 분류도 본문과 맞지 않으면 바로잡/);
+assert.match(hintAnswerPrompts(plan).systemPrompt,/선택한 작업 대신 다른 상식/);
 assert.match(hintAnswerPrompts(plan).userPrompt,/검증된 사실 아님/);
 
 assert.equal(parseCueResponse(JSON.stringify({...cue,kind:'key'}),'전사').kind,'key');
 assert.equal(parseHintPlan(JSON.stringify({...plan,kind:'verify'})).kind,'verify');
-assert.match(cuePrompts(observed,'','background').systemPrompt,/정보의 목적에 맞는 kind/);
+assert.match(cuePrompts(observed,'','background').systemPrompt,/분류는 제공할 도움의 작업/);

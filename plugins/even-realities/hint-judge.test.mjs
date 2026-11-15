@@ -27,7 +27,7 @@ console.log('PASS: 300–800 multilingual context budgets, bounded tool-free jud
 assert.equal(suggestedHintJudge([{id:'qwen3.5-0.8b-mlx',label:'0.8B'},{id:'gemma-4-e2b-it-mlx',label:'Gemma'}]),'gemma-4-e2b-it-mlx');
 assert.equal(suggestedHintJudge([{id:'qwen3.5-0.8b-mlx',label:'0.8B'}]),'');
 
-for(const [kind,label] of Object.entries({term:'용어',key:'핵심',verify:'확인',schedule:'일정',recap:'정리'})){
+for(const [kind,label] of Object.entries({term:'용어',key:'핵심',verify:'확인',schedule:'일정',recap:'요약'})){
  const decision=parseHintJudgment(JSON.stringify({...value,kind}),context);
  const shown=hintPresentation(decision.plan);
  assert.match(shown.title,new RegExp('^\\['+label+'\\]'));
@@ -54,3 +54,18 @@ assert.equal(changedSkip.continuity,'changed');assert.equal(changedSkip.topic,'�
 assert.equal(parseHintJudgment(JSON.stringify({hint:false,topic:'없는 주제',evidence:'없는 원문',continuity:'changed'}),continuityContext).topic,undefined,'ungrounded skip cannot change the current topic');
 for(const budget of [300,600,800])assert.ok(compactJudgeContext({text:'대화 중인 새 발화'.repeat(100),context:'참고'.repeat(100),activeTopic:'아주 긴 현재 주제 이름입니다'.repeat(10)},'',[],budget).estimatedTokens<=budget);
 assert.ok(sent.response_format.json_schema.schema.required.includes('continuity'));
+
+const conversation=compactJudgeContext({text:'금요일 오후 3시에 회의해요.\n장소는 2층입니다.\n노트북을 가져와 주세요.',latestText:'노트북을 가져와 주세요.',context:'금요일 오후 3시에 회의해요.\n장소는 2층입니다.'},'',[],600);
+assert.match(conversation.text,/Recent conversation/);assert.match(conversation.latest,/금요일 오후 3시/);assert.match(conversation.latest,/노트북/);
+const schedule=parseHintJudgment(JSON.stringify({hint:true,kind:'schedule',source:'conversation',topic:'회의 준비',evidence:'금요일 오후 3시',question:'언급한 일정과 준비물 정리'}),conversation);
+assert.equal(schedule.plan.source,'conversation');assert.match(schedule.plan.knownFacts[0],/2층/);
+assert.equal(parseHintJudgment(JSON.stringify({...value,source:'conversation',kind:'term'}),context).plan.source,'web','definitions cannot bypass external name verification through conversation summaries');
+for(const budget of [300,600,800]){
+ const c=compactJudgeContext({text:'전체',latestText:'최근 발화입니다. '.repeat(100),context:'모아둔 대화입니다. '.repeat(100)},'',[{term:'준비'}],budget);
+ assert.ok(c.estimatedTokens<=budget,JSON.stringify(c));assert.ok(c.prior);
+}
+const numberedChoice=conversation.evidenceChoices.findIndex(e=>e.includes('금요일'));
+assert.ok(numberedChoice>0);
+const chosen=parseHintJudgment(JSON.stringify({hint:true,kind:'schedule',source:'conversation',topic:'회의 준비',evidence:numberedChoice,question:'일정과 준비물 정리'}),conversation);
+assert.ok(chosen.focus.includes('금요일'));assert.equal(parseHintJudgment(JSON.stringify({...value,evidence:999}),conversation),null);
+assert.equal(sent.response_format.json_schema.schema.properties.evidence.type,'integer');

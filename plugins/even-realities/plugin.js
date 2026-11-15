@@ -21,7 +21,7 @@ import {localTranslate,translationReplyPrompts} from './chrome-translation.mjs';
 import {filterSpeakerPCM} from './speaker-filter.mjs';
 import { mergeTranslationDisplay, hasCompleteTranslationReplies, parseTranslationDisplay, translationReplyText, translationPhoneText } from './translation-display.mjs';
 import { directQuestionIntent } from './direct-question.mjs';
-import { cuePrompts, parseCueResponse, fitCue, hintPlanPrompts, parseHintPlan, hintAnswerPrompts, hintResultKind, extractHintFact, readHintPlanResponse } from './hint-enrichment.mjs';
+import { cuePrompts, parseCueResponse, hintPlanPrompts, parseHintPlan, hintAnswerPrompts, hintResultKind, extractHintFact, readHintPlanResponse } from './hint-enrichment.mjs';
 import { HintGate } from './hint-gate.mjs';
 import { waitForEvenAppBridge, AudioInputSource, OsEventTypeList } from '@evenrealities/even_hub_sdk';
 import { normalizeModels } from './model-list.mjs';
@@ -365,6 +365,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     renderLiveHUD();persistSettings().catch(console.warn);
   }
   const hintGate=new HintGate({
+    collectContext:true,windowMs:20000,settleMs:1400,collectWaitMs:4000,
     decide:async(job,signal)=>{
       ensureHintComparisonScope();
       const model=resolveRoleModel('hintDecision',config);
@@ -393,7 +394,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         els.hintJudgeStatus.textContent=`${model} · 토픽 판별 중`;
         const result=await requestHintJudgment({fetch:gatewayFetch,server:config.serverUrl,headers:getAuthHeaders({'Content-Type':'application/json'}),model,job,advisory,limit:config.hintContextTokens,signal,preferWeb:config.hintWebSearch!==false,sensitivity:config.hintSensitivity});
         if(result.hint && !hintGate.relevant({...job,focusText:result.focus},result.plan.topic))return {hint:false,reason:'past_topic'};
-        if(result.hint && await hintDuplicate(`${result.plan.topic}: ${result.plan.question}`,'plan',signal))return {...result,hint:false,reason:'duplicate_plan'};
+        if(result.hint && result.plan.source!=='conversation' && await hintDuplicate(`${result.plan.topic}: ${result.plan.question}`,'plan',signal))return {...result,hint:false,reason:'duplicate_plan'};
         els.hintJudgeStatus.textContent=`${result.hint?`주제: ${result.plan.topic}`:'보충할 정보 없음'} · 문맥 약 ${result.contextEstimatedTokens}/${result.contextBudget}토큰`;
         return result;
       }catch(error){
@@ -409,9 +410,9 @@ import { LocalAgreement } from './local-agreement.mjs';
       return true;
     },
     onTopicChange:()=>{
-      if(activeAIJob?.hint){activeAIJob.cancelledByTopic=true;aiAbortController?.abort();}
+      if(activeAIJob?.hint && activeAIJob.generationStartedAt===undefined){activeAIJob.cancelledByTopic=true;aiAbortController?.abort();}
       for(let i=pendingAI.length-1;i>=0;i--)if(pendingAI[i].hint && pendingAI[i].topicVersion!==hintGate.topicVersion){hintGate.complete(pendingAI[i]);pendingAI.splice(i,1);}
-      els.hintStatus.textContent='새 주제 확인 · 지난 힌트 취소';
+      els.hintStatus.textContent=activeAIJob?.hint && activeAIJob.generationStartedAt!==undefined?'새 주제 확인 · 생성 중인 힌트 완료 후 반영':'새 주제 확인 · 대기 후보 갱신';
     },
     onStatus:text=>{els.hintStatus.textContent=text;}
   });
@@ -1528,7 +1529,9 @@ import { LocalAgreement } from './local-agreement.mjs';
     clearHintStack();answerText=answerTitle=answerVoicePrompt='';answerAutoCloseEligible=false;aiScrollOffset=0;answerHoldUntil=0;
     renderLiveHUD();return true;
   }
-  function fitHintContent(text){return fitCue(text,AI_BOX_WIDTH_PX,transcriptDisplayHidden()?8:6);}
+  // The card scrolls. Fitting a whole sentence into the first viewport used
+  // to return an empty string for long sentences and silently drop the card.
+  function fitHintContent(text){return String(text || '').trim().slice(0,2000);}
   function syncCaptureSettings(){
     syncModeUI();syncGlassesInputUI();
     els.audioInputSource.value=config.audioInputSource;
@@ -2233,7 +2236,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         conversationContext:options.chatSession?chatContext:conversationContext
       });
       const payload=chatPayload(prompts,'answer');
-      if(options.hint)payload.hint_research={query:enrichmentPlan.question,source:enrichmentPlan.source,topic:enrichmentPlan.topic,kind:enrichmentPlan.kind || options.hintPlan?.kind || 'key',observed:options.observedText || prompt,anchor:enrichmentPlan.evidence || options.focusText || prompt,allow_web:config.hintWebSearch!==false,require_grounding:true};
+      if(options.hint)payload.hint_research={query:enrichmentPlan.question,source:enrichmentPlan.source,topic:enrichmentPlan.topic,kind:enrichmentPlan.kind || options.hintPlan?.kind || 'key',observed:options.observedText || prompt,anchor:Array.from(enrichmentPlan.evidence || options.focusText || prompt).slice(0,160).join(''),allow_web:config.hintWebSearch!==false,require_grounding:true};
       if(options.directQuestion && options.forceSearch && !options.chatSession)payload.hint_research={query:Array.from(prompt).slice(0,300).join(''),source:'web'};
       if (!options.hint) {
         aiPhaseTitle = activeMode === 'translate' ? '번역 및 답변 생성 중' : '생각 중';
@@ -2242,6 +2245,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         renderLiveHUD();
       }
       if(options.traceId)voiceLatency.mark(options.traceId,'chat_sent');
+      if(options.hint && !hintGate.beginGeneration(options)){els.hintStatus.textContent='힌트 요청 전 취소 · 새 발화 대기';return;}
       const res = await gatewayFetch(`${config.serverUrl}/api/chat`, {
         method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),body:JSON.stringify(payload), signal: controller.signal
       });
@@ -2369,14 +2373,17 @@ import { LocalAgreement } from './local-agreement.mjs';
         const decoder = new TextDecoder();
         let buffered = '';
         let eventName='';
+        let streamComplete=false;
         function consumeLine(line) {
+          if(streamComplete)return;
           if(options.chatEpoch && options.chatEpoch!==chatEpoch)return;
           line=line.replace(/\r$/,'');
           if(!line){eventName='';return;}
           if(line.startsWith('event:')){eventName=line.slice(6).trim();return;}
           if (!line.startsWith('data:')) return;
           const dataStr = line.slice(5).trim();
-          if (!dataStr || dataStr === '[DONE]') return;
+          if (!dataStr) return;
+          if(dataStr==='[DONE]'){streamComplete=true;return;}
           if(eventName==='error')throw new Error(dataStr);
           const parsed = JSON.parse(dataStr);
           if (parsed.error) throw new Error(typeof parsed.error === 'string' ? parsed.error : parsed.error.message || JSON.stringify(parsed.error));
@@ -2396,6 +2403,7 @@ import { LocalAgreement } from './local-agreement.mjs';
           if(final!==null)rawAnswer=final;
           else if(type==='message.delta')rawAnswer+=parsed.content || '';
           else rawAnswer+=parsed.choices?.[0]?.delta?.content || parsed.message?.content || '';
+          if(type==='request.complete')streamComplete=true;
 
           const extracted = extractVisibleAndReasoning(rawAnswer);
           if (extracted.isInlineReasoning) {
@@ -2419,6 +2427,7 @@ import { LocalAgreement } from './local-agreement.mjs';
           const lines = buffered.split('\n');
           buffered = lines.pop();
           for (const line of lines) consumeLine(line);
+          if(streamComplete){Promise.resolve(reader.cancel?.()).catch(()=>{});break;}
           if (done) {
             if (buffered.trim()) consumeLine(buffered);
             break;
@@ -2436,6 +2445,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       }
 
       if(options.translationToken && options.translationToken!==translationToken || options.chatEpoch && options.chatEpoch!==chatEpoch)return;
+      let verifiedHint=null;
       if(options.hint){
         const verified=validateHintGrounding(rawAnswer,hintProof);
         if(!verified.ok){
@@ -2443,24 +2453,22 @@ import { LocalAgreement } from './local-agreement.mjs';
           els.hintStatus.textContent=verified.reason==='missing_proof'?'출처 검증 정보 없음 · 게이트웨이 업데이트 필요':'명칭·본문의 출처 근거 불일치 · 힌트 생략';return;
         }
         enrichmentPlan={...enrichmentPlan,topic:verified.topic,source:verified.source,reference:verified.reference};
+        verifiedHint=verified;
         rawAnswer=JSON.stringify({fact:verified.fact,topic:verified.topic,kind:verified.kind || enrichmentPlan.kind,adds_information:true});
         if(options.topicVersion===hintGate.topicVersion)hintGate.currentTopic=verified.topic;
       }
-      const enrichedFact=options.hint?extractHintFact(rawAnswer,[conversationContext,prompt].join('\n'),enrichmentPlan):'';
+      const enrichedFact=options.hint?(['quote','conversation'].includes(hintProof?.mode)?verifiedHint.fact:extractHintFact(rawAnswer,[conversationContext,prompt].join('\n'),enrichmentPlan)):'';
       if(options.hint){
         const reason=hintGate.rejectionReason(options);
         const labels={topic_changed:'주제 전환 확인',transcript_changed:'근거 전사 수정',expired_or_canceled:'유효 시간 경과 또는 취소'};
         if(reason){els.hintStatus.textContent=`힌트 생략 · ${labels[reason] || reason}`;return;}
         if(!fitHintContent(enrichedFact)){els.hintStatus.textContent='힌트 생략 · 본문 형식 또는 보충 정보 없음';return;}
-        if(hintGate.duplicateCue(fitHintContent(enrichedFact))){els.hintStatus.textContent='힌트 생략 · 동일한 정보 반복';return;}
-      }
-      if(options.hint){
-        const duplicate=await hintDuplicate(fitHintContent(enrichedFact),'fact',controller.signal);
-        if(controller.signal.aborted || !hintGate.relevant(options,enrichmentPlan.topic)){els.hintStatus.textContent='힌트 생략 · 취소 또는 주제 전환 확인';return;}
-        if(duplicate){els.hintStatus.textContent='힌트 생략 · 의미가 같은 정보 반복';return;}
+        const visibleHintTexts=answerIsHint?(hintStackActive()?hintStack.cards.map(card=>card.text):[answerText]):[];
+        if(hintGate.identicalCue(fitHintContent(enrichedFact),visibleHintTexts)){els.hintStatus.textContent='동일한 힌트가 이미 표시됨 · 현재 카드 유지';return;}
+        if(controller.signal.aborted)return;
       }
       if(options.hint){const note={...enrichmentPlan,kind:hintResultKind(rawAnswer,enrichmentPlan.kind),evidence:enrichmentPlan.evidence || options.focusText};rememberHint(note);displayHintCard(note,fitHintContent(enrichedFact));cueDisplayed=true;cueTopic=enrichmentPlan.topic;els.chatQuestion.textContent=cueTopic?`💡 자동 힌트 · ${cueTopic}`:'💡 자동 힌트';}else setVisibleAnswer(rawAnswer,true);
-      if(options.hint)els.hintStatus.textContent=enrichmentPlan.source==='web'?'웹검색 근거로 보충한 정보':enrichmentPlan.source==='memory'?'저장된 기억으로 보충한 정보':'내부 지식으로 보충한 정보';
+      if(options.hint)els.hintStatus.textContent=enrichmentPlan.source==='web'?'웹검색 근거로 보충한 정보':enrichmentPlan.source==='memory'?'저장된 기억으로 보충한 정보':enrichmentPlan.source==='conversation'?'최근 대화에서 요점·일정 정리':'내부 지식으로 보충한 정보';
       els.chatOutput.textContent = activeMode==='translate'?translationPhoneText(translationDisplay):answerText;
       if(chromeText)els.chromeTranslationStatus.textContent=repliesReplaced?`${options.translatedBy || localLabel()} 번역 · 답변 예시 완료`:hasCompleteTranslationReplies(translationDisplay)?`${options.translatedBy || localLabel()} 번역 완료 · 이전 답변 예시 유지`:`${options.translatedBy || localLabel()} 번역 완료 · 답변 예시를 받지 못했습니다`;
       renderLiveHUD();

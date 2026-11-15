@@ -5,13 +5,13 @@ const compactTopic=text=>String(text || '').normalize('NFC').toLowerCase().repla
 const briefAcknowledgement=text=>/^(?:네|예|응|어|음|아|맞아|맞아요|그렇구나|알겠어|알겠습니다|고마워|감사합니다|okay|ok|yes|yeah|hmm)[.!?。！？\s]*$/iu.test(String(text).trim());
 // One optional decision at a time; never await this from transcription.
 export class HintGate {
-  constructor({decide,onHint,onStatus=()=>{},onTopicChange=()=>{},now=()=>Date.now(),cooldownMs=8000,generationIntervalMs=8000,intervalMs=2000,maxAgeMs=45000,displayAgeMs=45000,windowMs=8000,settleMs=500,repeatFocusMs=20000}) {
-    Object.assign(this,{decide,onHint,onStatus,onTopicChange,now,cooldownMs,generationIntervalMs,intervalMs,maxAgeMs,displayAgeMs,windowMs,settleMs,repeatFocusMs});
-    this.epoch=0;this.topicVersion=0;this.currentTopic='';this.topicDecisionSequence=0;this.entries=[];this.recent=[];this.failed=new Map();this.pending=null;this.inflight=null;
+  constructor({decide,onHint,onStatus=()=>{},onTopicChange=()=>{},now=()=>Date.now(),cooldownMs=8000,generationIntervalMs=8000,intervalMs=2000,maxAgeMs=45000,displayAgeMs=45000,windowMs=8000,settleMs=500,repeatFocusMs=20000,collectContext=false,collectWaitMs=4000,minContextChars=80}) {
+    Object.assign(this,{decide,onHint,onStatus,onTopicChange,now,cooldownMs,generationIntervalMs,intervalMs,maxAgeMs,displayAgeMs,windowMs,settleMs,repeatFocusMs,collectContext,collectWaitMs,minContextChars});
+    this.contextFloorSequence=0;this.epoch=0;this.topicVersion=0;this.currentTopic='';this.topicDecisionSequence=0;this.entries=[];this.recent=[];this.failed=new Map();this.pending=null;this.inflight=null;
     this.generating=new Map();this.sequence=0;this.nextGeneration=-Infinity;this.lastDecision=-Infinity;this.nextHint=-Infinity;this.timer=null;
   }
   reset({forgetHistory=false}={}) {
-    this.epoch++;this.topicVersion++;this.currentTopic='';this.topicDecisionSequence=0;this.generating.clear();this.failed.clear();this.pending=null;this.entries=[];
+    this.contextFloorSequence=0;this.epoch++;this.topicVersion++;this.currentTopic='';this.topicDecisionSequence=0;this.generating.clear();this.failed.clear();this.pending=null;this.entries=[];
     this.recent=forgetHistory?[]:this.recent.filter(e=>this.now()-e.at<180000);
     clearTimeout(this.timer);this.timer=null;
     this.inflight?.controller.abort();
@@ -28,8 +28,27 @@ export class HintGate {
     this.entries.push({id,preview,text:text.slice(0,1600),at,sequence:++this.sequence});this.entries=this.entries.slice(-16);
     const previousUtterance=this.entries.filter(e=>e.id!==id && now-e.at<=this.windowMs).at(-1);
     const context=refersToPrior(text)?previousUtterance?.text.slice(-200) || '':'';
+    const previousDue=this.pending?.due;
     this.pending={id,preview,topicVersion:this.topicVersion,text:text.slice(-800),context,at,epoch:this.epoch,focusText:text.trim(),windowCount:1,sequence:this.sequence,
       due:Math.min(now+this.settleMs,this.pending?.due ?? now+this.settleMs)};
+    if(this.collectContext){
+      const entries=this.entries.filter(e=>e.sequence>=this.contextFloorSequence && now-e.at<=this.windowMs && !briefAcknowledgement(e.text)).slice(-6);
+      let selected=[],size=0;
+      for(const entry of [...entries].reverse()){
+        if(selected.length && size+entry.text.length>1200)break;
+        selected.unshift({...entry,text:entry.text.slice(-1200)});size+=entry.text.length;
+      }
+      if(!selected.some(e=>e.id===id) && !briefAcknowledgement(text))selected.push({...this.entries.at(-1),text:text.slice(-1200)});
+      const latest=selected.at(-1);
+      if(!latest){this.pending=null;return;}
+      const prior=selected.slice(0,-1).map(e=>e.text).join('\n');
+      const joined=selected.map(e=>e.text).join('\n');
+      const ready=selected.length>=2 || Array.from(joined).length>=this.minContextChars;
+      this.pending={...this.pending,text:joined,latestText:latest.text,context:prior,windowCount:selected.length,windowEntries:selected,
+        due:Math.min(now+(ready?this.settleMs:this.collectWaitMs),previousDue ?? Infinity)};
+      // Avoid the legacy 500ms deadline for the first short speech fragment.
+      if(selected.length===1 && !ready)this.pending.due=Math.min(now+this.collectWaitMs,previousDue ?? Infinity);
+    }
     this.pump();
   }
   withdraw(id){
@@ -57,6 +76,9 @@ export class HintGate {
     this.pump();
   }
   duplicateCue(text){return this.recent.some(e=>this.now()-e.at<180000 && e.cue && similarHint(e.cue,text));}
+  identicalCue(text,visibleTexts=this.recent.filter(e=>this.now()-e.at<180000).map(e=>e.cue)){
+    const key=compactEvidence(text);return !!key && visibleTexts.some(cue=>cue && compactEvidence(cue)===key);
+  }
   duplicateTopic(topic){const t=normalized(String(topic || '')).join('');return !!t && this.recent.some(e=>this.now()-e.at<this.cooldownMs && e.topic && normalized(e.topic).join('')===t);}
   shownFocus(){return this.recent.filter(e=>this.now()-e.at<this.repeatFocusMs).slice(-4).map(e=>e.focusText || e.text);}
   shownTopics(){return [...new Set(this.recent.filter(e=>this.now()-e.at<180000 && e.topic).slice(-4).map(e=>e.topic))].join(', ');}
@@ -73,20 +95,29 @@ export class HintGate {
     // A missing name in the next sentence is not proof of a topic change.
     // Changed is accepted only from a grounded current classifier decision.
     const changed=decision.continuity==='changed' || (!decision.continuity && !compatible && compactTopic(job.text).includes(next));
-    if(!before || changed){this.topicVersion++;if(before)this.onTopicChange({topic,version:this.topicVersion});}
+    if(!before || changed){if(changed && this.collectContext)this.contextFloorSequence=job.sequence;this.topicVersion++;if(before)this.onTopicChange({topic,version:this.topicVersion});}
     if(!before || changed || decision.continuity==='same' || compatible)this.currentTopic=topic;
     this.topicDecisionSequence=job.sequence;
   }
   rejectionReason(job){
-    if(!this.fresh(job))return 'expired_or_canceled';
-    if(job.topicVersion!==undefined && job.topicVersion!==this.topicVersion)return 'topic_changed';
-    if(job.preview){
+    // Once the writer starts, later speech is queued for the next card. Its
+    // completion must not lose display eligibility just because time passed
+    // or the classifier has already moved on to another subject.
+    if(job.epoch!==this.epoch || job.generationStartedAt===undefined && !this.fresh(job))return 'expired_or_canceled';
+    if(job.generationStartedAt===undefined && job.topicVersion!==undefined && job.topicVersion!==this.topicVersion)return 'topic_changed';
+    if(job.evidenceEntries){
+      for(const evidence of job.evidenceEntries)if(evidence.preview){
+        const current=this.entries.find(e=>e.id===evidence.id);
+        if(!current || !compactEvidence(current.text).includes(compactEvidence(evidence.text)))return 'transcript_changed';
+      }
+    }else if(job.preview){
       const current=this.entries.find(e=>e.id===job.id);
       if(!current || !compactEvidence(current.text).includes(compactEvidence(job.focusText || job.text)))return 'transcript_changed';
     }
     return '';
   }
   relevant(job,topic=''){return !this.rejectionReason(job);}
+  beginGeneration(job){if(this.rejectionReason(job))return false;job.generationStartedAt=this.now();return true;}
   displayDelay(){return Math.max(0,this.nextHint-this.now());}
   duplicateHistory(kind='fact'){
     return this.recent.filter(e=>this.now()-e.at<180000).slice(-6).map(e=>kind==='plan'?e.decisionKey:e.cue).filter(Boolean);
@@ -114,17 +145,22 @@ export class HintGate {
       this.recent=this.recent.filter(e=>now-e.at<180000);
       for(const [key,candidate] of this.generating)if(!this.fresh(candidate))this.generating.delete(key);
       const focus=typeof decision.focus==='string' && job.text.includes(decision.focus.trim())?decision.focus.trim():'';
-      const versionedJob={...job,observedText:job.text,topicVersion:this.topicDecisionSequence===job.sequence?this.topicVersion:job.topicVersion};
+      const versionedJob={...job,observedText:decision.observedText || job.text,topicVersion:this.topicDecisionSequence===job.sequence?this.topicVersion:job.topicVersion};
       let focusedJob=focus?{...versionedJob,text:focus,focusText:focus,context:[job.context,job.text].filter(Boolean).join('\n').slice(-1200)}:versionedJob;
+      if(job.windowEntries){
+        const all=decision.plan?.source==='conversation' || decision.plan?.kind==='recap';
+        const sources=all?job.windowEntries.flatMap(e=>String(decision.observedText || job.text).split('\n').filter(part=>part.trim() && e.text.includes(part)).map(part=>({...e,text:part}))):job.windowEntries.filter(e=>!focus || e.text.includes(focus)).map(e=>({...e,text:focus || e.text}));
+        focusedJob={...focusedJob,context:job.text,evidenceEntries:sources};
+      }
       if(typeof decision.keyword==='string' && decision.keyword.length<=80 && typeof decision.keywordSurface==='string' && decision.keywordSurface.trim() && job.text.includes(decision.keywordSurface.trim()))focusedJob={...focusedJob,keyword:decision.keyword,keywordSurface:decision.keywordSurface};
-      if(decision.plan)focusedJob={...focusedJob,decisionKey:`${decision.plan.topic} ${decision.plan.question}`};
+      if(decision.plan)focusedJob={...focusedJob,decisionKey:decision.plan.source==='conversation'?`${decision.plan.kind}: ${job.text}`:`${decision.plan.topic} ${decision.plan.question}`};
       if(!this.relevant(focusedJob,decision.plan?.topic))return;
       for(const [k,until] of this.failed)if(until<=this.now())this.failed.delete(k);
       const focusKey=normalized(focusedJob.decisionKey || focusedJob.focusText || focusedJob.text).join('');
       if(decision.hint && focusKey && (this.failed.get(focusKey) || 0)>this.now()) {
         this.onStatus('직전 생략 후보 · 새 발화 대기');return;
       }
-      if(decision.hint && [...this.recent.filter(e=>this.now()-e.at<this.repeatFocusMs),...this.generating.values()].some(e=>similarHint(e.decisionKey || e.focusText || e.text,focusedJob.decisionKey || focusedJob.focusText || focusedJob.text))) {
+      if(decision.hint && [...this.recent.filter(e=>this.now()-e.at<this.repeatFocusMs),...this.generating.values()].some(e=>decision.plan?.source==='conversation'?compactEvidence(e.decisionKey)===compactEvidence(focusedJob.decisionKey):similarHint(e.decisionKey || e.focusText || e.text,focusedJob.decisionKey || focusedJob.focusText || focusedJob.text))) {
         this.onStatus('같은 내용 · 힌트 생략');return;
       }
       if(decision.hint) {

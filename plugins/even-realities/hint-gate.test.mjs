@@ -198,3 +198,44 @@ scopedTopic.confirmTopic({id:'one',sequence:1,text:'피라미드'},{topic:'피�
 const beforeRegionalChange=scopedTopic.topicVersion;
 scopedTopic.confirmTopic({id:'two',sequence:2,text:'이제 이집트 피라미드와는 다른 지역 이야기'},{topic:'이집트 피라미드와 다른 지역',focus:'다른 지역',continuity:'changed'});
 assert.ok(scopedTopic.topicVersion>beforeRegionalChange,'an explicit changed decision takes precedence over a shared name prefix');scopedTopic.reset();
+
+// Starting a writer reserves display eligibility; only explicit cancellation
+// or a real correction to the triggering ASR evidence can invalidate it.
+let committedNow=1000;
+const committed=new HintGate({now:()=>committedNow,decide:async()=>({hint:false}),onHint:()=>{}});
+const committedJob={epoch:committed.epoch,topicVersion:committed.topicVersion,at:committedNow,hint:true,sequence:1};
+assert.equal(committed.beginGeneration(committedJob),true);
+committed.topicVersion++;committedNow+=60000;
+assert.equal(committed.relevant(committedJob),true,'new topics and age cannot discard a writer already started');
+assert.equal(committed.beginGeneration({epoch:committed.epoch,topicVersion:committed.topicVersion-1,at:committedNow}),false,'queued old topics still cannot start');
+committed.entries=[{id:'correction',text:'피라미드',preview:true}];
+const correctedDuringGeneration={epoch:committed.epoch,topicVersion:committed.topicVersion,at:committedNow,hint:true,id:'correction',sequence:2,preview:true,focusText:'피라미드'};
+assert.equal(committed.beginGeneration(correctedDuringGeneration),true);committed.validatePreview('correction','피아노');
+assert.equal(committed.rejectionReason(correctedDuringGeneration),'transcript_changed');
+committed.reset();assert.equal(committed.relevant(committedJob),false,'explicit stop/mode/wake cancellation still wins');
+committed.complete({epoch:committed.epoch,sequence:3,text:'발화'},{displayed:true,text:'같은 문장입니다.',topic:'주제'});
+assert.equal(committed.identicalCue('같은  문장입니다.'),true);assert.equal(committed.identicalCue('같은 문장입니다.',[]),false,'a closed card must not veto an already completed answer');assert.equal(committed.identicalCue('같은 문장으로 새 사실을 더합니다.'),false);committed.reset();
+console.log('PASS: reserved writer display after topic/age changes, explicit cancellation and ASR correction precedence, exact duplicate retention');
+
+// Production context collection: coalesce fragments before classification.
+let contextNow=100000,collectedJobs=[],collectedCards=[];
+const collector=new HintGate({collectContext:true,windowMs:20000,settleMs:1200,collectWaitMs:4000,now:()=>contextNow,intervalMs:0,cooldownMs:0,generationIntervalMs:0,
+ decide:async job=>{collectedJobs.push(job);return job.latestText.includes('청동기')?{hint:false,continuity:'changed',topic:'청동기 시대',focus:'청동기 시대'}:{hint:true,continuity:'same',focus:'금요일 오후 3시',plan:{kind:'schedule',source:'conversation',topic:'회의 준비',question:'회의 일정과 준비 사항',evidence:'금요일 오후 3시'}};},onHint:job=>collectedCards.push(job)});
+collector.observe('금요일 오후 3시에 회의해요.',{id:'date',preview:true});
+assert.equal(collectedJobs.length,0);assert.equal(collector.pending.due,contextNow+4000);
+contextNow+=300;collector.observe('장소는 2층 회의실이고 노트북을 가져오세요.',{id:'place'});
+assert.equal(collectedJobs.length,0);assert.equal(collector.pending.windowCount,2);
+contextNow+=1201;clearTimeout(collector.timer);await collector.pump();
+assert.equal(collectedJobs.length,1);assert.match(collectedJobs[0].text,/금요일.*\n장소/s);assert.equal(collectedJobs[0].latestText,'장소는 2층 회의실이고 노트북을 가져오세요.');
+const collectedCard=collectedCards[0];assert.equal(collectedCard.hintPlan.kind,'schedule');assert.equal(collector.beginGeneration(collectedCard),true);
+collector.validatePreview('date','금요일 오후 4시에 회의해요.');assert.equal(collector.rejectionReason(collectedCard),'transcript_changed','correction to an earlier sentence must invalidate its derived schedule');
+contextNow+=1000;collector.observe('이제 청동기 시대 이야기로 바뀌었어요.',{id:'new-topic'});
+contextNow+=1201;clearTimeout(collector.timer);await collector.pump();
+contextNow+=100;collector.observe('청동기 시대의 지역별 차이를 살펴봐요.',{id:'new-detail'});
+assert.doesNotMatch(collector.pending.text,/금요일|회의실/,'confirmed topic change clears old context for subsequent judgments');
+collector.reset();assert.equal(collector.entries.length,0);
+console.log('PASS: multi-utterance collection delay, earlier-sentence grounding, ASR correction and topic-boundary window reset');
+let updates=[];
+const growing=new HintGate({collectContext:true,settleMs:0,collectWaitMs:0,intervalMs:0,generationIntervalMs:0,cooldownMs:0,decide:async()=>({hint:true,focus:'금요일',plan:{topic:'회의',question:'일정 정리',kind:'schedule',source:'conversation'}}),onHint:job=>updates.push(job)});
+growing.observe('금요일에 회의합니다.',{id:'first-detail'});await tick();growing.complete(updates[0],{displayed:true,text:'금요일 회의',topic:'회의'});
+growing.observe('장소는 2층이며 노트북을 준비하세요.',{id:'added-detail'});await tick();assert.equal(updates.length,2,'new schedule details must not be suppressed just because the research question is unchanged');growing.reset();
