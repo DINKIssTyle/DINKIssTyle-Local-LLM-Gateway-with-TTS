@@ -75,7 +75,7 @@ const context={DKST_DEFAULT_SERVER_URL:'https://192.168.1.4:2806',waitForEvenApp
   const word=reqBody.triggerWord; const triggered=!!word && nextTranscript.includes(word);
   return{ok:true,json:async()=>({text:nextRejected?'':nextTranscript,saved:!nextRejected,rejected:nextRejected,triggered:nextRejected?false:triggered,prompt:triggered ? nextTranscript.split(word).slice(1).join(word).trim() : ''})};
  }
- if(url.endsWith('/api/chat')){if(JSON.parse(opts.body).glasses_hint_phase==='judge'){
+ if(url.endsWith('/api/chat')){const payload=JSON.parse(opts.body);if(payload.glasses_task && !Array.isArray(payload.messages))return {ok:false,status:400,text:async()=>JSON.stringify({error:"'messages' field is required"})};if(payload.glasses_hint_phase==='judge'){
  if(judgeError)return{ok:false,status:503};
  let done=false;return{ok:true,body:{getReader:()=>({read:async()=>done?{done:true}:(done=true,{value:Buffer.from('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify(judgeReply)}}]})+'\n\ndata: [DONE]\n\n'),done:false})})}};
  }if(JSON.parse(opts.body).glasses_hint_phase==='plan'){
@@ -575,7 +575,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  const lastSttBody = JSON.parse(requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).at(-1).opts.body);
  assert.equal(lastSttBody.language,'en','Translate mode with target ko and auto source must resolve to safe 2-letter ISO language code en');
  const lastTranslateChat = JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
- assert.match(lastTranslateChat.system_prompt,/positive[\s\S]*negative/);
+ assert.match(lastTranslateChat.messages[0].content,/positive[\s\S]*negative/);
  assert.match(element('chat-output').textContent,/긍정: 네, 주세요\./);
  assert.match(element('hud-screen').innerHTML,/hud-ai-body">커피 드시겠어요\?/);
  const preview=element('hud-screen').innerHTML;
@@ -639,7 +639,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.doesNotMatch(element('hud-screen').innerHTML,/프롬프트|생각 중|생성 중|번역 중/,'progress must stay outside the translation box');
  assert.match(element('hud-notice').textContent,/번역/);
  const replyOnly=JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
- assert.match(replyOnly.system_prompt,/번역문을 생성·수정하지 마세요/);
+ assert.match(replyOnly.messages[0].content,/번역문을 생성·수정하지 마세요/);
  assert.equal(replyOnly.glasses_hint,true);assert.equal(replyOnly.hint_research.source,'internal');
  chromeText='Chrome의 최신 번역';
  chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({translation:'LLM이 덮어쓰면 안 되는 문장',positive:'네.\nはい。',negative:'아니요.\nいいえ。'})})+'\n\n');

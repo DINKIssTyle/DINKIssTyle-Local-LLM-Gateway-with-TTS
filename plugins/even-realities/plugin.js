@@ -2317,7 +2317,9 @@ import { LocalAgreement } from './local-agreement.mjs';
         if(isAmbient)body.glasses_client=true;
         if(chromeText){body.glasses_hint=true;body.glasses_hint_phase='answer';body.hint_research={source:'internal'};}
         if(isAmbient && (options.hint || options.directQuestion)){body.glasses_hint=true;body.glasses_hint_phase=options.directQuestion?'direct':phase;}
-        if(settings.llm_mode==='stateful') {
+        // Translation and reply examples use stateless /chat/completions even
+        // when interactive chat is configured for the native stateful API.
+        if(settings.llm_mode==='stateful' && activeMode!=='translate') {
           body.input=prompts.userPrompt;body.system_prompt=prompts.systemPrompt;
           if((isAmbient && (options.hint || options.directQuestion)) || settings.context_strategy!=='stateful')body.store=false;
         } else body.messages=[{role:'system',content:prompts.systemPrompt},{role:'user',content:prompts.userPrompt}];
