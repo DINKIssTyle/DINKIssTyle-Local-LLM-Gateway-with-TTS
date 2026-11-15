@@ -532,16 +532,13 @@ label:has(> #hint-web-search) { display: flex; align-items: flex-start; gap: 8px
 .hud-ai-mode .hud-ai-body { min-height: 0; max-height: calc(var(--hud-content-lines, 6) * 1.4em); flex: 0 1 auto; }
 .hud-ai-mode .hud-transcript-box { flex: 0 0 auto; min-height: 0; overflow: hidden; }
 .hud-ai-mode .hud-transcript-body { min-height: 0; max-height: none; flex: 1; }
-.hud-hint-box .hud-ai-header { font-size: inherit; opacity: 1; border-bottom: 0; padding-bottom: 0; }
+.hud-hint-box .hud-ai-header { font-size: inherit; opacity: 1; border-bottom: 1px solid var(--accent-green); padding-bottom: 3px; flex:none; gap:8px; }
 .hud-hint-box .hud-ai-badge { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: 0; }
-.hud-hint-box .hud-ai-meta { display: none; }
+.hud-hint-box .hud-ai-meta { display:block; flex:none; white-space:nowrap; }
 
 .hud-ai-mode .hud-transcript-label { font-size: 10px; line-height: 12px; }
 .hud-ai-mode .hud-transcript-body { flex: 0 1 auto; line-height: 18px; max-height: 54px; }
 
-.hud-hint-last-line { display:flex; justify-content:space-between; gap:8px; }
-.hud-hint-last-line > span:first-child { min-width:0; }
-.hud-hint-countdown { flex:none; white-space:nowrap; font-variant-numeric:tabular-nums; opacity:.8; }
 
 #btn-head-resume[hidden] { display:none; }
 .hud-head-paused { color:var(--text-secondary);font-size:13px;padding:12px 0; }

@@ -1,23 +1,20 @@
 import {getTextWidth} from '@evenrealities/pretext';
-import {wrapHUDLines} from './hud-status.mjs';
+import {wrapHUDLines,hudNoticeText} from './hud-status.mjs';
 import {hintWindow} from './adaptive-hud.mjs';
 
-const WIDTH=570,TAIL=92; // fixed timer reserve; never reflow as seconds tick.
+const WIDTH=570,TAIL=92;
 export function secondsPerHintLine(value){if(value==null || value==='')return 3;const n=Number(value);return Number.isFinite(n)?Math.max(1,Math.min(30,Math.round(n*2)/2)):3;}
-export function timedHintLines(text){
-  const lines=wrapHUDLines(text,WIDTH);
-  if(lines.length && getTextWidth(lines.at(-1))>WIDTH-TAIL)lines.splice(-1,1,...wrapHUDLines(lines.at(-1),WIDTH-TAIL));
-  return lines;
+export function timedHintLines(text){return wrapHUDLines(text,WIDTH);}
+export function aiTitleLine(title,seconds=null){
+  const label=seconds===null?'':`${Math.max(0,Math.ceil(seconds))}초`;
+  const caption=hudNoticeText(String(title || 'AI 답변').replace(/\s+/gu,' ').trim(),label?WIDTH-TAIL:WIDTH);
+  if(!label)return caption;
+  let pad=' ';while(getTextWidth(caption+pad+' '+label)<=WIDTH)pad+=' ';
+  return caption+pad+label;
 }
 export function hintCountdownWindow(text,title,offset,hideTranscript,seconds){
-  const win=hintWindow(timedHintLines(text).join('\n'),title,offset,hideTranscript);
-  const lines=[...win.lines];
-  if(lines.length && win.offsetLine+lines.length===win.totalLines){
-    const label=`${Math.max(0,Math.ceil(seconds))}초`;let pad=' ';
-    while(getTextWidth(lines.at(-1)+pad+' '+label)<=WIDTH)pad+=' ';
-    lines[lines.length-1]+=pad+label;
-  }
-  return {...win,visibleText:(win.layout.title?[win.layout.title,...lines]:lines).join('\n')};
+  const win=hintWindow(text,title,offset,hideTranscript);
+  return {...win,headerText:aiTitleLine(win.layout.title,seconds)};
 }
 export class HintLifetime {
   constructor({now=()=>Date.now(),schedule=setTimeout,cancel=clearTimeout,onTick=()=>{},onClose=()=>{}}={}){Object.assign(this,{now,schedule,cancel,onTick,onClose});this.generation=0;this.timer=null;this.deadline=0;this.text='';this.title='';this.seconds=3;}

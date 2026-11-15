@@ -197,7 +197,9 @@
         <label class="toggle-label"><input type="checkbox" id="hint-auto-close"><span>AI 힌트·답변 자동 닫기</span></label>
         <label for="hint-seconds-per-line">한 줄당 표시 시간 (초)</label>
         <input type="number" id="hint-seconds-per-line" value="3" min="1" max="30" step="0.5" disabled>
-        <p style="font-size:12px;color:var(--text-secondary)">안경 본문 전체 줄 수 × 초/줄로 계산합니다(제목 제외). 답변 끝줄 오른쪽에 남은 시간을 표시합니다. 변경하면 현재 힌트·완료된 AI 답변의 표시 시간을 다시 계산합니다. 답변 생성 중·호출어 질문 대기·번역에는 적용하지 않습니다.</p>
+        <p style="font-size:12px;color:var(--text-secondary)">안경 본문 전체 줄 수 × 초/줄로 계산합니다(제목 제외). 고정 제목줄 오른쪽에 남은 시간을 표시합니다. 변경하면 현재 힌트·완료된 AI 답변의 표시 시간을 다시 계산합니다. 답변 생성 중·호출어 질문 대기·번역에는 적용하지 않습니다.</p>
+        <label class="toggle-label"><input type="checkbox" id="trigger-transcript-only"><span>호출어 발동 시 LLM에 보낼 전사만 표시</span></label>
+        <p style="font-size:12px;color:var(--text-secondary)">평소 전사·임시 초안은 숨기고 호출어 뒤 실제 AI 질문만 표시합니다. 전체 전사는 계속 저장됩니다. 전사문 숨기기와 함께 켜면 질문은 AI 창이 뜨기 전까지만 표시하고, 창 아래에는 중복 표시하지 않습니다.</p>
         <label class="toggle-label"><input type="checkbox" id="head-gesture-enabled"><span>헤드 제스처로 화면·STT 토글</span></label>
         <button id="head-calibrate" type="button" class="btn btn-secondary" disabled>제스처 보정 · 정면 저장</button>
         <p id="head-gesture-status" role="status">처음 한 번 정면·고개를 올린 자세를 보정하세요. 고개를 올렸다 정면으로 돌아오면 일시정지/재개합니다.</p>
