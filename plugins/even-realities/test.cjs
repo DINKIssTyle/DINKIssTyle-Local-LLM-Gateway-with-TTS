@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const src = fs.readFileSync('plugin.js','utf8').replace(/^import .*\n/gm, '').replace('  function enqueueClip(', `  window.__queueTest={ai(){resetQueuesForModeSwitch('ai');config.glassesMode='ai';captureFailure='';isRecording=true;segmenter=new SpeechSegmenter();},refreshIcons(){queueHudIcons(true);},microphone:toggleVoiceRecording,dismiss:dismissAIWindow,headIMU:handleHeadIMU,headWait(){return headTransition?.catch(()=>{});},headState(){return {paused:headPaused,imu:headImuActive,phase:headCalibrationPhase,uncertain:micCloseUncertain};},lifetime:hintLifetime,showHint(title,text,transcript){answerAutoCloseEligible=!!text;answerVoicePrompt='';answerTitle=title;answerText=text;captionFinal=transcript;captionStable=captionDraft='';startHintLifetime();renderLiveHUD();},settings:applyLiveSettings,hintGate,liveTranslations,translationHistory,enqueueClip,drainClips,stopVoiceRecording,reset(){resetQueuesForModeSwitch('translate');config.glassesMode='translate';},state(){return{answer:answerText,title:answerTitle,ids:pendingClips.map(c=>c.segmentId),failure:captureFailure,recording:isRecording,engine:activeSttEngine,mode:config.glassesMode,active:activeUtterance?.id,previewBusy};},record(){isRecording=true;segmenter=new SpeechSegmenter();}};
+const src = fs.readFileSync('plugin.js','utf8').replace(/^import .*\n/gm, '').replace('  function enqueueClip(', `  window.__queueTest={ai(){resetQueuesForModeSwitch('ai');config.glassesMode='ai';captureFailure='';isRecording=true;segmenter=new SpeechSegmenter();},refreshIcons(){queueHudIcons(true);},microphone:toggleVoiceRecording,dismiss:dismissAIWindow,headIMU:handleHeadIMU,headWait(){return headTransition?.catch(()=>{});},headState(){return {paused:headPaused,imu:headImuActive,phase:headCalibrationPhase,uncertain:micCloseUncertain};},stack:hintStack,addHint(title,text){displayHintCard({topic:title,kind:'key',evidence:title},text);},lifetime:hintLifetime,showHint(title,text,transcript){answerAutoCloseEligible=!!text;answerVoicePrompt='';answerTitle=title;answerText=text;captionFinal=transcript;captionStable=captionDraft='';startHintLifetime();renderLiveHUD();},settings:applyLiveSettings,preview:observeAIPreview,clearSettings(){chatSettingsCache.clear();},hintGate,liveTranslations,translationHistory,enqueueClip,drainAI,drainClips,stopVoiceRecording,reset(){resetQueuesForModeSwitch('translate');config.glassesMode='translate';},state(){return{answer:answerText,title:answerTitle,ids:pendingClips.map(c=>c.segmentId),failure:captureFailure,recording:isRecording,engine:activeSttEngine,mode:config.glassesMode,active:activeUtterance?.id,previewBusy};},record(){isRecording=true;segmenter=new SpeechSegmenter();}};
   function enqueueClip(`);
 const elements = new Map();
 function element(id) {
@@ -13,6 +13,7 @@ function element(id) {
 }
 let modelFailure=false;
 let modelCatalog=[{key:'test-model',display_name:'Test Model'}];
+let nextHintProof=undefined;
 let llmMode='standard', chatReply=null, cueReply=null, chromeText=null, appleText='Apple 번역 결과';
 let nextTranscript = '이븐 테스트';let nextPreviewText=null;
 let nextRejected = false;
@@ -25,15 +26,25 @@ let hintClock=0,hintJobs=[];
 let rejectAutoLang=false;
 let sttReplies=[];
 let hintDecision={hint:false,reason:'no_hint'};
-let judgeReply={hint:false},judgeError=false;
+let judgeReply={hint:false},judgeError=false;let hintComparison={plan:false,fact:false};
 let nativeSaved = '';
 const documentHandlers = {};
 let deviceHandler;
 let handler; const imuCalls=[];const audioCalls=[]; const updates=[]; const requests=[]; let startup; let shutdown;let nativePage,validatePage=()=>{};const rebuilds=[];const imageUpdates=[];
 const bridge={async imuControl(open,pace){imuCalls.push([open,pace]);return true;},async getDeviceInfo(){return{model:'g2',sn:'glasses-1',status:{sn:'glasses-1',connectType:'connected',batteryLevel:82}};},onDeviceStatusChanged(fn){deviceHandler=fn;return()=>{};},async getLocalStorage(){return nativeSaved;},async setLocalStorage(key,value){nativeSaved=value;return true;},async createStartUpPageContainer(p){validatePage(p);startup=nativePage=p;return 0;},async rebuildPageContainer(p){validatePage(p);nativePage=p;rebuilds.push(p);return true;},onEvenHubEvent(fn){handler=fn;},async textContainerUpgrade(p){const container=nativePage.textObject.find(c=>c.containerID===p.containerID);assert.ok(container,`text update targets missing container ${p.containerID}`);if(p.content!==undefined)container.content=p.content;if(p.textColor!==undefined)container.textColor=p.textColor;updates.push(p);return true;},async updateImageRawData(p){imageUpdates.push(p);return 'success';},async audioControl(...args){audioCalls.push(args);return true;},async shutDownPageContainer(mode){shutdown=mode;return true;}};
 const chunks=['data: {"choices":[{"delta":{"con','tent":"안녕"}}]}\n\ndata: {"choices":[{"delta":{"content":"하세요"}}]}\n\ndata: [DONE]\n\n'];
+// Simulate gateway-owned proof events; dedicated cases override this default.
+function withHintProof(reply,body){
+ if(!reply.ok || body.glasses_hint_phase!=='answer' || !body.hint_research?.require_grounding)return reply;
+ const proof=nextHintProof===undefined?{version:1,mode:'known',source:'internal',topic:body.hint_research.topic}:nextHintProof;
+ nextHintProof=undefined;
+ if(!proof)return reply;
+ if(reply.body){const original=reply.body;return {...reply,body:{getReader(){const reader=original.getReader();let first=true;return{read:async()=>first?(first=false,{done:false,value:Buffer.from('data: '+JSON.stringify({type:'hint.grounding',grounding:proof})+'\n\n')}):reader.read()};}}};}
+ return {...reply,json:async()=>({...await reply.json(),hint_grounding:proof})};
+}
 const context={DKST_DEFAULT_SERVER_URL:'https://192.168.1.4:2806',waitForEvenAppBridge:async()=>bridge,AudioInputSource:{Glasses:'glasses',Phone:'phone'},OsEventTypeList:{CLICK_EVENT:0,DOUBLE_CLICK_EVENT:3},console,TextDecoder,Uint8Array,URL,AbortController,setTimeout:(fn,ms)=>{const timer=setTimeout(fn,ms);if(ms>=1000)timer.unref();return timer;},clearTimeout,alert(){},localStorage:{getItem(){return null;},setItem(){}},window:{location:{origin:'https://192.168.1.4:2806',hostname:'192.168.1.4'},btoa:s=>Buffer.from(s,'binary').toString('base64')},document:{body:{style:{overflow:''}},activeElement:{focus(){}},addEventListener(type,fn){documentHandlers[type]=fn;},readyState:'complete',getElementById:element,createElement:()=>({})},fetch:async(url,opts={})=>{
  requests.push({url,opts});
+ if(url.endsWith('/api/glasses/hint-compare'))return{ok:true,json:async()=>({checked:true,duplicate:hintComparison[JSON.parse(opts.body).kind]===true})};
  if(url.endsWith('/api/glasses/hint-decision')){if(hintDecision.error)return{ok:false,status:503};return{ok:true,json:async()=>hintDecision};}
  if(url.endsWith('/api/apple/status'))return{ok:true,json:async()=>({available:true,speechAvailable:true})};
  if(url.endsWith('/api/stt/apple/prepare') || url.endsWith('/api/stt/apple/stop') || url.endsWith('/api/translate/apple/prepare'))return{ok:true,json:async()=>({status:'ready'})};
@@ -69,7 +80,7 @@ const context={DKST_DEFAULT_SERVER_URL:'https://192.168.1.4:2806',waitForEvenApp
  }if(JSON.parse(opts.body).glasses_hint_phase==='plan'){
  const content=(Array.isArray(cueReply)?cueReply.shift():cueReply) || JSON.stringify({topic:'묵시적 갱신',question:'묵시적 갱신은 무엇을 뜻하나요?',knownFacts:['계약서에 묵시적 갱신이 나옴'],source:'internal'});
  let done=false;return{ok:true,body:{getReader:()=>({read:async()=>done?{done:true}:(done=true,{value:Buffer.from('data: '+JSON.stringify({type:'message.delta',content})+'\n\n'),done:false})})}};
- }if(chatReply){const reply=Array.isArray(chatReply)?chatReply.shift():chatReply;if(!Array.isArray(chatReply) || !chatReply.length)chatReply=null;return reply;}if(holdChat){holdChat=false;await new Promise((resolve,reject)=>{const aborted=()=>{const err=new Error('aborted');err.name='AbortError';reject(err);};opts.signal?.addEventListener('abort',aborted,{once:true});releaseChat=()=>{opts.signal?.removeEventListener('abort',aborted);resolve();};});}let i=0;return{ok:true,body:{getReader:()=>({read:async()=>i<chunks.length?{value:Buffer.from(chunks[i++]),done:false}:{done:true}})}};}
+ }if(chatReply){const reply=Array.isArray(chatReply)?chatReply.shift():chatReply;if(!Array.isArray(chatReply) || !chatReply.length)chatReply=null;return withHintProof(reply,JSON.parse(opts.body));}if(holdChat){holdChat=false;await new Promise((resolve,reject)=>{const aborted=()=>{const err=new Error('aborted');err.name='AbortError';reject(err);};opts.signal?.addEventListener('abort',aborted,{once:true});releaseChat=()=>{opts.signal?.removeEventListener('abort',aborted);resolve();};});}let i=0;return withHintProof({ok:true,body:{getReader:()=>({read:async()=>i<chunks.length?{value:Buffer.from(chunks[i++]),done:false}:{done:true}})}},JSON.parse(opts.body));}
  throw Error('Unexpected request '+url);
 }};
 const tick=()=>new Promise(r=>setImmediate(r));
@@ -82,7 +93,11 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  const autoCloseModule=await import('./hint-autoclose.mjs');Object.assign(context,autoCloseModule);
  context.HintLifetime=class extends autoCloseModule.HintLifetime{constructor(options){super({...options,now:()=>hintClock,schedule:fn=>{hintJobs.push(fn);return hintJobs.length;},cancel:()=>{}});}};
  Object.assign(context,await import('./adaptive-hud.mjs'));
+ const hintStackModule=await import('./hint-stack.mjs');Object.assign(context,hintStackModule);
+ context.HintStack=class extends hintStackModule.HintStack{constructor(options){super({...options,now:()=>hintClock,schedule:fn=>{hintJobs.push(fn);return hintJobs.length;},cancel:()=>{}});}};
  Object.assign(context,await import('./hint-judge.mjs'));
+ Object.assign(context,await import('./hint-grounding.mjs'));
+ Object.assign(context,await import('./realtime-hints.mjs'));
  Object.assign(context,await import('./settings-menu.mjs'));
  Object.assign(context,await import('./role-models.mjs'));
  Object.assign(context,await import('./live-translation.mjs'));
@@ -361,7 +376,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.match(element('hud-notice').textContent,/\|/);
  bridge.audioControl=normalAudioControl;
  // Text entry uses the same AI queue and chooses the effective account protocol.
- llmMode='stateful';
+ llmMode='stateful';context.window.__queueTest.clearSettings();
  function sseReply(text){let sent=false;return{ok:true,body:{getReader:()=>({read:async()=>sent?{done:true}:(sent=true,{done:false,value:Buffer.from(text)})})}};}
  chatReply=sseReply('event: model_load.progress\r\ndata: {"type":"model_load.progress","progress":0.5}\r\n\r\nevent: tool_call.arguments\r\ndata: {"type":"tool_call.arguments","tool":"web_search","arguments":{"query":"서울 날씨"}}\r\n\r\nevent: message.delta\r\ndata: {"type":"message.delta","content":"임시 답변"}\r\n\r\ndata: {"type":"reasoning.delta","content":"비공개 추론"}\n\ndata: {"type":"chat.end","result":{"output":[{"type":"message","content":"최종 답변\\n\\n검색 출처:\\n- [기상청](https://www.kma.go.kr)"}]}}\n\ndata: {"type":"request.complete","final_assistant_content":"최종 답변\\n\\n검색 출처:\\n- [기상청](https://www.kma.go.kr)"}\n\n');
  element('chat-input').value='텍스트 질문';
@@ -390,35 +405,57 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,beforeHints,'ordinary ambient conversation must not generate an answer');
  assert.ok(requests.some(r=>r.url.endsWith('/api/glasses/hint-decision')));
  assert.match(element('transcript-log').textContent,/오늘도 수고/,'hint filtering must not filter saved transcripts');
- context.window.__queueTest.hintGate.reset();
+ context.window.__queueTest.hintGate.reset({forgetHistory:true});
  hintDecision={hint:true,category:'explain'};
  chatReply=sseReply('data: '+JSON.stringify({type:'request.complete',final_assistant_content:JSON.stringify({fact:'묵시적 갱신은 계약 조건에 따른 자동 연장을 뜻합니다.',adds_information:true})})+'\n\n');
  nextTranscript='계약서에 묵시적 갱신이라는 조항이 나온대';utterance();await tick();await tick();await tick();
  const hintBody=JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
  assert.equal(hintBody.glasses_hint,true);assert.equal(hintBody.store,false);
  assert.match(hintBody.system_prompt,/정보 비서/);assert.doesNotMatch(hintBody.input,/<conversation>|<latest_utterance>/);assert.equal(hintBody.hint_research.source,'internal');assert.match(element('chat-output').textContent,/자동 연장/);
- context.window.__queueTest.hintGate.reset();hintDecision={error:true};
+ context.window.__queueTest.hintGate.reset({forgetHistory:true});hintDecision={error:true};
  const callsBeforeError=requests.filter(r=>r.url.endsWith('/api/chat')).length;
  nextTranscript='다음 전사는 판별 오류와 독립적으로 저장됩니다';utterance();await tick();await tick();await tick();
  assert.equal(context.window.__queueTest.state().recording,true);
  assert.match(element('hint-status').textContent,/전사 계속/);
  assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,callsBeforeError);
- context.window.__queueTest.hintGate.reset();hintDecision={hint:true,category:'check'};
+ context.window.__queueTest.hintGate.reset({forgetHistory:true});hintDecision={hint:true,category:'check'};
  chatReply=sseReply('data: {"type":"message.delta","content":"HINT_SKIP"}\n\ndata: {"type":"request.complete","final_assistant_content":"HINT_SKIP"}\n\n');
  nextTranscript='또 다른 개념이 대화에 나왔어';utterance();await tick();await tick();await tick();
  assert.doesNotMatch(element('hud-screen').innerHTML,/HINT_SKIP/);
  assert.match(element('chat-output').textContent,/자동 연장/,'skip must preserve the useful previous cue');
- // JEV-selected stable knowledge needs only one LLM request and no research.
- context.window.__queueTest.hintGate.reset();
+ // Legacy immediate facts must pass the same verified answer path as planned hints.
+ context.window.__queueTest.hintGate.reset({forgetHistory:true});
  cueReply=JSON.stringify({topic:'피라미드',cue_type:'concept',source:'internal',fact:'이집트 피라미드는 왕실 무덤으로 건립되었습니다.',adds_information:true});
+ chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({fact:'이집트 피라미드는 왕실 무덤으로 건립되었습니다.',adds_information:true})})+'\n\n');
  const fastStart=requests.filter(r=>r.url.endsWith('/api/chat')).length;
  nextTranscript='피라미드 영상이 나와';utterance();await tick();await tick();await tick();
- assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,fastStart+1);
+ assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,fastStart+2);
  assert.match(element('chat-output').textContent,/왕실 무덤/);
  assert.doesNotMatch(element('hud-screen').innerHTML,/보충할 정보 찾는 중|대화에 없는 질문 구성/);
  cueReply=null;
+ // Source failures retain the last good card and never expose model speculation.
+ const verifiedQuote='피라미드 건축에서는 무거운 석재를 옮길 때 경사로를 활용한 것으로 추정됩니다.';
+ const quoteProof={version:1,mode:'quote',source:'web',topic:'달무늬 소자',records:[{title:'피라미드 건축',url:'https://example.com/pyramid',text:verifiedQuote}]};
+ for(const [proof,result,status] of [
+   [quoteProof,{fact:'달무늬 소자는 특별한 동력 장치입니다.',support_quote:verifiedQuote,topic:'달무늬 소자',adds_information:true},/출처 근거 불일치/],
+   [null,{fact:'검증 없이 만들어 낸 설명입니다.',adds_information:true},/게이트웨이 업데이트 필요/]
+ ]){
+   context.window.__queueTest.hintGate.reset({forgetHistory:true});
+   cueReply=JSON.stringify({topic:'달무늬 소자',question:'달무늬 소자는 무엇인가',knownFacts:[],source:'web'});
+   nextHintProof=proof;chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify(result)})+'\n\n');
+   nextTranscript='달무늬 소자가 나왔대';utterance();for(let i=0;i<6;i++)await tick();
+   assert.match(element('hint-status').textContent,status);
+   assert.match(element('chat-output').textContent,/왕실 무덤/);
+   assert.equal(context.window.__queueTest.state().recording,true);
+ }
+ context.window.__queueTest.hintGate.reset({forgetHistory:true});
+ nextHintProof={...quoteProof,topic:'피라미드'};chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({fact:'출처에 없는 인과 설명입니다.',support_quote:verifiedQuote,topic:'피라미드',adds_information:true})})+'\n\n');
+ nextTranscript='달무늬 소자가 피라미드에 나온대';utterance();for(let i=0;i<6;i++)await tick();
+ assert.equal(element('chat-output').textContent,verifiedQuote);
+ assert.match(context.window.__queueTest.state().title,/피라미드$/);
+ cueReply=null;
  // Web preference first extracts the actual topic and an independent lookup question.
- context.window.__queueTest.hintGate.reset();
+ context.window.__queueTest.hintGate.reset({forgetHistory:true});
  element('hint-web-search').checked=true;await element('hint-web-search').handlers.change();
  hintDecision={hint:true,category:'background',focus:'맥북 에어 M4의 무게 얘기야'};
  cueReply=JSON.stringify({topic:'맥북 에어 M4',question:'MacBook Air M4 13인치와 15인치의 무게는 각각 얼마인가?',knownFacts:[],source:'web'});
@@ -431,31 +468,32 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.equal(webBody.hint_research.query,'MacBook Air M4 13인치와 15인치의 무게는 각각 얼마인가?');
  assert.doesNotMatch(webBody.input,/네, 알겠습니다/);
  assert.match(element('chat-output').textContent,/검색 근거에서 확인한/);
- context.window.__queueTest.hintGate.reset();
+ context.window.__queueTest.hintGate.reset({forgetHistory:true});
  cueReply=[JSON.stringify({topic:'맥북 에어',question:'맥북 에어 M4 무게는?',knownFacts:[],source:'web'}),JSON.stringify({topic:'맥북 에어',cue_type:'concept',source:'internal',fact:'맥북 에어는 휴대성을 중시한 노트북 제품군입니다.',adds_information:true})];
  chatReply={ok:false,status:424,text:async()=>'힌트 근거 조회 실패'};
  nextTranscript='맥북 에어 M4의 무게 얘기야';utterance();await tick();await tick();await tick();await tick();
- assert.match(element('hint-status').textContent,/웹검색 사용 불가 · 내부 지식 힌트/);
- assert.match(element('chat-output').textContent,/휴대성/);cueReply=null;
+ assert.match(element('hint-status').textContent,/명칭·출처를 확인하지 못해/);
+ assert.doesNotMatch(element('chat-output').textContent,/휴대성/);cueReply=null;
  element('hint-web-search').checked=false;await element('hint-web-search').handlers.change();
  // Ambient questions and requests remain observed data, never direct AI chat.
- context.window.__queueTest.hintGate.reset();hintDecision={hint:false};
+ context.window.__queueTest.hintGate.reset({forgetHistory:true});hintDecision={hint:false};
  const directStart=requests.filter(r=>r.url.endsWith('/api/chat')).length;
  const judgeStart=requests.filter(r=>r.url.endsWith('/api/glasses/hint-decision')).length;
  nextTranscript='청동기 시대는 언제부터 언제까지인가요';utterance();await tick();await tick();await tick();
  assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,directStart,'ambient question must not bypass JEV');
  assert.ok(requests.filter(r=>r.url.endsWith('/api/glasses/hint-decision')).length>judgeStart);
- context.window.__queueTest.hintGate.reset();
+ context.window.__queueTest.hintGate.reset({forgetHistory:true});
  nextTranscript='그 내용을 웹에서 검색해줘';utterance();await tick();await tick();await tick();
  assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,directStart,'ambient command must not become an AI instruction');
- context.window.__queueTest.hintGate.reset();hintDecision={hint:true,category:'background'};
+ context.window.__queueTest.hintGate.reset({forgetHistory:true});hintDecision={hint:true,category:'background'};
  cueReply=JSON.stringify({topic:'청동기 시대',cue_type:'concept',source:'internal',fact:'한반도 청동기 시대는 대략 기원전 2000~1500년 무렵 시작되어 기원전 4세기경까지 이어집니다.',adds_information:true});
+ chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({fact:'한반도 청동기 시대는 청동으로 도구를 만들던 시대입니다.',adds_information:true})})+'\n\n');
  nextTranscript='청동기 시대는 언제부터 언제까지인가요';utterance();await tick();await tick();await tick();
  const autonomous=JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
- assert.equal(autonomous.glasses_hint_phase,'plan');assert.match(autonomous.system_prompt,/역할: 자율 정보 제공/);
+ assert.equal(autonomous.glasses_hint_phase,'answer');assert.equal(autonomous.hint_research.require_grounding,true);
  assert.match(element('chat-output').textContent,/한반도 청동기 시대/);cueReply=null;
  // An explicit wake-word question interrupts an optional hint without stopping capture.
- hintDecision={hint:true,category:'background'};context.window.__queueTest.hintGate.reset();holdChat=true;
+ hintDecision={hint:true,category:'background'};context.window.__queueTest.hintGate.reset({forgetHistory:true});holdChat=true;
  nextTranscript='전문적인 새 개념이 대화에 등장했어';utterance();await tick();await tick();await tick();
  assert.equal(JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body).glasses_hint_phase,'answer');
  assert.match(element('hud-screen').innerHTML,/한반도 청동기 시대/,'private cue work must keep the previously displayed answer');
@@ -464,7 +502,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.match(element('chat-output').textContent,/새 질문에 우선/);
  assert.equal(context.window.__queueTest.state().recording,true);
  // Wake-only acknowledgement is local; the next utterance is explicit chat.
- context.window.__queueTest.hintGate.reset();hintDecision={hint:false};
+ context.window.__queueTest.hintGate.reset({forgetHistory:true});hintDecision={hint:false};
  const beforeWake=requests.filter(r=>r.url.endsWith('/api/chat')).length;
  nextTranscript='이븐';utterance();await tick();await tick();await tick();
  assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,beforeWake,'wake-only must not spend an LLM request');
@@ -640,7 +678,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  chatReply=sseReply('data: {"choices":[{"delta":{"content":"오류 전 텍스트"}}]}\n\nevent: error\ndata: LLM error: input is required\n\n');
  element('chat-input').value='오류 확인';element('text-chat-form').handlers.submit({preventDefault(){}});await tick();await tick();await tick();
  assert.match(element('chat-output').textContent,/응답 중단: LLM error: input is required/,'plain SSE errors must preserve the original cause alongside the partial answer');
- llmMode='standard';
+ llmMode='standard';context.window.__queueTest.clearSettings();
  chatReply={ok:false,status:401,text:async()=>'LM_STUDIO_AUTH_ERROR: invalid API key'};
  element('chat-input').value='인증 확인';element('text-chat-form').handlers.submit({preventDefault(){}});await tick();await tick();await tick();
  assert.match(element('chat-output').textContent,/HTTP 401.*invalid API key/);
@@ -837,7 +875,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:'채팅 전용 모델의 답변'})+'\n\n');
  element('chat-input').value='모델별 채팅 질문';element('text-chat-form').handlers.submit({preventDefault(){}});await tick();await tick();await tick();
  assert.equal(JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body).model,'chat-role');
- queue.ai();queue.hintGate.reset();queue.hintGate.settleMs=0;queue.hintGate.intervalMs=0;
+ queue.ai();queue.hintGate.reset({forgetHistory:true});queue.hintGate.settleMs=0;queue.hintGate.intervalMs=0;
  element('hint-web-search').checked=false;await element('hint-web-search').handlers.change();hintDecision={hint:true,category:'background'};
  cueReply=JSON.stringify({topic:'RAG',question:'RAG의 구조는?',knownFacts:[],source:'internal'});
  chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({fact:'RAG는 관련 문서를 검색해 그 근거를 바탕으로 답변을 생성하는 방식입니다.',adds_information:true})})+'\n\n');
@@ -870,7 +908,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  element('model-select').value='new-base';await element('model-select').handlers.change();
  assert.match(element('model-ai-chat').options[0].textContent,/new-base/);assert.equal(element('model-ai-chat').value,'chat-role','base change must not reset pinned models');
  element('model-ai-hint').value='';await element('model-ai-hint').handlers.change();
- queue.ai();queue.hintGate.reset();hintDecision={hint:true,category:'background'};
+ queue.ai();queue.hintGate.reset({forgetHistory:true});hintDecision={hint:true,category:'background'};
  cueReply=JSON.stringify({topic:'양자역학',cue_type:'concept',source:'internal',fact:'양자역학에서는 입자의 상태를 확률 진폭으로 기술하며 측정 결과는 확률로 예측합니다.',adds_information:true});
  nextTranscript='양자역학의 의미를 알려줘';utterance();await tick();await tick();await tick();
  assert.equal(JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body).model,'new-base','JEV-selected ambient questions use hint model inheritance');cueReply=null;
@@ -1085,23 +1123,68 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  element('model-hint-decision').value='judge-role';await element('model-hint-decision').handlers.change();
  element('model-ai-hint').value='hint-role';await element('model-ai-hint').handlers.change();
  element('hint-context-tokens').value='300';await element('hint-context-tokens').handlers.change();
- hintDecision={hint:false};judgeReply={hint:true,topic:'피라미드',evidence:'피라미드',question:'기자 피라미드 건립 시기와 건축 기술',source:'internal'};
- chatReply=sseReply('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify({fact:'기자의 대피라미드는 쿠푸왕을 위해 건립됐으며 석회암 블록으로 쌓았습니다.',adds_information:true})}}]})+'\n\ndata: [DONE]\n\n');
+ hintDecision={hint:false};judgeReply={hint:true,kind:'term',topic:'피라미드',evidence:'피라미드',question:'기자 피라미드 건립 시기와 건축 기술',source:'internal'};
+ chatReply=sseReply('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify({fact:'기자의 대피라미드는 쿠푸왕을 위해 건립됐으며 석회암 블록으로 쌓았습니다.',adds_information:true,kind:'key'})}}]})+'\n\ndata: [DONE]\n\n');
  const smallJudgeStart=requests.length;
- queue.hintGate.observe('피라미드가 왕의 무덤이래.',{id:'judge-end-to-end'});
+ queue.preview({mode:'ai',segmentId:'judge-end-to-end'},{text:'피라미드가 왕의 무덤이래.'},{stable:'피라미드가 왕의 무덤이래.'});
  for(let i=0;i<15;i++)await tick();
  const judgedBodies=requests.slice(smallJudgeStart).filter(r=>r.url.endsWith('/api/chat')).map(r=>JSON.parse(r.opts.body));
  assert.ok(judgedBodies.some(b=>b.glasses_hint_phase==='judge' && b.model==='judge-role'));
  assert.ok(judgedBodies.some(b=>b.glasses_hint_phase==='answer' && b.model==='hint-role'));
  assert.ok(!judgedBodies.some(b=>b.glasses_hint_phase==='plan'),'do not spend another writer request planning');
  assert.match(element('chat-output').textContent,/쿠푸왕/);assert.match(element('hint-judge-status').textContent,/300토큰/);
- queue.hintGate.reset();judgeReply={hint:false};const smallJudgeSkipStart=requests.length;
+ assert.match(queue.state().title,/^\[핵심\] 피라미드/);
+ assert.match(element('hint-evidence-log').textContent,/피라미드.*대화 이해에 필요한 정보/);
+ assert.equal(queue.hintGate.entries.length,1);
+ queue.hintGate.observe('피라미드가 왕의 무덤이래.',{id:'judge-end-to-end'});
+ assert.equal(queue.hintGate.entries.length,1,'final transcript promotes the stable preview without duplication');
+ const firstHintAnswer=queue.state().answer,comparisonStart=requests.length;
+ const readyComparison=()=>{for(const item of queue.hintGate.recent)item.at=Date.now()-9000;queue.hintGate.lastDecision=-Infinity;queue.hintGate.nextHint=-Infinity;queue.hintGate.nextGeneration=-Infinity;};
+ hintComparison.fact=true;readyComparison();
+ judgeReply={hint:true,kind:'key',topic:'피라미드',evidence:'피라미드',question:'쿠푸왕 무덤의 석재 종류와 건축 재료',source:'internal'};
+ chatReply=sseReply('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify({fact:'쿠푸왕의 왕실 무덤으로 알려진 이 건축물에는 주로 석회암이 사용됐습니다.',adds_information:true,kind:'key'})}}]})+'\n\ndata: [DONE]\n\n');
+ queue.hintGate.observe('피라미드의 돌은 어떤 재료인지 궁금하대.',{id:'semantic-fact-duplicate'});for(let i=0;i<25;i++)await tick();
+ assert.equal(queue.state().answer,firstHintAnswer,'semantic duplicate must not replace the displayed hint');
+ assert.ok(requests.slice(comparisonStart).some(r=>r.url.endsWith('/api/glasses/hint-compare') && JSON.parse(r.opts.body).kind==='fact'));
+ const planComparisonStart=requests.length;hintComparison={plan:true,fact:false};readyComparison();
+ judgeReply={hint:true,kind:'key',topic:'피라미드',evidence:'피라미드',question:'피라미드 무덤의 주인 이름과 신분',source:'internal'};
+ queue.hintGate.observe('피라미드는 누구의 무덤인지 궁금하대.',{id:'semantic-plan-duplicate'});for(let i=0;i<25;i++)await tick();
+ assert.ok(!requests.slice(planComparisonStart).some(r=>r.url.endsWith('/api/chat') && JSON.parse(r.opts.body).glasses_hint_phase==='answer'),'repeated research is rejected before spending a writer request');
+ for(const request of requests.slice(comparisonStart).filter(r=>r.url.endsWith('/api/chat')))assert.ok(!request.opts.body.includes(firstHintAnswer),'old displayed facts must not enter judge/writer prompts');
+ hintComparison={plan:false,fact:false};
+
+ queue.hintGate.reset({forgetHistory:true});judgeReply={hint:false};const smallJudgeSkipStart=requests.length;
  queue.hintGate.observe('점심 맛있었어. 내일 만나자.',{id:'judge-skip'});for(let i=0;i<10;i++)await tick();
  assert.ok(!requests.slice(smallJudgeSkipStart).some(r=>r.url.endsWith('/api/chat') && JSON.parse(r.opts.body).glasses_hint_phase==='answer'));
- queue.hintGate.reset();judgeError=true;hintDecision={error:true};
+ queue.hintGate.reset({forgetHistory:true});judgeError=true;hintDecision={error:true};
  queue.hintGate.observe('청동기 시대에는 청동을 사용했대.',{id:'judge-error'});for(let i=0;i<10;i++)await tick();
  assert.equal(queue.state().recording,true,'judge errors must never stop transcription');assert.match(element('hint-judge-status').textContent,/지연\/오류/);
  judgeError=false;hintDecision={hint:false};
+ // A continuation without the topic name must not discard a finished hint.
+ // Queue a second distinct hint before the first finishes; wait BEFORE its writer call.
+ queue.ai();queue.hintGate.intervalMs=0;queue.hintGate.settleMs=0;queue.hintGate.generationIntervalMs=0;
+ const originalHintNow=queue.hintGate.now;let displayClock=Date.now();queue.hintGate.now=()=>displayClock;
+ const originalChunks=chunks.slice();
+ const firstVisibleFact='기자의 대피라미드는 쿠푸왕을 위해 세워진 왕실 무덤입니다.';
+ chunks.splice(0,chunks.length,'data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify({fact:firstVisibleFact,adds_information:true,kind:'key'})}}]})+'\n\ndata: [DONE]\n\n');
+ holdChat=true;chatReply=null;releaseChat=null;
+ judgeReply={hint:true,continuity:'unknown',kind:'key',topic:'피라미드',evidence:'피라미드',question:'피라미드 건립 목적과 대상 왕',source:'internal'};
+ const visibilityStart=requests.length;
+ queue.hintGate.observe('피라미드의 건립 목적이 궁금하대',{id:'visible-inflight'});for(let i=0;i<20;i++)await tick();
+ assert.equal(typeof releaseChat,'function');
+ judgeReply={hint:true,continuity:'same',kind:'key',topic:'피라미드',evidence:'큰 돌',question:'피라미드의 석재 운반 기술과 경사로 원리',source:'internal'};
+ queue.hintGate.lastDecision=-Infinity;queue.hintGate.nextGeneration=-Infinity;
+ queue.hintGate.observe('그렇게 큰 돌을 어떻게 높이 옮겼을까',{id:'same-topic-followup'});for(let i=0;i<20;i++)await tick();
+ const secondVisibleFact='경사로는 무거운 석재를 높은 곳까지 옮기는 데 활용된 것으로 추정됩니다.';
+ chatReply=sseReply('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify({fact:secondVisibleFact,adds_information:true,kind:'key'})}}]})+'\n\ndata: [DONE]\n\n');
+ releaseChat();for(let i=0;i<25;i++)await tick();
+ assert.equal(queue.state().answer,firstVisibleFact,'a same-topic continuation without a literal topic name must not hide the first generated hint');
+ assert.equal(requests.slice(visibilityStart).filter(r=>r.url.endsWith('/api/chat') && JSON.parse(r.opts.body).glasses_hint_phase==='answer').length,1,'second hint must wait before generation rather than generate and get discarded');
+ chunks.splice(0,chunks.length,...originalChunks);
+ displayClock+=8001;await queue.drainAI();for(let i=0;i<15;i++)await tick();
+ assert.equal(queue.state().answer,secondVisibleFact,'distinct second hint must display after the spacing interval');
+ assert.equal(requests.slice(visibilityStart).filter(r=>r.url.endsWith('/api/chat') && JSON.parse(r.opts.body).glasses_hint_phase==='answer').length,2);
+ queue.hintGate.now=originalHintNow;await queue.stopVoiceRecording(false);
  element('model-hint-decision').value='__jev__';await element('model-hint-decision').handlers.change();
  await queue.stopVoiceRecording(false);
  // Keep persisted settings expected by the restore tests below.
@@ -1274,10 +1357,10 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  element('hide-transcript').checked=false;await element('hide-transcript').handlers.change();
  element('trigger-transcript-only').checked=true;await element('trigger-transcript-only').handlers.change();
  assert.equal(element('hide-transcript').checked,false);
- nextTranscript='평소에 말한 일반 대화는 숨깁니다';queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'ambient-hidden-by-trigger');for(let i=0;i<10;i++)await tick();
- assert.match(element('transcript-log').textContent,/평소에 말한 일반 대화/);assert.ok(!element('hud-screen').innerHTML.includes('hud-transcript-box'));
+ nextTranscript='평소에 말한 일반 대화도 보여야 합니다';queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'ambient-hidden-by-trigger');for(let i=0;i<10;i++)await tick();
+ assert.match(element('transcript-log').textContent,/평소에 말한 일반 대화/);assert.match(element('hud-screen').innerHTML,/hud-transcript-body[^>]*>평소에 말한 일반 대화/,'wake option must not hide ordinary speech when transcript hiding is off');
  nextTranscript='이븐';queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'wake-awaiting');for(let i=0;i<8;i++)await tick();
- assert.ok(!element('hud-screen').innerHTML.includes('hud-transcript-box'),'wake-only has no LLM question yet');
+ assert.ok(element('hud-screen').innerHTML.includes('hud-transcript-box'),'ordinary transcript remains visible even before a wake question');
  assert.equal(element('hud-trigger-keyword').style.opacity,'1');
  handler({sysEvent:{eventType:0}});await tick();assert.equal(queue.state().recording,true);assert.equal(element('hud-trigger-keyword').style.opacity,'0.5');
  holdChat=true;chatReply=null;nextTranscript='이븐 피라미드를 누가 지었나요';queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'wake-with-question');for(let i=0;i<10;i++)await tick();
@@ -1285,19 +1368,29 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.equal(element('hud-trigger-keyword').style.opacity,'1');
  releaseChat();for(let i=0;i<10;i++)await tick();
  assert.equal(queue.state().title,'피라미드를 누가 지었나요');
- assert.match(element('hud-screen').innerHTML,/hud-transcript-body">피라미드를 누가 지었나요/);
+ assert.match(element('hud-screen').innerHTML,/hud-transcript-body">이븐 피라미드를 누가 지었나요/,'finished wake request returns to the normal transcript');
  nextTranscript='응답 도중 상관없는 새로운 전사';queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'other-transcript');for(let i=0;i<10;i++)await tick();
- assert.ok(!element('hud-screen').innerHTML.includes('상관없는 새로운 전사'));assert.match(element('transcript-log').textContent,/상관없는 새로운 전사/);
+ assert.ok(element('hud-screen').innerHTML.includes('상관없는 새로운 전사'),'later ambient speech must not be replaced by an old question');assert.match(element('transcript-log').textContent,/상관없는 새로운 전사/);
  const voiceCloseMic=audioCalls.length;handler({sysEvent:{eventType:0}});await tick();await tick();assert.equal(queue.state().answer,'');assert.equal(queue.state().recording,true);assert.equal(audioCalls.length,voiceCloseMic);
- assert.ok(!element('hud-screen').innerHTML.includes('hud-transcript-box'));
+ assert.ok(element('hud-screen').innerHTML.includes('hud-transcript-box'),'closing the AI card must not hide normal transcription');
  queue.showHint('기존 힌트','잠시 보이는 힌트','전사');holdChat=true;chatReply=null;
  element('chat-input').value='닫아서 취소할 새 질문';element('text-chat-form').handlers.submit({preventDefault(){}});for(let i=0;i<5;i++)await tick();
  const lateReply=releaseChat;handler({textEvent:{eventType:0}});lateReply();for(let i=0;i<12;i++)await tick();
  assert.equal(queue.state().answer,'');assert.equal(queue.state().recording,true,'late response cannot reopen a dismissed panel');
+ // Hiding alone must still hide an active wake question.
+ element('hide-transcript').checked=true;await element('hide-transcript').handlers.change();
+ element('trigger-transcript-only').checked=false;await element('trigger-transcript-only').handlers.change();
+ holdChat=true;chatReply=null;nextTranscript='이븐 숨겨 둘 질문입니다';queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'hide-only-question');for(let i=0;i<10;i++)await tick();
+ assert.ok(!element('hud-screen').innerHTML.includes('hud-transcript-box'),'hide on / wake exception off hides even the active question');releaseChat();for(let i=0;i<10;i++)await tick();queue.dismiss();
+ element('trigger-transcript-only').checked=true;await element('trigger-transcript-only').handlers.change();
  // Both options can stay enabled: show the authorized question only before the panel appears.
  element('hide-transcript').checked=true;await element('hide-transcript').handlers.change();
  assert.equal(element('trigger-transcript-only').checked,true);assert.equal(element('hide-transcript').checked,true);
- queue.dismiss();holdChat=true;chatReply=null;
+ queue.dismiss();nextTranscript='이븐';queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'both-options-wake-only');for(let i=0;i<10;i++)await tick();
+ assert.match(queue.state().answer,/말씀하세요/);
+ holdChat=true;chatReply=null;nextTranscript='피라미드 높이를 알려줘';queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'both-options-followup');for(let i=0;i<12;i++)await tick();
+ assert.match(element('hud-screen').innerHTML,/hud-transcript-body">피라미드 높이를 알려줘/,'wake-only acknowledgement must yield to the question preview');
+ releaseChat();for(let i=0;i<12;i++)await tick();queue.dismiss();holdChat=true;chatReply=null;
  nextTranscript='이븐 청동기 시대가 언제인가요';queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'both-options-question');for(let i=0;i<10;i++)await tick();
  assert.match(element('hud-screen').innerHTML,/hud-transcript-body">청동기 시대가 언제인가요/,'show the sent question while waiting for the first answer');
  releaseChat();for(let i=0;i<10;i++)await tick();
@@ -1310,6 +1403,67 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.equal(JSON.parse(nativeSaved).triggerTranscriptOnly,true);assert.equal(JSON.parse(nativeSaved).hideTranscript,true);
  queue.dismiss();assert.ok(!element('hud-screen').innerHTML.includes('hud-transcript-box'));
 
+ // A speculative wake prepares only settings. Final confirmation sends exactly one chat.
+ queue.ai();queue.clearSettings();
+ const previewWakeStart=requests.length;
+ queue.preview({mode:'ai',segmentId:'preview-wake'},{text:'이븐 새로운 질문입니다'},{stable:'이븐 새로운 질문입니다'});
+ for(let i=0;i<8;i++)await tick();
+ assert.equal(requests.slice(previewWakeStart).filter(r=>r.url.endsWith('/api/config')).length,1);
+ assert.equal(requests.slice(previewWakeStart).filter(r=>r.url.endsWith('/api/chat')).length,0,'preview must never send an unconfirmed voice question');
+ nextTranscript='이븐 새로운 질문입니다';queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'preview-wake');
+ for(let i=0;i<20;i++)await tick();
+ assert.equal(requests.slice(previewWakeStart).filter(r=>r.url.endsWith('/api/config')).length,1,'final query reuses speculative settings');
+ assert.equal(requests.slice(previewWakeStart).filter(r=>r.url.endsWith('/api/chat')).length,1);
+ assert.match(element('voice-latency').textContent,/설정 조회: \d+ms/);
+ assert.match(element('voice-latency').textContent,/호출어 감지→전송/);
+ queue.dismiss();
+ // Two cards: bounded native frames, no text-container overflow, independent closing.
+ queue.dismiss();queue.ai();
+ element('hint-card-count').value='2';await element('hint-card-count').handlers.change();
+ element('hint-auto-close').checked=false;await element('hint-auto-close').handlers.change();
+ element('hide-transcript').checked=false;await element('hide-transcript').handlers.change();
+ element('trigger-transcript-only').checked=false;await element('trigger-transcript-only').handlers.change();
+ queue.addHint('첫 번째 제목','오래된 본문 첫 줄\n오래된 본문 둘째 줄\n오래된 본문 셋째 줄\n오래된 본문 넷째 줄');
+ queue.addHint('두 번째 제목','최신 본문 첫 줄\n최신 본문 둘째 줄\n최신 본문 셋째 줄\n최신 본문 넷째 줄');
+ for(let i=0;i<150 && !nativePage.textObject.some(c=>c.containerID===10);i++)await new Promise(r=>setTimeout(r,20));
+ assert.equal(queue.stack.cards.length,2);assert.ok(nativePage.textObject.length<=8,'two cards and transcript must obey the SDK eight-text limit');
+ assert.equal(nativePage.containerTotalNum,nativePage.textObject.length+nativePage.imageObject.length);
+ assert.ok(nativePage.textObject.some(c=>c.containerID===4),'transcript remains available with two cards');
+ assert.match(nativePage.textObject.find(c=>c.containerID===9).content,/두 번째 제목/);
+ assert.match(nativePage.textObject.find(c=>c.containerID===10).content,/첫 번째 제목/);
+ assert.ok(nativePage.textObject.find(c=>c.containerID===10).zOrderIndex>nativePage.textObject.find(c=>c.containerID===1).zOrderIndex,'second pinned title must render above the shared body');
+ assert.ok(nativePage.textObject.every(c=>c.yPosition+c.height<=288));
+ const stackSnapshots=[{html:element('hud-screen').innerHTML,native:JSON.parse(JSON.stringify(nativePage))}];
+ const bodies=nativePage.textObject.find(c=>c.containerID===1).content;
+ assert.ok(bodies.includes('최신 본문') && bodies.includes('오래된 본문'));assert.ok(!bodies.includes('제목'),'both titles stay outside the scrolling body');
+ queue.addHint('세 번째 제목','교체된 새 본문');assert.deepEqual(Array.from(queue.stack.cards,c=>c.title),['[핵심] 세 번째 제목','[핵심] 두 번째 제목']);
+ const cardMicCalls=audioCalls.length;handler({textEvent:{eventType:0}});await tick();
+ assert.equal(queue.stack.cards.length,1);assert.match(queue.state().title,/두 번째 제목/);assert.equal(queue.state().recording,true);assert.equal(audioCalls.length,cardMicCalls,'tap removes a card without toggling STT');
+ queue.addHint('네 번째 제목','폰에서 남길 본문');const oldCardID=queue.stack.cards[1].id;
+ element('hud-screen').handlers.click({target:{closest:()=>({dataset:{hintCard:oldCardID}})}});await tick();
+ assert.equal(queue.stack.cards.length,1);assert.match(queue.state().title,/네 번째 제목/,'phone closes the selected older card');
+ element('hint-card-count').value='1';await element('hint-card-count').handlers.change();
+ assert.equal(queue.stack.cards.length,0);assert.match(queue.state().title,/네 번째 제목/,'switching to one card keeps the newest hint');
+ element('hint-card-count').value='2';await element('hint-card-count').handlers.change();
+ assert.equal(queue.stack.cards.length,1,'enabling a stack adopts the currently displayed hint');
+ queue.dismiss();hintClock=100000;
+ element('hint-auto-close').checked=true;await element('hint-auto-close').handlers.change();element('hint-seconds-per-line').value='1';await element('hint-seconds-per-line').handlers.change();
+ queue.addHint('먼저 닫힐 카드','앞 카드 첫 줄\n앞 카드 둘째 줄');hintClock=101000;
+ queue.addHint('나중에 닫힐 카드','뒤 카드 첫 줄\n뒤 카드 둘째 줄\n뒤 카드 셋째 줄');const survivorDeadline=queue.stack.cards[0].deadline;
+ hintClock=102000;hintJobs.at(-1)();assert.equal(queue.stack.cards.length,1);assert.equal(queue.stack.cards[0].deadline,survivorDeadline);assert.equal(queue.stack.remaining(queue.stack.cards[0]),2);
+ hintClock=104000;hintJobs.at(-1)();assert.equal(queue.stack.cards.length,0);assert.equal(queue.state().answer,'');assert.equal(queue.state().recording,true);
+ element('hint-auto-close').checked=false;await element('hint-auto-close').handlers.change();
+ element('hide-transcript').checked=true;await element('hide-transcript').handlers.change();
+ queue.addHint('긴 첫 카드',Array.from({length:8},(_,i)=>`첫 카드 본문 ${i}`).join('\n'));queue.addHint('긴 두 번째 카드',Array.from({length:8},(_,i)=>`둘째 카드 본문 ${i}`).join('\n'));
+ for(let i=0;i<150 && nativePage.textObject.some(c=>c.containerID===4);i++)await new Promise(r=>setTimeout(r,20));
+ assert.ok(!nativePage.textObject.some(c=>c.containerID===4));assert.ok(nativePage.textObject.length<=8);
+ stackSnapshots.push({html:element('hud-screen').innerHTML,native:JSON.parse(JSON.stringify(nativePage))});
+ fs.writeFileSync('/private/tmp/dkst-card-stack-preview.json',JSON.stringify(stackSnapshots));
+ nextTranscript='이븐';queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'stack-wake-only');for(let i=0;i<15;i++)await tick();
+ assert.equal(queue.stack.cards.length,0,'explicit wake acknowledgement retains its single answer window');assert.match(queue.state().answer,/말씀하세요/);
+ queue.dismiss();
+ element('trigger-transcript-only').checked=true;await element('trigger-transcript-only').handlers.change();
+ element('hint-auto-close').checked=true;await element('hint-auto-close').handlers.change();element('hint-seconds-per-line').value='2.5';await element('hint-seconds-per-line').handlers.change();
  element('head-gesture-enabled').checked=true;await element('head-gesture-enabled').handlers.change();await queue.stopVoiceRecording(false);
  const restoredPrepareStart=requests.length;
  elements.clear();
@@ -1320,6 +1474,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.equal(element('auth-password').value,'');
  assert.equal(element('hide-transcript').checked,true,'both display options restore independently');
  assert.equal(element('trigger-transcript-only').checked,true,'trigger-only display restores from native storage');
+ assert.equal(element('hint-card-count').value,'2','card count restores from native storage');
  assert.equal(element('hint-auto-close').checked,true);assert.equal(element('hint-seconds-per-line').value,'2.5','per-line duration restores from native storage');
  assert.equal(element('model-ai-chat').value,'chat-role');assert.equal(element('model-translation-reply').value,'reply-role');
  assert.equal(element('audio-input-source').value,'phone','phone source must survive native settings restore');

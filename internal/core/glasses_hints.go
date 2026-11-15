@@ -16,12 +16,13 @@ import (
 )
 
 type glassesHintRequest struct {
-	Advisory    bool     `json:"advisory,omitempty"`
-	Text        string   `json:"text"`
-	Context     string   `json:"context"`
-	Sensitivity string   `json:"sensitivity"`
-	Shown       []string `json:"shown,omitempty"`
-	ShownInfo   string   `json:"shownInfo,omitempty"`
+	Advisory     bool     `json:"advisory,omitempty"`
+	KeywordsOnly bool     `json:"keywordsOnly,omitempty"`
+	Text         string   `json:"text"`
+	Context      string   `json:"context"`
+	Sensitivity  string   `json:"sensitivity"`
+	Shown        []string `json:"shown,omitempty"`
+	ShownInfo    string   `json:"shownInfo,omitempty"`
 }
 type glassesHintDecision struct {
 	Candidates     []hintKeywordCandidate `json:"candidates,omitempty"`
@@ -366,7 +367,9 @@ func handleGlassesHintDecision(auth *AuthManager) http.HandlerFunc {
 		auth.mu.RUnlock()
 		decision := glassesHintDecision{Reason: "embedding_disabled"}
 		var err error
-		if !disabled {
+		if req.Advisory && req.KeywordsOnly {
+			decision = glassesHintDecision{Reason: "keyword_advice", Backend: "dictionary"}
+		} else if !disabled {
 			decision, err = classifyGlassesHint(req)
 		}
 		if req.Advisory {
@@ -401,8 +404,14 @@ func readOnlyHintTools(disabled []string) []string {
 }
 
 type hintResearchRequest struct {
-	Query  string `json:"query"`
-	Source string `json:"source"`
+	RequireGrounding bool   `json:"require_grounding"`
+	Topic            string `json:"topic"`
+	Kind             string `json:"kind"`
+	Observed         string `json:"observed"`
+	Anchor           string `json:"anchor"`
+	AllowWeb         bool   `json:"allow_web"`
+	Query            string `json:"query"`
+	Source           string `json:"source"`
 }
 
 func loadHintEvidence(ctx context.Context, registry *toolruntime.Registry, execCtx toolruntime.ExecutionContext, enableTools bool, research hintResearchRequest) (string, error) {

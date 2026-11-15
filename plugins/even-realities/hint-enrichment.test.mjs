@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {cuePrompts,parseCueResponse,fitCue,hintPlanPrompts,parseHintPlan,hintAnswerPrompts,extractHintFact,readHintPlanResponse} from './hint-enrichment.mjs';
+import {cuePrompts,parseCueResponse,fitCue,hintPlanPrompts,parseHintPlan,hintAnswerPrompts,hintResultKind,extractHintFact,readHintPlanResponse} from './hint-enrichment.mjs';
 const observed='피라미드 영상이 나오네. 거기 청동기 시대 얘기도 나오더라.';
 const plan=parseHintPlan(JSON.stringify({topic:'피라미드',question:'이집트 피라미드는 어떤 목적으로 건립되었나?',knownFacts:['피라미드 영상이 나옴'],source:'internal'}));
 assert.equal(plan.source,'internal');
@@ -12,7 +12,7 @@ for(const prompts of [hintPlanPrompts(observed,'','background'),hintAnswerPrompt
 assert.match(hintAnswerPrompts(plan).userPrompt,/내부 조사 항목\(사용자 질문 아님\)/);
 const prior='[피라미드] 피라미드는 왕실 무덤으로 건립되었습니다.';
 for(const prompts of [cuePrompts('피라미드 건축 방식이 궁금한 대화','','background',prior),cuePrompts('피라미드 건축 방식이 궁금한 대화','','background',prior,{preferWeb:true}),hintAnswerPrompts(plan,prior)]){
- assert.ok(prompts.userPrompt.includes(prior),'prompt must carry previously shown information');
+ assert.ok(!prompts.userPrompt.includes(prior),'old hint text must not enter generative prompts');
  assert.match(prompts.systemPrompt,/같은 주제가 이어져도 새 정보/);
  assert.match(prompts.systemPrompt,/표현만 바꾼 반복은 금지/);
  assert.doesNotMatch(prompts.userPrompt,/제외할 직전 주제|다시 다루지 말 것|새로운 토픽만/,'do not exclude an entire topic');
@@ -42,7 +42,7 @@ assert.equal(parseCueResponse('{"skip":true}','전사'),null);
 assert.equal(parseCueResponse(JSON.stringify({...plan,source:'web'}),'전사').source,'web');
 assert.equal(fitCue('짧은 완결 문장입니다. '+ '너무 긴 문장 '.repeat(100)+'.'),'짧은 완결 문장입니다.');
 assert.equal(fitCue('너무 긴 문장 '.repeat(100)), '','never show a cut-off sentence');
-assert.match(cuePrompts('최근 발화','이전 문맥','background','이미 나온 도움').userPrompt,/이미 나온 도움/);
+assert.ok(!cuePrompts('최근 발화','이전 문맥','background','이미 나온 도움').userPrompt.includes('이미 나온 도움'));
 console.log('PASS: single-pass typed cues, evidence-only research, complete sentences in six-line display');
 
 const web=cuePrompts('그 제품 무게 얘기야','맥북 에어 M4','background','',{preferWeb:true});
@@ -57,3 +57,21 @@ for(const preferWeb of [false,true])assert.match(cuePrompts('청동기 시대에
 const wrappedCue={topic:'피라미드',cue_type:'concept',question:'피라미드의 건축 기술',knownFacts:['왕의 무덤'],source:'web'};
 assert.equal(parseCueResponse('```json\n'+JSON.stringify({result:JSON.stringify(wrappedCue)})+'\n```','피라미드가 왕의 무덤이래').topic,'피라미드');
 assert.ok(extractHintFact(JSON.stringify({result:JSON.stringify({fact:'기자의 대피라미드는 쿠푸왕을 위해 건립됐습니다.',adds_information:true})}),'피라미드가 왕의 무덤이래',{knownFacts:[]}));
+
+// A writer may correct the planning label to match the actual information.
+assert.equal(hintResultKind('{"fact":"돌을 올리는 원리","kind":"key"}','term'),'key');
+assert.equal(hintResultKind('```json\n{"result":"{\\\"kind\\\":\\\"verify\\\"}"}\n```','term'),'verify');
+assert.equal(hintResultKind('{"kind":"unsupported"}','verify'),'verify');
+assert.equal(hintResultKind('{"fact":"legacy writer"}','term'),'term');
+assert.equal(hintResultKind('HINT_SKIP',undefined),'key');
+for(const prompts of [hintPlanPrompts(observed,'','background'),hintAnswerPrompts(plan),cuePrompts(observed,'','background')]){
+ assert.match(prompts.systemPrompt,/오인식·오타·단어\/문장 누락/);
+ assert.match(prompts.systemPrompt,/부정 표현/);
+ assert.match(prompts.systemPrompt,/추가 발화를 기다린다/);
+}
+assert.match(hintAnswerPrompts(plan).systemPrompt,/판별 단계의 분류도 본문과 맞지 않으면 바로잡/);
+assert.match(hintAnswerPrompts(plan).userPrompt,/검증된 사실 아님/);
+
+assert.equal(parseCueResponse(JSON.stringify({...cue,kind:'key'}),'전사').kind,'key');
+assert.equal(parseHintPlan(JSON.stringify({...plan,kind:'verify'})).kind,'verify');
+assert.match(cuePrompts(observed,'','background').systemPrompt,/정보의 목적에 맞는 kind/);

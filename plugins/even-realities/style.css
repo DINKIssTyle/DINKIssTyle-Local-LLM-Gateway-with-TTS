@@ -581,3 +581,9 @@ summary:focus-visible { outline:2px solid var(--accent-blue); outline-offset:2px
   .settings-section .input-row > input { width:0; flex:1 1 0; }
   .settings-section .input-row > .btn { flex:0 0 auto; }
 }
+
+.hint-evidence-log { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20rem; overflow-y: auto; font: inherit; font-size: .85rem; line-height: 1.6; }
+
+.hud-hint-stack .hud-ai-box { border-radius: 0; padding: 4px 2px; }
+.hud-hint-stack .hud-ai-box + .hud-ai-box { margin-top: 3px; }
+.hud-hint-stack .hud-ai-header { min-height: 1.4em; padding-bottom: 1px; }

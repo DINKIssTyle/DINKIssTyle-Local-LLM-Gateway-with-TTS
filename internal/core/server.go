@@ -2922,6 +2922,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	mux.HandleFunc("/api/translate/chrome", AuthMiddleware(authMgr, handleChromeTranslation(chromeTranslation, false)))
 	mux.HandleFunc("/api/translate/chrome/prepare", AuthMiddleware(authMgr, handleChromeTranslation(chromeTranslation, true)))
 	mux.HandleFunc("/api/glasses/hint-decision", AuthMiddleware(authMgr, handleGlassesHintDecision(authMgr)))
+	mux.HandleFunc("/api/glasses/hint-compare", AuthMiddleware(authMgr, handleGlassesHintCompare(authMgr)))
 	mux.HandleFunc("/api/stt/chrome/stop", AuthMiddleware(authMgr, handleChromeSpeechStop()))
 	mux.HandleFunc("/api/stt/chrome/prepare", AuthMiddleware(authMgr, handleChromeSpeechPrepare()))
 	mux.HandleFunc("/api/stt/status", AuthMiddleware(authMgr, handleSTTStatus(app)))
@@ -4527,7 +4528,10 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	if glassesHint && hintPhase != "direct" && hintResearch.Source != "memory" {
 		enableMemory = false
 	}
-	if glassesHint && hintPhase == "answer" && hintResearch.Source == "internal" {
+	hintLookupEnabled := enableTools
+	if glassesHint && hintPhase == "answer" && (hintResearch.Source == "internal" || hintResearch.RequireGrounding) {
+		// Grounded hints fetch evidence once on the server. The writer gets no
+		// tool access, while an unknown internal name may still need a lookup.
 		enableTools = false
 	}
 
@@ -4704,8 +4708,19 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		"instruction_chars": len([]rune(skillCompilation.Prompt)),
 	})
 
+	var verifiedHint *hintGrounding
 	if glassesHint && hintPhase != "plan" && !hintJudge && hintResearch.Source != "" {
-		evidence, researchErr := loadHintEvidence(chatCtx, toolruntime.Default, toolExecCtx, enableTools, hintResearch)
+		var evidence string
+		var researchErr error
+		if hintResearch.RequireGrounding {
+			var proof hintGrounding
+			proof, evidence, researchErr = prepareHintGrounding(chatCtx, toolruntime.Default, toolExecCtx, hintLookupEnabled, hintResearch)
+			if researchErr == nil {
+				verifiedHint = &proof
+			}
+		} else {
+			evidence, researchErr = loadHintEvidence(chatCtx, toolruntime.Default, toolExecCtx, enableTools, hintResearch)
+		}
 		if researchErr != nil {
 			http.Error(w, "힌트 근거 조회 실패: "+researchErr.Error(), http.StatusFailedDependency)
 			return
@@ -5052,6 +5067,11 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		return
 	}
 	emitter.SetupHeaders()
+	if verifiedHint != nil {
+		if err := emitter.EmitDataJSON(map[string]any{"type": "hint.grounding", "grounding": verifiedHint}); err != nil {
+			return
+		}
+	}
 	if len(selectedSkillEvents) > 0 {
 		skillEvent := map[string]interface{}{
 			"type":    "skill.applied",

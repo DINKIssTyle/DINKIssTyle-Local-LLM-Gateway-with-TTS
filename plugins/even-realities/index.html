@@ -550,6 +550,14 @@
         </summary>
         <div class="settings-section-body">
           <div class="form-group">
+            <label for="hint-card-count">동시에 표시할 힌트 수</label>
+            <select id="hint-card-count">
+              <option value="1">1장</option>
+              <option value="2">2장 · 카드 스택</option>
+            </select>
+            <p class="setting-help">새 힌트가 위에 쌓입니다. 가득 차면 가장 오래된 카드를 교체합니다.</p>
+          </div>
+          <div class="form-group">
             <label class="setting-toggle">
               <input type="checkbox" id="hide-transcript">
               <span>
@@ -568,7 +576,7 @@
               </span>
             </label>
             <p class="setting-help">
-              호출어 뒤 질문만 보여줍니다. 전사문 숨기기도 켜면 AI 창 아래에는 표시하지 않습니다.
+              전사문을 숨겨도 호출어 뒤 질문은 AI 창이 표시되기 전까지 보여줍니다. 숨기기를 끄면 평소 전사는 계속 보입니다.
             </p>
           </div>
           <div class="form-group">
@@ -589,7 +597,7 @@
             </p>
           </div>
           <p class="setting-help">
-            AI 창이 열려 있을 때 안경을 탭하면 창만 닫힙니다.
+            안경을 탭하면 가장 위의 힌트 카드가 닫힙니다. 폰에서는 원하는 카드를 눌러 닫을 수 있습니다.
           </p>
         </div>
       </details>
@@ -808,6 +816,16 @@
           </span>
         </summary>
         <div class="settings-section-body">
+          <details class="settings-advanced">
+            <summary>최근 힌트 · 표시 이유</summary>
+            <p class="setting-help">이번 실행에서 표시한 최근 12개의 분류와 근거입니다.</p>
+            <pre id="hint-evidence-log" class="hint-evidence-log">아직 표시한 힌트가 없습니다.</pre>
+          </details>
+          <details class="settings-advanced">
+            <summary>음성 질문 처리 시간</summary>
+            <p class="setting-help">가장 최근 음성 질문의 단계별 소요 시간입니다.</p>
+            <p id="voice-latency" class="setting-status" role="status">음성 질문을 기다립니다.</p>
+          </details>
           <div class="form-group">
             <label for="transcript-date">
               기록 날짜

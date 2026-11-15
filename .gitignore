@@ -49,3 +49,5 @@ all_funcs.txt
 !internal/core/glasses_keywords_test.go
 
 !internal/core/glasses_judge_test.go
+
+!internal/core/glasses_hint_grounding_test.go
