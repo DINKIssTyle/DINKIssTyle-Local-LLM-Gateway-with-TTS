@@ -18,6 +18,6 @@ export function chatDeadline(controller,{chatSession=false,hint=false,setTimer=s
 export function chatFailureMessage(error,deadline){
   if(deadline.reason())return deadline.reason();
   if(error instanceof TypeError || /load failed|failed to fetch|fetch failed|networkerror|network connection/i.test(error?.message || ''))
-    return '서버 응답을 받는 중 연결 오류가 발생했습니다. Mac 게이트웨이·모델 서버 연결을 확인해 주세요. 요청이 서버에서 계속 처리 중일 수 있습니다.';
+    return '서버 응답을 받는 중 연결 오류가 발생했습니다. 게이트웨이·모델 서버 연결을 확인해 주세요. 요청이 서버에서 계속 처리 중일 수 있습니다.';
   return error?.message || 'AI 응답 오류';
 }

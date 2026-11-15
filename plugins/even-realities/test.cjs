@@ -998,7 +998,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  context.window.__queueTest.microphone();await tick();await tick();await tick();
  context.setTimeout=beforeNoAudioTimer;assert.equal(typeof noPhoneAudio,'function');
  noPhoneAudio();await tick();await tick();await tick();
- assert.equal(queue.state().recording,false);assert.match(queue.state().failure,/휴대폰 마이크 입력이 없습니다/);assert.match(queue.state().failure,/iOS/);
+ assert.equal(queue.state().recording,false);assert.match(queue.state().failure,/휴대폰 마이크 입력이 없습니다/);assert.match(queue.state().failure,/휴대폰 설정/);
  // A failed model catalog must not prevent independent Apple capability discovery.
  const capabilitiesBefore=requests.filter(r=>r.url.endsWith('/api/apple/status')).length;
  modelFailure=true;await element('btn-refresh-models').handlers.click();await tick();modelFailure=false;

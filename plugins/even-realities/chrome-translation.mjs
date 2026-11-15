@@ -1,4 +1,4 @@
-// This bridge talks only to the user's authenticated Mac gateway. The request carries provisional or finalized text, never microphone PCM.
+// This bridge talks only to the user's authenticated gateway. The request carries provisional or finalized text, never microphone PCM.
 // Transcription may come from Whisper or the separately selected Chrome STT engine.
 export async function localTranslate(fetcher,server,headers,request,signal,timeoutMs=8000,engine="chrome"){
   if(!["chrome","apple"].includes(engine))return {ok:false,reason:"잘못된 번역 엔진"};

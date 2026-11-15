@@ -1,0 +1,7 @@
+{
+  "name": "dkst-gateway-workspace",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix plugins/even-realities run dev --"
+  }
+}

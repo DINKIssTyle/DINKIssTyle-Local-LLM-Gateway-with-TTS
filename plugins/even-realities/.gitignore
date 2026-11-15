@@ -2,3 +2,5 @@ node_modules/
 bundle.js
 dist/
 *.ehpk
+
+.dev/

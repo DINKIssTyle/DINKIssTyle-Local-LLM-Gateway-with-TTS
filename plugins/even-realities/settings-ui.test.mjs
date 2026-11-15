@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+const html=readFileSync(new URL('./index.html',import.meta.url),'utf8');
+const ids=[...html.matchAll(/\bid="([^"]+)"/g)].map(m=>m[1]);
+assert.equal(ids.length,new Set(ids).size,'settings must have unique control IDs');
+for(const id of ['server-url','auth-username','auth-password','api-key','model-select','model-ai-chat','model-ai-hint','model-hint-decision','model-translation','model-translation-reply','head-gesture-enabled','head-calibrate','btn-head-resume','hint-auto-close','hint-seconds-per-line','hide-transcript','trigger-transcript-only','translate-source-lang','translate-target-lang','translation-engine','translate-exclude-self','stt-engine','audio-input-source','glasses-sensitivity','glasses-gain','speech-filter','speaker-scope','transcript-modal','btn-save-settings'])assert.ok(ids.includes(id),id);
+const sections=['settings-connection','settings-audio','settings-ai','settings-translation','settings-display','settings-head','settings-models','settings-advanced','settings-records'];
+for(let i=1;i<sections.length;i++)assert.ok(html.indexOf('id="'+sections[i-1]+'"')<html.indexOf('id="'+sections[i]+'"'),'related settings order');
+assert.ok(!/<div[^>]+id="translate-lang-row"[^>]+hidden/.test(html),'translation preferences must be configurable in either mode');
+const script=readFileSync(new URL('./plugin.js',import.meta.url),'utf8'),deadline=readFileSync(new URL('./chat-deadline.mjs',import.meta.url),'utf8');
+assert.ok(!script.includes('Mac 게이트웨이') && !deadline.includes('Mac 게이트웨이'));
+assert.ok(!script.includes('iOS 설정'));
+assert.match(html,/Apple 로컬 STT · macOS 26\+/,'genuine engine support restrictions remain explicit');
+console.log('PASS: grouped settings retain existing controls, unique IDs, always-accessible translation preferences and platform-neutral general errors');

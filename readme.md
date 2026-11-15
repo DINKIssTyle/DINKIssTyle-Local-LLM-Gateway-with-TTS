@@ -76,3 +76,15 @@ Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
 <div align="center"><br>
 <a href="https://github.com/DINKIssTyle/DINKIssTyle-Markdown-Browser" target="_blank"><img src="https://github.com/DINKIssTyle/DINKIssTyle-Markdown-Browser/blob/main/DKST-Markdown.png?raw=true" width="150"></a><br>
 </div>
+
+
+### Even 플러그인 화면 개발
+
+저장소 루트에서 다음 명령으로 폰 설정 화면의 개발 서버를 실행할 수 있습니다.
+
+~~~sh
+npm --prefix plugins/even-realities ci
+npm run dev
+~~~
+
+기본 주소는 http://127.0.0.1:5173 이며, JS·HTML·CSS·아이콘 변경 시 새로고침됩니다. 게이트웨이 서버는 별도로 실행합니다. 옵션과 자세한 사용법은 [Even 플러그인 개발 안내](plugins/even-realities/README.md)를 참고하세요.
