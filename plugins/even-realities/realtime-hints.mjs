@@ -68,15 +68,19 @@ export async function compareHintDuplicate({fetch,server,headers,text,history,ki
   if(!history.length)return false;
   const controller=new AbortController(),abort=()=>controller.abort();
   if(signal?.aborted)controller.abort();else signal?.addEventListener('abort',abort,{once:true});
+  let interrupt;const interrupted=new Promise(resolve=>{interrupt=()=>resolve(null);});
+  controller.signal.addEventListener('abort',interrupt,{once:true});
+  if(controller.signal.aborted)interrupt();
   const timer=setTimeout(abort,timeoutMs);
   try{
-    const response=await fetch(`${server}/api/glasses/hint-compare`,{method:'POST',headers,signal:controller.signal,
-      body:JSON.stringify({kind,text:Array.from(text).slice(0,600).join(''),history:history.slice(-6).map(value=>Array.from(value).slice(0,600).join(''))})});
-    if(!response.ok)return false; // Old gateways and a busy/offline encoder retain local checks.
-    const result=await response.json();
+    const response=await Promise.race([fetch(`${server}/api/glasses/hint-compare`,{method:'POST',headers,signal:controller.signal,
+      body:JSON.stringify({kind,text:Array.from(text).slice(0,600).join(''),history:history.slice(-6).map(value=>Array.from(value).slice(0,600).join(''))})}),interrupted]);
+    if(!response || !response.ok)return false; // Old gateways and a busy/offline encoder retain local checks.
+    const result=await Promise.race([response.json(),interrupted]);
+    if(!result)return false;
     return !controller.signal.aborted && result.checked===true && result.duplicate===true;
   }catch(error){if(signal?.aborted)throw error;return false;}
-  finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);}
+  finally{clearTimeout(timer);controller.signal.removeEventListener('abort',interrupt);signal?.removeEventListener('abort',abort);}
 }
 
 // Keep timings only: never record recognized speech, prompts, credentials or answers.

@@ -167,6 +167,7 @@ def main():
                 if any(segment.get('no_speech_prob',0)>.6 and segment.get('avg_logprob',-10)<-.5 for segment in segments):
                     rejected = rejected or 'no-speech'
                 send({'text': '' if rejected else text, 'duration': duration,
+                      'language': result.get('language') or whisper_lang or '',
                       'rejected': bool(rejected), 'reason': rejected, 'averageLogprob': average, **speech_filter.stats})
                 continue
             inputs = processor(audio, sampling_rate=16000, return_tensors='pt', return_attention_mask=True)
@@ -183,6 +184,10 @@ def main():
                     inputs.input_features, **gen_kwargs
                 )
             text = processor.batch_decode(generated.sequences, skip_special_tokens=True)[0].strip()
+            import re
+            language_tokens = processor.batch_decode(generated.sequences, skip_special_tokens=False)[0]
+            language_match = re.search(r'<\|([a-z]{2})\|>', language_tokens)
+            detected_language = language_match.group(1) if language_match else (whisper_lang or '')
             probabilities = []
             scores = generated.scores or ()
             chosen = generated.sequences[0, -len(scores):] if scores else ()
@@ -197,7 +202,7 @@ def main():
             eos = model.generation_config.eos_token_id
             if generated.sequences[0, -1].item() not in ([eos] if isinstance(eos, int) else eos):
                 rejected = rejected or 'incomplete-decode'
-            send({'text': '' if rejected else text, 'duration': duration,
+            send({'text': '' if rejected else text, 'duration': duration, 'language': detected_language,
                   'rejected': bool(rejected), 'reason': rejected, 'averageLogprob': average, **speech_filter.stats})
         except Exception as exc:
             send({'error': str(exc)})

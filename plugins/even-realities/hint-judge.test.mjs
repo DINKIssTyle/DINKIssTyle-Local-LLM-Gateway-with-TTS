@@ -53,7 +53,7 @@ const changedSkip=parseHintJudgment(JSON.stringify({hint:false,topic:'내일 날
 assert.equal(changedSkip.continuity,'changed');assert.equal(changedSkip.topic,'내일 날씨');
 assert.equal(parseHintJudgment(JSON.stringify({hint:false,topic:'없는 주제',evidence:'없는 원문',continuity:'changed'}),continuityContext).topic,undefined,'ungrounded skip cannot change the current topic');
 for(const budget of [300,600,800])assert.ok(compactJudgeContext({text:'대화 중인 새 발화'.repeat(100),context:'참고'.repeat(100),activeTopic:'아주 긴 현재 주제 이름입니다'.repeat(10)},'',[],budget).estimatedTokens<=budget);
-assert.ok(sent.response_format.json_schema.schema.required.includes('continuity'));
+assert.ok(sent.response_format.json_schema.schema.required.includes('span'));
 
 const conversation=compactJudgeContext({text:'금요일 오후 3시에 회의해요.\n장소는 2층입니다.\n노트북을 가져와 주세요.',latestText:'노트북을 가져와 주세요.',context:'금요일 오후 3시에 회의해요.\n장소는 2층입니다.'},'',[],600);
 assert.match(conversation.text,/Recent conversation/);assert.match(conversation.latest,/금요일 오후 3시/);assert.match(conversation.latest,/노트북/);
@@ -68,10 +68,10 @@ const numberedChoice=conversation.evidenceChoices.findIndex(e=>e.includes('금�
 assert.ok(numberedChoice>0);
 const chosen=parseHintJudgment(JSON.stringify({hint:true,kind:'schedule',source:'conversation',topic:'회의 준비',evidence:numberedChoice,question:'일정과 준비물 정리'}),conversation);
 assert.equal(chosen.hint,false);assert.equal(parseHintJudgment(JSON.stringify({...value,evidence:999}),conversation),null);
-assert.equal(sent.response_format.json_schema.schema.properties.evidence.type,'integer');
+assert.equal(sent.response_format.json_schema.schema.properties.span.type,'integer');
 
 let repairs=0;
-const repaired=await requestHintJudgment({server:'http://test',model:'small',job:{text:'피라미드의 큰 돌을 어떻게 옮겼을까.'},fetch:async(url,opts)=>{repairs++;const body=JSON.parse(opts.body);assert.ok(body.response_format.json_schema.schema.anyOf);return {ok:true,json:async()=>({response:JSON.stringify(repairs===1?{...value,hint:true,topic:'',evidence:0}:{...value,evidence:1})})};}});
+const repaired=await requestHintJudgment({server:'http://test',model:'small',job:{text:'피라미드의 큰 돌을 어떻게 옮겼을까.'},fetch:async(url,opts)=>{repairs++;const body=JSON.parse(opts.body);assert.ok(!body.response_format.json_schema.schema.anyOf);return {ok:true,json:async()=>({response:JSON.stringify(repairs===1?{...value,hint:true,topic:'',evidence:0}:{...value,evidence:1})})};}});
 assert.equal(repairs,2);assert.equal(repaired.repairAttempts,1);assert.ok(repaired.focus.includes('피라미드'));
 let skippedCalls=0;const skipped=await requestHintJudgment({server:'http://test',job:{text:'응 고마워.'},fetch:async()=>{skippedCalls++;return {ok:true,json:async()=>({response:'{"hint":false}'})};}});assert.equal(skipped.hint,false);assert.equal(skippedCalls,1,'a legitimate skip must never trigger a retry');
 let badCalls=0;await assert.rejects(()=>requestHintJudgment({job:{text:'피라미드 이야기'},fetch:async()=>{badCalls++;return {ok:true,json:async()=>({response:'{"hint":true,"topic":"","evidence":0}'})};}}),/비어 있어/);assert.equal(badCalls,2,'format repair is bounded to one retry');
@@ -126,3 +126,28 @@ assert.ok(skippedDiagnostic.elapsedMs>=0);
 assert.ok(!sent.response_format.json_schema.schema.properties.kind.enum.includes('recap'));
 assert.ok(!sent.response_format.json_schema.schema.properties.source.enum.includes('conversation'));
 for(const source of ['internal','web','memory'])assert.equal(parseHintJudgment(JSON.stringify({...value,kind:'recap',source}),context).reason,'conversation_summary_disabled');
+
+const biology=compactJudgeContext({latestText:'열수 분출공에서는 고압의 뜨거운 물이 나옵니다.',context:'원시 수프 가설도 생명의 기원에 관한 설명입니다.'},'',[],600);
+const span=biology.evidenceChoices.findIndex(text=>text.includes('열수'));
+const selection={span,topic:'열수 분출공',need:'원시 수프 가설과 에너지원 및 조건의 차이',kind:'term',source:'web'};
+const selected=parseHintJudgment(JSON.stringify(selection),biology);
+assert.ok(selected.hint);assert.equal(selected.plan.question,selection.need);
+assert.equal(selected.plan.evidence,biology.evidenceChoices[span]);
+assert.equal(parseHintJudgment(JSON.stringify({...selection,span:0,topic:'',need:''}),biology).hint,false);
+for(const bad of [{span:99},{span:[span]},{span:null},{span:-1},{topic:'스마트 안경'},{topic:'소인성'},{need:''}])assert.equal(parseHintJudgment(JSON.stringify({...selection,...bad}),biology),null);
+const fragment=compactJudgeContext({text:'있습니다.'});
+assert.equal(parseHintJudgment(JSON.stringify({hint:true,evidence:1,topic:'UFO',question:'UFO 정의',kind:'term',source:'web'}),fragment),null);
+assert.equal(parseHintJudgment(JSON.stringify({...value,evidence:0}),context),null,'old positive zero is never auto-repaired');
+const staleTopic=compactJudgeContext({text:'열수 분출공 이야기',activeTopic:'피라미드'});
+assert.doesNotMatch(staleTopic.text,/피라미드/);
+assert.ok(!sent.response_format.json_schema.schema.anyOf);
+assert.deepEqual(sent.response_format.json_schema.schema.required,['span','topic','need','kind','source']);
+console.log('PASS: compact span contract, real biology comparison, grounded topic, positive-zero rejection and stale topic removal');
+
+assert.equal(parseHintJudgment(JSON.stringify({...selection,kind:'mechanism'}),biology).plan.kind,'term');
+const thanks=compactJudgeContext({text:'네 감사합니다. 잘 알겠습니다.'});
+assert.equal(parseHintJudgment(JSON.stringify({span:2,topic:'잘 알겠습니다.',need:'',kind:'key',source:'internal'}),thanks).hint,false);
+
+const failedDiagnostics=[];
+await assert.rejects(()=>requestHintJudgment({job:{text:'피라미드'},onDiagnostic:event=>failedDiagnostics.push(event),fetch:async()=>({ok:true,json:async()=>({response:'{"span":99}'})})}),/비어 있어/);
+assert.equal(failedDiagnostics.filter(event=>event.reason==='judge_invalid_response').length,2,'each attempt emits once, without a duplicated terminal response');

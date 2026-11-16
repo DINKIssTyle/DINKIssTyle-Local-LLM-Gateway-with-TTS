@@ -306,3 +306,15 @@ func TestNativeAmbientReasoningCompatibilityRetry(t *testing.T) {
 		t.Fatal("unrelated errors must not trigger reasoning retry")
 	}
 }
+
+func TestNativeHintContractDoesNotInviteSchemaCopying(t *testing.T) {
+	body := map[string]any{"system_prompt": "Select missing information.", "response_format": map[string]any{"json_schema": map[string]any{"name": "hint_judgment", "schema": map[string]any{"type": "object", "properties": map[string]any{"span": map[string]any{"type": "integer"}}}}}}
+	prepareNativeAmbientPayload(body)
+	system := fmt.Sprint(body["system_prompt"])
+	if !strings.Contains(system, "span (integer source number; 0 means skip)") || strings.Contains(system, `"properties"`) || strings.Contains(system, `"type":"object"`) {
+		t.Fatalf("schema copied into Native prompt: %s", system)
+	}
+	if body["reasoning"] != "off" || body["store"] != false {
+		t.Fatal("ambient policy lost")
+	}
+}

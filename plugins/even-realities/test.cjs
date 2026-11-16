@@ -91,7 +91,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
 (async()=>{
  const {validateEvenHubPageContainer}=await import('@evenrealities/even_hub_sdk');
  validatePage=page=>{const result=validateEvenHubPageContainer(page);assert.equal(result.valid,true,JSON.stringify(result));};
- for(const module of ['./audio-upload.mjs','./translation-metrics.mjs','./llm-translation.mjs','./hint-audit.mjs'])Object.assign(context,await import(module));
+ for(const module of ['./hint-quality.mjs','./translation-direction.mjs','./audio-upload.mjs','./translation-metrics.mjs','./llm-translation.mjs','./hint-audit.mjs'])Object.assign(context,await import(module));
  Object.assign(context,await import('./head-gesture.mjs'));
  const autoCloseModule=await import('./hint-autoclose.mjs');Object.assign(context,autoCloseModule);
  context.HintLifetime=class extends autoCloseModule.HintLifetime{constructor(options){super({...options,now:()=>hintClock,schedule:fn=>{hintJobs.push(fn);return hintJobs.length;},cancel:()=>{}});}};
@@ -123,7 +123,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  Object.assign(context,await import('./translation-display.mjs'));
  Object.assign(context,await import('./direct-question.mjs'));
  Object.assign(context,await import('./hint-enrichment.mjs'));
- const {HintGate}=await import('./hint-gate.mjs');context.HintGate=class extends HintGate{constructor(options){super({...options,collectContext:false,collectWaitMs:0});}};
+ const {HintGate,hintActivityTiming}=await import('./hint-gate.mjs');context.hintActivityTiming=hintActivityTiming;context.HintGate=class extends HintGate{constructor(options){super({...options,timing:()=>null,collectContext:false,collectWaitMs:0});}};
  const {normalizeModels} = await import('./model-list.mjs');
  const {rightAlignedStatusText,modeHeaderText,translationHeaderText,cleanHintText,clockText,glassesBatteryText,hudStatusText,hudNoticeText,animatedDots,withAnimatedDots,extractVisibleAndReasoning,stripSourcesForGlasses,formatToolStatusText,wrapHUDLines,sliceHUDWindow,normalizeGlassesMode,nextGlassesMode,glassesModeMenuIdToMode,targetLanguageLabel,glassesModeShortLabel,glassesModeBadgeText,buildModePrompts}=await import('./hud-status.mjs');
  Object.assign(context,{rightAlignedStatusText,modeHeaderText,translationHeaderText,cleanHintText,hudStatusText,hudNoticeText,withAnimatedDots,extractVisibleAndReasoning,stripSourcesForGlasses,formatToolStatusText,sliceHUDWindow,normalizeGlassesMode,nextGlassesMode,glassesModeMenuIdToMode,targetLanguageLabel,glassesModeShortLabel,glassesModeBadgeText,buildModePrompts});
@@ -671,7 +671,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  nextTranscript='Would you like some coffee?';
  utterance();await tick();await tick();await tick();
  const lastSttBody = JSON.parse(requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).at(-1).opts.body);
- assert.equal(lastSttBody.language,'en','Translate mode with target ko and auto source must resolve to safe 2-letter ISO language code en');
+ assert.equal(lastSttBody.language,'auto','Whisper translation into Korean must detect both conversation languages');
  const lastTranslateChat = JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
  assert.match(lastTranslateChat.messages[0].content,/positive[\s\S]*negative/);
  assert.match(element('chat-output').textContent,/긍정: 네, 주세요\./);
@@ -727,8 +727,19 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  nextTranscript='こんにちは';
  utterance();await tick();await tick();await tick();
  const jaSttBody = JSON.parse(requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).at(-1).opts.body);
- assert.equal(jaSttBody.language,'ja','Translate mode must use selected source language code');
+ assert.equal(jaSttBody.language,'auto','Whisper must detect both Japanese and Korean with selected Japanese partner');
  assert.doesNotMatch(element('hud-notice').textContent,/전사 오류/);
+ // Korean wearer speech reverses the selected Japanese pair; the prior box
+ // is cleared and a final pronunciation is added without replacing translation.
+ chromeText='ありがとうございます。';
+ chatReply=sseReply('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify({positive:'どういたしまして。\n천만에요.',negative:'いいえ。\n아니요.',pronunciation:'아리가토 고자이마스'})}}]})+'\n\ndata: [DONE]\n\n');
+ nextTranscript='감사합니다';utterance('other');await tick();await tick();await tick();await tick();
+ const reverseRequest=JSON.parse(requests.filter(r=>r.url.endsWith('/api/translate/chrome')).at(-1).opts.body);
+ assert.equal(reverseRequest.source,'ko');assert.equal(reverseRequest.target,'ja');
+ assert.equal(context.window.__queueTest.translationHistory.entries.length,1,'a language turn starts a fresh translation box');
+ assert.match(context.window.__queueTest.translationHistory.text(),/ありがとうございます/);
+ assert.match(context.window.__queueTest.translationHistory.text(),/발음: 아리가토 고자이마스/);
+ assert.doesNotMatch(context.window.__queueTest.translationHistory.text(),/커피|안녕하세요/);
  // Local translation is visible before a slow reply LLM and the next utterance
  // can replace it without waiting for the previous LLM result.
  chromeText='Chrome이 먼저 번역한 첫 문장';chatReply=null;holdChat=true;
@@ -1321,6 +1332,18 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  queue.hintGate.observe('피라미드의 돌은 어떤 재료인지 궁금하대.',{id:'semantic-fact-duplicate'});for(let i=0;i<25;i++)await tick();
  assert.match(queue.state().answer,/왕의 방.*화강암/,'a distinct finished hint must display without a second semantic veto');
  assert.ok(!requests.slice(comparisonStart).some(r=>r.url.endsWith('/api/glasses/hint-compare') && JSON.parse(r.opts.body).kind==='fact'),'do not perform a post-generation semantic check');
+ const transcriptCheck=requests.slice(comparisonStart).find(r=>r.url.endsWith('/api/glasses/hint-compare') && JSON.parse(r.opts.body).kind==='transcript');
+ assert.ok(transcriptCheck,'compare against observed speech only, never old generated cards');
+ assert.ok(JSON.parse(transcriptCheck.opts.body).history.some(text=>text.includes('어떤 재료')));
+ assert.ok(!JSON.parse(transcriptCheck.opts.body).history.some(text=>text.includes('쿠푸왕을 위해')));
+ const beforeEcho=queue.state().answer;
+ hintComparison.transcript=true;readyComparison();
+ judgeReply={span:1,topic:'피라미드',need:'이미 들은 건축재료를 표현만 바꿔 설명',kind:'key',source:'internal'};
+ chatReply=sseReply('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify({fact:'피라미드 건축에는 석재를 쌓는 방식이 쓰였습니다.',adds_information:true,kind:'key'})}}]})+'\n\ndata: [DONE]\n\n');
+ queue.hintGate.observe('피라미드는 돌을 쌓아 만드는 건축물이래.',{id:'observed-paraphrase'});for(let i=0;i<25;i++)await tick();
+ assert.equal(queue.state().answer,beforeEcho,'a paraphrase of observed speech never replaces a useful card');
+ assert.match(element('hint-status').textContent,/이미 설명된 내용/);
+ hintComparison.transcript=false;
  const planComparisonStart=requests.length;hintComparison={plan:true,fact:false};readyComparison();
  judgeReply={hint:true,kind:'key',topic:'피라미드',evidence:'피라미드',question:'피라미드 무덤의 주인 이름과 신분',source:'internal'};
  queue.hintGate.observe('피라미드는 누구의 무덤인지 궁금하대.',{id:'semantic-plan-duplicate'});for(let i=0;i<25;i++)await tick();
@@ -1347,7 +1370,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  const visibilityStart=requests.length;
  queue.hintGate.observe('피라미드의 건립 목적이 궁금하대',{id:'visible-inflight'});for(let i=0;i<20;i++)await tick();
  assert.equal(typeof releaseChat,'function');
- judgeReply={hint:true,continuity:'same',kind:'key',topic:'피라미드',evidence:'큰 돌',question:'피라미드의 석재 운반 기술과 경사로 원리',source:'internal'};
+ judgeReply={hint:true,continuity:'same',kind:'key',topic:'큰 돌',evidence:'큰 돌',question:'피라미드의 석재 운반 기술과 경사로 원리',source:'internal'};
  queue.hintGate.lastDecision=-Infinity;queue.hintGate.nextGeneration=-Infinity;
  queue.hintGate.observe('그렇게 큰 돌을 어떻게 높이 옮겼을까',{id:'same-topic-followup'});for(let i=0;i<20;i++)await tick();
  const secondVisibleFact='경사로는 무거운 석재를 높은 곳까지 옮기는 데 활용된 것으로 추정됩니다.';
@@ -1374,6 +1397,28 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  releaseChat();for(let i=0;i<25;i++)await tick();
  assert.equal(queue.state().answer,completedOldTopic,'the writer already started, so show its verified completion');
  assert.equal(queue.hintGate.currentTopic,'청동기 시대','finishing an older card must not overwrite the classifier topic');
+ // Two-card stack: a new selected topic must not abort the first definition
+ // when its draft clause is corrected but the actual term remains unchanged.
+ queue.hintGate.reset({forgetHistory:true});queue.stack.clear();
+ element('hint-card-count').value='2';await element('hint-card-count').handlers.change();queue.stack.clear();
+ const stackFirst='해양의 염분은 지역과 수심에 따라 달라지며 해류의 움직임에도 영향을 줍니다.';
+ const stackSecond='대기는 온도 변화에 따라 층으로 구분하며 각 층에서 나타나는 현상이 다릅니다.';
+ chunks.splice(0,chunks.length,'data: '+JSON.stringify({type:'request.complete',final_assistant_content:JSON.stringify({fact:stackFirst,adds_information:true,kind:'term'})})+'\n\n');
+ holdChat=true;chatReply=null;releaseChat=null;
+ judgeReply={span:1,topic:'해양',need:'definition',kind:'term',source:'internal'};
+ queue.hintGate.observe('해양이라고 하는 동네 말이죠?',{id:'stack-definition-draft',preview:true});for(let i=0;i<20;i++)await tick();
+ assert.equal(typeof releaseChat,'function');
+ queue.hintGate.validatePreview('stack-definition-draft','해양이라고 하는 종류의 환경입니다.');
+ queue.hintGate.lastDecision=-Infinity;queue.hintGate.nextGeneration=-Infinity;
+ judgeReply={span:1,topic:'대기',need:'대기의 층을 구분하는 기준',kind:'term',source:'internal'};
+ queue.hintGate.observe('다음에는 대기 이야기를 해봅시다.',{id:'stack-second-topic'});for(let i=0;i<20;i++)await tick();
+ releaseChat();for(let i=0;i<25;i++)await tick();
+ assert.ok(queue.stack.cards.some(card=>card.text===stackFirst),'first definition must finish despite a corrected clause and next candidate');
+ chatReply=sseReply('data: '+JSON.stringify({type:'request.complete',final_assistant_content:JSON.stringify({fact:stackSecond,adds_information:true,kind:'term'})})+'\n\n');
+ displayClock+=8001;await queue.drainAI();for(let i=0;i<25;i++)await tick();
+ assert.equal(queue.stack.cards.length,2);assert.deepEqual(Array.from(queue.stack.cards,card=>card.text),[stackSecond,stackFirst]);
+ element('hint-card-count').value='1';await element('hint-card-count').handlers.change();
+ chunks.splice(0,chunks.length,...originalChunks);
  // Long first sentences must scroll instead of being rejected by viewport fitting.
  queue.hintGate.reset({forgetHistory:true});
  const longHint='피라미드 건축의 구조와 자재 운송 및 하중 분산 원리를 자세히 설명하는 긴 문장으로 '+ '여러 석재의 배치와 경사로를 통한 운반 방법을 함께 살펴보며 '.repeat(12)+'완성됩니다.';

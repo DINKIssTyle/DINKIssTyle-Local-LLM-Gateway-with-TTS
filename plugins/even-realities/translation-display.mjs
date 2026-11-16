@@ -8,7 +8,7 @@ export function parseTranslationDisplay(raw) {
   if(json.startsWith('{')){
     try{
       const data=JSON.parse(json);
-      for(const key of Object.keys(result))if(typeof data[key]==='string')result[key]=data[key].trim();
+      for(const key of [...Object.keys(result),'pronunciation'])if(typeof data[key]==='string')result[key]=data[key].trim();
     }catch{
       // Decode each string independently while a JSON object is streaming.
       // An incomplete escape stays private until the next chunk arrives.
@@ -41,7 +41,7 @@ export function translationReplyText(result,maxWidth=null) {
     return lines.map(line=>maxWidth===null?line:pxTruncate(line,maxWidth)).join('\n');
   }).join('\n');
 }
-export function translationPhoneText(result){return [result.translation,translationReplyText(result)].filter(Boolean).join('\n');}
+export function translationPhoneText(result){return [result.translation,result.pronunciation?'발음: '+result.pronunciation:'',translationReplyText(result)].filter(Boolean).join('\n');}
 
 
 export function hasCompleteTranslationReplies(value){

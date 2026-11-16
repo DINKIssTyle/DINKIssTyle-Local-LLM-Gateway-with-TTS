@@ -65,7 +65,7 @@ func TestHintGroundingInternalDefinitionCanLookupWithoutWriterTools(t *testing.T
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		raw, _ := json.Marshal(body)
-		if _, ok := body["tools"]; ok || !strings.Contains(string(raw), "원문 인용 모드") {
+		if _, ok := body["tools"]; ok || !strings.Contains(string(raw), "selection:") {
 			t.Error("writer must use fetched records without separate tools")
 		}
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"HINT_SKIP\"}}]}\n\ndata: [DONE]\n\n")
@@ -112,7 +112,7 @@ func TestHintGroundingUnknownNamesRequireEvidence(t *testing.T) {
 	req.Topic = "피라미드"
 	req.Source = "web"
 	proof, body, err := prepareHintGrounding(context.Background(), registry, toolruntime.ExecutionContext{}, true, req)
-	if err != nil || proof.Mode != "quote" || !strings.Contains(body, "원문 인용 모드") || calls != 2 {
+	if err != nil || proof.Mode != "quote" || !strings.Contains(body, "selection:") || calls != 2 {
 		t.Fatalf("real source name: %+v %v calls=%d", proof, err, calls)
 	}
 	req.Source = "internal"
@@ -162,5 +162,71 @@ func TestHintGroundingConversationAPIKeepsOperationAndRawEvidence(t *testing.T) 
 	handleChat(w, req, &App{llmEndpoint: upstream.URL, llmMode: "standard"}, &AuthManager{users: map[string]*User{}})
 	if w.Code != 200 || calls != 1 || !strings.Contains(w.Body.String(), `"mode":"conversation"`) || !strings.Contains(w.Body.String(), `"kind":"schedule"`) {
 		t.Fatalf("%d calls=%d %s", w.Code, calls, w.Body.String())
+	}
+}
+
+func TestHintQuoteSpansAndTaskFirstSelection(t *testing.T) {
+	text := "첫 번째 문장은 실제 자료에서 읽은 문장입니다. 수치는 1.5미터로 표현되어 있습니다. 마지막 설명도 실제 자료의 일부입니다."
+	spans := hintQuoteSpans(text)
+	if len(spans) != 3 || !strings.Contains(spans[1], "1.5미터") {
+		t.Fatalf("source sentence boundaries: %#v", spans)
+	}
+	for _, span := range spans {
+		if !strings.Contains(text, span) {
+			t.Fatal("source text was rewritten")
+		}
+	}
+	registry := toolruntime.NewRegistry()
+	err := registry.Register(toolruntime.Definition{Name: "search_web", InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}}}`)}, func(context.Context, toolruntime.ExecutionContext, json.RawMessage) (toolruntime.Result, error) {
+		return toolruntime.Result{Content: "Title: 물리학의 고고학 활용\nLink: https://example.com/archaeology\nSnippet: 고고학에서는 물리학적 측정으로 시료의 특성을 비교합니다."}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := "고고학에서 물리학이 활용되는 구체적인 사례"
+	proof, instructions, err := prepareHintGrounding(context.Background(), registry, toolruntime.ExecutionContext{}, true, hintResearchRequest{Source: "internal", Kind: "term", Topic: "물리학", Query: query, Observed: "고고학에서는 물리학을 활용합니다", Anchor: "물리학", AllowWeb: true})
+	if err != nil || proof.Task != query || len(proof.Records) != 1 || len(proof.Records[0].Spans) != 1 {
+		t.Fatalf("missing numbered source proof: %+v %v", proof, err)
+	}
+	for _, wanted := range []string{query, "selection:", "an integer choice number", "generic definition is not an answer", "Topic overlap alone is not enough"} {
+		if !strings.Contains(instructions, wanted) {
+			t.Errorf("task-first selector instruction missing: %s", wanted)
+		}
+	}
+	if strings.Contains(instructions, `"support_quote":"`) {
+		t.Fatal("selector still asks the model to reconstruct quotes")
+	}
+}
+
+func TestHintSelectorReplacesConflictingWriterFormat(t *testing.T) {
+	proof := hintGrounding{Version: 1, Mode: "quote", Topic: "물리학", Source: "web", Records: []hintSourceRecord{{Title: "활용", URL: "https://example.com/a", Text: "검증용 자료에서 선택할 문장입니다.", Spans: []string{"검증용 자료에서 선택할 문장입니다."}}}}
+	req := hintResearchRequest{Query: "고고학에서 물리학을 활용하는 사례", Observed: "고고학에서는 물리학을 이용합니다", Kind: "term"}
+	for _, native := range []bool{false, true} {
+		body := map[string]any{"model": "role-model", "stream": true, "messages": []map[string]string{{"role": "system", "content": "OLD_FREE_FORM_FACT_INSTRUCTION"}, {"role": "user", "content": "old task"}}}
+		if native {
+			delete(body, "messages")
+			body["input"] = "old task"
+			body["system_prompt"] = "OLD_FREE_FORM_FACT_INSTRUCTION"
+		}
+		raw, _ := json.Marshal(body)
+		updated, err := prepareHintSelectionBody(raw, proof, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(updated), "OLD_FREE_FORM_FACT_INSTRUCTION") || !strings.Contains(string(updated), req.Query) || !strings.Contains(string(updated), "selection:") {
+			t.Fatalf("selector still conflicts with old format: %s", updated)
+		}
+		var payload map[string]any
+		_ = json.Unmarshal(updated, &payload)
+		if payload["model"] != "role-model" || payload["stream"] != true {
+			t.Fatal("model/transport routing changed")
+		}
+		if native {
+			if payload["max_output_tokens"] != float64(192) {
+				t.Fatal("Native selector budget missing")
+			}
+		} else if payload["max_tokens"] != float64(192) {
+			t.Fatal("standard selector budget missing")
+		}
 	}
 }

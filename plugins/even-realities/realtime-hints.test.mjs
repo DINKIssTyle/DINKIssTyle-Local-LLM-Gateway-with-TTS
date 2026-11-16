@@ -47,3 +47,5 @@ assert.equal(await compareHintDuplicate({fetch:comparison,server:'http://test',h
 assert.equal(compareBody.kind,'plan');assert.deepEqual(compareBody.history,['이전 조사']);
 for(const response of [{ok:false},{ok:true,json:async()=>({checked:false,duplicate:true})},{ok:true,json:async()=>({checked:true,duplicate:false})}])assert.equal(await compareHintDuplicate({fetch:async()=>response,server:'http://test',headers:{},text:'새 정보',history:['이전 정보']}),false);
 assert.equal(await compareHintDuplicate({fetch:async(_url,options)=>new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(Error('timeout')))),server:'http://test',headers:{},text:'새 정보',history:['이전 정보'],timeoutMs:5}),false,'optional comparison cannot stall transcription');
+
+assert.equal(await compareHintDuplicate({fetch:async()=>new Promise(()=>{}),server:'http://test',headers:{},text:'새 정보',history:['들은 내용'],kind:'transcript',timeoutMs:5}),false,'an uncooperative optional comparison cannot hold a finished card');

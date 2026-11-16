@@ -22,3 +22,14 @@ const summaryPrompt=p.hintAnswerPrompts({source:'conversation',kind:'recap',topi
 assert.match(summaryPrompt,/Return HINT_SKIP/);assert.match(summaryPrompt,/Do not relabel a recap as key/);
 assert.match(p.judgePrompts(context).systemPrompt,/Do not output recaps/);
 assert.match(p.hintPlanPrompts(original,'','background').systemPrompt,/conversation and recap are disabled/);
+
+const activePolicy=p.judgePrompts(context,{sensitivity:'active'}).systemPrompt;
+assert.match(activePolicy,/A single mention is enough/);
+assert.match(activePolicy,/different useful facet/);
+assert.match(activePolicy,/Still skip unclear ASR/);
+assert.doesNotMatch(p.judgePrompts(context,{sensitivity:'balanced'}).systemPrompt,/low intervention threshold/);
+
+const application=p.hintAnswerPrompts({topic:'물리학',kind:'term',source:'internal',question:'고고학에서 물리학이 활용되는 구체적 사례',knownFacts:[]});
+assert.match(application.systemPrompt,/application, comparison or mechanism tasks take priority/);
+assert.match(application.systemPrompt,/return only the selection integer/);
+assert.match(application.userPrompt,/고고학에서 물리학이 활용되는 구체적 사례/);

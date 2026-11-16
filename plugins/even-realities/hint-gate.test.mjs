@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {HintGate,similarHint} from './hint-gate.mjs';
+import {HintGate,similarHint,hintActivityTiming} from './hint-gate.mjs';
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 let now=100000,calls=[],hints=[],statuses=[],release;
 const gate=new HintGate({generationIntervalMs:0,settleMs:0,now:()=>now,intervalMs:0,cooldownMs:0,decide:async job=>{
@@ -256,3 +256,39 @@ for(const reason of ['llm_skip','judge_timeout','judge_invalid_response']){
  assert.equal(selected.length,0);assert.equal(audits.some(e=>e.reason==='transcript_changed'),false,reason);
  skipGate.reset();
 }
+
+// The active profile dispatches a short clear mention sooner, without changing
+// duplicate suppression or allowing concurrent classifier calls.
+let profile='active',activityNow=0,activityCalls=[];
+const activity=new HintGate({timing:()=>hintActivityTiming(profile),collectContext:true,
+ now:()=>activityNow,decide:async job=>{activityCalls.push(job);return {hint:false};},onHint:()=>{}});
+activity.observe('반도체의 밴드갭',{id:'short'});
+assert.equal(activity.pending.due,1000);
+activityNow=999;await activity.pump();assert.equal(activityCalls.length,0);
+activityNow=1000;await activity.pump();assert.equal(activityCalls.length,1);
+activity.reset();profile='balanced';activityNow=2000;
+activity.observe('반도체의 밴드갭',{id:'balanced'});assert.equal(activity.pending.due,4200);
+assert.equal(activity.cooldownMs,8000);assert.equal(activity.generationIntervalMs,8000);
+activity.reset();
+assert.equal(hintActivityTiming('active').cooldownMs,4000);
+assert.equal(hintActivityTiming('active').generationIntervalMs,4000);
+console.log('PASS: active short-context dispatch, bounded cadence and balanced profile restore');
+
+const definitionGate=new HintGate({now:()=>1000,decide:async()=>({hint:false}),onHint:()=>{}});
+const originalDefinition='VX라고 하는 동네 물주도 VX?';
+definitionGate.entries=[{id:'vx-preview',text:originalDefinition,preview:true}];
+const definitionJob={epoch:definitionGate.epoch,topicVersion:definitionGate.topicVersion,at:1000,hint:true,preview:true,id:'vx-preview',focusText:originalDefinition,hintPlan:{kind:'term',topic:'VX',question:'definition'}};
+assert.ok(definitionGate.beginGeneration(definitionJob));
+definitionGate.entries[0]={id:'vx-preview',text:'VX라고 하는 종류의 무기라고 VX? 이것보다 약한 기존의 무기도 있어요.',preview:false};
+definitionGate.topicVersion++;
+assert.equal(definitionGate.rejectionReason(definitionJob),'','stable definition target survives surrounding final-ASR correction and a new candidate');
+definitionGate.entries[0].text='VX가 아니라 다른 물질이라고 합니다.';
+assert.equal(definitionGate.rejectionReason(definitionJob),'transcript_changed','negation correction still invalidates the old task');
+definitionGate.entries[0].text='AVX라고 하는 동네 물주도 AVX?';
+assert.equal(definitionGate.rejectionReason(definitionJob),'transcript_changed','a different Latin name containing the old letters cannot keep the definition');
+definitionGate.entries[0].text='전혀 다른 주제 이야기';
+assert.equal(definitionGate.rejectionReason(definitionJob),'transcript_changed');
+definitionGate.entries[0].text='VX라고 하는 종류의 무기 20';
+assert.equal(definitionGate.rejectionReason(definitionJob),'transcript_changed');
+definitionGate.reset();
+console.log('PASS: reported definition cancellation fixed without ignoring removed names, negation or numeric corrections');

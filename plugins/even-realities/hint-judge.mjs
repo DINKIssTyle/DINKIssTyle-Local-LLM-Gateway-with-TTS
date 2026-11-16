@@ -1,3 +1,4 @@
+import {acknowledgementOnly} from './hint-quality.mjs';
 import {judgePrompts,hintJudgeRepairPrompt} from './prompts.mjs';
 export {judgePrompts} from './prompts.mjs';
 import {HINT_LABELS,INFORMATION_HINT_KINDS,isInformationHintPlan} from './hint-policy.mjs';
@@ -42,7 +43,9 @@ export function compactJudgeContext(job,shown='',_candidates=[],limit=600){
   const current=tailWithin(collected?job.latestText:job.text,Math.floor((budget-reserve)*(collected ? .45 : .76)));
   const remaining=budget-reserve-estimateHintTokens(current);
   const prior=tailWithin(job.context,Math.floor(remaining*(collected ? .8 : .35)));
-  const activeTopic=headWithin(job.activeTopic,24);
+  const topic=headWithin(job.activeTopic,24);
+  const compact=value=>String(value || '').normalize('NFC').toLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
+  const activeTopic=compact([prior,current].join(' ')).includes(compact(topic))?topic:'';
   const latest=collected?[prior,current].filter(Boolean).join('\n'):current;
   const evidenceChoices=hintEvidenceChoices(latest);
   const numbered=value=>hintEvidenceChoices(value).slice(1).map(part=>`[${evidenceChoices.indexOf(part)}] ${part}`).join('\n');
@@ -64,6 +67,15 @@ export function unwrapHintObject(raw){
 }
 export function parseHintJudgment(raw,context){
   let data=unwrapHintObject(raw);
+  const modern=data && Object.hasOwn(data,'span');
+  if(modern){
+    if(!Number.isInteger(data.span) || data.span<0 || data.span>=context.evidenceChoices.length)return null;
+    if(data.span===0)return {hint:false,reason:'llm_skip',backend:'llm',continuity:'unknown'};
+    const evidence=context.evidenceChoices[data.span];
+    if(acknowledgementOnly(evidence))return {hint:false,reason:'llm_skip',backend:'llm',continuity:'unknown'};
+    const kindAliases={mechanism:'term',definition:'term',comparison:'term',factcheck:'verify',fact_check:'verify'};
+    data={...data,kind:kindAliases[data.kind] || data.kind,hint:true,evidence:data.span,question:data.need};
+  }
   if(data && Number.isInteger(data.evidence))data={...data,evidence:context.evidenceChoices?.[data.evidence] ?? ''};
   const continuity=['same','changed','unknown'].includes(data?.continuity)?data.continuity:'unknown';
   if(data?.hint===false){
@@ -77,14 +89,17 @@ export function parseHintJudgment(raw,context){
   if(context.latest && evidence.includes(context.latest))evidence=context.latest;
   // The model must ground its selection in text it actually saw, from the current window.
   if(!context.latest.includes(evidence))return null;
+  const key=value=>String(value).normalize('NFC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
+  // A source number cannot ground an unrelated topic or an empty sentence ending.
+  if(!key(evidence).includes(key(data.topic)) || key(data.topic).length<2)return null;
   if(data.kind!==undefined && !Object.hasOwn(HINT_LABELS,data.kind))return null;
   // A definition/claim needs external verification even when the small model
   // accidentally calls it a conversation summary. Correct the route, not the evidence.
   const source=data.source;
   const plan={kind:data.kind || 'key',evidence,topic:data.topic.trim(),question:data.question.trim(),source,knownFacts:[context.latest]};
-  return {hint:true,continuity,category:data.source==='memory'?'recall':'background',focus:evidence,reason:'llm_topic',backend:'llm',plan};
+  return {hint:true,...(modern?{}:{continuity}),category:data.source==='memory'?'recall':'background',focus:evidence,reason:'llm_topic',backend:'llm',plan};
 }
-const schema={type:'object',properties:{hint:{type:'boolean'},topic:{type:'string',maxLength:40},evidence:{type:'string',maxLength:40},question:{type:'string',maxLength:100},kind:{type:'string',enum:INFORMATION_HINT_KINDS},source:{type:'string',enum:['internal','web','memory']},continuity:{type:'string',enum:['same','changed','unknown']}},required:['hint','topic','evidence','question','kind','source','continuity'],additionalProperties:false};
+const schema={type:'object',properties:{span:{type:'integer'},topic:{type:'string',maxLength:40},need:{type:'string',maxLength:100},kind:{type:'string',enum:INFORMATION_HINT_KINDS},source:{type:'string',enum:['internal','web','memory']}},required:['span','topic','need','kind','source'],additionalProperties:false};
 // Keep sentences intact. Only oversized sentences need clause/word boundaries;
 // the 160-code-point hard ceiling matches the evidence validator.
 export function hintEvidenceChoices(text){
@@ -107,13 +122,10 @@ export function hintEvidenceChoices(text){
 export async function requestHintJudgment({fetch,server,headers,model,job,shown='',limit=600,signal,preferWeb=true,sensitivity='balanced',targetLang='ko',timeoutMs=12000,onDiagnostic=()=>{}}){
   const context=compactJudgeContext(job,shown,[],limit);
   const prompts=judgePrompts(context,{preferWeb,sensitivity,targetLang});
-  const requestSchema={...schema,properties:{...schema.properties,evidence:{type:'integer',enum:context.evidenceChoices.map((_,index)=>index)}},anyOf:[
-    {properties:{hint:{const:true},topic:{minLength:2},question:{minLength:4},evidence:{enum:context.evidenceChoices.map((_,index)=>index).filter(index=>index>0)}}},
-    {properties:{hint:{const:false}}}
-  ]};
+  const requestSchema={...schema,properties:{...schema.properties,span:{type:'integer',enum:context.evidenceChoices.map((_,index)=>index)}}};
   const controller=new AbortController(),started=Date.now();
-  let timedOut=false,attempt=0,requestMs=0,readMs=0,lastRaw='',phase='request';
-  const diagnostic=(reason,extra={})=>{try{onDiagnostic({reason,model,role:'hintDecision',attempt:Math.min(attempt+1,2),phase,elapsedMs:Date.now()-started,requestMs,readMs,...extra});}catch{}};
+  let timedOut=false,attempt=0,requestMs=0,readMs=0,lastRaw='',phase='request',lastDiagnostic='';
+  const diagnostic=(reason,extra={})=>{const key=JSON.stringify([reason,Math.min(attempt+1,2),phase,extra]);if(key===lastDiagnostic)return;lastDiagnostic=key;try{onDiagnostic({reason,model,role:'hintDecision',attempt:Math.min(attempt+1,2),phase,elapsedMs:Date.now()-started,requestMs,readMs,...extra});}catch{}};
   let rejectAbort;
   const interrupted=new Promise((_,reject)=>{rejectAbort=reject;});
   const abort=()=>{

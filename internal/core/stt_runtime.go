@@ -83,6 +83,7 @@ type sttWorker struct {
 	log    limitedWorkerLog
 }
 type sttWorkerReply struct {
+	Language   string  `json:"language,omitempty"`
 	LockMS     float64 `json:"-"`
 	EngineMS   float64 `json:"-"`
 	StableText string  `json:"stableText,omitempty"`

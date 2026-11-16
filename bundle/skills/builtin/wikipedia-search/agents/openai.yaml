@@ -1,0 +1,4 @@
+interface:
+  display_name: "위키백과 검색 (Wikimedia)"
+  short_description: "Search Wikipedia/Wikimedia via commons.wikimedia.org API"
+  default_prompt: "Use $wikipedia-search to search and summarize information from https://commons.wikimedia.org/w/api.php."

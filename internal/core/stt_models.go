@@ -380,6 +380,9 @@ func handleSTTAudio(app *App, preview bool) http.HandlerFunc {
 			Text:     transcribedText,
 			Language: lang,
 		}
+		if inference.Language != "" {
+			resp.Language = inference.Language
+		}
 		if preview {
 			resp.Stage = "draft"
 			resp.Timings["server_ms"] = float64(time.Since(requestStarted).Microseconds()) / 1000

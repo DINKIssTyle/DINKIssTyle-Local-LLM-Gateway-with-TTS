@@ -1,3 +1,4 @@
+import {usefulHintText} from './hint-quality.mjs';
 export {hintPlanPrompts,hintAnswerPrompts,cuePrompts} from './prompts.mjs';
 import {HINT_LABELS,isInformationHintPlan} from './hint-policy.mjs';
 import {measureTextWrap} from '@evenrealities/pretext';
@@ -45,6 +46,7 @@ export function extractHintFact(raw,observed,plan) {
   if(!data || data.adds_information!==true || !rawFact)return '';
   const fact=stripConversationalLeadIn(cleanHintText(rawFact));
   const compact=normalized(fact);
+  if(!usefulHintText(fact,plan.topic))return '';
   if(!compact || normalized(observed).includes(compact) || plan.knownFacts.some(v=>normalized(v)===compact))return '';
   if(/\b(?:you|we|they|the speakers?) (?:are|were) (?:talking|discussing|mentioning)\b|\b(?:this|the) conversation (?:is|was) about\b/iu.test(fact))return '';
   if(/(?:이야기|논의|언급|대화)(?:하고|되고|하는|되었습니다|했습니다)|기억해\s*(?:두|놓)|확인해\s*보세요/u.test(fact))return '';

@@ -1,12 +1,19 @@
+import {acknowledgementOnly} from './hint-quality.mjs';
 // Prior speech is available only to resolve an explicit reference, never as another topic.
 export function refersToPrior(text){return /(?:^|\s)(?:그(?:것|거|건|걸|게|곳|때|쪽|분)|이(?:것|거|건|걸|게)|저(?:것|거|곳)|거기|그\s+(?:사람|제품|시대)|it|that|this|they|them|their|there|these|those|he|she|his|her)(?:[은는이가을를의도]?)(?=\s|[,.!?。！？]|$)/iu.test(String(text));}
 const compactEvidence=text=>String(text || '').normalize('NFC').toLowerCase().replace(/\s/gu,'');
 const compactTopic=text=>String(text || '').normalize('NFC').toLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
-const briefAcknowledgement=text=>/^(?:네|예|응|어|음|아|맞아|맞아요|그렇구나|알겠어|알겠습니다|고마워|감사합니다|okay|ok|yes|yeah|hmm)[.!?。！？\s]*$/iu.test(String(text).trim());
+const briefAcknowledgement=acknowledgementOnly;
 // One optional decision at a time; never await this from transcription.
+export function hintActivityTiming(sensitivity='balanced',llm=true){
+  const active=sensitivity==='active';
+  return {intervalMs:active?(llm?1800:1500):(llm?3000:2000),
+    settleMs:active?650:1400,collectWaitMs:active?1000:2200,minContextChars:active?24:45,
+    cooldownMs:active?4000:8000,generationIntervalMs:active?4000:8000};
+}
 export class HintGate {
-  constructor({decide,onHint,onStatus=()=>{},onTopicChange=()=>{},onAudit=()=>{},now=()=>Date.now(),cooldownMs=8000,generationIntervalMs=8000,intervalMs=2000,maxAgeMs=45000,displayAgeMs=45000,windowMs=8000,settleMs=500,repeatFocusMs=20000,collectContext=false,collectWaitMs=4000,minContextChars=80,decisionTimeoutMs=8000}) {
-    Object.assign(this,{decide,onHint,onStatus,onTopicChange,onAudit,now,cooldownMs,generationIntervalMs,intervalMs,maxAgeMs,displayAgeMs,windowMs,settleMs,repeatFocusMs,collectContext,collectWaitMs,minContextChars,decisionTimeoutMs});
+  constructor({timing=()=>null,decide,onHint,onStatus=()=>{},onTopicChange=()=>{},onAudit=()=>{},now=()=>Date.now(),cooldownMs=8000,generationIntervalMs=8000,intervalMs=2000,maxAgeMs=45000,displayAgeMs=45000,windowMs=8000,settleMs=500,repeatFocusMs=20000,collectContext=false,collectWaitMs=4000,minContextChars=80,decisionTimeoutMs=8000}) {
+    Object.assign(this,{timing,decide,onHint,onStatus,onTopicChange,onAudit,now,cooldownMs,generationIntervalMs,intervalMs,maxAgeMs,displayAgeMs,windowMs,settleMs,repeatFocusMs,collectContext,collectWaitMs,minContextChars,decisionTimeoutMs});
     this.contextFloorSequence=0;this.epoch=0;this.topicVersion=0;this.currentTopic='';this.topicDecisionSequence=0;this.entries=[];this.recent=[];this.failed=new Map();this.pending=null;this.inflight=null;
     this.generating=new Map();this.sequence=0;this.nextGeneration=-Infinity;this.lastDecision=-Infinity;this.nextHint=-Infinity;this.timer=null;
   }
@@ -18,6 +25,7 @@ export class HintGate {
     this.lastDecision=this.nextHint=this.nextGeneration=-Infinity;
   }
   observe(text,{id,at=this.now(),preview=false}={}) {
+    Object.assign(this,this.timing());
     const now=this.now();
     if(!text?.trim() || now-at>this.maxAgeMs)return;
     this.entries=this.entries.filter(e=>now-e.at<=60000);
@@ -107,6 +115,19 @@ export class HintGate {
     const sources=all?job.windowEntries.flatMap(e=>observed.split('\n').filter(part=>part.trim() && e.text.includes(part)).map(part=>({...e,text:part}))):job.windowEntries.filter(e=>focus && e.text.includes(focus)).map(e=>({...e,text:focus}));
     return {...job,focusText:focus || job.focusText,evidenceEntries:sources,evidenceMissing:!sources.length};
   }
+  sourceStillSupports(job,evidence,current){
+    if(!current)return false;
+    const plan=job.hintPlan || {},topic=compactTopic(plan.topic);
+    if(/^[a-z0-9]+$/u.test(topic) && !new RegExp('(?:^|[^a-z0-9])'+topic+'(?=$|[^a-z0-9])','iu').test(compactEvidence(current.text)))return false;
+    if(compactEvidence(current.text).includes(compactEvidence(evidence.text)))return true;
+    // A general definition is anchored to the unchanged name, not every word
+    // in its unstable ASR clause. Other research tasks retain full evidence.
+    if(job.generationStartedAt===undefined || plan.kind!=='term' || !/(?:\bdefinition\b|\bmeaning\b|정의|뜻|의미)/iu.test(plan.question || '') || topic.length<2)return false;
+    if(!compactTopic(evidence.text).includes(topic) || !compactTopic(current.text).includes(topic))return false;
+    const numbers=text=>(String(text).match(/[+-]?\d+(?:[.,]\d+)*/gu) || []).sort().join('|');
+    const negative=text=>/않|못|없|아니|불가|안\s*(?:돼|되|됨|됩|해)|\b(?:not|never|cannot|without|no)\b/iu.test(text);
+    return numbers(evidence.text)===numbers(current.text) && negative(evidence.text)===negative(current.text);
+  }
   rejectionReason(job){
     // Once the writer starts, later speech is queued for the next card. Its
     // completion must not lose display eligibility just because time passed
@@ -117,22 +138,23 @@ export class HintGate {
     if(job.evidenceEntries){
       for(const evidence of job.evidenceEntries)if(evidence.preview){
         const current=this.entries.find(e=>e.id===evidence.id);
-        if(!current || !compactEvidence(current.text).includes(compactEvidence(evidence.text)))return 'transcript_changed';
+        if(!this.sourceStillSupports(job,evidence,current))return 'transcript_changed';
       }
     }else if(job.preview){
       const current=this.entries.find(e=>e.id===job.id);
-      if(!current || !compactEvidence(current.text).includes(compactEvidence(job.focusText || job.text)))return 'transcript_changed';
+      if(!this.sourceStillSupports(job,{text:job.focusText || job.text},current))return 'transcript_changed';
     }
     return '';
   }
   relevant(job,topic=''){return !this.rejectionReason(job);}
-  beginGeneration(job){if(this.rejectionReason(job))return false;job.generationStartedAt=this.now();return true;}
+  beginGeneration(job){if(this.rejectionReason(job))return false;job.generationStartedAt ??= this.now();return true;}
   displayDelay(){return Math.max(0,this.nextHint-this.now());}
   duplicateHistory(kind='fact'){
     return this.recent.filter(e=>this.now()-e.at<180000).slice(-6).map(e=>kind==='plan'?e.decisionKey:e.cue).filter(Boolean);
   }
 
   async pump() {
+    Object.assign(this,this.timing());
     if(this.inflight || !this.pending)return;
     clearTimeout(this.timer);this.timer=null;
     const now=this.now();

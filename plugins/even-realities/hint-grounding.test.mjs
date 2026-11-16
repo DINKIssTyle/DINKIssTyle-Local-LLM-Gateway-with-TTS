@@ -59,3 +59,34 @@ assert.equal(validateHintGrounding(JSON.stringify({points:[{type:'verified',text
 const longCopy='전체 원문을 그대로 여러 차례 늘어놓는 문장입니다. '.repeat(8).trim();
 const copyProof={...mixedProof,records:[{text:longCopy}],spans:[longCopy]};
 assert.equal(validateHintGrounding(JSON.stringify({points:[{type:'summary',text:longCopy,evidence:[1]}]}),copyProof).reason,'no_summary_value','a long verbatim transcript is not a summary');
+
+const vague={...good,fact:'피라미드에 대한 구체적인 기록이 존재함.'};
+assert.equal(validateHintGrounding(JSON.stringify(vague),known).reason,'no_information_value');
+const cut='피라미드에 관한 잘린 설명만 있어서...';
+const cutSource={...source,records:[{...source.records[0],text:cut}]};
+assert.equal(validateHintGrounding(JSON.stringify({...good,support_quote:cut}),cutSource).reason,'incomplete_or_empty_source');
+const completeThenCut=source.records[0].text+' 다른 설명은 아직...';
+const mixedQuoteSource={...source,records:[{...source.records[0],text:completeThenCut}]};
+assert.equal(validateHintGrounding(JSON.stringify({...good,support_quote:completeThenCut}),mixedQuoteSource).fact,source.records[0].text);
+console.log('PASS: vague existence claims and incomplete snippets rejected; complete source prefix remains exact');
+
+const headingCut='3.2. 피라미드 구조에 대한 잘린 설명...';
+assert.equal(validateHintGrounding(JSON.stringify({...good,support_quote:headingCut}),{...source,records:[{...source.records[0],text:headingCut}]}).ok,false,'a numbered heading alone is not a complete explanatory quote');
+
+// Reproduce the reported task drift without accepting the invented quote.
+const archaeology='고고학에서는 물리학적 측정을 이용해 시료의 특성을 비교합니다.';
+const physicsProof={version:1,mode:'quote',source:'web',topic:'물리학',kind:'term',task:'고고학에서 물리학을 활용하는 사례',records:[{title:'물리학의 고고학 활용',url:'https://example.com/archaeology',text:archaeology,spans:[archaeology]}]};
+const unrelated='물리에서 미분은 변화율을 분석하거나 연속적인 양의 변화를 수학적으로 기술하는 데 사용됩니다.';
+assert.equal(validateHintGrounding(JSON.stringify({fact:unrelated,support_quote:unrelated,topic:'물리학',adds_information:true}),physicsProof).reason,'unsupported_quote_or_name');
+const referenced=validateHintGrounding(JSON.stringify({record:1,sentences:[1],adds_information:true}),physicsProof);
+assert.equal(referenced.ok,true);assert.equal(referenced.fact,archaeology);assert.equal(referenced.kind,'term');
+assert.equal(validateHintGrounding(JSON.stringify({record:1,sentences:[1],fact:unrelated,support_quote:unrelated,topic:'위조',adds_information:true}),physicsProof).fact,archaeology,'only immutable source text is displayed');
+for(const bad of [{record:0},{record:2},{sentences:[0]},{sentences:[2]},{sentences:[1,1]},{sentences:[]},{sentences:['1']}])assert.equal(validateHintGrounding(JSON.stringify({record:1,sentences:[1],adds_information:true,...bad}),physicsProof).ok,false);
+assert.equal(validateHintGrounding(JSON.stringify({record:1,sentences:[1],adds_information:true}),{...physicsProof,records:[{...physicsProof.records[0],spans:[unrelated]}]}).ok,false,'a span outside the actual source is never trusted');
+console.log('PASS: reported unsupported quotation remains blocked; source selection reconstructs exact text without trusting generated fact/topic');
+
+assert.equal(validateHintGrounding(JSON.stringify({record:0,sentences:[],adds_information:false}),physicsProof).reason,'source_does_not_answer_task');
+
+assert.equal(validateHintGrounding(JSON.stringify({selection:1}),physicsProof).fact,archaeology);
+assert.equal(validateHintGrounding(JSON.stringify({selection:0}),physicsProof).reason,'source_does_not_answer_task');
+for(const selection of [-1,2,'1',null,1.5])assert.equal(validateHintGrounding(JSON.stringify({selection}),physicsProof).ok,false);

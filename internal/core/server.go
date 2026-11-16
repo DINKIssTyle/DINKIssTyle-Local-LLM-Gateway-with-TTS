@@ -4852,7 +4852,13 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			return
 		}
 		if evidence != "" {
-			enrichedBody, enrichErr := appendHintEvidence(body, evidence)
+			var enrichedBody []byte
+			var enrichErr error
+			if verifiedHint != nil && verifiedHint.Mode == "quote" {
+				enrichedBody, enrichErr = prepareHintSelectionBody(body, *verifiedHint, hintResearch)
+			} else {
+				enrichedBody, enrichErr = appendHintEvidence(body, evidence)
+			}
 			if enrichErr != nil {
 				http.Error(w, enrichErr.Error(), 400)
 				return

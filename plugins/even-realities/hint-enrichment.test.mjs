@@ -83,3 +83,5 @@ assert.equal(parseCueResponse(JSON.stringify(conversationPlan),'금요일 3시 �
 assert.equal(extractHintFact(JSON.stringify({fact:'The conversation is about pyramid construction.',adds_information:true}),observed,plan),'','English meta summaries are not information');
 assert.equal(parseHintPlan(JSON.stringify({...plan,source:'conversation',kind:'key'})),null);
 assert.equal(parseHintPlan(JSON.stringify({...plan,source:'internal',kind:'recap'})),null);
+
+assert.equal(extractHintFact(JSON.stringify({fact:'피라미드에 대한 구체적인 기록이 존재함.',adds_information:true}),observed,plan),'');

@@ -188,3 +188,27 @@ func TestBundledWeatherDoesNotMatchGenericCurrentQuestions(t *testing.T) {
 		}
 	}
 }
+
+func TestBundledWikipediaSearchLoadsWithoutDiagnostics(t *testing.T) {
+	builtin := filepath.Join("..", "..", "bundle", "skills", "builtin")
+	result := LoadAndCompile(Config{BuiltinDir: builtin}, "$wikipedia-search 서울")
+	if len(result.Diagnostics) > 0 {
+		t.Fatalf("unexpected diagnostics loading builtin skills: %#v", result.Diagnostics)
+	}
+	var found bool
+	for _, s := range result.Available {
+		if s.Namespace == "builtin:wikipedia-search" {
+			found = true
+			if s.DisplayName != "위키백과 검색 (Wikimedia)" {
+				t.Fatalf("unexpected display name: %q", s.DisplayName)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("wikipedia-search skill missing from available: %#v", result.Available)
+	}
+	if len(result.Selected) != 1 || result.Selected[0].Namespace != "builtin:wikipedia-search" {
+		t.Fatalf("expected explicit $wikipedia-search selection, got %#v", result.Selected)
+	}
+}

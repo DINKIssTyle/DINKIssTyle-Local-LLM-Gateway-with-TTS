@@ -1,3 +1,4 @@
+import {TranslationDirection,pronunciationText} from './translation-direction.mjs';
 import {isInformationHintPlan} from './hint-policy.mjs';
 import {localizeVerifiedHint,hintNeedsLocalization} from './hint-localization.mjs';
 import {buildModePrompts,cuePrompts,hintAnswerPrompts,translationOnlyPrompts,translationReplyPrompts} from './prompts.mjs';
@@ -31,7 +32,7 @@ import {filterSpeakerPCM} from './speaker-filter.mjs';
 import { mergeTranslationDisplay, hasCompleteTranslationReplies, parseTranslationDisplay, translationReplyText, translationPhoneText } from './translation-display.mjs';
 import { directQuestionIntent } from './direct-question.mjs';
 import { parseCueResponse, parseHintPlan, hintResultKind, extractHintFact, readHintPlanResponse } from './hint-enrichment.mjs';
-import { HintGate } from './hint-gate.mjs';
+import { HintGate,hintActivityTiming } from './hint-gate.mjs';
 import { waitForEvenAppBridge, AudioInputSource, OsEventTypeList } from '@evenrealities/even_hub_sdk';
 import { normalizeModels } from './model-list.mjs';
 import { SpeechSegmenter, mergePCM } from './audio-segments.mjs';
@@ -221,7 +222,6 @@ import { LocalAgreement } from './local-agreement.mjs';
   let lastSecondAITitleContent='';
   let lastTranscriptHUDContent = '';
   let transcriptStatusMessage = '';
-  let autoLangUnsupported = false;
   let previewAbortController = null;
   let clipAbortController = null;
   let aiAbortController = null;
@@ -408,7 +408,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       previewWakeId=snapshot.segmentId;
       voiceLatency.mark(snapshot.segmentId,'preview_wake');
       hintGate.reset();
-      if(activeAIJob?.hint)aiAbortController?.abort();
+      if(activeAIJob?.hint){activeAIJob.cancelReason='chat_priority';aiAbortController?.abort();}
       for(let i=pendingAI.length-1;i>=0;i--)if(pendingAI[i].hint)pendingAI.splice(i,1);
       getChatSettings().catch(()=>{});
     }else if(!intent.wake){
@@ -483,12 +483,12 @@ import { LocalAgreement } from './local-agreement.mjs';
     renderLiveHUD();persistSettings().catch(console.warn);
   }
   const hintGate=new HintGate({
+    timing:()=>hintActivityTiming(config.hintSensitivity,!!resolveRoleModel('hintDecision',config) && resolveRoleModel('hintDecision',config)!==JEV_ONLY),
     collectContext:true,decisionTimeoutMs:16000,windowMs:20000,settleMs:1400,collectWaitMs:2200,minContextChars:45,
     decide:async(job,signal)=>{
       ensureHintComparisonScope();
       const model=resolveRoleModel('hintDecision',config);
       const useLLM=!!model && model!==JEV_ONLY;
-      hintGate.intervalMs=useLLM?3000:2000;
       job.auditSession=sessionId;job.auditJobID=`${sessionId}-${job.epoch}-${job.sequence}`;
       const readAdvice=async(advisory,adviceSignal)=>{
         const res=await gatewayFetch(`${config.serverUrl}/api/glasses/hint-decision`,{
@@ -519,14 +519,14 @@ import { LocalAgreement } from './local-agreement.mjs';
     },
     onHint:job=>{
       if(!isRecording || config.glassesMode!=='ai' || previewWakeId || pendingTrigger || (activeAIJob && !activeAIJob.hint) || pendingAI.some(job=>!job.hint))return false;
-      if(activeAIJob?.hint && !hintGate.relevant(activeAIJob,activeAIJob.hintPlan?.topic))aiAbortController?.abort();
+      if(activeAIJob?.hint && !hintGate.relevant(activeAIJob,activeAIJob.hintPlan?.topic)){activeAIJob.cancelReason=hintGate.rejectionReason(activeAIJob);aiAbortController?.abort();}
       job.auditSession=sessionId;job.auditJobID=`${sessionId}-${job.epoch}-${job.sequence}`;
       auditHint(job,'selected',{reason:'queued'});
       enqueueAI(`${job.id}-hint-${job.sequence}`,job.text,job.context,'ai',config.translateTargetLang,{...job,hint:true});
       return true;
     },
     onTopicChange:()=>{
-      if(activeAIJob?.hint && activeAIJob.generationStartedAt===undefined){activeAIJob.cancelledByTopic=true;aiAbortController?.abort();}
+      if(activeAIJob?.hint && activeAIJob.generationStartedAt===undefined){activeAIJob.cancelledByTopic=true;activeAIJob.cancelReason='topic_changed';aiAbortController?.abort();}
       for(let i=pendingAI.length-1;i>=0;i--)if(pendingAI[i].hint && pendingAI[i].topicVersion!==hintGate.topicVersion){hintGate.complete(pendingAI[i]);pendingAI.splice(i,1);}
       els.hintStatus.textContent=activeAIJob?.hint && activeAIJob.generationStartedAt!==undefined?'새 주제 확인 · 생성 중인 힌트 완료 후 반영':'새 주제 확인 · 대기 후보 갱신';
     },
@@ -608,6 +608,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     }catch(error){if(signal?.aborted)throw error;return {ok:false,reason:error.message};}
   }
   const translationHistory=new TranslationHistory();
+  const translationDirection=new TranslationDirection();
   const translationSentence=new TranslationSentence();
   const stableTranslation=new StableTranslation((job,signal)=>translateLocal({text:job.prompt,source:job.source,target:job.target,traceId:job.id},signal,job.engine));
   const llmStableTranslation=new StableTranslation(async(job,signal)=>{
@@ -645,7 +646,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       if(normalizeGlassesMode(config.glassesMode)!=='translate')return;
       translationPaint={id:job.id,at:Date.now(),acked:false};
       liveTranslationDraft=job.draft;
-      translationFailure='';translationDisplay={...translationDisplay,translation:text};answerText=text;
+      translationFailure='';translationDisplay={...translationDisplay,translation:text,pronunciation:''};answerText=text;
       translationHistory.update(job.historyId || job.id,text,{final:!job.draft,revision:job.id});
       els.chatOutput.textContent=translationPhoneText(translationDisplay);
       els.chromeTranslationStatus.textContent=job.draft?`${localLabel()} 실시간 번역 · 인식에 따라 수정됩니다`:`${localLabel()} 확정 번역 · 답변 예시 생성 중`;renderLiveHUD();
@@ -675,7 +676,7 @@ import { LocalAgreement } from './local-agreement.mjs';
   function hudCaptureIcon(){return captureStatusIcon({listening:captureListening() && receivedCaptureAudio,preparing:capturePreparing || !!pendingMicOpen || !!micStopPromise,transcribing:draining || pendingClips.length>0,error:!!captureFailure || micCloseUncertain});}
   function visibleHeaderMessage(){return hudImagesDisabled?currentHUDHeader(true):iconHeaderMessage(currentHUDHeader(true));}
   function currentHeaderLayout(translate=normalizeGlassesMode(config.glassesMode)==='translate'){
-    const layout=headerLayout(translate,{trigger:triggerLabels()[0] || '',source:config.translateSourceLang || 'auto',target:config.translateTargetLang || 'ko'});
+    const layout=headerLayout(translate,{trigger:triggerLabels()[0] || '',source:translationDirection.pair.split('>')[0] || config.translateSourceLang || 'auto',target:translationDirection.pair.split('>')[1] || config.translateTargetLang || 'ko'});
     // Recreate the header once when capture becomes ready, even on firmware
     // that ignores blank partial updates. PCM/STT capture keeps running.
     return {...layout,key:JSON.stringify([layout.key,captureListening() && receivedCaptureAudio,normalizeHUDDimming(config)])};
@@ -814,7 +815,7 @@ import { LocalAgreement } from './local-agreement.mjs';
   function resetQueuesForModeSwitch(nextMode, preserveAudio=false, preserveDisplay=false) {
     previewIntent.reset();previewWakeId='';previewWakePrompt='';audioUpload.reset();llmTranslationCache.clear();clearTimeout(hintDrainTimer);hintDrainTimer=null;
     hintLifetime.clear();answerAutoCloseEligible=false;voiceWakeJobs.clear();
-    chatEpoch++;translationFailure='';translationSentence.reset();if(!preserveDisplay)translationHistory.reset();stableTranslation.reset();llmStableTranslation.reset();
+    chatEpoch++;translationFailure='';translationDirection.reset();translationSentence.reset();if(!preserveDisplay)translationHistory.reset();stableTranslation.reset();llmStableTranslation.reset();
     stopChromeSegment(activeUtterance?.id);
     liveTranslationDraft=false;liveTranslations.reset();
     if(!preserveDisplay)translationDisplay={translation:'',positive:'',negative:''};
@@ -1491,7 +1492,7 @@ import { LocalAgreement } from './local-agreement.mjs';
   }
 
   function currentTranslationHeader(messageOnly=false){
-    return translationHeaderText({messageOnly,imageIcons:true,source:config.translateSourceLang || 'auto',target:config.translateTargetLang,
+    return translationHeaderText({messageOnly,imageIcons:true,source:translationDirection.pair.split('>')[0] || config.translateSourceLang || 'auto',target:translationDirection.pair.split('>')[1] || config.translateTargetLang,
       running:isRecording || capturePreparing || processingAI || isThinking || translating,
       listening:captureListening(),detail:captureStatus(),
       phase:(isThinking || processingAI)?aiPhaseTitle:'',phaseDetail:(isThinking || processingAI)?aiPhaseDetail:'',translating,
@@ -1718,7 +1719,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     chatEpoch++;pendingTrigger=false;voiceWakeJobs.clear();
     for(const job of pendingAI)if(job.hint)hintGate.complete(job);
     pendingAI.length=0;hintGate.pending=null;clearTimeout(hintGate.timer);hintGate.timer=null;hintGate.inflight?.controller.abort();
-    aiAbortedByModeSwitch=true;aiAbortController?.abort();hintLifetime.clear();
+    aiAbortedByModeSwitch=true;if(activeAIJob?.hint)activeAIJob.cancelReason='user_dismissed';aiAbortController?.abort();hintLifetime.clear();
     clearTimeout(answerTimer);stopAIAutoScroll();
     if(stacked){hintStack.remove(typeof cardID==='string'?cardID:undefined);return true;}
     clearHintStack();answerText=answerTitle=answerVoicePrompt='';answerAutoCloseEligible=false;aiScrollOffset=0;answerHoldUntil=0;
@@ -1970,7 +1971,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     let lang = overrideLang;
     if (!lang) {
       if (clip.mode === 'translate') {
-        lang = resolveTranslateSourceLang(clip);
+        lang = (clip.engine || activeSttEngine)==='whisper' && clip.targetLang==='ko'?'auto':resolveTranslateSourceLang(clip);
       } else {
         lang = 'ko';
       }
@@ -2001,13 +2002,6 @@ import { LocalAgreement } from './local-agreement.mjs';
         audioUpload.resync(snapshot);payload=sttPayload(snapshot);uploadedBytes+=snapshot.bytes.length;
         res=await gatewayFetch(`${config.serverUrl}/api/stt/preview`,{method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),body:JSON.stringify(payload),signal:controller.signal});
       }
-      if (!res.ok && res.status !== 429 && payload.language === 'auto') {
-        autoLangUnsupported = true;
-        res = await gatewayFetch(`${config.serverUrl}/api/stt/preview`, {
-          method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),
-          body:JSON.stringify(sttPayload(snapshot, fallbackTranslateSourceLang(snapshot))),signal:controller.signal,
-        });
-      }
       if (res.status===429) {
         // The native engine may still be finalizing audio. Keep only the newest
         // snapshot and retry independently of transcript persistence/backlog.
@@ -2035,7 +2029,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       captionStable = agreed.stable; captionDraft = agreed.draft;
       if(snapshot.mode==='translate'){
         const translationText=localEngine()==='llm'?stableTranslationPreview(data.text,agreed.stable.trim()):data.text;
-        if(translationText)enqueueTranslation(snapshot.segmentId,translationText,'',resolveTranslateSourceLang(snapshot),snapshot.targetLang,{sessionId:snapshot.sessionId,draft:true,stableText:agreed.stable.trim(),revision:snapshot.revision,joinSentence:String(snapshot.engine||'').startsWith('chrome-') && isContinuousCaptureMode(),startedAt:snapshot.startedAt,endedAt:snapshot.endedAt});
+        if(translationText)enqueueTranslation(snapshot.segmentId,translationText,'',snapshot.sourceLang || 'auto',snapshot.targetLang,{sessionId:snapshot.sessionId,draft:true,stableText:agreed.stable.trim(),revision:snapshot.revision,detectedLanguage:data.language,sttEngine:data.engine || snapshot.engine,joinSentence:String(snapshot.engine||'').startsWith('chrome-') && isContinuousCaptureMode(),startedAt:snapshot.startedAt,endedAt:snapshot.endedAt});
       }
       transcriptStatusMessage = '';
       transcriptNotice('실시간 전사 중');
@@ -2200,7 +2194,7 @@ import { LocalAgreement } from './local-agreement.mjs';
             answerIsWakeInput=true;answerTitle=`${wakeName} 질문`;answerVoicePrompt='';answerText=`${wakeName}: ${route.prompt}`;els.chatOutput.textContent=answerText;
             chatSession=true;prompt=route.prompt;wakeToken=++nextWakeJob;voiceWakeJobs.set(wakeToken,prompt);
             directIntent={...directQuestionIntent(prompt),direct:true};
-            hintGate.reset();if(activeAIJob?.hint)aiAbortController?.abort();
+            hintGate.reset();if(activeAIJob?.hint){activeAIJob.cancelReason='chat_priority';aiAbortController?.abort();}
             els.hintStatus.textContent='AI 채팅 · 이전 질문·답변 참조';
           }else if(isRecording && normalizeGlassesMode(config.glassesMode)==='ai'){
             // Ambient questions are observed conversation too. Only the wake
@@ -2210,7 +2204,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         }else if(clipMode==='translate'){prompt=text;pendingTrigger=false;}
         if (prompt) {
           const context=chatSession?'':clip.continuous?transcriptContext.slice(0,-1).slice(-2).join('\n').slice(-800):'';
-          if(clipMode==='translate')enqueueTranslation(clip.segmentId,prompt,context,resolveTranslateSourceLang(clip),clipTargetLang,{sessionId:clip.sessionId,joinSentence:String(clip.engine||'').startsWith('chrome-') && clip.continuous,startedAt:clip.startedAt,endedAt:clip.endedAt});
+          if(clipMode==='translate')enqueueTranslation(clip.segmentId,prompt,context,clip.sourceLang || 'auto',clipTargetLang,{sessionId:clip.sessionId,detectedLanguage:data.language,sttEngine:data.engine || clip.engine,joinSentence:String(clip.engine||'').startsWith('chrome-') && clip.continuous,startedAt:clip.startedAt,endedAt:clip.endedAt});
           else enqueueAI(clip.segmentId,prompt,context,clipMode,clipTargetLang,directIntent.direct?{directQuestion:true,forceSearch:directIntent.search,chatSession,wakeToken,traceId:clip.segmentId,chatEpoch:chatSession?chatEpoch:undefined}:{});
         } else {
           if (pendingTrigger) setHUDNotice('AI 호출됨 · 질문을 말씀하세요');
@@ -2248,13 +2242,6 @@ import { LocalAgreement } from './local-agreement.mjs';
         method: 'POST', headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(payload), signal: controller.signal,
       });
-      if (!res.ok && res.status!==429 && payload.language === 'auto') {
-        autoLangUnsupported = true;
-        res = await gatewayFetch(`${config.serverUrl}/api/stt/transcribe`, {
-          method: 'POST', headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify(sttPayload(clip, fallbackTranslateSourceLang(clip))), signal: controller.signal,
-        });
-      }
       if (!res.ok) {
         const err=new Error(`HTTP ${res.status}: ${(await res.text()).slice(0,300)}`);
         err.busy=res.status===429;
@@ -2303,7 +2290,16 @@ import { LocalAgreement } from './local-agreement.mjs';
 
   function enqueueTranslation(id,prompt,context,source,target,options={}){
     if(options.sessionId && options.sessionId!==sessionId)return;
-    const job={id,prompt,context,source,target,engine:localEngine(),...options};
+    if(options.sttEngine!=='whisper')source=resolveTranslateSourceLang({sourceLang:source,targetLang:target});
+    const direction=translationDirection.route({source,target,detected:options.detectedLanguage,engine:options.sttEngine,text:prompt,startedAt:options.startedAt});
+    if(!direction){els.chromeTranslationStatus.textContent='상대 언어를 먼저 인식하거나 출발 언어를 선택하세요';return;}
+    if(direction.changed){
+      liveTranslations.reset();translationSentence.reset();translationHistory.reset();
+      stableTranslation.reset();llmStableTranslation.reset();
+      translationDisplay={translation:'',positive:'',negative:''};answerText='';
+      els.chatOutput.textContent='';renderLiveHUD();
+    }
+    const job={id,prompt,context:direction.changed?'':context,source:direction.source,target:direction.target,engine:localEngine(),...options};
     const sentence=options.joinSentence?translationSentence.update(job):job;
     if(sentence)liveTranslations.submit(sentence);
   }
@@ -2355,6 +2351,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         if(pendingAI[0].hint && hintGate.displayDelay()>0)break;
         const job = pendingAI.shift();
         if(job.hint && !hintGate.relevant(job,job.hintPlan?.topic)){auditHint(job,'skipped',{reason:hintGate.rejectionReason(job)});hintGate.complete(job);continue;}
+        if(job.hint && !hintGate.beginGeneration(job)){auditHint(job,'skipped',{reason:hintGate.rejectionReason(job)});hintGate.complete(job);continue;}
         activeAIJob=job;
         if(job.traceId)voiceLatency.mark(job.traceId,'chat_start');
         if(translationStale(job) || job.chatEpoch && job.chatEpoch!==chatEpoch){finishWakeJob(job.wakeToken);continue;}
@@ -2404,6 +2401,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     const requestChatScope=chatScope();
     const chatContext=options.chatSession?chatMemory.context(requestChatScope):'';
     let enrichmentPlan=null;let hintProof=null;
+    const recordHintProof=proof=>{hintProof=proof;if(!proof)return;const records=Array.isArray(proof.records)?proof.records:[];auditHint(options,'decision_response',{reason:'source_records',topic:proof.topic || '',text:JSON.stringify({mode:proof.mode,source:proof.source,task:String(proof.task || enrichmentPlan?.question || '').slice(0,300),records:records.slice(0,4).map((record,index)=>({record:index+1,title:String(record.title || '').slice(0,100),sentences:record.spans?.length || 0}))})});};
     let repliesReplaced=false;
     let receivedVisibleAnswer=false;
     let chromeText=options.chromeTranslationText || '';let chromeSource=options.translationSource || resolveTranslateSourceLang({targetLang});
@@ -2519,6 +2517,8 @@ import { LocalAgreement } from './local-agreement.mjs';
         }
       }
       if(options.hint && res.status===424){hintSkipReason='source_lookup_failed';
+        const lookupDetail=(await res.text()).trim().slice(0,300);
+        auditHint(options,'decision_response',{reason:'source_lookup_detail',topic:enrichmentPlan?.topic || '',text:lookupDetail});
         if(options.topicVersion===hintGate.topicVersion)hintGate.currentTopic='';
         els.hintStatus.textContent='명칭·출처를 확인하지 못해 힌트 생략 · 계속 듣는 중';
         return;
@@ -2536,6 +2536,11 @@ import { LocalAgreement } from './local-agreement.mjs';
           const previousTranslation=translationDisplay.translation;
           const parsedTranslation=parseTranslationDisplay(raw);
           if(options.replyOnly)parsedTranslation.translation='';
+          if(commitReplies && options.replyOnly && targetLang!=='ko' && targetLang!=='en' && parsedTranslation.pronunciation){
+            translationDisplay.pronunciation=parsedTranslation.pronunciation;
+            const spoken=pronunciationText(translationDisplay.translation,parsedTranslation.pronunciation,targetLang);
+            translationHistory.update(options.translationHistoryId,spoken,{final:true,revision:options.translationRevisionId || options.translationHistoryId});
+          }
           if(separateLLMReplies){parsedTranslation.positive='';parsedTranslation.negative='';}
           if(commitReplies && !chromeText && (!parsedTranslation.translation || ['…','...'].includes(parsedTranslation.translation)))throw Error('LLM에서 번역문을 받지 못했습니다.');
           translationDisplay=mergeTranslationDisplay(translationDisplay,parsedTranslation,{commitReplies});
@@ -2554,7 +2559,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       }
 
       function applyStreamStatusEvent(type, parsed) {
-        if(type==='hint.grounding' && options.hint){if(hintProof===null)hintProof=parsed.grounding;return true;}
+        if(type==='hint.grounding' && options.hint){if(hintProof===null)recordHintProof(parsed.grounding);return true;}
         if (type === 'model_load.start') {
           aiPhaseTitle = '모델 로딩 중';
           aiPhaseDetail = '모델을 메모리에 불러오는 중';
@@ -2706,7 +2711,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       } else {
         const data = await res.json();
         if(data.error)throw new Error(typeof data.error==='string'?data.error:data.error.message || JSON.stringify(data.error));
-        if(options.hint && hintProof===null)hintProof=data.hint_grounding || null;
+        if(options.hint && hintProof===null)recordHintProof(data.hint_grounding || null);
         rawAnswer = finalChatText(data) ?? data.choices?.[0]?.message?.content ?? data.response ?? '';
         if(!options.hint){
           setVisibleAnswer(rawAnswer);
@@ -2721,7 +2726,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         const verified=validateHintGrounding(rawAnswer,hintProof);
         if(!verified.ok){hintSkipReason=verified.reason;
           if(options.topicVersion===hintGate.topicVersion)hintGate.currentTopic='';
-          els.hintStatus.textContent=verified.reason==='missing_proof'?'출처 검증 정보 없음 · 게이트웨이 업데이트 필요':'명칭·본문의 출처 근거 불일치 · 힌트 생략';return;
+          els.hintStatus.textContent=({missing_proof:'출처 검증 정보 없음 · 게이트웨이 업데이트 필요',no_information_value:'구체적인 추가 정보 없음 · 새 대화 계속',incomplete_or_empty_source:'출처 설명이 잘렸거나 내용 부족 · 새 대화 계속',source_does_not_answer_task:'출처에 요청한 정보 없음 · 새 대화 계속'})[verified.reason] || '명칭·본문의 출처 근거 불일치 · 힌트 생략';return;
         }
         if(verified.source==='conversation' || verified.kind==='recap'){hintSkipReason='conversation_summary_disabled';return;}
         enrichmentPlan={...enrichmentPlan,topic:verified.topic,source:verified.source,reference:verified.reference};
@@ -2751,6 +2756,9 @@ import { LocalAgreement } from './local-agreement.mjs';
         const labels={topic_changed:'주제 전환 확인',transcript_changed:'근거 전사 수정',expired_or_canceled:'유효 시간 경과 또는 취소'};
         if(reason){hintSkipReason=reason;els.hintStatus.textContent=`힌트 생략 · ${labels[reason] || reason}`;return;}
         if(!fitHintContent(enrichedFact)){hintSkipReason='empty_or_echo';els.hintStatus.textContent='힌트 생략 · 본문 형식 또는 보충 정보 없음';return;}
+        const observedFacts=(enrichmentPlan.knownFacts || []).flatMap(text=>String(text).split(/\n|(?<=[.!?。！？])\s+/u)).filter(Boolean).slice(-4);
+        if(await compareHintDuplicate({fetch:gatewayFetch,server:config.serverUrl,headers:getAuthHeaders({'Content-Type':'application/json'}),text:enrichedFact,history:observedFacts,kind:'transcript',signal:controller.signal,timeoutMs:1000})){hintSkipReason='transcript_echo';els.hintStatus.textContent='이미 설명된 내용 · 새 정보 대기';return;}
+        if(controller.signal.aborted)return;
         const visibleHintTexts=answerIsHint?(hintStackActive()?hintStack.cards.map(card=>card.text):[answerText]):[];
         if(hintGate.identicalCue(fitHintContent(enrichedFact),visibleHintTexts)){hintSkipReason='already_visible';els.hintStatus.textContent='동일한 힌트가 이미 표시됨 · 현재 카드 유지';return;}
         if(controller.signal.aborted)return;
@@ -2777,7 +2785,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         playTTS(answerText);
       }
     } catch (err) {
-      if(options.hint)hintSkipReason=controller.signal.aborted?'canceled':'writer_error';
+      if(options.hint)hintSkipReason=controller.signal.aborted?(options.cancelReason || (deadline.reason()?'writer_timeout':'canceled')):'writer_error';
       if(translationStale(options) || options.chatEpoch && options.chatEpoch!==chatEpoch)return;
       if (controller.signal.aborted && aiAbortedByModeSwitch) {
         return;
@@ -2816,7 +2824,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),5000),scope=chatScope();
     try{const res=await gatewayFetch(`${config.serverUrl}/api/glasses/hint-events?limit=100`,{headers:getAuthHeaders(),signal:controller.signal});if(!res.ok)throw Error(`HTTP ${res.status}`);const data=await res.json();if(scope!==chatScope())return;
       const labels={decision_response:'판별 응답·소요 시간',decision:'판별',selected:'선택',generation:'생성 요청',generated:'본문 생성',validated:'근거 검증 완료',skipped:'생략',phone_display:'폰 표시',device_display:'안경 전송 완료',device_error:'안경 전송 오류',canceled:'취소'};
-      const reasons={conversation_summary_disabled:'대화 요약·재진술 제외',invalid_summary:'요약 항목 형식 오류',no_summary_value:'원문 반복·정리할 정보 없음',hint_translation_failed:'검증된 힌트의 표시 언어 번역 실패',judge_response:'판별 응답 수신',judge_timeout:'판별 시간 초과',judge_invalid_response:'판별 응답 형식·근거 오류',judge_http_error:'판별 HTTP 오류',judge_request_error:'판별 통신·응답 처리 오류',judge_canceled:'판별 취소',llm_skip:'보충할 도움 없음',hint_selected:'힌트 필요',judge_format_repaired:'판별 형식 재검사 완료',selection_evidence_changed:'선택한 원문이 수정됨',transcript_changed:'근거 전사 수정·철회',topic_changed:'주제 전환',source_lookup_failed:'출처 조회 실패',no_fact:'표시할 구조화된 본문 없음',unsupported_summary:'원문에 없는 요약 근거',unverified_name:'검증한 명칭과 불일치',already_visible:'같은 카드가 표시 중',sdk_ack:'안경 SDK 전송 확인',model_completed:'모델 생성 완료',source_validated:'원문 근거 확인',card_rendered:'폰 화면에 카드 표시',duplicate_candidate:'최근과 같은 조사 후보',duplicate_plan:'의미가 같은 조사 계획',candidate_expired:'대기 중 유효 시간 초과',writer_error:'본문 생성 오류',canceled:'사용자·모드·호출어에 의해 취소',judge_format_or_timeout:'판별 형식 오류 또는 시간 초과'};
+      const reasons={source_does_not_answer_task:'출처에 요청한 정보 없음',user_dismissed:'사용자가 창 닫음',chat_priority:'AI 채팅 호출로 전환',writer_timeout:'힌트 처리 시간 초과',pending_replaced:'대기 후보를 최신 힌트로 교체',source_records:'출처·문장 후보 확인',invalid_source_selection:'출처 문장 번호 오류',unsupported_quote_or_name:'생성 문장과 출처가 일치하지 않음',transcript_echo:'전사에 이미 설명된 내용',source_lookup_detail:'출처 조회 상세',no_information_value:'구체적인 추가 정보 없음',incomplete_or_empty_source:'잘린 출처·추가 정보 없음',conversation_summary_disabled:'대화 요약·재진술 제외',invalid_summary:'요약 항목 형식 오류',no_summary_value:'원문 반복·정리할 정보 없음',hint_translation_failed:'검증된 힌트의 표시 언어 번역 실패',judge_response:'판별 응답 수신',judge_timeout:'판별 시간 초과',judge_invalid_response:'판별 응답 형식·근거 오류',judge_http_error:'판별 HTTP 오류',judge_request_error:'판별 통신·응답 처리 오류',judge_canceled:'판별 취소',llm_skip:'보충할 도움 없음',hint_selected:'힌트 필요',judge_format_repaired:'판별 형식 재검사 완료',selection_evidence_changed:'선택한 원문이 수정됨',transcript_changed:'근거 전사 수정·철회',topic_changed:'주제 전환',source_lookup_failed:'출처 조회 실패',no_fact:'표시할 구조화된 본문 없음',unsupported_summary:'원문에 없는 요약 근거',unverified_name:'검증한 명칭과 불일치',already_visible:'같은 카드가 표시 중',sdk_ack:'안경 SDK 전송 확인',model_completed:'모델 생성 완료',source_validated:'원문 근거 확인',card_rendered:'폰 화면에 카드 표시',duplicate_candidate:'최근과 같은 조사 후보',duplicate_plan:'의미가 같은 조사 계획',candidate_expired:'대기 중 유효 시간 초과',writer_error:'본문 생성 오류',canceled:'작업 취소',judge_format_or_timeout:'판별 형식 오류 또는 시간 초과'};
       el.textContent=data.events.map(e=>`${new Date(e.occurredAt || e.createdAt).toLocaleString()} [${labels[e.stage] || e.stage}] ${e.kind?hintPresentation({kind:e.kind,topic:e.topic}).title:e.topic || ''}\n${reasons[e.reason] || e.reason || ''}${e.text?'\n'+e.text:''}`).join('\n\n') || '저장된 이력이 없습니다.';status.textContent='최근 100개 처리 이력';
     }catch(error){if(scope===chatScope())status.textContent=`이력 조회 실패 · ${error.message}`;}finally{clearTimeout(timer);}
   });
@@ -3052,7 +3060,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       els.chatInput.value='';
       if(processingAI)els.chatOutput.textContent='질문을 대기열에 추가했습니다.';
       const chatSession=normalizeGlassesMode(config.glassesMode)==='ai';
-      if(chatSession){pendingTrigger=false;hintGate.reset();if(activeAIJob?.hint)aiAbortController?.abort();}
+      if(chatSession){pendingTrigger=false;hintGate.reset();if(activeAIJob?.hint){activeAIJob.cancelReason='chat_priority';aiAbortController?.abort();}}
       enqueueAI(newID(),prompt,'',config.glassesMode,config.translateTargetLang,chatSession?{directQuestion:true,chatSession:true,chatEpoch,forceSearch:directQuestionIntent(prompt).search}:{});
     });
     const viewport=window.visualViewport;

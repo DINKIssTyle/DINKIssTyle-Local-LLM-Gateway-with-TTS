@@ -1,3 +1,4 @@
+import {usefulHintText,completeHintQuote} from './hint-quality.mjs';
 import {unwrapHintObject,HINT_LABELS} from './hint-judge.mjs';
 
 const textKey=text=>String(text || '').normalize('NFC').replace(/\s+/gu,' ').trim();
@@ -12,15 +13,36 @@ export function validateHintGrounding(raw,proof){
   const data=unwrapHintObject(raw);
   if(!data)return {ok:false,reason:'no_fact'};
   if(proof.mode==='conversation')return conversationHint(data,proof);
+  if(proof.mode==='quote' && Object.hasOwn(data,'selection')){
+    if(!Number.isInteger(data.selection) || data.selection<0)return {ok:false,reason:'invalid_source_selection'};
+    if(data.selection===0)return {ok:false,reason:'source_does_not_answer_task'};
+    const choices=(proof.records || []).slice(0,4).flatMap((record,index)=>(Array.isArray(record.spans)?record.spans:[]).slice(0,16).map((_,sentence)=>({record:index+1,sentences:[sentence+1],adds_information:true})));
+    const selected=choices[data.selection-1];
+    return selected?validateHintGrounding(JSON.stringify(selected),proof):{ok:false,reason:'invalid_source_selection'};
+  }
+  if(proof.mode==='quote' && data.record===0 && data.adds_information===false && Array.isArray(data.sentences) && !data.sentences.length)return {ok:false,reason:'source_does_not_answer_task'};
   if(data.adds_information!==true)return {ok:false,reason:'no_fact'};
   const kind=Object.hasOwn(HINT_LABELS,proof.kind)?proof.kind:data.kind;
-  if(typeof data.fact!=='string' || !data.fact.trim())return {ok:false,reason:'no_fact'};
   if(proof.mode==='known'){
+    if(typeof data.fact!=='string' || !data.fact.trim())return {ok:false,reason:'no_fact'};
     if(typeof proof.topic!=='string' || !proof.topic.trim())return {ok:false,reason:'unknown_name'};
     const allowed=[proof.topic,...(Array.isArray(proof.aliases)?proof.aliases:[])].map(nameKey);
     if(data.topic && !allowed.includes(nameKey(data.topic)))return {ok:false,reason:'unverified_name'};
+    if(!usefulHintText(data.fact,proof.topic))return {ok:false,reason:'no_information_value'};
     return {ok:true,fact:data.fact.trim(),topic:proof.topic.trim(),kind,source:'internal'};
   }
+  if(Object.hasOwn(data,'record') || Object.hasOwn(data,'sentences')){
+    if(!Number.isInteger(data.record) || data.record<1 || data.record>Math.min(4,proof.records?.length || 0))return {ok:false,reason:'invalid_source_selection'};
+    const record=proof.records[data.record-1],indices=data.sentences;
+    if(!Array.isArray(indices) || !indices.length || indices.length>2 || !Array.isArray(record.spans))return {ok:false,reason:'invalid_source_selection'};
+    if(indices.some((index,i)=>!Number.isInteger(index) || index<1 || index>record.spans.length || (i && index!==indices[i-1]+1)))return {ok:false,reason:'invalid_source_selection'};
+    const selected=indices.map(index=>record.spans[index-1]);
+    if(selected.some(text=>typeof text!=='string' || !textKey(record.text).includes(textKey(text))))return {ok:false,reason:'unsupported_quote_or_name'};
+    // Never trust generated fact/topic alongside references. Resolve exclusively
+    // against the immutable proof; run the existing URL/name/quality checks.
+    return validateHintGrounding(JSON.stringify({fact:selected.join(' '),support_quote:selected.join(' '),topic:proof.topic,adds_information:true}),{...proof,records:[record]});
+  }
+  if(typeof data.fact!=='string' || !data.fact.trim())return {ok:false,reason:'no_fact'};
   const quote=typeof data.support_quote==='string'?data.support_quote.trim():data.fact.trim();
   const topic=typeof data.topic==='string'?data.topic.trim():String(proof.topic || '').trim();
   if(nameKey(topic)!==nameKey(proof.topic))return {ok:false,reason:'unverified_name'};
@@ -35,7 +57,9 @@ export function validateHintGrounding(raw,proof){
     if(proof.source!=='memory' && !/^https?:\/\//i.test(record.url || ''))continue;
     if(!nameKey(quote).includes(nameKey(topic)) && !nameKey(record.title).includes(nameKey(topic)))continue;
     // Display the verified extract itself, never an unsupported paraphrase.
-    return {ok:true,fact:punctuationOnly?record.text.trim():quote,topic,kind,source:proof.source,reference:{title:record.title || '',url:record.url || ''}};
+    const fact=completeHintQuote(punctuationOnly?record.text.trim():quote);
+    if(Array.from(fact).length<12 || !usefulHintText(fact,topic))return {ok:false,reason:'incomplete_or_empty_source'};
+    return {ok:true,fact,topic,kind,source:proof.source,reference:{title:record.title || '',url:record.url || ''}};
   }
   return {ok:false,reason:'unsupported_quote_or_name'};
 }
