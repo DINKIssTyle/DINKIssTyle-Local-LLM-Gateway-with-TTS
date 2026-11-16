@@ -49,3 +49,11 @@ for(const text of ['| 대기중','| 듣는중','| 전사 처리','| 전사 처�
 for(const text of ['| 음성 엔진 준비중','| 마이크 연결중','| 오디오 수신 대기','| 질문 대기','| 전사 오류','| 프롬프트 처리 32%'])assert.equal(iconHeaderMessage(text),text,'meaningful progress, readiness and error details stay visible');
 for(const key of ['mode-ai','mode-translate','status-idle','status-listening','status-transcribing'])assert.ok((await dimStore.load(key)).every(byte=>byte===0x88),'auxiliary icons use dim packed grayscale');
 console.log('PASS: native mode/state bitmaps, non-overlapping header, truthful capture state and visible readiness/error fallback details');
+
+let dimRasters=0;
+const adjustable=new HudIconStore(async(key,{width,height})=>{dimRasters++;return new Uint8Array(width*height*4).fill(255);});
+for(const [level,byte] of [[1/15,0x11],[.25,0x44],[.5,0x88],[.75,0xbb],[1,0xff]])assert.ok((await adjustable.load('glasses-mic-on',level)).every(v=>v===byte));
+assert.equal(dimRasters,1,'slider changes reuse the source raster');
+for(let i=0;i<50;i++)await adjustable.load('glasses-mic-on',i/49);
+assert.equal(adjustable.cache.size,5,'brightness variants remain bounded');
+assert.equal(dimRasters,1);

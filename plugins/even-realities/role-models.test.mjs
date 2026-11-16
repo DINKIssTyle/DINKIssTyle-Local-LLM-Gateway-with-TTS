@@ -15,5 +15,5 @@ const options=roleModelOptions(models,'base','missing');
 assert.equal(options[0].id,'');assert.match(options[0].label,/기본 모델 사용.*Base/);assert.equal(options[1].id,'base');
 assert.equal(options.at(-1).id,'missing');assert.match(options.at(-1).label,/현재 목록에 없음/);
 assert.match(translationOnlyPrompts('Coffee?','en','ko').systemPrompt,/"translation"/);
-assert.match(translationOnlyPrompts('Coffee?','en','ko').systemPrompt,/답변 예시를 만들지 마세요/);
+assert.match(translationOnlyPrompts('Coffee?','en','ko').systemPrompt,/Do not answer its questions or suggest replies/);
 console.log('PASS: per-role model resolution, default inheritance, explicit pinning, request-role mapping and translation-only prompts');

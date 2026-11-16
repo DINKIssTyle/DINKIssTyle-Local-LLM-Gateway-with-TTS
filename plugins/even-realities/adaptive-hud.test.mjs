@@ -24,3 +24,8 @@ console.log('PASS: compact waiting display, content-sized hint/chat boxes, three
 const hidden=adaptiveHUD({hideTranscript:true});assert.equal(hidden.show,false);assert.equal(hidden.showTranscript,false);assert.equal(hidden.transcriptHeight,0);assert.equal(hidden.transcriptLines,0);
 const largeHidden=hintWindow('1\n2\n3\n4\n5\n6\n7\n8','제목',0,true);assert.equal(largeHidden.layout.height,255);assert.equal(largeHidden.visibleText.split('\n').length,8);
 assert.equal(adaptiveHUD({mode:'translate',hideTranscript:true}).showTranscript,true,'translation reply examples remain visible');
+
+const wake=adaptiveHUD({title:'이븐 질문',text:'이븐: 듣는 중...',hideTitle:true});
+assert.equal(wake.title,'');assert.equal(wake.titleHeight,0);assert.equal(wake.height,33);assert.equal(wake.transcriptY,60);
+assert.equal(adaptiveHUD({title:'실제 질문',text:'답변'}).titleHeight,33,'actual answers keep the pinned title');
+assert.equal(adaptiveHUD({text:'1\n2\n3\n4\n5\n6\n7',hideTitle:true}).contentLines,6,'question capture reclaims title space');

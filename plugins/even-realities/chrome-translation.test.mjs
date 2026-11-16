@@ -11,7 +11,7 @@ assert.equal(timed.ok,false);assert.match(timed.reason,/시간 초과/);
 const controller=new AbortController();controller.abort();
 await assert.rejects(chromeTranslate(()=>assert.fail('must not fetch'),' ',{}, {},controller.signal),{name:'AbortError'});
 const prompts=translationReplyPrompts('안녕','Hello','ko','en');
-assert.match(prompts.systemPrompt,/translation 필드는 출력하지 마세요/);assert.match(prompts.userPrompt,/이미 완료된 번역[\s\S]*Hello/);
+assert.match(prompts.systemPrompt,/no translation field/);assert.match(prompts.userPrompt,/Completed translation[\s\S]*Hello/);
 console.log('PASS: authenticated Chrome bridge, bounded fallback, cancellation and reply-only prompts');
 
 let appleURL;

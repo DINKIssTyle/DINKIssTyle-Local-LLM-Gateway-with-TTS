@@ -19,7 +19,7 @@ func TestGlassesJudgeHasNoRuntimeOrTools(t *testing.T) {
 		}
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body["model"] != "small" || body["max_tokens"] != float64(192) || body["store"] != false {
+		if body["model"] != "small" || body["max_tokens"] != float64(384) || body["store"] != false {
 			t.Errorf("judge controls: %+v", body)
 		}
 		raw, _ := json.Marshal(body)

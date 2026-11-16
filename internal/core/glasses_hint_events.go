@@ -12,7 +12,7 @@ import (
 
 func validHintEvent(e mcp.HintEvent) bool {
 	switch e.Stage {
-	case "decision", "selected", "generation", "generated", "validated", "skipped", "phone_display", "device_display", "device_error", "canceled":
+	case "decision_response", "decision", "selected", "generation", "generated", "validated", "skipped", "phone_display", "device_display", "device_error", "canceled":
 	default:
 		return false
 	}
@@ -28,7 +28,7 @@ func validHintEvent(e mcp.HintEvent) bool {
 	if e.EventID == "" || e.JobID == "" {
 		return false
 	}
-	if e.Text != "" && e.Stage != "generated" && e.Stage != "phone_display" {
+	if e.Text != "" && e.Stage != "generated" && e.Stage != "phone_display" && e.Stage != "decision_response" {
 		return false
 	}
 	if e.OccurredAt != "" {

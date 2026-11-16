@@ -45,3 +45,17 @@ assert.equal(validateHintGrounding(JSON.stringify({...numberedSummary,points:[{t
 assert.equal(validateHintGrounding(JSON.stringify({points:[{text:'회의 준비 사항',evidence:[1,2]}]}),numberedProof).fact,'금요일 오후 3시에 회의해요. / 장소는 2층 회의실입니다.');
 assert.equal(validateHintGrounding(JSON.stringify({skip:true,...numberedSummary}),numberedProof).ok,false);
 assert.equal(validateHintGrounding(JSON.stringify({...good,adds_information:false}),source).ok,false,'external facts still require explicit inclusion and verified quotes');
+
+// Compression may omit an unrelated quantity from the cited sentence. Only
+// invented/changed quantities should force recovery to the original evidence.
+const mixedSource='금요일 오후 3시에 회의하고 5시에 식사합니다. 노트북을 준비합니다. 서울 부산 KTX는 1시간 30분이라고 말했습니다.';
+const mixedProof={version:1,mode:'conversation',source:'conversation',topic:'대화 정리',kind:'recap',records:[{text:mixedSource}],spans:['금요일 오후 3시에 회의하고 5시에 식사합니다.','노트북을 준비합니다.','서울 부산 KTX는 1시간 30분이라고 말했습니다.']};
+const mixedSummary={points:[{type:'schedule',text:'금요일 오후 3시 회의',evidence:[1]},{type:'summary',text:'노트북 준비',evidence:[2]},{type:'check',text:'서울 부산 KTX 소요시간 1시간 30분',evidence:[3]}]};
+const digest=validateHintGrounding(JSON.stringify(mixedSummary),mixedProof);
+assert.equal(digest.ok,true);assert.match(digest.fact,/일정: 금요일 오후 3시 회의/);assert.doesNotMatch(digest.fact,/5시에 식사/,'omitting another event is not a numeric fabrication');assert.match(digest.fact,/핵심: 노트북 준비/);assert.match(digest.fact,/확인 필요: 서울 부산 KTX/);assert.doesNotMatch(digest.fact,/검증 완료|사실 확인 완료/);
+const changedTime=validateHintGrounding(JSON.stringify({points:[{type:'schedule',text:'금요일 오후 8시 회의',evidence:[1]}]}),mixedProof);
+assert.ok(changedTime.ok);assert.doesNotMatch(changedTime.fact,/8시/,'invented times never reach the display');
+assert.equal(validateHintGrounding(JSON.stringify({points:[{type:'verified',text:'검증 완료',evidence:[3]}]}),mixedProof).ok,false,'conversation alone cannot produce a verified category');
+const longCopy='전체 원문을 그대로 여러 차례 늘어놓는 문장입니다. '.repeat(8).trim();
+const copyProof={...mixedProof,records:[{text:longCopy}],spans:[longCopy]};
+assert.equal(validateHintGrounding(JSON.stringify({points:[{type:'summary',text:longCopy,evidence:[1]}]}),copyProof).reason,'no_summary_value','a long verbatim transcript is not a summary');

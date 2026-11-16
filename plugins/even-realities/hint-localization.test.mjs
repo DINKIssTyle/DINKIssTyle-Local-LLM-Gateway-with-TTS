@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import {hintNeedsLocalization,localizeVerifiedHint} from './hint-localization.mjs';
+assert.equal(hintNeedsLocalization('전수조사는 전체 대상을 조사합니다.','ko'),false);
+assert.equal(hintNeedsLocalization('전수조사는 전체 대상을 조사합니다.','en'),true);
+assert.equal(hintNeedsLocalization('調査について説明します。','ja'),false);
+assert.equal(hintNeedsLocalization('调查全部对象。','zh'),false);
+assert.equal(hintNeedsLocalization('Bonjour à tous.','en'),true,'Latin script cannot establish English');
+const original='1990년 시작했습니다.';
+let calls=0;
+const result=await localizeVerifiedHint({text:original,target:'en',translate:async(text,target)=>{calls++;assert.equal(text,original);assert.equal(target,'en');return {ok:true,text:'It started in 1990.'};}});
+assert.equal(result.text,'It started in 1990.');assert.equal(calls,1);
+assert.equal((await localizeVerifiedHint({text:original,target:'ko',translate:()=>assert.fail('unneeded translation')})).text,original);
+assert.equal((await localizeVerifiedHint({text:original,target:'en',translate:async()=>({ok:false})})).ok,false);
+const c=new AbortController();c.abort();await assert.rejects(()=>localizeVerifiedHint({text:original,target:'en',signal:c.signal,translate:()=>assert.fail('canceled')}),{name:'AbortError'});
+console.log('PASS: verified source localization, non-Latin same-language fast path, no English assumption from Latin script and cancellation/failure');

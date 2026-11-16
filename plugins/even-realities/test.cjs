@@ -6,7 +6,7 @@ const src = fs.readFileSync('plugin.js','utf8').replace(/^import .*\n/gm, '').re
 const elements = new Map();
 function element(id) {
   if (!elements.has(id)) {
-    const node={value:'',checked:true,textContent:'',style:{},hidden:true,focus(){},handlers:{},options:[],classList:{add(){},remove(){},toggle(){}},addEventListener(type,fn){const previous=this.handlers[type];this.handlers[type]=previous?(...args)=>{const first=previous(...args);return fn(...args) ?? first;}:fn;},appendChild(opt){this.options.push(opt);if(!this.value)this.value=opt.value;}};
+    const node={value:'',checked:true,textContent:'',style:{setProperty(name,value){this[name]=value;}},hidden:true,focus(){},handlers:{},options:[],classList:{add(){},remove(){},toggle(){}},addEventListener(type,fn){const previous=this.handlers[type];this.handlers[type]=previous?(...args)=>{const first=previous(...args);return fn(...args) ?? first;}:fn;},appendChild(opt){this.options.push(opt);if(!this.value)this.value=opt.value;}};
     let markup='';Object.defineProperty(node,'innerHTML',{get(){return markup;},set(value){markup=value;if(value==='')this.options=[];}});elements.set(id,node);
   }
   return elements.get(id);
@@ -99,6 +99,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  const hintStackModule=await import('./hint-stack.mjs');Object.assign(context,hintStackModule);
  context.HintStack=class extends hintStackModule.HintStack{constructor(options){super({...options,now:()=>hintClock,schedule:fn=>{hintJobs.push(fn);return hintJobs.length;},cancel:()=>{}});}};
  Object.assign(context,await import('./hint-judge.mjs'));
+ Object.assign(context,await import('./hint-policy.mjs'));
  Object.assign(context,await import('./hint-grounding.mjs'));
  Object.assign(context,await import('./realtime-hints.mjs'));
  Object.assign(context,await import('./settings-menu.mjs'));
@@ -108,6 +109,9 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  Object.assign(context,await import('./engine-preparation.mjs'));
  Object.assign(context,await import('./chat-deadline.mjs'));
  Object.assign(context,await import('./header-layout.mjs'));
+ Object.assign(context,await import('./hud-brightness.mjs'));
+ Object.assign(context,await import('./ai-response-limit.mjs'));
+ Object.assign(context,await import('./hint-localization.mjs'));
  Object.assign(context,await import('./glasses-input.mjs'));
  const iconModule=await import('./hud-icons.mjs');Object.assign(context,iconModule);
  context.HudIconStore=class extends iconModule.HudIconStore{constructor(){super(async(key,{width,height})=>new Uint8Array(width*height*4).fill(255));}};
@@ -219,10 +223,10 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.ok(element('hud-state-icon').src.endsWith('status-idle.png'));assert.ok(element('hud-mode-icon').src.endsWith('mode-ai.png'));
  assert.equal(startup.imageObject.find(c=>c.containerID===5).width,24);
  const hp=startup.textObject.find(c=>c.containerID===7),hw=startup.textObject.find(c=>c.containerID===8),hm=startup.imageObject.find(c=>c.containerID===5),hn=startup.textObject.find(c=>c.containerID===3);
- assert.equal(startup.textObject.find(c=>c.containerID===8).textColor,2);
- assert.equal(element('hud-transcript-body').style.color,'#008033');assert.equal(element('hud-transcript-body').style.textShadow,'none');
- for(const id of [2,3,4,7])assert.equal(startup.textObject.find(c=>c.containerID===id).textColor,2,'secondary HUD content must start dim');
- assert.equal(element('hud-trigger-keyword').style.opacity,'0.5');
+ assert.equal(startup.textObject.find(c=>c.containerID===8).textColor,1);
+ assert.equal(element('hud-transcript-body').style.color,'rgb(0, 64, 26)');assert.equal(element('hud-transcript-body').style.textShadow,'none');
+ for(const id of [2,3,4,7])assert.equal(startup.textObject.find(c=>c.containerID===id).textColor,1,'secondary HUD content must start dim');
+ assert.equal(element('hud-trigger-keyword').style.opacity,'0.25');
  assert.equal(hp.content,'[');assert.ok(hw.xPosition>=hp.xPosition+hp.width);assert.ok(hm.xPosition>=hw.xPosition+hw.width);assert.ok(hn.xPosition>=hm.xPosition+hm.width);assert.equal(hn.content,' ');
  assert.ok(!startup.textObject.some(c=>c.containerID===1));
  const txArea=startup.textObject.find(c=>c.containerName==='transcript');
@@ -298,6 +302,34 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  context.window.__queueTest.microphone(); await tick();await tick();
  const speech=Buffer.alloc(3200);for(let i=0;i<speech.length;i+=2)speech.writeInt16LE(5000,i);
  function utterance(speakerRole){for(let i=0;i<6;i++)handler({audioEvent:{audioPcm:speech,speakerRole}});for(let i=0;i<9;i++)handler({audioEvent:{audioPcm:Buffer.alloc(3200),speakerRole}});}
+ // Brightness controls update text and bitmap luminance without cycling capture.
+ const micCallsBeforeDim=audioCalls.length;
+ element('hud-dim-level').value='0';element('hud-dim-level').handlers.input();
+ for(let i=0;i<150 && nativePage.textObject.find(c=>c.containerID===2)?.textColor!==0;i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(nativePage.textObject.find(c=>c.containerID===2).textColor,0,'lowest SDK level is sent as zero rather than omitted');
+ assert.equal(element('hud-dim-value').textContent,'최저');
+ for(let i=0;i<150 && !imageUpdates.some(u=>u.containerID===5 && u.imageData.every(byte=>byte===0x11));i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.ok(imageUpdates.some(u=>u.containerID===5 && u.imageData.every(byte=>byte===0x11)),'lowest icon uses the faintest non-black Gray4 value');
+
+ element('hud-dim-level').value='2';element('hud-dim-level').handlers.input();
+ for(let i=0;i<150 && nativePage.textObject.find(c=>c.containerID===2)?.textColor!==2;i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(nativePage.textObject.find(c=>c.containerID===2).textColor,2);
+ assert.equal(element('hud-mic-icon').style.opacity,'0.5');
+ for(let i=0;i<150 && !imageUpdates.some(u=>u.containerID===5 && u.imageData.every(byte=>byte===0x88));i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.ok(imageUpdates.some(u=>u.containerID===5 && u.imageData.every(byte=>byte===0x88)),'slider also changes the actual microphone bitmap');
+ assert.equal(element('hud-dim-value').textContent,'50%');
+ element('hud-full-transcript').checked=true;element('hud-full-transcript').handlers.change();
+ for(let i=0;i<150 && nativePage.textObject.find(c=>c.containerID===4)?.textColor!==4;i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(nativePage.textObject.find(c=>c.containerID===4).textColor,4);
+ assert.equal(JSON.parse(nativeSaved).hudFullTranscript,true,'exemptions persist to Even storage');
+ element('hud-dim-enabled').checked=false;element('hud-dim-enabled').handlers.change();
+ for(let i=0;i<150 && nativePage.textObject.find(c=>c.containerID===2)?.textColor!==4;i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(nativePage.textObject.find(c=>c.containerID===2).textColor,4);
+ assert.equal(element('hud-mic-icon').style.opacity,'1');assert.equal(element('hud-dim-level').disabled,true);
+ element('hud-dim-level').value='1';element('hud-full-transcript').checked=false;element('hud-dim-enabled').checked=true;element('hud-dim-enabled').handlers.change();
+ for(let i=0;i<150 && nativePage.textObject.find(c=>c.containerID===2)?.textColor!==1;i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(nativePage.textObject.find(c=>c.containerID===2).textColor,1);
+ assert.equal(audioCalls.length,micCallsBeforeDim,'display changes never restart the active microphone');
  nextTranscript='오늘 회의는 세 시입니다'; utterance();await tick();await tick();
  assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,originalChatCount,'ordinary conversation must not call AI');
  assert.match(element('transcript-log').textContent,/오늘 회의/);
@@ -309,9 +341,9 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.equal(element('hud-trigger-keyword').style.opacity,'1','voice trigger brightens only its header text');
  for(let i=0;i<150 && nativePage.textObject.find(c=>c.containerID===8)?.textColor!==4;i++)await new Promise(resolve=>setTimeout(resolve,20));
  assert.equal(nativePage.textObject.find(c=>c.containerID===8).textColor,4);
- for(let i=0;i<150 && nativePage.textObject.find(c=>c.containerID===4)?.textColor!==4;i++)await new Promise(resolve=>setTimeout(resolve,20));
- assert.equal(nativePage.textObject.find(c=>c.containerID===4).textColor,4,'active voice question brightens its transcript');
- assert.equal(element('hud-transcript-body').style.color,'var(--accent-green)');
+ for(let i=0;i<150 && nativePage.textObject.find(c=>c.containerID===4)?.textColor!==1;i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(nativePage.textObject.find(c=>c.containerID===4).textColor,1,'transcript stays at the selected dim level unless exempted');
+ assert.equal(element('hud-transcript-body').style.color,'rgb(0, 64, 26)');
  assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,originalChatCount+1,'trigger should call the existing gateway chat');
  const triggerBody=JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
  assert.doesNotMatch(triggerBody.messages.at(-1).content,/오늘 회의/,'ambient transcripts must not enter explicit AI chat history');
@@ -321,12 +353,12 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.equal(requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).length,finalsBeforeAIWait+1,'ASR must continue while the LLM is waiting');
  assert.match(element('transcript-log').textContent,/AI 응답 중에도/);
  releaseChat();await tick();await tick();await tick();
- assert.equal(element('hud-trigger-keyword').style.opacity,'0.5','response completion restores dim wake text');
- for(let i=0;i<150 && nativePage.textObject.find(c=>c.containerID===8)?.textColor!==2;i++)await new Promise(resolve=>setTimeout(resolve,20));
- assert.equal(nativePage.textObject.find(c=>c.containerID===8).textColor,2);
- for(let i=0;i<150 && nativePage.textObject.find(c=>c.containerID===4)?.textColor!==2;i++)await new Promise(resolve=>setTimeout(resolve,20));
- assert.equal(nativePage.textObject.find(c=>c.containerID===4).textColor,2,'after the answer, ordinary transcription returns to dim');
- assert.equal(element('hud-transcript-body').style.color,'#008033');
+ assert.equal(element('hud-trigger-keyword').style.opacity,'0.25','response completion restores dim wake text');
+ for(let i=0;i<150 && nativePage.textObject.find(c=>c.containerID===8)?.textColor!==1;i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(nativePage.textObject.find(c=>c.containerID===8).textColor,1);
+ for(let i=0;i<150 && nativePage.textObject.find(c=>c.containerID===4)?.textColor!==1;i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(nativePage.textObject.find(c=>c.containerID===4).textColor,1,'after the answer, ordinary transcription returns to dim');
+ assert.equal(element('hud-transcript-body').style.color,'rgb(0, 64, 26)');
  const chatCount=requests.filter(r=>r.url.endsWith('/api/chat')).length;
  const finalsBeforePreview=requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).length;
  nextTranscript='이븐 임시로 인식한 문장';
@@ -335,6 +367,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.ok(requests.some(r=>r.url.endsWith('/api/stt/preview')));
  assert.equal(element('hud-trigger-keyword').style.opacity,'1','preview wake immediately activates trigger display');
  assert.match(element('hud-screen').innerHTML,/이븐: 임시로 인식한 문장/,'wake input box shows live STT immediately');
+ assert.doesNotMatch(element('hud-screen').innerHTML,/이븐 질문|hud-ai-header/,'draft question has no redundant title row');
  assert.equal(requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).length,finalsBeforePreview);
  assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,chatCount,'draft trigger must not call AI');
  assert.doesNotMatch(element('transcript-log').textContent,/임시로 인식/,'draft must not enter saved history');
@@ -440,7 +473,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  element('text-chat-form').handlers.submit({preventDefault(){}});await tick();await tick();await tick();
  let textRequest=JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
  assert.ok(textRequest.input.endsWith('텍스트 질문'));assert.match(textRequest.input,/오늘 일정을 요약해줘/,'typed chat should share explicit wake-word chat context');assert.equal(textRequest.store,false);assert.equal(textRequest.messages,undefined);
- assert.match(textRequest.system_prompt,/HUD/);
+ assert.match(textRequest.system_prompt,/HUD/);assert.match(textRequest.system_prompt,/visible answer in Korean/);
  assert.equal(element('chat-input').value,'');
  assert.equal(element('chat-output').textContent,'최종 답변','terminal answer must replace drafts without duplicating content, revealing reasoning, or keeping sources');
  let terminalReads=0;
@@ -450,7 +483,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  }})}};
  element('chat-input').value='완료 신호 확인';element('text-chat-form').handlers.submit({preventDefault(){}});for(let i=0;i<8;i++)await tick();
  assert.equal(element('chat-output').textContent,'완료 신호에서 즉시 표시하는 답변');assert.equal(terminalReads,1);
- assert.equal(element('hud-trigger-keyword').style.opacity,'0.5','typed chat does not activate the voice trigger indicator');
+ assert.equal(element('hud-trigger-keyword').style.opacity,'0.25','typed chat does not activate the voice trigger indicator');
  assert.match(element('hud-screen').innerHTML,/hud-ai-box/);
  assert.match(element('hud-screen').innerHTML,/hud-transcript-box/);
  assert.doesNotMatch(element('hud-screen').innerHTML,/검색 출처|kma\.go\.kr/);
@@ -475,7 +508,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  nextTranscript='계약서에 묵시적 갱신이라는 조항이 나온대';utterance();await tick();await tick();await tick();
  const hintBody=JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
  assert.equal(hintBody.glasses_hint,true);assert.equal(hintBody.store,false);
- assert.match(hintBody.system_prompt,/정보 비서/);assert.doesNotMatch(hintBody.input,/<conversation>|<latest_utterance>/);assert.equal(hintBody.hint_research.source,'internal');assert.match(element('chat-output').textContent,/자동 연장/);
+ assert.match(hintBody.system_prompt,/specific factual note/);assert.doesNotMatch(hintBody.input,/<conversation>|<latest_utterance>/);assert.equal(hintBody.hint_research.source,'internal');assert.match(element('chat-output').textContent,/자동 연장/);
  context.window.__queueTest.hintGate.reset({forgetHistory:true});hintDecision={error:true};
  const callsBeforeError=requests.filter(r=>r.url.endsWith('/api/chat')).length;
  nextTranscript='다음 전사는 판별 오류와 독립적으로 저장됩니다';utterance();await tick();await tick();await tick();
@@ -571,6 +604,10 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  nextTranscript='이븐';utterance();await tick();await tick();await tick();
  assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,beforeWake,'wake-only must not spend an LLM request');
  assert.match(element('hud-screen').innerHTML,/이븐: 듣는 중\.\.\./);
+ assert.doesNotMatch(element('hud-screen').innerHTML,/이븐 질문|hud-ai-header/,'wake-only acknowledgement has no title row');
+ for(let i=0;i<150 && nativePage.textObject.some(c=>c.containerID===9);i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(nativePage.textObject.some(c=>c.containerID===9),false,'native wake input omits the title container');
+ assert.equal(nativePage.textObject.find(c=>c.containerID===1).yPosition,27,'native question begins immediately below the status header');
  assert.match(element('hud-notice').textContent,/질문 대기/);
  assert.equal(element('hud-trigger-keyword').style.opacity,'1','wake-only acknowledgement stays bright while waiting for the question');
  chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:'쿠푸왕의 피라미드에 대한 답변입니다.'})+'\n\n');
@@ -578,7 +615,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  let privateChat=JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
  assert.equal(privateChat.glasses_hint,undefined);assert.equal(privateChat.glasses_client,undefined);assert.ok(privateChat.input.endsWith('피라미드는 누가 만들었나요'));
  assert.doesNotMatch(privateChat.input,/질문의 내용에 바로 답변합니다/,'ambient answers are not private chat memory');
- assert.equal(element('hud-trigger-keyword').style.opacity,'0.5','the armed next question dims again when answered');
+ assert.equal(element('hud-trigger-keyword').style.opacity,'0.25','the armed next question dims again when answered');
  const afterPrivate=requests.filter(r=>r.url.endsWith('/api/chat')).length;
  nextTranscript='일상 대화를 이어서 듣는 중입니다';utterance();await tick();await tick();await tick();
  assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,afterPrivate,'one armed question must return to hints afterward');
@@ -592,7 +629,11 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  holdChat=true;element('chat-input').value='취소할 오래된 질문';element('text-chat-form').handlers.submit({preventDefault(){}});
  await tick();await tick();
  nextTranscript='이븐';utterance();await tick();await tick();await tick();
- assert.match(element('hud-screen').innerHTML,/이븐: 듣는 중\.\.\./);assert.doesNotMatch(element('hud-screen').innerHTML,/AI 오류/);
+ assert.match(element('hud-screen').innerHTML,/이븐: 듣는 중\.\.\./);
+ assert.doesNotMatch(element('hud-screen').innerHTML,/이븐 질문|hud-ai-header/,'wake-only acknowledgement has no title row');
+ for(let i=0;i<150 && nativePage.textObject.some(c=>c.containerID===9);i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(nativePage.textObject.some(c=>c.containerID===9),false,'native wake input omits the title container');
+ assert.equal(nativePage.textObject.find(c=>c.containerID===1).yPosition,27,'native question begins immediately below the status header');assert.doesNotMatch(element('hud-screen').innerHTML,/AI 오류/);
  chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:'새 질문에 대한 정상 답변입니다.'})+'\n\n');
  nextTranscript='다시 물어볼 내용';utterance();await tick();await tick();await tick();
  privateChat=JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
@@ -603,11 +644,11 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  nextTranscript='이븐';utterance();await tick();await tick();await tick();await tick();
  assert.equal(element('hud-trigger-keyword').style.opacity,'1','old cancelled response must not override new question-wait brightness');
  await context.window.__queueTest.stopVoiceRecording(false);await tick();
- assert.equal(element('hud-trigger-keyword').style.opacity,'0.5','cancelled question wait returns to dim');
+ assert.equal(element('hud-trigger-keyword').style.opacity,'0.25','cancelled question wait returns to dim');
  context.window.__queueTest.microphone();await tick();await tick();await tick();
  chatReply={ok:false,status:503,text:async()=>'simulated voice LLM error'};
  nextTranscript='이븐 오류 테스트 질문';utterance();await tick();await tick();await tick();await tick();
- assert.equal(element('hud-trigger-keyword').style.opacity,'0.5','failed voice response must not leave a stuck bright trigger');
+ assert.equal(element('hud-trigger-keyword').style.opacity,'0.25','failed voice response must not leave a stuck bright trigger');
  // Switch to Translate mode via menu item 2
  handler({menuItemClickEvent:{itemID:2}});await tick();
  assert.equal(element('glasses-mode').value,'translate');
@@ -623,7 +664,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.ok(replyBox.height>=4*27);assert.equal(translationBox.yPosition+translationBox.height,replyBox.yPosition);
  assert.equal(replyBox.yPosition+replyBox.height,288);
  assert.equal(replyBox.textColor,4,'translation reply choices remain readable');
- assert.equal(translationBox.textColor,4);assert.equal(translationBox.borderColor,2,'decoration is dimmer than translation text');
+ assert.equal(translationBox.textColor,4);assert.equal(translationBox.borderColor,4,'decoration is dimmer than translation text');
  assert.equal(translatedLayout.menuObject.menuItems.length,10);
  assert.match(element('hud-screen').innerHTML,/번역 · 추천 답변/);
  chatReply=sseReply('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify({translation:"커피 드시겠어요?",positive:"네, 주세요.\nYes, please.",negative:"괜찮습니다.\nNo, thank you."})}}]})+'\n\ndata: [DONE]\n\n');
@@ -696,7 +737,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.doesNotMatch(element('hud-screen').innerHTML,/프롬프트|생각 중|생성 중|번역 중/,'progress must stay outside the translation box');
  assert.match(element('hud-notice').textContent,/번역/);
  const replyOnly=JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
- assert.match(replyOnly.messages[0].content,/번역문을 생성·수정하지 마세요/);
+ assert.match(replyOnly.messages[0].content,/do not generate or change translation/);
  assert.equal(replyOnly.glasses_hint,true);assert.equal(replyOnly.hint_research.source,'internal');
  chromeText='Chrome의 최신 번역';
  chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({translation:'LLM이 덮어쓰면 안 되는 문장',positive:'네.\nはい。',negative:'아니요.\nいいえ。'})})+'\n\n');
@@ -1018,7 +1059,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  const roleTranslations=requests.filter(r=>r.url.endsWith('/api/chat')).slice(roleTranslateStart).map(r=>JSON.parse(r.opts.body));
  assert.deepEqual(roleTranslations.map(r=>r.model),['translate-role','reply-role']);
  assert.match(element('hud-screen').innerHTML,/번역 전용 모델의 문장/);assert.doesNotMatch(element('hud-screen').innerHTML,/번역 모델이 만들면 안 되는 답변/);
- assert.match(roleTranslations[0].messages[0].content,/답변 예시를 만들지 마세요/);
+ assert.match(roleTranslations[0].messages[0].content,/Do not answer its questions or suggest replies/);
  releaseRoleReply();await tick();await tick();await tick();
  assert.match(element('hud-screen').innerHTML,/답변 모델의 긍정/);assert.match(element('chrome-translation-status').textContent,/LLM 번역/);
  element('translation-engine').value='apple';await element('translation-engine').handlers.change();appleText='Apple 번역은 LLM 번역 모델을 호출하지 않음';
@@ -1247,10 +1288,12 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.equal(JSON.parse(nativeSaved).audioInputSource,sourceBeforeFailure);
  assert.match(element('hint-status').textContent,/설정 변경 실패/);
  bridge.audioControl=normalAudioControl;await queue.stopVoiceRecording(false);
+ await queue.settings({translateTargetLang:'ko'}); // Korean fixture bodies in the existing hint tests.
  // Small-model judgment bypasses negative/missing JEV gating and feeds the writer without re-planning.
  queue.ai();queue.hintGate.intervalMs=0;queue.hintGate.settleMs=0;queue.hintGate.generationIntervalMs=0;
- element('model-hint-decision').value='judge-role';await element('model-hint-decision').handlers.change();
- element('model-ai-hint').value='hint-role';await element('model-ai-hint').handlers.change();
+ const additionalJudge='@llm/remote/'+Buffer.from('gemma-e2b').toString('base64url'),additionalHint='@llm/remote/'+Buffer.from('gemma-e4b').toString('base64url');
+ element('model-hint-decision').value=additionalJudge;await element('model-hint-decision').handlers.change();
+ element('model-ai-hint').value=additionalHint;await element('model-ai-hint').handlers.change();
  element('hint-context-tokens').value='300';await element('hint-context-tokens').handlers.change();
  hintDecision={hint:false};judgeReply={hint:true,kind:'key',topic:'피라미드',evidence:'피라미드',question:'기자 피라미드 건립 시기와 건축 기술',source:'internal'};
  chatReply=sseReply('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify({fact:'기자의 대피라미드는 쿠푸왕을 위해 건립됐으며 석회암 블록으로 쌓았습니다.',adds_information:true,kind:'key'})}}]})+'\n\ndata: [DONE]\n\n');
@@ -1258,11 +1301,14 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  queue.preview({mode:'ai',segmentId:'judge-end-to-end'},{text:'피라미드가 왕의 무덤이래.'},{stable:'피라미드가 왕의 무덤이래.'});
  for(let i=0;i<15;i++)await tick();
  const judgedBodies=requests.slice(smallJudgeStart).filter(r=>r.url.endsWith('/api/chat')).map(r=>JSON.parse(r.opts.body));
- assert.ok(judgedBodies.some(b=>b.glasses_hint_phase==='judge' && b.model==='judge-role'));
- assert.ok(judgedBodies.some(b=>b.glasses_hint_phase==='answer' && b.model==='hint-role'));
+ assert.ok(judgedBodies.some(b=>b.glasses_hint_phase==='judge' && b.model===additionalJudge));
+ assert.ok(!requests.slice(smallJudgeStart).some(r=>r.url.endsWith('/api/glasses/hint-decision')),'LLM selection never calls dictionary/JEV candidate extraction');
+ assert.ok(judgedBodies.filter(b=>b.glasses_hint_phase==='judge').every(b=>!JSON.stringify(b.messages).includes('Names')),'judge receives transcript without candidate hints');
+
+ assert.ok(judgedBodies.some(b=>b.glasses_hint_phase==='answer' && b.model===additionalHint));
  assert.ok(!judgedBodies.some(b=>b.glasses_hint_phase==='plan'),'do not spend another writer request planning');
  assert.match(element('chat-output').textContent,/쿠푸왕/);assert.match(element('hint-judge-status').textContent,/300토큰/);
- assert.match(queue.state().title,/^\[핵심\] 피라미드/);
+ assert.match(queue.state().title,/^\[정보\] 피라미드/);
  assert.match(element('hint-evidence-log').textContent,/피라미드.*대화 이해에 필요한 정보/);
  assert.equal(queue.hintGate.entries.length,1);
  queue.hintGate.observe('피라미드가 왕의 무덤이래.',{id:'judge-end-to-end'});
@@ -1349,41 +1395,17 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.equal(queue.state().answer,longHint,'an already generated answer must not disappear because its identical older card is closed');
  chunks.splice(0,chunks.length,...originalChunks);
  queue.hintGate.now=originalHintNow;await queue.stopVoiceRecording(false);
- // Collect full sentences and render a schedule/summary without web research.
+ // The model may ignore its schema. Conversation-only tasks must never spend a writer request or replace a useful card.
  queue.ai();queue.hintGate.collectContext=true;queue.hintGate.windowMs=20000;queue.hintGate.settleMs=1000;queue.hintGate.collectWaitMs=4000;queue.hintGate.intervalMs=0;queue.hintGate.generationIntervalMs=0;
- const meetingLines=['금요일 오후 3시에 회의해요.','장소는 2층 회의실입니다.','노트북을 가져와 주세요.'];
- judgeReply={hint:true,kind:'schedule',source:'conversation',topic:'회의 준비',evidence:'금요일 오후 3시',question:'회의 일정과 준비물 모으기',continuity:'same'};
- nextHintProof={version:1,mode:'conversation',source:'conversation',kind:'schedule',topic:'회의 준비',records:[{text:meetingLines.join('\n')}]};
- chatReply=sseReply('data: '+JSON.stringify({type:'request.complete',final_assistant_content:JSON.stringify({adds_information:false,kind:'key',points:[{text:'금요일 오후 3시 · 2층 회의실',evidence:meetingLines.slice(0,2)},{text:'준비: 노트북 지참',evidence:[meetingLines[2]]}]})})+'\n\n');
- const collectedStart=requests.length;
- meetingLines.forEach((text,i)=>queue.hintGate.observe(text,{id:'meeting-'+i,preview:i===2}));
- assert.ok(!requests.slice(collectedStart).some(r=>r.url.endsWith('/api/chat')),'collect speech before asking the model');
- queue.hintGate.pending.due=0;clearTimeout(queue.hintGate.timer);await queue.hintGate.pump();for(let i=0;i<25;i++)await tick();
- const collectedWriter=JSON.parse(requests.slice(collectedStart).find(r=>r.url.endsWith('/api/chat') && JSON.parse(r.opts.body).glasses_hint_phase==='answer').opts.body);
- assert.equal(collectedWriter.hint_research.source,'conversation');meetingLines.forEach(line=>assert.ok(collectedWriter.hint_research.observed.includes(line)));
- assert.match(queue.state().title,/^\[일정\]/);assert.match(queue.state().answer,/금요일 오후 3시.*2층/);assert.match(queue.state().answer,/노트북/);
- await queue.audit.flush();for(let i=0;i<10;i++)await tick();
- const scheduleEvents=requests.filter(r=>r.url.endsWith('/api/glasses/hint-events')).flatMap(r=>JSON.parse(r.opts.body).events).filter(e=>e.topic==='회의 준비');
- assert.ok(scheduleEvents.some(e=>e.stage==='generated' && e.text.includes('false')),'generated output is kept separately from acceptance');
- assert.ok(scheduleEvents.some(e=>e.stage==='phone_display' && e.text.includes('노트북')));
- assert.ok(scheduleEvents.some(e=>e.stage==='validated'));
- const generationJob=scheduleEvents.find(e=>e.stage==='generated').jobId;
- assert.ok(scheduleEvents.filter(e=>['generated','phone_display','validated'].includes(e.stage)).every(e=>e.jobId===generationJob),'stages have a stable correlation ID');
- for(let i=0;i<120;i++){
-   if(requests.filter(r=>r.url.endsWith('/api/glasses/hint-events')).flatMap(r=>JSON.parse(r.opts.body).events).some(e=>e.jobId===generationJob && e.stage==='device_display'))break;
-   await new Promise(resolve=>setTimeout(resolve,20));await queue.audit.flush();
+ for(const [kind,source] of [['schedule','conversation'],['recap','conversation'],['recap','internal'],['key','conversation']]){
+   queue.hintGate.reset({forgetHistory:true});
+   judgeReply={hint:true,kind,source,topic:'회의 준비',evidence:'금요일 오후 3시',question:'대화 정리',continuity:'same'};
+   const before=requests.length,previousAnswer=queue.state().answer;
+   queue.hintGate.observe('금요일 오후 3시에 회의하고 노트북을 가져갑니다.',{id:'disabled-'+kind+'-'+source});
+   queue.hintGate.pending.due=0;clearTimeout(queue.hintGate.timer);await queue.hintGate.pump();for(let i=0;i<15;i++)await tick();
+   assert.ok(!requests.slice(before).some(r=>r.url.endsWith('/api/chat') && JSON.parse(r.opts.body).glasses_hint_phase==='answer'),'conversation recaps/schedules must not reach the writer');
+   assert.equal(queue.state().answer,previousAnswer,'rejected summaries retain the useful previous display');
  }
- const ack=requests.filter(r=>r.url.endsWith('/api/glasses/hint-events')).flatMap(r=>JSON.parse(r.opts.body).events).find(e=>e.jobId===generationJob && e.stage==='device_display');
- assert.ok(ack,'device display is recorded only after native SDK acknowledgement');assert.equal(ack.text,'');
- await element('btn-hint-history').handlers.click();assert.match(element('hint-history-status').textContent,/최근 100개/);
-
- queue.hintGate.reset({forgetHistory:true});
- const decisionLines=['A안은 싸지만 설치에 일주일 걸립니다.','B안은 비싸지만 바로 사용할 수 있습니다.','빨리 시작해야 하므로 B안을 선택했습니다.'];
- judgeReply={hint:true,kind:'recap',source:'conversation',topic:'설치안 결정',evidence:'B안을 선택했습니다',question:'비교와 결정 이유 요약',continuity:'same'};
- nextHintProof={version:1,mode:'conversation',source:'conversation',kind:'recap',topic:'설치안 결정',records:[{text:decisionLines.join('\n')}]};
- chatReply=sseReply('data: '+JSON.stringify({type:'request.complete',final_assistant_content:JSON.stringify({adds_information:true,kind:'key',points:[{text:'A안: 저렴하지만 설치에 일주일 소요',evidence:[decisionLines[0]]},{text:'빠른 시작을 위해 B안 선택',evidence:[decisionLines[2]]}]})})+'\n\n');
- decisionLines.forEach((text,i)=>queue.hintGate.observe(text,{id:'decision-'+i}));queue.hintGate.pending.due=0;clearTimeout(queue.hintGate.timer);await queue.hintGate.pump();for(let i=0;i<25;i++)await tick();
- assert.match(queue.state().title,/^\[요약\]/);assert.match(queue.state().answer,/B안/);
  queue.hintGate.reset({forgetHistory:true});queue.hintGate.collectContext=false;queue.hintGate.settleMs=0;
  const definition='EBITDA는 이자와 세금, 감가상각비를 차감하기 전의 이익을 뜻합니다.';
  judgeReply={hint:true,kind:'term',source:'web',topic:'EBITDA',evidence:'EBITDA',question:'EBITDA의 뜻',continuity:'unknown'};
@@ -1391,6 +1413,21 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  chatReply=sseReply('data: '+JSON.stringify({type:'request.complete',final_assistant_content:JSON.stringify({adds_information:true,kind:'key',topic:'EBITDA',fact:definition,support_quote:definition})})+'\n\n');
  queue.hintGate.observe('EBITDA가 무슨 뜻인지 모르겠어요.',{id:'term-not-key'});for(let i=0;i<25;i++)await tick();
  assert.match(queue.state().title,/^\[용어\]/);assert.equal(queue.state().answer,definition,'writer default key must not erase a selected term definition');
+ // Preserve original quote verification, then localize only the verified display.
+ await queue.settings({translateTargetLang:'en',translationEngine:'chrome'});
+ queue.hintGate.reset({forgetHistory:true});queue.hintGate.collectContext=false;queue.hintGate.settleMs=0;
+ chromeText='EBITDA means earnings before interest, taxes, depreciation and amortization.';
+ judgeReply={hint:true,kind:'term',source:'web',topic:'EBITDA',evidence:'EBITDA',question:'EBITDA 뜻',continuity:'unknown'};
+ nextHintProof={version:1,mode:'quote',source:'web',kind:'term',topic:'EBITDA',records:[{title:'EBITDA',url:'https://example.com/ebitda',text:definition}]};
+ chatReply=sseReply('data: '+JSON.stringify({type:'request.complete',final_assistant_content:JSON.stringify({adds_information:true,kind:'term',topic:'EBITDA',fact:definition,support_quote:definition})})+'\n\n');
+ const localizationRequests=requests.length;
+ queue.hintGate.observe('EBITDA의 의미를 설명해 줬어요.',{id:'localized-proof'});for(let i=0;i<30;i++)await tick();
+ assert.equal(queue.state().answer,chromeText,'verified Korean quote is displayed in the chosen English target');
+ const localizedRequest=requests.slice(localizationRequests).find(r=>r.url.endsWith('/api/translate/chrome'));
+ assert.ok(localizedRequest);assert.equal(JSON.parse(localizedRequest.opts.body).text,definition,'only the verified source text reaches translation');assert.equal(JSON.parse(localizedRequest.opts.body).target,'en');
+ const localizedJudge=requests.slice(localizationRequests).filter(r=>r.url.endsWith('/api/chat')).map(r=>JSON.parse(r.opts.body)).find(b=>b.glasses_hint_phase==='judge');
+ assert.match(localizedJudge.messages[0].content,/information card will be written in English/);
+ chromeText=null;await queue.settings({translateTargetLang:'ko'});
  await queue.stopVoiceRecording(false);
  element('model-hint-decision').value='__jev__';await element('model-hint-decision').handlers.change();
  await queue.stopVoiceRecording(false);
@@ -1472,10 +1509,29 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.equal(queue.lifetime.active,false,'timer must not run while AI is generating its answer');
  releaseChat();for(let i=0;i<10;i++)await tick();
  assert.equal(queue.lifetime.active,true,'completed typed AI answer starts the common timer');
- assert.equal(element('hud-trigger-keyword').style.opacity,'0.5','typed AI answer never activates voice wake brightness');
+ assert.equal(element('hud-trigger-keyword').style.opacity,'0.25','typed AI answer never activates voice wake brightness');
  const typedTick=hintJobs.at(-1);hintClock+=100000;typedTick();assert.equal(queue.state().answer,'');
  element('hint-auto-close').checked=false;await element('hint-auto-close').handlers.change();
  queue.showHint('제목','유지할 힌트','전사');assert.equal(queue.lifetime.active,false);assert.ok(!element('hud-screen').innerHTML.includes('초</span>'));
+ const audioBeforeAIExemption=audioCalls.length;
+ element('hud-full-ai').checked=false;element('hud-full-ai').handlers.change();
+ for(let i=0;i<150 && nativePage.textObject.find(c=>c.containerID===1)?.textColor!==1;i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(nativePage.textObject.find(c=>c.containerID===1).textColor,1);
+ assert.equal(nativePage.textObject.find(c=>c.containerID===9).textColor,1);
+ assert.equal(element('hud-ai-body').style.color,'rgb(0, 64, 26)');
+ assert.equal(queue.state().answer,'유지할 힌트','dimming never replaces displayed content');
+ element('hud-full-ai').checked=true;element('hud-full-ai').handlers.change();
+ for(let i=0;i<150 && nativePage.textObject.find(c=>c.containerID===1)?.textColor!==4;i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(nativePage.textObject.find(c=>c.containerID===1).textColor,4);
+ assert.equal(nativePage.textObject.find(c=>c.containerID===9).textColor,4);
+ assert.equal(audioCalls.length,audioBeforeAIExemption);
+ element('hud-dim-level').value='0';element('hud-dim-level').handlers.input();
+ for(let i=0;i<150 && nativePage.textObject.find(c=>c.containerID===2)?.textColor!==0;i++)await new Promise(resolve=>setTimeout(resolve,20));
+ for(const id of [1,9]){assert.equal(nativePage.textObject.find(c=>c.containerID===id).borderWidth,1);assert.equal(nativePage.textObject.find(c=>c.containerID===id).borderColor,4,'lowest status brightness must retain the content frame');}
+ element('hud-dim-level').value='1';element('hud-dim-level').handlers.input();
+ for(let i=0;i<150 && nativePage.textObject.find(c=>c.containerID===2)?.textColor!==1;i++)await new Promise(resolve=>setTimeout(resolve,20));
+
+
  element('hint-auto-close').checked=true;await element('hint-auto-close').handlers.change();
  assert.equal(JSON.parse(nativeSaved).hintAutoClose,true);assert.equal(JSON.parse(nativeSaved).hintSecondsPerLine,2.5);
  await queue.stopVoiceRecording(false);
@@ -1569,7 +1625,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  nextTranscript='이븐';queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'wake-awaiting');for(let i=0;i<8;i++)await tick();
  assert.ok(element('hud-screen').innerHTML.includes('hud-transcript-box'),'ordinary transcript remains visible even before a wake question');
  assert.equal(element('hud-trigger-keyword').style.opacity,'1');
- handler({sysEvent:{eventType:0}});await tick();assert.equal(queue.state().recording,true);assert.equal(element('hud-trigger-keyword').style.opacity,'0.5');
+ handler({sysEvent:{eventType:0}});await tick();assert.equal(queue.state().recording,true);assert.equal(element('hud-trigger-keyword').style.opacity,'0.25');
  holdChat=true;chatReply=null;nextTranscript='이븐 피라미드를 누가 지었나요';queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'wake-with-question');for(let i=0;i<10;i++)await tick();
  assert.match(element('hud-screen').innerHTML,/피라미드를 누가 지었나요/);assert.ok(!element('hud-screen').innerHTML.includes('이븐 피라미드를'));
  assert.equal(element('hud-trigger-keyword').style.opacity,'1');
@@ -1645,7 +1701,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  const stackSnapshots=[{html:element('hud-screen').innerHTML,native:JSON.parse(JSON.stringify(nativePage))}];
  const bodies=nativePage.textObject.find(c=>c.containerID===1).content;
  assert.ok(bodies.includes('최신 본문') && bodies.includes('오래된 본문'));assert.ok(!bodies.includes('제목'),'both titles stay outside the scrolling body');
- queue.addHint('세 번째 제목','교체된 새 본문');assert.deepEqual(Array.from(queue.stack.cards,c=>c.title),['[핵심] 세 번째 제목','[핵심] 두 번째 제목']);
+ queue.addHint('세 번째 제목','교체된 새 본문');assert.deepEqual(Array.from(queue.stack.cards,c=>c.title),['[정보] 세 번째 제목','[정보] 두 번째 제목']);
  const cardMicCalls=audioCalls.length;handler({textEvent:{eventType:0}});await tick();
  assert.equal(queue.stack.cards.length,1);assert.match(queue.state().title,/두 번째 제목/);assert.equal(queue.state().recording,true);assert.equal(audioCalls.length,cardMicCalls,'tap removes a card without toggling STT');
  queue.addHint('네 번째 제목','폰에서 남길 본문');const oldCardID=queue.stack.cards[1].id;

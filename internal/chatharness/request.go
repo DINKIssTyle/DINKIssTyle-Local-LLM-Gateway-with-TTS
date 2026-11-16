@@ -69,9 +69,9 @@ func PrepareRequest(input RequestInput) (PreparedRequest, error) {
 	if judgeProfile || translationProfile {
 		// Classification and translation use only their bounded task prompts.
 		// Older glasses clients send the native stateful input/system_prompt
-		// shape. These profiles are routed to chat completions, which requires
-		// messages regardless of the user's interactive chat mode.
-		if _, exists := reqMap["messages"]; !exists {
+		// shape. Compatible requests require messages; an explicitly selected
+		// Native connection retains input/system_prompt and reasoning control.
+		if _, exists := reqMap["messages"]; !exists && input.LLMMode != "stateful" {
 			if text, ok := reqMap["input"].(string); ok {
 				messages := make([]any, 0, 2)
 				if system, ok := reqMap["system_prompt"].(string); ok && strings.TrimSpace(system) != "" {
@@ -81,7 +81,7 @@ func PrepareRequest(input RequestInput) (PreparedRequest, error) {
 				reqMap["messages"] = messages
 			}
 		}
-		if _, exists := reqMap["messages"]; exists {
+		if _, exists := reqMap["messages"]; exists && input.LLMMode != "stateful" {
 			delete(reqMap, "input")
 			delete(reqMap, "system_prompt")
 		}

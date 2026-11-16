@@ -73,3 +73,29 @@ func BenchmarkHintKeywordExtraction(b *testing.B) {
 		hintKeywords("피라미드가 왕실 무덤이래. 청동기 시대에는 청동을 사용했대. 맥북 에어 M4의 무게도 궁금하네.")
 	}
 }
+
+func TestHintKeywordSpokenQuantitiesDoNotBecomeNames(t *testing.T) {
+	for _, text := range []string{"한 천 년 넘게 걸려요.", "한 천에는 못 미쳐요.", "오늘 오후 사흘 동안 시간 이야기를 했어요."} {
+		for _, candidate := range hintKeywords(text) {
+			if normalizeHintKeyword(candidate.Term) == "한천" || hintGenericCandidate(candidate.Term) {
+				t.Fatalf("quantity/time fragment became a title in %q: %+v", text, candidate)
+			}
+		}
+	}
+	for _, text := range []string{"한천은 배지를 굳히는 데 사용됩니다.", "한천으로 배지를 만듭니다."} {
+		found := false
+		for _, candidate := range hintKeywords(text) {
+			if normalizeHintKeyword(candidate.Term) == "한천" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("literal name wrongly blocked: %q", text)
+		}
+	}
+	for _, text := range []string{"청동기 시대에는 청동을 사용했어요.", "피라미드는 왕실 무덤이었어요."} {
+		if len(hintKeywords(text)) == 0 {
+			t.Fatalf("legitimate concepts blocked: %q", text)
+		}
+	}
+}

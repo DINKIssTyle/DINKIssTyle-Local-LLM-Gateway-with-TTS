@@ -6,7 +6,7 @@
     <title>
       DKST AI Gateway for Even Realities G2
     </title>
-    <link rel="stylesheet" href="style.css?v=2.24.1">
+    <link rel="stylesheet" href="style.css?v=2.24.14">
   </head>
   <body>
     <div class="plugin-container">
@@ -21,7 +21,7 @@
               DKST Gateway
             </div>
             <div style="font-size: 11px; color: var(--text-secondary);">
-              Even Realities G2 · <span id="plugin-build-version">2.24.1</span>
+              Even Realities G2 · <span id="plugin-build-version">2.24.14</span>
             </div>
           </div>
         </div>
@@ -500,6 +500,7 @@
                   태국어 (Thai)
                 </option>
               </select>
+              <p class="setting-help">AI 힌트와 AI 채팅 답변도 이 언어로 표시합니다.</p>
             </div>
             <div class="form-group">
               <label for="translation-engine">
@@ -547,11 +548,20 @@
               화면 표시
             </strong>
             <span class="settings-summary">
-              전사 표시 · 자동 닫기
+              밝기 · 전사 표시 · 자동 닫기
             </span>
           </span>
         </summary>
         <div class="settings-section-body">
+          <div class="form-group hud-dimming-settings">
+            <label class="setting-toggle"><input type="checkbox" id="hud-dim-enabled"><span>일부 화면 어둡게 하기</span></label>
+            <label for="hud-dim-level">어둡게 표시할 밝기 <output id="hud-dim-value" for="hud-dim-level">25%</output></label>
+            <input type="range" id="hud-dim-level" min="0" max="4" step="1" value="1" aria-label="어둡게 표시할 밝기">
+            <p class="setting-help">최저·25·50·75·100% 중 선택합니다. 최저 단계는 기기에 따라 거의 보이지 않을 수 있습니다. 마이크·상태 아이콘과 시간 등에 적용됩니다. 원래 밝기로 유지할 내용을 선택하세요. 번역문·예상 답변과 발동한 호출어는 원래 밝기를 유지합니다.</p>
+            <p class="setting-help">주변 밝기에 따른 변화까지 막으려면 Even 앱의 밝기 설정에서 자동 밝기를 끄세요. 일부 영역만 자동 밝기에서 제외하는 기능은 지원되지 않습니다.</p>
+            <label class="setting-toggle"><input type="checkbox" id="hud-full-transcript"><span>전사</span></label>
+            <label class="setting-toggle"><input type="checkbox" id="hud-full-ai"><span>AI 힌트 및 답변</span></label>
+          </div>
           <div class="form-group">
             <label for="hint-card-count">동시에 표시할 힌트 수</label>
             <select id="hint-card-count">
@@ -885,7 +895,7 @@
         </button>
       </div>
     </div>
-    <script src="bundle.js?v=2.24.1">
+    <script src="bundle.js?v=2.24.14">
     </script>
   </body>
 </html>

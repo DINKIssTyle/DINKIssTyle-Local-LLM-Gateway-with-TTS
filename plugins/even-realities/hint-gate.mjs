@@ -5,8 +5,8 @@ const compactTopic=text=>String(text || '').normalize('NFC').toLowerCase().repla
 const briefAcknowledgement=text=>/^(?:네|예|응|어|음|아|맞아|맞아요|그렇구나|알겠어|알겠습니다|고마워|감사합니다|okay|ok|yes|yeah|hmm)[.!?。！？\s]*$/iu.test(String(text).trim());
 // One optional decision at a time; never await this from transcription.
 export class HintGate {
-  constructor({decide,onHint,onStatus=()=>{},onTopicChange=()=>{},onAudit=()=>{},now=()=>Date.now(),cooldownMs=8000,generationIntervalMs=8000,intervalMs=2000,maxAgeMs=45000,displayAgeMs=45000,windowMs=8000,settleMs=500,repeatFocusMs=20000,collectContext=false,collectWaitMs=4000,minContextChars=80}) {
-    Object.assign(this,{decide,onHint,onStatus,onTopicChange,onAudit,now,cooldownMs,generationIntervalMs,intervalMs,maxAgeMs,displayAgeMs,windowMs,settleMs,repeatFocusMs,collectContext,collectWaitMs,minContextChars});
+  constructor({decide,onHint,onStatus=()=>{},onTopicChange=()=>{},onAudit=()=>{},now=()=>Date.now(),cooldownMs=8000,generationIntervalMs=8000,intervalMs=2000,maxAgeMs=45000,displayAgeMs=45000,windowMs=8000,settleMs=500,repeatFocusMs=20000,collectContext=false,collectWaitMs=4000,minContextChars=80,decisionTimeoutMs=8000}) {
+    Object.assign(this,{decide,onHint,onStatus,onTopicChange,onAudit,now,cooldownMs,generationIntervalMs,intervalMs,maxAgeMs,displayAgeMs,windowMs,settleMs,repeatFocusMs,collectContext,collectWaitMs,minContextChars,decisionTimeoutMs});
     this.contextFloorSequence=0;this.epoch=0;this.topicVersion=0;this.currentTopic='';this.topicDecisionSequence=0;this.entries=[];this.recent=[];this.failed=new Map();this.pending=null;this.inflight=null;
     this.generating=new Map();this.sequence=0;this.nextGeneration=-Infinity;this.lastDecision=-Infinity;this.nextHint=-Infinity;this.timer=null;
   }
@@ -142,7 +142,7 @@ export class HintGate {
     if(!this.fresh(job)){this.onAudit(job,{stage:'skipped',reason:'candidate_expired'});this.pump();return;}
     const controller=new AbortController();const token={controller};this.inflight=token;
     this.lastDecision=now;
-    const timeout=setTimeout(()=>controller.abort(),8000);
+    const timeout=setTimeout(()=>controller.abort(),this.decisionTimeoutMs);
     try {
       const decision=await this.decide(job,controller.signal);
       if(!this.fresh(job) || controller.signal.aborted)return;
@@ -151,6 +151,15 @@ export class HintGate {
         return;
       }
       this.confirmTopic(job,decision);
+      // Negative/error decisions have no selected evidence. Do not fabricate
+      // transcript_changed by attempting to bind their absent evidence.
+      if(!decision.hint){
+        if(decision.reason==='embedding_busy' && !this.pending && !job.retry)this.pending={...job,retry:true,due:this.now()+2000};
+        const reasons={embedding_disabled:'임베딩 비활성 · 전사만 계속',embedding_unavailable:'임베딩 준비 필요 · 전사만 계속',jev_required:'EmbeddingGemma 2 + JEV 필요',embedding_busy:'임베딩 사용 중 · 다음 발화에서 재판별'};
+        this.onStatus(reasons[decision.reason] || (decision.reason?.startsWith('judge_')?'판별 실패 · 전사 계속':`${decision.reason==='uncertain'?'힌트 보류':'힌트 대기'} · 최근 ${job.windowCount}개 발화 / ${Array.from(job.text).length}자 판별`));
+        return;
+      }
+
       this.recent=this.recent.filter(e=>now-e.at<180000);
       for(const [key,candidate] of this.generating)if(!this.fresh(candidate))this.generating.delete(key);
       const focus=typeof decision.focus==='string' && job.text.includes(decision.focus.trim())?decision.focus.trim():'';
@@ -175,11 +184,6 @@ export class HintGate {
         if(accepted===false){this.onAudit(job,{stage:'skipped',reason:'chat_or_capture_priority'});this.generating.delete(job.sequence);this.onStatus('힌트 생성 대기 · 다음 대화에서 재판별');return;}
         this.nextGeneration=this.now()+this.generationIntervalMs;
         this.onStatus(`힌트 후보 · ${focusedJob.text.slice(0,80)}`);
-      } else {
-        if(decision.reason==='embedding_busy' && !this.pending && !job.retry){this.pending={...job,retry:true,due:this.now()+2000};}
-        const reasons={embedding_disabled:'임베딩 비활성 · 전사만 계속',embedding_unavailable:'임베딩 준비 필요 · 전사만 계속',jev_required:'EmbeddingGemma 2 + JEV 필요',embedding_busy:'임베딩 사용 중 · 다음 발화에서 재판별'};
-        const prefix=decision.reason==='uncertain'?'힌트 보류':'힌트 대기';
-        this.onStatus(reasons[decision.reason] || `${prefix} · 최근 ${job.windowCount}개 발화 / ${Array.from(job.text).length}자 판별`);
       }
     } catch(err) {
       if(job.epoch===this.epoch)this.onStatus(controller.signal.aborted?'힌트 판별 지연 · 전사 계속':`힌트 판별 실패 · 전사 계속 (${err.message})`);

@@ -1,13 +1,13 @@
 {
   "name": "dkst-even-realities-plugin",
-  "version": "2.24.1",
+  "version": "2.24.14",
   "description": "DKST AI Gateway for Even Realities G2",
   "main": "plugin.js",
   "scripts": {
     "build": "node build.mjs",
     "qr": "evenhub qr",
     "pack": "node pack.mjs",
-    "test": "node test.cjs && node hint-gate.test.mjs && node hint-enrichment.test.mjs && node direct-question.test.mjs && node translation-display.test.mjs && node speaker-filter.test.mjs && node chrome-translation.test.mjs && node translation-header.test.mjs && node live-translation.test.mjs && node translation-sentence.test.mjs && node translation-history.test.mjs && node ai-conversation.test.mjs && node role-models.test.mjs && node stable-translation.test.mjs && node engine-preparation.test.mjs && node chat-deadline.test.mjs && node hud-icons.test.mjs && node glasses-input.test.mjs && node settings-menu.test.mjs && node hint-judge.test.mjs && node hint-grounding.test.mjs && node realtime-hints.test.mjs && node adaptive-hud.test.mjs && node hint-autoclose.test.mjs && node hint-stack.test.mjs && node head-gesture.test.mjs && node settings-ui.test.mjs && node audio-upload.test.mjs && node llm-translation.test.mjs && node translation-metrics.test.mjs && node hint-audit.test.mjs",
+    "test": "node test.cjs && node hint-gate.test.mjs && node hint-enrichment.test.mjs && node prompts.test.mjs && node hint-localization.test.mjs && node ai-response-limit.test.mjs && node direct-question.test.mjs && node translation-display.test.mjs && node speaker-filter.test.mjs && node chrome-translation.test.mjs && node translation-header.test.mjs && node live-translation.test.mjs && node translation-sentence.test.mjs && node translation-history.test.mjs && node ai-conversation.test.mjs && node role-models.test.mjs && node stable-translation.test.mjs && node engine-preparation.test.mjs && node chat-deadline.test.mjs && node hud-icons.test.mjs && node hud-brightness.test.mjs && node glasses-input.test.mjs && node settings-menu.test.mjs && node hint-judge.test.mjs && node hint-grounding.test.mjs && node realtime-hints.test.mjs && node adaptive-hud.test.mjs && node hint-autoclose.test.mjs && node hint-stack.test.mjs && node head-gesture.test.mjs && node settings-ui.test.mjs && node audio-upload.test.mjs && node llm-translation.test.mjs && node translation-metrics.test.mjs && node hint-audit.test.mjs",
     "dev": "node dev.mjs",
     "test:dev": "node --test dev.test.mjs"
   },

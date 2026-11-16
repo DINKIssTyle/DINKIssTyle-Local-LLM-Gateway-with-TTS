@@ -12,6 +12,12 @@ func TestHintEventValidation(t *testing.T) {
 	if !validHintEvent(base) {
 		t.Fatal("valid event rejected")
 	}
+	diagnostic := base
+	diagnostic.Stage = "decision_response"
+	diagnostic.Text = `{"reason":"judge_timeout","elapsedMs":12000}`
+	if !validHintEvent(diagnostic) {
+		t.Fatal("bounded judge diagnostics rejected")
+	}
 	bad := base
 	bad.Stage = "execute_command"
 	if validHintEvent(bad) {

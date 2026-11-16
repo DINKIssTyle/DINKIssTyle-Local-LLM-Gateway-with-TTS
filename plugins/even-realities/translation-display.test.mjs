@@ -23,9 +23,9 @@ for(const line of lines){assert.ok(getTextWidth(line)<=576);assert.match(line,/\
 assert.ok(translationPhoneText(long).includes('좋습니다. '.repeat(20)));
 assert.equal(translationReplyText({}).split('\n').length,4);
 const prompt=buildModePrompts('translate',{prompt:'Would you like coffee?'}).systemPrompt;
-assert.match(prompt,/상대방 발화를 번역하거나 반복하는 곳이 아닙니다/);
+assert.match(prompt,/rather than repeating or translating the utterance/);
 assert.match(prompt,/translation[\s\S]*positive[\s\S]*negative/);
-assert.match(prompt,/이미 목표 언어로 말한 경우/);
+assert.match(prompt,/if already in that language/);
 const coffee={translation:'커피 드시겠어요?',positive:'Yes, please. — 네, 주세요.',negative:'No, thank you. — 아니요, 괜찮습니다.'};
 const raw=JSON.stringify(coffee);
 for(let i=1;i<=raw.length;i++){
@@ -43,7 +43,7 @@ const bilingual={translation:'Would you like coffee?',positive:'Yes, please.\n�
 const rows=translationReplyText(bilingual,576).split('\n');
 assert.equal(rows[0],'긍정: Yes, please.');assert.equal(rows[1].trim(),'네, 주세요.');
 assert.equal(rows[2],'부정: No, thank you.');assert.equal(rows[3].trim(),'아니요, 괜찮습니다.');
-assert.match(buildModePrompts('translate',{targetLang:'en'}).systemPrompt,/첫 줄에 목표 언어/);
+assert.match(buildModePrompts('translate',{targetLang:'en'}).systemPrompt,/two lines: a short reply in the target language/);
 
 const {mergeTranslationDisplay}=await import('./translation-display.mjs');
 const previous={translation:'이전 번역',positive:'Yes.\n네.',negative:'No.\n아니요.'};

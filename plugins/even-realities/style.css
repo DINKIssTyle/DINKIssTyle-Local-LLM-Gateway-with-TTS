@@ -592,3 +592,11 @@ summary:focus-visible { outline:2px solid var(--accent-blue); outline-offset:2px
 .hud-hint-stack .hud-ai-header { min-height: 1.4em; padding-bottom: 1px; }
 
 #hud-mode-icon, #hud-state-icon { opacity: 0.5; }
+
+.hud-dimming-settings input[type="range"] { width:100%; padding:0; accent-color:var(--accent-green); }
+.hud-dimming-settings output { margin-left:8px; color:var(--text-secondary); font-variant-numeric:tabular-nums; }
+.hud-hint-box .hud-ai-header { border-bottom-color:var(--hud-ai-color,var(--accent-green)); }
+
+.hud-transcript-label { color:var(--hud-transcript-color,var(--accent-green)); opacity:1; text-shadow:none; }
+
+.hud-ai-box { border-color:var(--hud-ai-color,var(--accent-green)); }

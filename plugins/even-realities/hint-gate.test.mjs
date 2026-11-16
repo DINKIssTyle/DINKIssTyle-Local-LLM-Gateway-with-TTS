@@ -246,3 +246,13 @@ let earlierDecision;
 const earlierGate=new HintGate({collectContext:true,settleMs:1000,collectWaitMs:4000,intervalMs:0,decide:async job=>{const decision={hint:true,focus:'금요일 오후 3시',plan:{source:'conversation',kind:'schedule',topic:'회의 준비'},observedText:job.text};earlierDecision=earlierGate.withEvidence(job,decision);assert.equal(earlierGate.relevant(earlierDecision),true);return {hint:false};},onHint:()=>{}});
 earlierGate.observe('금요일 오후 3시에 회의합니다.',{id:'previous',preview:true});earlierGate.observe('노트북을 가져오세요.',{id:'current',preview:true});earlierGate.pending.due=0;clearTimeout(earlierGate.timer);await earlierGate.pump();
 earlierGate.validatePreview('previous','금요일 오후 4시에 회의합니다.');assert.equal(earlierGate.rejectionReason(earlierDecision),'transcript_changed');earlierGate.reset();
+
+// No selected evidence exists on skip/error; do not label it ASR correction.
+for(const reason of ['llm_skip','judge_timeout','judge_invalid_response']){
+ const audits=[],selected=[];
+ const skipGate=new HintGate({collectContext:true,intervalMs:0,settleMs:1000,decide:async()=>({hint:false,reason}),onAudit:(job,event)=>audits.push(event),onHint:job=>selected.push(job)});
+ skipGate.observe('유전자 등록 정보에 대한 설명입니다.',{id:'skip-with-context',preview:true});
+ skipGate.pending.due=0;clearTimeout(skipGate.timer);await skipGate.pump();
+ assert.equal(selected.length,0);assert.equal(audits.some(e=>e.reason==='transcript_changed'),false,reason);
+ skipGate.reset();
+}

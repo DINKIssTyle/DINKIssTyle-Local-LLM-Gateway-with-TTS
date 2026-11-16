@@ -1,3 +1,6 @@
-export const HINT_LABELS={key:'핵심',term:'용어',verify:'확인',schedule:'일정',recap:'요약'};
-export const TRANSCRIPT_UNCERTAINTY_POLICY='입력은 자동 음성 전사로 오인식·오타·단어/문장 누락·중간 끊김이 있을 수 있고, 확정 전사도 정확성을 보장하지 않는다. 명백한 오타만 짧은 주변 문맥으로 해석한다. 빠진 말·부정 표현·숫자·단위·날짜를 임의로 보충하거나 의미를 뒤집지 않는다. 이름·수치·날짜나 대상이 불명확하면 추측해 검색하거나 힌트를 만들지 말고 추가 발화를 기다린다. 전사와 검색 결과만으로 실제 발언·의도가 증명되지는 않는다. 낯선 조어·오인식 후보의 뜻·어원·소속·인과를 만들어 설명하지 않는다. 검색 결과의 일반적인 관련 문장만으로 그 명칭의 존재를 인정하지 않는다. ';
-export const HINT_CLASSIFICATION_POLICY='분류는 제공할 도움의 작업을 기준으로 고른다. 날짜·시간·기한에 연결된 일정·준비물·할 일이 여러 발화에 나뉘어 나오면 schedule(일정)로 모은다. 여러 문장의 핵심 주장·진행 상황·결정·비교를 짧게 압축하면 recap(요약)이다. 낯선 용어·약어·개념의 뜻이나 용법이 대화 이해에 도움이 되면 term(용어)으로 설명한다. 용어의 의미·두 개념의 차이는 term이며 사실 주장 검증과 혼동하지 않는다. 날짜 없는 단순 진행 상황·남은 작업은 recap으로 요약한다. 수치·연대·주장의 정확성을 확인해야 하면 verify(확인)다. key(핵심)는 위 작업이 아닌 구체적 배경·원리·실용 정보가 실제 빈틈을 메울 때만 쓴다. 기본값으로 key를 고르거나 종류별 할당량을 채우지 않는다. 명칭·고유명사·역사 주제가 등장했다는 이유만으로 term을 고르지 않는다. schedule과 recap은 대화 자체를 근거로 정리할 수 있고 새 외부 사실을 억지로 추가하지 않는다. 웹검색 여부는 분류 기준이 아니다. ';
+export const HINT_LABELS={key:'정보',term:'용어',verify:'확인',schedule:'일정',recap:'요약'};
+export {TRANSCRIPT_UNCERTAINTY_POLICY,HINT_CLASSIFICATION_POLICY} from './prompts.mjs';
+
+// Legacy recap labels remain readable in history; automatic selection is information-only.
+export const INFORMATION_HINT_KINDS=['key','term','verify','schedule'];
+export function isInformationHintPlan(plan){return !!plan && INFORMATION_HINT_KINDS.includes(plan.kind || 'key') && ['internal','web','memory'].includes(plan.source);}

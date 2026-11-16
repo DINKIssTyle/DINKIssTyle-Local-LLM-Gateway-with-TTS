@@ -36,10 +36,12 @@ export async function rasterizeIcon(key,{width,height},baseURL=document.baseURI)
   return ctx.getImageData(0,0,width,height).data;
 }
 export class HudIconStore {
-  constructor(render=rasterizeIcon){this.render=render;this.cache=new Map();}
-  load(key){
+  constructor(render=rasterizeIcon){this.render=render;this.cache=new Map();this.rasters=new Map();}
+  load(key,brightness=key.endsWith('-off') || key.startsWith('mode-') || key.startsWith('status-')?0.5:1){
     const spec=HUD_ICONS[key];if(!spec)throw Error('알 수 없는 HUD 아이콘');
-    if(!this.cache.has(key))this.cache.set(key,Promise.resolve().then(()=>this.render(key,spec)).then(rgba=>rgbaToGray4(rgba,spec.width,spec.height,key.endsWith('-off') || key.startsWith('mode-') || key.startsWith('status-')?0.5:1)).catch(error=>{this.cache.delete(key);throw error;}));
-    return this.cache.get(key);
+    const level=Math.max(0,Math.min(4,Math.round((Number(brightness) || 1/15)*4))),cacheKey=`${key}:${level}`;
+    if(!this.rasters.has(key))this.rasters.set(key,Promise.resolve().then(()=>this.render(key,spec)).catch(error=>{this.rasters.delete(key);throw error;}));
+    if(!this.cache.has(cacheKey))this.cache.set(cacheKey,this.rasters.get(key).then(rgba=>rgbaToGray4(rgba,spec.width,spec.height,level===0?1/15:level/4)).catch(error=>{this.cache.delete(cacheKey);throw error;}));
+    return this.cache.get(cacheKey);
   }
 }

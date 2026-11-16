@@ -151,7 +151,7 @@ func TestHintGroundingConversationAPIKeepsOperationAndRawEvidence(t *testing.T) 
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		raw, _ := json.Marshal(body)
-		if _, ok := body["tools"]; ok || !strings.Contains(string(raw), "장소는 2층") || !strings.Contains(string(raw), "대화 정리 자료") {
+		if _, ok := body["tools"]; ok || !strings.Contains(string(raw), "장소는 2층") || !strings.Contains(string(raw), "Conversation source data") || !strings.Contains(string(raw), "type=summary/schedule/check") || strings.Contains(string(raw), "rather than summarize the transcript") {
 			t.Errorf("summary writer lost source or gained tools: %s", raw)
 		}
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"HINT_SKIP\"}}]}\n\ndata: [DONE]\n\n")

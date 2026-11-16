@@ -51,21 +51,27 @@ function conversationHint(data,proof){
   const negative=text=>/않|못|없|아니|미정|불가|안\s*(?:돼|되|됨|됩|해)|\b(?:not|never|cannot|without|no)\b/iu.test(text);
   for(const point of data.points){
     const text=typeof point?.text==='string'?point.text.trim():'';
+    if(point.type!==undefined && !['summary','schedule','check'].includes(point.type))return {ok:false,reason:'invalid_summary'};
     const refs=Array.isArray(point?.evidence)?point.evidence:typeof point?.evidence==='string'?[point.evidence]:[];
     const evidence=refs.map(ref=>Number.isInteger(ref)?proof.spans?.[ref-1] || '':ref);
     if(!text || text.length>300 || !evidence.length || evidence.length>3 || evidence.some(e=>typeof e!=='string' || e.trim().length<2 || !textKey(source).includes(textKey(e))))return {ok:false,reason:'unsupported_summary'};
     const support=evidence.join(' '),numbers=new Set(numberKey(support).split('|'));
     const outputNumbers=new Set(numberKey(text).split('|'));
-    const valuesChanged=[...outputNumbers].some(n=>n && !numbers.has(n)) || [...numbers].some(n=>n && !outputNumbers.has(n)) || negative(text)!==negative(support);
+    const valuesChanged=[...outputNumbers].some(n=>n && !numbers.has(n)) || negative(text)!==negative(support);
     const grams=value=>{const chars=Array.from(nameKey(value).replace(/^(?:결론|비교|이유|요점|결정|핵심|일정|회의|준비|준비물|내용|참고)[:：]\s*/u,'').replace(/[^\p{L}\p{N}]/gu,''));return new Set(chars.slice(1).map((_,i)=>chars[i]+chars[i+1]));};
     const outputGrams=grams(text),sourceGrams=grams(support);
     const overlap=[...outputGrams].filter(g=>sourceGrams.has(g)).length;
     // A heading alone is not a summary. If the model omits the useful values
     // or changes critical facts, show its validated source spans instead.
     const contentPresent=overlap>=Math.min(2,sourceGrams.size) && overlap/Math.max(1,outputGrams.size)>=.18;
+    // A long exact copy is not a digest; retain other useful structured points.
+    if(point.type==='summary' && Array.from(text).length>100 && textKey(text)===textKey(support))continue;
     recovered ||= valuesChanged || !contentPresent;
-    points.push(valuesChanged || !contentPresent?evidence.map(e=>e.trim()).join(' / '):text);
+    const body=valuesChanged || !contentPresent?evidence.map(e=>e.trim()).join(' / '):text;
+    const labels={summary:'핵심',schedule:'일정',check:'확인 필요'};
+    points.push(point.type?`${labels[point.type]}: ${body.replace(/^(?:핵심|일정|확인 필요|summary|schedule|check)[:：]\s*/iu,'')}`:body);
   }
+  if(!points.length)return {ok:false,reason:'no_summary_value'};
   const fact=points.join('\n');
   const generic=/^(?:대화|내용|상황|관련|자료|정보|핵심|요점|일정|회의|준비|진행|검토|사항|정리|요약|및|중|입니다|합니다|[\s·:：,./])+$/u;
   if(points.every(p=>generic.test(p)) || (!recovered && points.length===1 && source.replace(/\s/g,'').length<60 && textKey(source)===textKey(fact)))return {ok:false,reason:'no_summary_value'};

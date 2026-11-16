@@ -339,3 +339,35 @@ func normalizeConnectionPayload(body map[string]any, mode string) error {
 	}
 	return nil
 }
+
+// Native LM Studio uses different token/reasoning controls. JSON schema is
+// supplied as an output contract because /api/v1/chat has no response_format.
+// The client still validates the result; no hidden reasoning becomes an answer.
+func prepareNativeAmbientPayload(body map[string]any) {
+	body["reasoning"] = "off"
+	if limit, ok := body["max_tokens"]; ok {
+		body["max_output_tokens"] = limit
+	} else if _, ok := body["max_output_tokens"]; !ok {
+		body["max_output_tokens"] = 2048
+	}
+	if format, ok := body["response_format"].(map[string]any); ok {
+		if spec, ok := format["json_schema"].(map[string]any); ok {
+			if schema, ok := spec["schema"]; ok {
+				contract, _ := json.Marshal(schema)
+				system, _ := body["system_prompt"].(string)
+				body["system_prompt"] = system + "\nJSON output contract:\n" + string(contract)
+			}
+		}
+	}
+	for _, key := range []string{"max_tokens", "max_completion_tokens", "chat_template_kwargs", "reasoning_effort", "response_format", "previous_response_id"} {
+		delete(body, key)
+	}
+	body["store"] = false
+}
+func nativeReasoningUnsupported(status int, message string) bool {
+	if status != 400 && status != 422 {
+		return false
+	}
+	text := strings.ToLower(message)
+	return strings.Contains(text, "reasoning") && (strings.Contains(text, "not support") || strings.Contains(text, "unsupported") || strings.Contains(text, "not allowed"))
+}

@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import {limitHUDResponse,HUD_RESPONSE_POLICY} from './ai-response-limit.mjs';
+assert.match(HUD_RESPONSE_POLICY,/500 Unicode characters/);
+assert.equal(limitHUDResponse('짧은 답변입니다.'),'짧은 답변입니다.');
+assert.equal(limitHUDResponse('가'.repeat(500)),'가'.repeat(500));
+assert.equal(Array.from(limitHUDResponse('가'.repeat(501))).length,500);
+assert.equal(Array.from(limitHUDResponse('😀'.repeat(501))).length,500,'never split a Unicode code point');
+const complete='가'.repeat(350)+'.';
+assert.equal(limitHUDResponse(complete+' '+'나'.repeat(300)),complete+'…','prefer a complete sentence');
+assert.equal(limitHUDResponse(''),'');
+console.log('PASS: 500-character HUD response limit, complete sentences and Unicode safety');

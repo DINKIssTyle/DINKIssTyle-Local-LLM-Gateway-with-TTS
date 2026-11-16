@@ -210,3 +210,99 @@ func TestLLMConnectionValidationBeforeSaving(t *testing.T) {
 		t.Fatal("configuration did not round trip")
 	}
 }
+
+func TestAdditionalNativeAmbientRoles(t *testing.T) {
+	for _, role := range []string{"judge", "plan", "answer", "translation", "chat"} {
+		t.Run(role, func(t *testing.T) {
+			var calls int
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if r.URL.Path != "/api/v1/chat" || r.Header.Get("Authorization") != "Bearer account-native" {
+					t.Error("wrong endpoint or account credential", r.URL.Path)
+				}
+				var body map[string]any
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				if body["model"] != "same-model" || !strings.Contains(fmt.Sprint(body["input"]), "synthetic speech") {
+					t.Error("model route or speech lost")
+				}
+				if _, ok := body["messages"]; ok {
+					t.Error("compatible messages leaked into Native request")
+				}
+				if role == "chat" {
+					if body["reasoning"] != "high" {
+						t.Error("explicit chat reasoning changed")
+					}
+				} else {
+					if body["reasoning"] != "off" || body["store"] != false {
+						t.Error("ambient reasoning/store policy lost")
+					}
+					for _, key := range []string{"max_tokens", "response_format", "chat_template_kwargs", "previous_response_id", "integrations", "tools"} {
+						if _, ok := body[key]; ok {
+							t.Errorf("unsupported/control field leaked: %s", key)
+						}
+					}
+					if body["max_output_tokens"] == nil {
+						t.Error("Native output limit absent")
+					}
+					if role == "judge" && (body["max_output_tokens"] != float64(384) || !strings.Contains(fmt.Sprint(body["system_prompt"]), "JSON output contract")) {
+						t.Error("judge budget/schema contract lost")
+					}
+				}
+				fmt.Fprint(w, "data: {\"type\":\"message.delta\",\"content\":\"native role answer\"}\n\ndata: {\"type\":\"chat.end\",\"result\":{\"output\":[{\"type\":\"message\",\"content\":\"native role answer\"}]}}\n\n")
+			}))
+			defer upstream.Close()
+			app := &App{llmEndpoint: "http://127.0.0.1:1", llmMode: "standard", llmApiToken: "primary-must-not-leak", llmConnections: []LLMConnection{{ID: "remote", Endpoint: upstream.URL, Mode: "stateful", APIKey: "default-native"}}}
+			am := &AuthManager{users: map[string]*User{"u": {ID: "u", Settings: UserSettings{LLMAPIKeys: map[string]string{"remote": "account-native"}}}}}
+			body := map[string]any{"model": routedModel("remote", "same-model"), "stream": true, "messages": []any{map[string]any{"role": "system", "content": "select JSON"}, map[string]any{"role": "user", "content": "synthetic speech"}}}
+			if role == "chat" {
+				body["reasoning"] = "high"
+			} else if role == "translation" {
+				body["glasses_client"], body["glasses_task"] = true, "translation"
+			} else {
+				body["glasses_hint"], body["glasses_hint_phase"] = true, role
+				if role == "judge" {
+					body["response_format"] = map[string]any{"type": "json_schema", "json_schema": map[string]any{"schema": map[string]any{"type": "object", "required": []string{"hint"}}}}
+				}
+			}
+			encoded, _ := json.Marshal(body)
+			r := httptest.NewRequest("POST", "/api/chat", strings.NewReader(string(encoded)))
+			r.Header.Set("X-User-ID", "u")
+			w := httptest.NewRecorder()
+			handleChat(w, r, app, am)
+			if w.Code != 200 || calls != 1 || !strings.Contains(w.Body.String(), "native role answer") {
+				t.Fatalf("role=%s status=%d calls=%d body=%s", role, w.Code, calls, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestNativeAmbientReasoningCompatibilityRetry(t *testing.T) {
+	calls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if calls == 1 {
+			if body["reasoning"] != "off" {
+				t.Error("missing reasoning control")
+			}
+			http.Error(w, `{"error":"This model does not support reasoning"}`, 400)
+			return
+		}
+		if _, ok := body["reasoning"]; ok {
+			t.Error("unsupported reasoning control not removed")
+		}
+		fmt.Fprint(w, "data: {\"type\":\"message.delta\",\"content\":\"ready\"}\n\ndata: {\"type\":\"chat.end\",\"result\":{\"output\":[{\"type\":\"message\",\"content\":\"ready\"}]}}\n\n")
+	}))
+	defer upstream.Close()
+	app := &App{llmMode: "standard", llmConnections: []LLMConnection{{ID: "remote", Endpoint: upstream.URL, Mode: "stateful"}}}
+	r := httptest.NewRequest("POST", "/api/chat", strings.NewReader(`{"model":"`+routedModel("remote", "model")+`","stream":true,"glasses_hint":true,"glasses_hint_phase":"judge","messages":[{"role":"user","content":"synthetic"}]}`))
+	w := httptest.NewRecorder()
+	handleChat(w, r, app, &AuthManager{users: map[string]*User{}})
+	if calls != 2 || !strings.Contains(w.Body.String(), "ready") {
+		t.Fatalf("calls=%d body=%s", calls, w.Body.String())
+	}
+	if nativeReasoningUnsupported(401, "reasoning unsupported invalid api key") || nativeReasoningUnsupported(400, "model not found") {
+		t.Fatal("unrelated errors must not trigger reasoning retry")
+	}
+}

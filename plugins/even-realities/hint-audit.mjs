@@ -10,7 +10,7 @@ export class HintAudit {
   if(scope!==this.scope){this.pending=[];this.scope=scope;this.failedUntil=0;}
   if(this.now()<this.failedUntil)return;
   const cut=(value,n)=>Array.from(String(value || '')).slice(0,n).join('');
-  const entry={eventId:`${this.nonce}-${this.now()}-${++this.sequence}`,sessionId:cut(event.sessionId,100),segmentId:cut(event.segmentId,100),jobId:cut(event.jobId,120),stage:event.stage,reason:cut(event.reason,240),topic:cut(event.topic,80),kind:cut(event.kind,16),source:cut(event.source,24),evidence:cut(event.evidence,160),text:['generated','phone_display'].includes(event.stage)?cut(event.text,2000):'',version:this.version,occurredAt:new Date(this.now()).toISOString()};
+  const entry={eventId:`${this.nonce}-${this.now()}-${++this.sequence}`,sessionId:cut(event.sessionId,100),segmentId:cut(event.segmentId,100),jobId:cut(event.jobId,120),stage:event.stage,reason:cut(event.reason,240),topic:cut(event.topic,80),kind:cut(event.kind,16),source:cut(event.source,24),evidence:cut(event.evidence,160),text:['generated','phone_display','decision_response'].includes(event.stage)?cut(event.text,2000):'',version:this.version,occurredAt:new Date(this.now()).toISOString()};
   this.pending.push({entry,scope,spec});this.pending=this.pending.slice(-64);
   if(!this.timer)this.timer=this.schedule(()=>{this.timer=null;this.flush();},250);
  }

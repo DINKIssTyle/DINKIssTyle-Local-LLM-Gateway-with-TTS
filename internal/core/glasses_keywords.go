@@ -114,6 +114,31 @@ func hintKeywordEvidence(text string, start, end int) string {
 	return evidence
 }
 
+// Dictionary membership is only advisory. Joining spoken quantity words can
+// accidentally produce a real but unrelated title ("한 천" -> "한천").
+func hintQuantityPhrase(surface string) bool {
+	parts := strings.Fields(surface)
+	if len(parts) < 2 {
+		return false
+	}
+	for _, part := range parts {
+		if !hintQuantityWord.MatchString(part) {
+			return false
+		}
+	}
+	return true
+}
+
+var hintQuantityWord = regexp.MustCompile(`^(?:[0-9]+(?:[.,][0-9]+)?|한|두|세|네|몇|수|약|일|이|삼|사|오|육|칠|팔|구|십|백|천|만|억|조|년|달|개월|일간|시간|분|초|명|개|번|배|원|미터|킬로미터)$`)
+
+func hintGenericCandidate(term string) bool {
+	switch normalizeHintKeyword(term) {
+	case "오늘", "내일", "어제", "모레", "그제", "오전", "오후", "하루", "이틀", "사흘", "시간", "해당", "여기", "저기":
+		return true
+	}
+	return false
+}
+
 func hintKeywords(text string) []hintKeywordCandidate {
 	// Byte offsets refer to the original transcription, not reconstructed text.
 	words := hintWordPattern.FindAllStringIndex(text, 128)
@@ -125,6 +150,9 @@ func hintKeywords(text string) []hintKeywordCandidate {
 			}
 			start, end := word[0], words[j][1]
 			surface := text[start:end]
+			if hintQuantityPhrase(surface) {
+				continue
+			}
 			term := lookupHintKeyword(surface)
 			if term == "" {
 				for _, particle := range hintParticles {
@@ -132,6 +160,9 @@ func hintKeywords(text string) []hintKeywordCandidate {
 						continue
 					}
 					root := strings.TrimSpace(strings.TrimSuffix(surface, particle))
+					if hintQuantityPhrase(root) {
+						continue
+					}
 					if title := lookupHintKeyword(root); title != "" {
 						term = title
 						surface = root
@@ -140,7 +171,7 @@ func hintKeywords(text string) []hintKeywordCandidate {
 					}
 				}
 			}
-			if term == "" || hintPronoun(normalizeHintKeyword(term)) {
+			if term == "" || hintPronoun(normalizeHintKeyword(term)) || hintGenericCandidate(term) {
 				continue
 			}
 			found = append(found, hintKeywordCandidate{term, surface, hintKeywordEvidence(text, start, end), start, end})

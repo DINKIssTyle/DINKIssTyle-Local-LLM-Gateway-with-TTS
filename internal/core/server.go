@@ -4481,9 +4481,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	}
 
 	if hintJudge || translationTask {
-		// A bounded, tool-free classifier always uses a stateless chat completion,
-		// even when the user's interactive chat uses LM Studio's native stateful API.
-		hintEnvelope["max_tokens"] = 192
+		// Bound automatic tasks independently of interactive chat. Native additional
+		// connections adapt this budget to max_output_tokens below.
+		hintEnvelope["max_tokens"] = 384
 		if translationTask {
 			hintEnvelope["max_tokens"] = 1024
 			if task == "translation_replies" {
@@ -4651,13 +4651,19 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		enableMemory = false
 		contextStrategy = "none"
 	}
-	if hintJudge || translationTask {
+	// A Native additional connection must retain its protocol for fast ambient
+	// roles: LM Studio's compatible endpoint may ignore enable_thinking=false.
+	nativeAmbient := connectionID != "" && llmMode == "stateful" && (hintJudge || translationTask || (glassesHint && hintPhase != "direct"))
+	if (hintJudge || translationTask) && !nativeAmbient {
 		llmMode = "standard"
 	}
 	if connectionID != "" {
 		if err := normalizeConnectionPayload(routedBody, llmMode); err != nil {
 			http.Error(w, err.Error(), 400)
 			return
+		}
+		if nativeAmbient {
+			prepareNativeAmbientPayload(routedBody)
 		}
 		body, _ = json.Marshal(routedBody)
 	}
@@ -5248,6 +5254,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		webSearchProviderLimit = 6
 	}
 	previousResponseRetryUsed := false
+	nativeReasoningRetryUsed := false
 	reasoningOnlyFinalRecoveryUsed := false
 	discardStatefulResponseIDForTurn := false
 	generationFirstTokenEmitted := false
@@ -5367,6 +5374,14 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				"elapsed_ms":  time.Since(turnStart).Milliseconds(),
 				"error":       compactText(errorMsg, 180),
 			})
+			if nativeAmbient && !nativeReasoningRetryUsed && nativeReasoningUnsupported(resp.StatusCode, errorMsg) {
+				nativeReasoningRetryUsed = true
+				delete(reqMap, "reasoning")
+				body, _ = json.Marshal(reqMap)
+				resp.Body.Close()
+				turn-- // Transport compatibility retry, not another model/tool turn.
+				continue
+			}
 			if llmMode == "stateful" &&
 				!previousResponseRetryUsed &&
 				(strings.Contains(errorMsg, "Could not find stored response for previous_response_id") ||
