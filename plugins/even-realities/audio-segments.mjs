@@ -26,10 +26,10 @@ export function speechSegmentOptions(engine,mode){
 
 export class SpeechSegmenter {
   constructor({ threshold = 0.008, silenceMs = 900, maxMs = 12000, snapshotMinMs = 1200, snapshotVoicedMs = 400 } = {}) {
-    Object.assign(this, { threshold, silenceMs, maxMs, snapshotMinMs, snapshotVoicedMs });
+    Object.assign(this, { threshold, silenceMs, baseSilenceMs: silenceMs, maxMs, snapshotMinMs, snapshotVoicedMs });
     this.reset();
   }
-  reset() { this.parts = []; this.preRoll = []; this.preMs = 0; this.ms = 0; this.silence = 0; this.voiced = 0; }
+  reset() { this.parts = []; this.preRoll = []; this.preMs = 0; this.ms = 0; this.silence = 0; this.voiced = 0; this.silenceMs = this.baseSilenceMs; }
   push(bytes,level=pcmLevel(bytes)) {
     if (!bytes.length || bytes.length % 2) throw new Error('잘못된 PCM16 오디오 프레임');
     const ms = bytes.length / 32;

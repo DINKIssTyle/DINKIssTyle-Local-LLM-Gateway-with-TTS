@@ -16,7 +16,8 @@ test('development server builds from any cwd and serves only preview assets',{ti
   assert.ok(base,errors+log);
   const page=await fetch(base);assert.equal(page.status,200);const html=await page.text();assert.match(html,/settings-connection/);assert.match(html,/__dev_reload/);
   const script=await fetch(base+'/bundle.js');assert.equal(script.status,200);assert.match(await script.text(),/127\.0\.0\.1:2806/);
-  assert.equal((await fetch(base+'/style.css')).status,200);assert.equal((await fetch(base+'/assets/hud-icons/ai-trigger.png')).status,200);
+  for(const name of ['mode-ai','mode-translate','status-idle','status-listening','status-transcribing']){const image=await fetch(base+'/assets/hud-icons/'+name+'.png');assert.equal(image.status,200);const bytes=Buffer.from(await image.arrayBuffer());assert.equal(bytes.readUInt32BE(16),24);assert.equal(bytes.readUInt32BE(20),24);}
+  assert.equal((await fetch(base+'/style.css')).status,200);assert.equal((await fetch(base+'/assets/hud-icons/glasses-mic-on.png')).status,200);
   const manifest=await (await fetch(base+'/app.json')).json();assert.equal(manifest.permissions[0].whitelist[0],'http://127.0.0.1:2806');
   for(const path of ['/.env.eval.local','/bundle/config.json','/package.json','/plugin.js','/%2e%2e%2fpackage.json']){
    const response=await fetch(base+path);assert.ok([403,404].includes(response.status),path);

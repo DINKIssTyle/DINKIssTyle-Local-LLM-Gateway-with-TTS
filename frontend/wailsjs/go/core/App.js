@@ -106,6 +106,10 @@ export function GetLLMApiToken() {
   return window['go']['core']['App']['GetLLMApiToken']();
 }
 
+export function GetLLMConnections() {
+  return window['go']['core']['App']['GetLLMConnections']();
+}
+
 export function GetLicenseText() {
   return window['go']['core']['App']['GetLicenseText']();
 }
@@ -168,6 +172,10 @@ export function GetUserDisallowedCommands(arg1) {
 
 export function GetUserDisallowedDirectories(arg1) {
   return window['go']['core']['App']['GetUserDisallowedDirectories'](arg1);
+}
+
+export function GetUserLLMConnections(arg1) {
+  return window['go']['core']['App']['GetUserLLMConnections'](arg1);
 }
 
 export function GetUserMemoryRetentionConfig(arg1) {
@@ -270,6 +278,10 @@ export function SetLLMApiToken(arg1) {
   return window['go']['core']['App']['SetLLMApiToken'](arg1);
 }
 
+export function SetLLMConnections(arg1) {
+  return window['go']['core']['App']['SetLLMConnections'](arg1);
+}
+
 export function SetLLMEndpoint(arg1) {
   return window['go']['core']['App']['SetLLMEndpoint'](arg1);
 }
@@ -320,6 +332,10 @@ export function SetUserDisallowedCommands(arg1, arg2) {
 
 export function SetUserDisallowedDirectories(arg1, arg2) {
   return window['go']['core']['App']['SetUserDisallowedDirectories'](arg1, arg2);
+}
+
+export function SetUserLLMAPIKeys(arg1, arg2) {
+  return window['go']['core']['App']['SetUserLLMAPIKeys'](arg1, arg2);
 }
 
 export function SetUserMemoryRetentionConfig(arg1, arg2) {

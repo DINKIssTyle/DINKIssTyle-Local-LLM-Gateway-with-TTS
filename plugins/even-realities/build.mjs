@@ -1,4 +1,5 @@
 import { build } from 'esbuild';
+import { createHash } from 'node:crypto';
 import { copyFile, cp, mkdir, readFile, writeFile } from 'node:fs/promises';
 
 const serverIndex = process.argv.indexOf('--server');
@@ -27,6 +28,16 @@ for (const file of ['index.html', 'style.css', 'bundle.js']) {
   await copyFile(file, `dist/${file}`);
 }
 const manifest = JSON.parse(await readFile('app.json', 'utf8'));
+// A repack at the same version can still change assets. Fingerprint both files
+// so webviews never reuse the previous JS/CSS under an unchanged entry URL.
+let html=await readFile('index.html','utf8');
+for(const [attribute,file] of [['href','style.css'],['src','bundle.js']]){
+  const hash=createHash('sha256').update(await readFile(file)).digest('hex').slice(0,12);
+  const pattern=new RegExp(`${attribute}="${file.replace('.', '[.]')}(?:[?][^"]*)?"`);
+  html=html.replace(pattern,`${attribute}="${file}?v=${manifest.version}-${hash}"`);
+}
+html=html.replace(/id="plugin-build-version">[^<]*/,'id="plugin-build-version">'+manifest.version);
+await writeFile('dist/index.html',html);
 if (serverUrl) manifest.permissions.find(p => p.name === 'network').whitelist = [serverUrl];
 await writeFile('dist/app.json', JSON.stringify(manifest, null, 2) + '\n');
 console.log('G2 bundle ready: bundle.js / dist/');

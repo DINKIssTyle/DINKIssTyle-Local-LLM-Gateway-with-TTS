@@ -1,25 +1,27 @@
-<!doctype html><html lang="ko"><meta charset="utf-8"><title>DKST HUD 아이콘</title>
+<!doctype html><html lang="ko"><meta charset="utf-8"><title>DKST HUD 비트맵 아이콘</title>
 <style>
-*{box-sizing:border-box}body{margin:0;padding:36px;background:#0a1014;color:#e5efeb;font:16px -apple-system,BlinkMacSystemFont,sans-serif}h1{font-size:24px;margin:0 0 8px}p{color:#9bafa7;margin:0 0 28px}.grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}.card{background:#111e22;border:1px solid #294239;border-radius:12px;padding:20px 10px;text-align:center}.card img{height:72px;max-width:120px;image-rendering:pixelated;filter:brightness(0) saturate(100%) invert(83%) sepia(79%) saturate(1624%) hue-rotate(79deg)}.label{margin-top:16px;font-size:14px}.size{color:#8ca399;font-size:12px;margin-top:8px}.rows{margin-top:26px;background:#000;padding:18px;border-radius:10px;color:#00ff88;font:18px monospace}.row{display:flex;align-items:center;gap:4px;height:36px}.row img{filter:brightness(0) saturate(100%) invert(83%) sepia(79%) saturate(1624%) hue-rotate(79deg)}.time{margin-left:auto}small{display:block;margin-top:18px;color:#8ca399}#check{font-size:12px;color:#8ca399;margin-top:14px}
+*{box-sizing:border-box}body{margin:0;padding:30px;background:#0a1014;color:#e5efeb;font:15px -apple-system,BlinkMacSystemFont,sans-serif}h1{font-size:23px;margin:0 0 8px}p{color:#9bafa7;line-height:1.5}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px}.card{background:#111e22;border:1px solid #294239;border-radius:10px;padding:20px 8px;text-align:center}.card img{width:72px;height:72px;image-rendering:pixelated}.card div{margin-top:12px}.card small{display:block;color:#8ca399;font-size:11px;margin-top:8px}img{filter:brightness(0) saturate(100%) invert(83%) sepia(79%) saturate(1624%) hue-rotate(79deg)}.rows{margin-top:24px;background:#000;padding:16px;border-radius:10px;color:#00ff88;font:16px monospace}.row{display:flex;align-items:center;gap:4px;min-height:36px;white-space:nowrap}.row img{width:24px;height:24px;image-rendering:pixelated}.row .aux{opacity:.5}.time{margin-left:auto;opacity:.5}#check{font-size:12px;color:#8ca399;margin-top:14px}
 </style>
-<h1>1:1 비트맵 HUD 아이콘 5종</h1><p>24×24 PNG 원본 · 1-bit 흑백 / 투명 배경 · 안경에서는 녹색 단색으로 표시</p>
+<h1>1:1 비트맵 HUD 아이콘</h1><p>24×24 PNG 원본 · 1-bit 흑백 / 투명 배경. 각 파일을 직접 편집할 수 있습니다.</p>
 <div class="grid">
-<div class="card"><img src="glasses-mic-on.png"><div class="label">안경 + 마이크 켜짐</div><div class="size">24 × 24</div></div>
-<div class="card"><img src="glasses-mic-off.png"><div class="label">안경 + 마이크 꺼짐</div><div class="size">24 × 24</div></div>
-<div class="card"><img src="phone-mic-on.png"><div class="label">휴대폰 + 마이크 켜짐</div><div class="size">24 × 24</div></div>
-<div class="card"><img src="phone-mic-off.png"><div class="label">휴대폰 + 마이크 꺼짐</div><div class="size">24 × 24</div></div>
-<div class="card"><img src="ai-trigger.png"><div class="label">AI 호출어</div><div class="size">24 × 24</div></div>
+<div class="card"><img src="mode-ai.png" alt="AI 모드"><div>AI 모드</div><small>mode-ai.png</small></div>
+<div class="card"><img src="mode-translate.png" alt="번역 모드"><div>번역 모드</div><small>mode-translate.png</small></div>
+<div class="card"><img src="status-idle.png" alt="대기"><div>대기</div><small>status-idle.png</small></div>
+<div class="card"><img src="status-listening.png" alt="듣기"><div>듣기</div><small>status-listening.png</small></div>
+<div class="card"><img src="status-transcribing.png" alt="전사 처리"><div>전사 처리</div><small>status-transcribing.png</small></div>
+<div class="card"><img src="glasses-mic-on.png" alt="안경 마이크 켜짐"><div>안경 마이크 켜짐</div><small>glasses-mic-on.png</small></div>
+<div class="card"><img src="glasses-mic-off.png" alt="안경 마이크 꺼짐"><div>안경 마이크 꺼짐</div><small>glasses-mic-off.png</small></div>
+<div class="card"><img src="phone-mic-on.png" alt="휴대폰 마이크 켜짐"><div>휴대폰 마이크 켜짐</div><small>phone-mic-on.png</small></div>
+<div class="card"><img src="phone-mic-off.png" alt="휴대폰 마이크 꺼짐"><div>휴대폰 마이크 꺼짐</div><small>phone-mic-off.png</small></div>
 </div>
-<div class="rows"><div class="row"><span>[AI</span><img src="ai-trigger.png" width="24" height="24"><span>웬즈데이]</span><img src="glasses-mic-on.png" width="24" height="24"><span>| 듣는중</span><span class="time">16:14 | 75%</span></div><div class="row"><span>[번역] AUTO→KO</span><img src="phone-mic-off.png" width="24" height="24"><span>| -</span><span class="time">16:14 | 75%</span></div></div>
-<small>위 카드: 확대 미리보기 · 아래 행: 원래 아이콘 크기 배치 예시. 안경 전체 화면의 실측 캡처는 아닙니다.</small><div id="check"></div>
+<div class="rows"><div class="row"><span class="aux">[</span><img class="aux" src="mode-ai.png" alt="AI"><span class="aux">웬즈데이]</span><img src="glasses-mic-on.png" alt="안경 마이크 켜짐"><img class="aux" src="status-listening.png" alt="듣는중"><span class="time">16:14 | 75%</span></div><div class="row"><span class="aux">[</span><img class="aux" src="mode-translate.png" alt="번역"><span class="aux">] EN→KO</span><img src="phone-mic-on.png" alt="휴대폰 마이크 켜짐"><img class="aux" src="status-transcribing.png" alt="전사 처리중"><span class="aux">| 번역 처리</span><span class="time">16:14 | 75%</span></div></div>
+<p>위 카드: 3배 확대 · 아래 행: 원본 크기 배치 예시. 실제 G2 화면 캡처는 아닙니다.</p><div id="check"></div>
 <script type="module">
-// Development-only raster check; a packaged preview remains usable without it.
 if(new URLSearchParams(location.search).has('verify')){
  document.body.dataset.iconCheck='pending';try{
  const {HudIconStore,HUD_ICONS,rasterizeIcon}=await import('../../hud-icons.mjs');const store=new HudIconStore((key,spec)=>rasterizeIcon(key,spec,new URL('../../',document.baseURI)));
- const results=await Promise.all(Object.entries(HUD_ICONS).map(async([key,{width,height}])=>{
-  const bytes=await store.load(key);if(bytes.length!==width*height/2 || !bytes.some(v=>v))throw Error(key+' raster failed');return key;
- }));document.body.dataset.iconCheck='passed';document.getElementById('check').textContent='PNG → Gray4 변환 확인: '+results.length+' / 5';
+ const results=await Promise.all(Object.entries(HUD_ICONS).map(async([key,{width,height}])=>{const bytes=await store.load(key);if(bytes.length!==width*height/2 || !bytes.some(v=>v))throw Error(key+' raster failed');return key;}));
+ document.body.dataset.iconCheck='passed';document.getElementById('check').textContent='PNG → Gray4 변환 확인: '+results.length+' / '+Object.keys(HUD_ICONS).length;
  }catch(error){document.body.dataset.iconCheck='failed';document.getElementById('check').textContent=error.message;}
 }
 </script></html>

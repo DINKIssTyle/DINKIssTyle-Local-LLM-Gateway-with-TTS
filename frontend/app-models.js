@@ -151,6 +151,8 @@
 
             return {
                 id,
+                connectionName: model.connection_id===''?'':String(model.connection_name || ''),
+                canUnload: model.can_unload!==false,
                 displayName: String(model.display_name || model.displayName || model.name || id).trim() || id,
                 isLoaded,
                 loadedInstances,
@@ -200,8 +202,8 @@
                 const loadedBadge = isStatefulMode && model.isLoaded
                     ? `<span class="model-picker-badge is-loaded">${escapeHtml(t('models.loaded'))}</span>`
                     : '';
-                const currentLabel = selected ? `<span class="model-picker-current">${escapeHtml(model.id)}</span>` : '';
-                const unloadButton = isStatefulMode && model.isLoaded && model.primaryLoadedInstanceId
+                const currentLabel = selected ? `<span class="model-picker-current">${escapeHtml(model.connectionName || model.id)}</span>` : '';
+                const unloadButton = isStatefulMode && model.canUnload && model.isLoaded && model.primaryLoadedInstanceId
                     ? `<button type="button" class="icon-btn model-picker-unload" title="${escapeAttr(t('models.unload'))}" onclick="unloadHeaderModel(event, '${escapeAttr(model.primaryLoadedInstanceId)}')"><span class="material-icons-round">eject</span></button>`
                     : '';
 
@@ -294,7 +296,7 @@
                     secondarySelect.innerHTML = '<option value="">Use primary model</option>';
                 }
 
-                if (normalizedModels.length === 0) {
+                if (normalizedModels.length === 0 && !String(config.model || '').startsWith('@llm/')) {
                     select.innerHTML = '<option value="">No models available</option>';
                     renderReasoningControl();
                     return;
@@ -313,6 +315,13 @@
                     }
                 });
 
+                // An unavailable extra connection must not silently switch the
+                // next prompt to a different provider.
+                for(const [element,selected] of [[select,config.model],[secondarySelect,config.secondaryModel]]){
+                    if(element && String(selected || '').startsWith('@llm/') && !Array.from(element.options).some(option=>option.value===selected)){
+                        const option=global.document.createElement('option');option.value=selected;option.textContent=t('models.unavailableSelected');element.appendChild(option);
+                    }
+                }
                 if (config.model && Array.from(select.options).some((opt) => opt.value === config.model)) {
                     select.value = config.model;
                 } else if (normalizedModels.length > 0) {

@@ -5,7 +5,7 @@ assert.equal(normalizeGlassesMode('transcript'),'ai','migrate previously saved t
 assert.equal(nextGlassesMode('ai'),'translate');assert.equal(nextGlassesMode('translate'),'ai');
 assert.equal(glassesModeMenuIdToMode(1),'ai');assert.equal(glassesModeMenuIdToMode(2),'translate');assert.equal(glassesModeMenuIdToMode(3),null);
 const ack=routeAIUtterance({text:'웬즈 데이',triggered:true,prompt:''},{name:'웬즈데이'});
-assert.deepEqual(ack,{kind:'ack',waiting:true,ack:'네, 웬즈데이입니다. 말씀하세요.'});
+assert.deepEqual(ack,{kind:'ack',waiting:true,ack:'웬즈데이: 듣는 중...'});
 assert.equal(routeAIUtterance({text:'',rejected:true},{waiting:true}).waiting,true,'empty/rejected input must not consume the armed question');
 assert.equal(routeAIUtterance({text:'피라미드의 건립 목적은 뭐야'},{waiting:ack.waiting}).prompt,'피라미드의 건립 목적은 뭐야');
 assert.equal(routeAIUtterance({text:'웬즈데이야',triggered:true,prompt:'야'},{name:'웬즈데이'}).kind,'ack');

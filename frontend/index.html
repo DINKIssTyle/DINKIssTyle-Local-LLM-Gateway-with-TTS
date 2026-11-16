@@ -1272,6 +1272,7 @@
             }
         }
     </style>
+    <script src="llm-connection-ui.js?v=2.23.0"></script>
 </head>
 
 <body>
@@ -1374,6 +1375,9 @@
                         <input type="password" id="llm-api-key" placeholder="lm-studio or custom key"
                             data-i18n-placeholder="placeholder.apiKey" onchange="saveLLMApiKey()">
                     </div>
+                    <button class="btn btn-secondary" type="button" onclick="openAdditionalLLMModal()">
+                        <span class="material-icons-round">settings</span><span data-i18n="llm.connections.title">추가 LLM 설정</span>
+                    </button>
                 </div>
 
                 <!-- Startup Settings -->
@@ -1666,6 +1670,26 @@
         </div>
     </div>
 
+    <div class="modal-overlay" id="additional-llm-modal" role="dialog" aria-modal="true" aria-labelledby="additional-llm-title" onclick="if(event.target===this)closeAdditionalLLMModal()">
+        <div class="modal" style="max-width:520px;max-height:85vh;display:flex;flex-direction:column">
+            <div class="modal-header"><div class="modal-title" id="additional-llm-title" data-i18n="llm.connections.title">추가 LLM 설정</div>
+                <button class="icon-btn" type="button" aria-label="닫기" data-i18n-aria-label="action.close" onclick="closeAdditionalLLMModal()"><span class="material-icons-round">close</span></button>
+            </div>
+            <div class="modal-body" style="overflow-y:auto;min-height:0"><div id="server-llm-connections"></div></div>
+            <div class="modal-footer" style="display:flex;gap:8px;justify-content:space-between">
+                <button class="btn" style="background:var(--border-color)" type="button" onclick="closeAdditionalLLMModal()" data-i18n="action.close">닫기</button>
+                <button class="btn btn-primary" type="button" onclick="document.getElementById('server-llm-connections').addConnection?.()"><span class="material-icons-round">add</span><span data-i18n="llm.connections.add">LLM 추가</span></button>
+            </div>
+        </div>
+    </div>
+    <div class="modal-overlay" id="additional-llm-edit-modal" role="dialog" aria-modal="true" aria-labelledby="llm-connection-edit-title" style="z-index:130" onclick="if(event.target===this)closeAdditionalLLMEditor()">
+        <div class="modal" style="max-width:440px;max-height:90vh;display:flex;flex-direction:column">
+            <div class="modal-header"><div class="modal-title" id="llm-connection-edit-title">LLM 추가</div><button class="icon-btn" type="button" aria-label="닫기" data-i18n-aria-label="action.close" onclick="closeAdditionalLLMEditor()"><span class="material-icons-round">close</span></button></div>
+            <div class="modal-body" style="overflow-y:auto;min-height:0" id="llm-connection-editor"></div>
+            <div class="modal-footer" style="display:flex;gap:8px;justify-content:flex-end"><button class="btn" style="background:var(--border-color)" type="button" onclick="closeAdditionalLLMEditor()" data-i18n="action.cancel">취소</button><button id="llm-connection-editor-save" class="btn btn-primary" type="button" onclick="document.getElementById('server-llm-connections').saveConnectionEditor?.()" data-i18n="llm.connections.save">저장</button></div>
+        </div>
+    </div>
+
     <div class="modal-overlay" id="doc-help-modal">
         <div class="modal doc-help-modal">
             <div class="modal-header">
@@ -1836,10 +1860,12 @@
                         <input type="password" id="edit-user-api-key" placeholder="Enter API key for this user"
                             data-i18n-placeholder="edit.placeholder.userApiKey">
                     </div>
-                    <div style="font-size: 11px; color: var(--text-secondary); margin-top: -8px;"
+
+                    <div style="font-size: 11px; color: var(--text-secondary); margin-top: 0; line-height:1.5;"
                         data-i18n="edit.help.apiKey">
                         This API key will be used when this user makes LLM requests.
                     </div>
+                    <div id="edit-user-llm-keys" style="margin-top:16px;display:grid;gap:12px"></div>
                 </div>
 
                 <!-- Memory Retention Section -->
@@ -2013,6 +2039,9 @@
 
         const SERVER_TRANSLATIONS = {
             ko: {
+                'llm.connections.title':'추가 LLM 설정',
+                'llm.connections.add':'LLM 추가',
+                'llm.connections.save':'저장',
                 'banner.restart.message': '서버 설정이 변경되었습니다. 적용하려면 서버를 다시 시작하세요.',
                 'action.saveOnly': '저장만',
                 'action.restartNow': '지금 재시작',
@@ -2106,7 +2135,7 @@
 				'edit.section.toolPermissions': '앱 도구 권한',
                 'edit.label.newPassword': '새 비밀번호',
                 'edit.label.confirmNewPassword': '새 비밀번호 확인',
-                'edit.label.llmApiKey': 'LLM API 키',
+                'edit.label.llmApiKey': '기본 LLM API 키',
                 'edit.label.coreDays': '핵심 메모리 일수',
                 'edit.label.workingDays': '작업 메모리 일수',
                 'edit.label.ephemeralDays': '일회성 메모리 일수',
@@ -2117,7 +2146,7 @@
                 'edit.placeholder.userApiKey': '이 사용자용 API 키 입력',
                 'edit.placeholder.disallowedCommands': 'rm, shutdown, reboot',
                 'edit.placeholder.disallowedDirectories': '/etc, /var, C:\\Windows',
-                'edit.help.apiKey': '이 API 키는 이 사용자가 LLM 요청을 보낼 때 사용됩니다.',
+                'edit.help.apiKey': '이 사용자의 기본 LLM 연결에 사용됩니다.',
                 'edit.help.memoryRetention': '계정 정책입니다. 각 메모리 계층별 보존 일수를 설정하세요. <code>0</code>이면 자동 삭제를 끕니다.',
                 'edit.help.toolPermissions': '체크를 해제하면 해당 사용자에 대해 특정 도구를 비활성화합니다.',
                 'edit.action.changePassword': '비밀번호 변경',
@@ -2187,6 +2216,9 @@
                 'status.pending': '대기 중'
             },
             en: {
+                'llm.connections.title':'Additional LLM settings',
+                'llm.connections.add':'Add LLM',
+                'llm.connections.save':'Save',
                 'banner.restart.message': 'Server configuration has changed. Restart the server to apply changes.',
                 'action.saveOnly': 'Save Only',
                 'action.restartNow': 'Restart Now',
@@ -2280,7 +2312,7 @@
 				'edit.section.toolPermissions': 'App Tool Permissions',
                 'edit.label.newPassword': 'New Password',
                 'edit.label.confirmNewPassword': 'Confirm New Password',
-                'edit.label.llmApiKey': 'LLM API Key',
+                'edit.label.llmApiKey': 'Default LLM API key',
                 'edit.label.coreDays': 'Core Days',
                 'edit.label.workingDays': 'Working Days',
                 'edit.label.ephemeralDays': 'Ephemeral Days',
@@ -2291,7 +2323,7 @@
                 'edit.placeholder.userApiKey': 'Enter API key for this user',
                 'edit.placeholder.disallowedCommands': 'rm, shutdown, reboot',
                 'edit.placeholder.disallowedDirectories': '/etc, /var, C:\\Windows',
-                'edit.help.apiKey': 'This API key will be used when this user makes LLM requests.',
+                'edit.help.apiKey': 'Used for this account’s default LLM connection.',
                 'edit.help.memoryRetention': 'Account policy. Set days to keep each memory tier for this user. Use <code>0</code> to disable automatic deletion.',
                 'edit.help.toolPermissions': 'Uncheck to disable specific tools for this user.',
                 'edit.action.changePassword': 'Change Password',
@@ -3938,6 +3970,19 @@
         // Edit User Modal Functions
         let editUserOriginalRole = '';
 
+        function openAdditionalLLMModal(){
+            const modal=document.getElementById('additional-llm-modal');modal.style.display='flex';
+            window.DKSTConnectionUI?.mountConnections(document.getElementById('server-llm-connections'),{
+                load:()=>window.go.core.App.GetLLMConnections(),save:rows=>window.go.core.App.SetLLMConnections(rows),
+                editor:document.getElementById('additional-llm-edit-modal'),
+                confirmRemove:row=>new Promise(resolve=>showConfirm(currentServerLanguage==='ko'?escapeHtml(row.name)+' 연결을 삭제할까요?':'Delete '+escapeHtml(row.name)+'?',resolve))
+            });
+            modal.querySelector('button').focus();
+        }
+        function closeAdditionalLLMEditor(){document.getElementById('additional-llm-edit-modal').style.display='none';}
+        function closeAdditionalLLMModal(){closeAdditionalLLMEditor();document.getElementById('additional-llm-modal').style.display='none';}
+        document.addEventListener('keydown',event=>{if(event.key==='Escape'){if(document.getElementById('additional-llm-edit-modal').style.display==='flex')closeAdditionalLLMEditor();else if(document.getElementById('additional-llm-modal').style.display==='flex')closeAdditionalLLMModal();}});
+
         async function openEditUserModal(userId) {
             if (typeof window.go === 'undefined') return;
 
@@ -3960,6 +4005,11 @@
                 const apiKey = await window.go.core.App.GetUserApiToken(userId);
                 document.getElementById('edit-user-api-key').value = apiKey || '';
 
+                window.DKSTConnectionUI?.mountKeys(document.getElementById('edit-user-llm-keys'),{
+                    hideWhenEmpty:true,
+                    load:()=>window.go.core.App.GetUserLLMConnections(userId),
+                    save:keys=>window.go.core.App.SetUserLLMAPIKeys(userId,keys)
+                });
                 const retention = await window.go.core.App.GetUserMemoryRetentionConfig(userId);
                 document.getElementById('edit-retention-core-days').value = String(retention?.coreDays ?? 0);
                 document.getElementById('edit-retention-working-days').value = String(retention?.workingDays ?? 0);
@@ -4141,6 +4191,7 @@
                     await window.go.core.App.UpdateUserRole(userId, newRole);
                 }
 
+                await document.getElementById('edit-user-llm-keys').saveConnectionKeys?.();
                 // Update API key
                 await window.go.core.App.SetUserApiToken(userId, apiKey);
 

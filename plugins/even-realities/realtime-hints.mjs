@@ -1,15 +1,26 @@
-function previewHasWake(text,word){
+function previewWakeMatch(text,word){
   const alias=String(word || '').normalize('NFC').replace(/\s/gu,'');
-  if(!alias)return false;
+  if(!alias)return null;
   const pattern=Array.from(alias,c=>c.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('\\s*');
   const source=String(text).normalize('NFC');
   for(const match of source.matchAll(new RegExp(pattern,'giu'))){
-    if(!/^[a-z]/i.test(alias))return true;
+    if(!/^[a-z]/i.test(alias))return match;
     const before=Array.from(source.slice(0,match.index)).at(-1) || '';
     const after=Array.from(source.slice(match.index+match[0].length))[0] || '';
-    if(!/[\p{L}\p{N}]/u.test(before) && !/[\p{L}\p{N}]/u.test(after))return true;
+    if(!/[\p{L}\p{N}]/u.test(before) && !/[\p{L}\p{N}]/u.test(after))return match;
   }
-  return false;
+  return null;
+}
+
+function previewPromptAfterWake(text,aliases=[]){
+  const source=String(text || '').normalize('NFC');
+  for(const word of aliases){
+    const match=previewWakeMatch(source,word);
+    if(match){
+      return source.slice(match.index+match[0].length).replace(/^[\s,.:;!?~"'”’]+/u,'').replace(/^(?:야|아)(?=$|[\s,.!?])/u,'').replace(/^[\s,.:;!?]+/u,'').trim();
+    }
+  }
+  return '';
 }
 
 // A preview can prepare a request, but never authorizes a chat or stores a transcript.
@@ -22,12 +33,13 @@ export class PreviewIntent {
     while(common<text.length && common<this.previous.length && text[common]===this.previous[common])common++;
     const stable=String(stableText || text.slice(0,common)).trim();
     this.previous=text;
-    const wake=aliases.some(word=>previewHasWake(stable,word));
+    const wake=aliases.some(word=>Boolean(previewWakeMatch(stable,word) || previewWakeMatch(text,word)));
     const newWake=wake && !this.wake;this.wake=wake;
+    const prompt=wake?previewPromptAfterWake(text || stable,aliases):'';
     const changed=stable!==this.selected && (Math.abs(stable.length-this.selected.length)>=8 || !stable.startsWith(this.selected));
     const hintText=!wake && stable.length>=8 && changed?stable:'';
     if(hintText)this.selected=hintText;
-    return {wake,newWake,hintText};
+    return {wake,newWake,prompt,hintText};
   }
 }
 

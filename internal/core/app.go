@@ -41,6 +41,7 @@ type App struct {
 	isRunning           bool
 	port                string
 	llmEndpoint         string
+	llmConnections      []LLMConnection
 	llmApiToken         string
 	llmMode             string // "standard" or "stateful"
 	enableTTS           bool
@@ -68,6 +69,7 @@ type App struct {
 type AppConfig struct {
 	Port              string               `json:"port"`
 	LLMEndpoint       string               `json:"llmEndpoint"`
+	LLMConnections    []LLMConnection      `json:"llmConnections,omitempty"`
 	LLMApiToken       string               `json:"llmApiToken"`
 	LLMMode           string               `json:"llmMode"`
 	EnableTTS         bool                 `json:"enableTTS"`
@@ -379,6 +381,7 @@ func (a *App) loadConfig() {
 		a.llmMode = cfg.LLMMode
 	}
 	a.llmApiToken = cfg.LLMApiToken
+	a.llmConnections = cfg.LLMConnections
 	a.enableTTS = cfg.EnableTTS
 	if cfg.EnableTools != nil {
 		a.enableTools = *cfg.EnableTools
@@ -440,6 +443,7 @@ func (a *App) saveConfig() {
 	cfg.LLMEndpoint = a.llmEndpoint
 	cfg.LLMMode = a.llmMode
 	cfg.LLMApiToken = a.llmApiToken
+	cfg.LLMConnections = a.llmConnections
 	cfg.EnableTTS = a.enableTTS
 	enableTools := a.enableTools
 	cfg.EnableTools = &enableTools
@@ -911,6 +915,7 @@ func (a *App) saveStartupSetting(key string, value bool) {
 	// Note: We don't necessarily force Token persist here if it's missing in loaded config
 	// but for consistency let's ensure current state is preserved
 	cfg.LLMApiToken = a.llmApiToken
+	cfg.LLMConnections = a.llmConnections
 	cfg.EnableTTS = a.enableTTS
 	cfg.TTS = ttsConfig
 	cfg.Embedding = currentEmbeddingModelConfig()

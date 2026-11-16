@@ -1,3 +1,4 @@
+import {HUD_ICONS} from './hud-icons.mjs';
 import {context} from 'esbuild';
 import {createServer} from 'node:http';
 import {readFile,writeFile,copyFile,cp,mkdir,stat} from 'node:fs/promises';
@@ -37,7 +38,7 @@ function watch(name,copy){
  watchFile(path,{interval:300},async(current,previous)=>{if(current.mtimeMs===previous.mtimeMs)return;try{await copy();reload();}catch(error){console.error('다시 불러오기 실패:',error.message);}});
 }
 watch('index.html',copyPage);watch('style.css',()=>copyFile(resolve(root,'style.css'),resolve(out,'style.css')));watch('app.json',copyManifest);
-for(const name of ['ai-trigger','glasses-mic-off','glasses-mic-on','phone-mic-off','phone-mic-on'])watch('assets/hud-icons/'+name+'.png',()=>copyFile(resolve(root,'assets/hud-icons',name+'.png'),resolve(out,'assets/hud-icons',name+'.png')));
+for(const name of Object.keys(HUD_ICONS))watch('assets/hud-icons/'+name+'.png',()=>copyFile(resolve(root,'assets/hud-icons',name+'.png'),resolve(out,'assets/hud-icons',name+'.png')));
 const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json; charset=utf-8','.map':'application/json','.png':'image/png'};
 const server=createServer(async(req,res)=>{
  let pathname;try{pathname=decodeURIComponent(new URL(req.url,'http://localhost').pathname);}catch{res.writeHead(400).end();return;}

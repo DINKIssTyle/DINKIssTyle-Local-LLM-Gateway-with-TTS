@@ -3,7 +3,7 @@ export function routeAIUtterance(data,{waiting=false,name='AI'}={}){
   if(!text)return {kind:'ambient',waiting};
   if(data.triggered){
     const question=String(data.prompt || '').trim().replace(/^[야아][,.!?]?$/u,'');
-    return question?{kind:'chat',prompt:question,waiting:false}:{kind:'ack',waiting:true,ack:`네, ${name}입니다. 말씀하세요.`};
+    return question?{kind:'chat',prompt:question,waiting:false}:{kind:'ack',waiting:true,ack:`${name}: 듣는 중...`};
   }
   return waiting?{kind:'chat',prompt:text,waiting:false}:{kind:'ambient',waiting:false};
 }

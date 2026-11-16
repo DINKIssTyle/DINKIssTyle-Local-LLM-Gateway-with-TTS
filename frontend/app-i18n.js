@@ -6,6 +6,7 @@
 (function attachDKSTI18n(global) {
     const translations = {
         "ko": {
+            "models.unavailableSelected": "선택한 연결 모델 · 목록 확인 불가",
             "modal.settings.title": "설정",
             "section.llm": "LLM 설정",
             "section.appearance": "채팅 외형",
@@ -277,6 +278,7 @@
             "action.stopGeneration": "답변 중단"
         },
         "en": {
+            "models.unavailableSelected": "Selected connection model · list unavailable",
             "modal.settings.title": "Settings",
             "section.llm": "LLM Settings",
             "section.appearance": "Chat Appearance",

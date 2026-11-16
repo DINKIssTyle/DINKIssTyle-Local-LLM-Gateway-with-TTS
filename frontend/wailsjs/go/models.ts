@@ -1,5 +1,5 @@
 export namespace core {
-	
+
 	export class BrowserAssetStatus {
 	    supported: boolean;
 	    installed: boolean;
@@ -8,11 +8,11 @@ export namespace core {
 	    executablePath: string;
 	    installDir: string;
 	    message: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new BrowserAssetStatus(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.supported = source["supported"];
@@ -32,11 +32,11 @@ export namespace core {
 	    message: string;
 	    details?: Record<string, string>;
 	    payload?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new DebugTraceEntry(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -53,11 +53,11 @@ export namespace core {
 	    modelId: string;
 	    enabled: boolean;
 	    useJevDecisions: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new EmbeddingModelConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.provider = source["provider"];
@@ -72,11 +72,11 @@ export namespace core {
 	    ttsStatus: string;
 	    ttsMessage: string;
 	    serverModel: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new HealthCheckResult(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.llmStatus = source["llmStatus"];
@@ -84,6 +84,52 @@ export namespace core {
 	        this.ttsStatus = source["ttsStatus"];
 	        this.ttsMessage = source["ttsMessage"];
 	        this.serverModel = source["serverModel"];
+	    }
+	}
+	export class LLMConnection {
+	    id: string;
+	    name: string;
+	    endpoint: string;
+	    mode: string;
+	    manage_models: boolean;
+	    api_key?: string;
+	    has_api_key?: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new LLMConnection(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.endpoint = source["endpoint"];
+	        this.mode = source["mode"];
+	        this.manage_models = source["manage_models"];
+	        this.api_key = source["api_key"];
+	        this.has_api_key = source["has_api_key"];
+	    }
+	}
+	export class LLMConnectionUpdate {
+	    id: string;
+	    name: string;
+	    endpoint: string;
+	    mode: string;
+	    manage_models: boolean;
+	    api_key?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new LLMConnectionUpdate(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.endpoint = source["endpoint"];
+	        this.mode = source["mode"];
+	        this.manage_models = source["manage_models"];
+	        this.api_key = source["api_key"];
 	    }
 	}
 	export class ManagedModelDownloadState {
@@ -102,11 +148,11 @@ export namespace core {
 	    bytesDownloaded: number;
 	    bytesTotal: number;
 	    progressPct: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ManagedModelDownloadState(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.key = source["key"];
@@ -144,11 +190,11 @@ export namespace core {
 	    currentFile?: string;
 	    progressPct?: number;
 	    progressText?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ManagedModelStatus(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.key = source["key"];
@@ -180,11 +226,11 @@ export namespace core {
 	    osVoiceLang?: string;
 	    osRate?: number;
 	    osPitch?: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ServerTTSConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.engine = source["engine"];
@@ -208,11 +254,11 @@ export namespace core {
 	    restartRecommended: boolean;
 	    primaryMessage: string;
 	    secondaryMessage: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new WelcomeState(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.showModal = source["showModal"];
@@ -230,16 +276,16 @@ export namespace core {
 }
 
 export namespace mcp {
-	
+
 	export class MemoryRetentionConfig {
 	    coreDays: number;
 	    workingDays: number;
 	    ephemeralDays: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new MemoryRetentionConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.coreDays = source["coreDays"];
@@ -251,15 +297,15 @@ export namespace mcp {
 }
 
 export namespace promptkit {
-	
+
 	export class SystemPrompt {
 	    title: string;
 	    prompt: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new SystemPrompt(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.title = source["title"];

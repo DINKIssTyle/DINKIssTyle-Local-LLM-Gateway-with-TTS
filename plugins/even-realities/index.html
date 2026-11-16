@@ -6,7 +6,7 @@
     <title>
       DKST AI Gateway for Even Realities G2
     </title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=2.24.1">
   </head>
   <body>
     <div class="plugin-container">
@@ -21,7 +21,7 @@
               DKST Gateway
             </div>
             <div style="font-size: 11px; color: var(--text-secondary);">
-              Even Realities G2
+              Even Realities G2 · <span id="plugin-build-version">2.24.1</span>
             </div>
           </div>
         </div>
@@ -46,13 +46,14 @@
         <div class="hud-status" aria-label="현재 시각과 안경 배터리">
           <div class="hud-notice-group">
             <span id="hud-mode-label">
-              [AI
+              [
             </span>
-            <img id="hud-trigger-icon" class="hud-icon" src="assets/hud-icons/ai-trigger.png" width="24" height="24" alt="AI 호출어">
+            <img id="hud-mode-icon" class="hud-icon" src="assets/hud-icons/mode-ai.png" width="24" height="24" alt="AI">
             <span id="hud-trigger-keyword">
               이븐]
             </span>
             <img id="hud-mic-icon" class="hud-icon" src="assets/hud-icons/glasses-mic-off.png" width="24" height="24" alt="안경 마이크 꺼짐">
+            <img id="hud-state-icon" class="hud-icon" src="assets/hud-icons/status-idle.png" width="24" height="24" alt="대기중">
             <span id="hud-header-message">
               | -
             </span>
@@ -669,6 +670,7 @@
           <p class="setting-help">
             역할별로 선택하거나 기본 모델을 그대로 사용할 수 있습니다.
           </p>
+          <p id="model-load-status" class="setting-status" role="status"></p>
           <div class="form-group">
             <label for="model-ai-chat">
               AI 채팅
@@ -883,7 +885,7 @@
         </button>
       </div>
     </div>
-    <script src="bundle.js">
+    <script src="bundle.js?v=2.24.1">
     </script>
   </body>
 </html>

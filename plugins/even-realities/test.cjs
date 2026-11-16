@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const src = fs.readFileSync('plugin.js','utf8').replace(/^import .*\n/gm, '').replace('  function enqueueClip(', `  window.__queueTest={ai(){resetQueuesForModeSwitch('ai');config.glassesMode='ai';captureFailure='';isRecording=true;segmenter=new SpeechSegmenter();},refreshIcons(){queueHudIcons(true);},microphone:toggleVoiceRecording,dismiss:dismissAIWindow,headIMU:handleHeadIMU,headWait(){return headTransition?.catch(()=>{});},headState(){return {paused:headPaused,imu:headImuActive,phase:headCalibrationPhase,uncertain:micCloseUncertain};},audit:hintAudit,stack:hintStack,addHint(title,text){displayHintCard({topic:title,kind:'key',evidence:title},text);},lifetime:hintLifetime,showHint(title,text,transcript){answerAutoCloseEligible=!!text;answerVoicePrompt='';answerTitle=title;answerText=text;captionFinal=transcript;captionStable=captionDraft='';startHintLifetime();renderLiveHUD();},settings:applyLiveSettings,preview:observeAIPreview,clearSettings(){chatSettingsCache.clear();},hintGate,liveTranslations,translationHistory,enqueueClip,drainAI,drainClips,stopVoiceRecording,reset(){resetQueuesForModeSwitch('translate');config.glassesMode='translate';},state(){return{answer:answerText,title:answerTitle,ids:pendingClips.map(c=>c.segmentId),failure:captureFailure,recording:isRecording,engine:activeSttEngine,mode:config.glassesMode,active:activeUtterance?.id,previewBusy};},record(){isRecording=true;segmenter=new SpeechSegmenter();}};
+const src = fs.readFileSync('plugin.js','utf8').replace(/^import .*\n/gm, '').replace('  function enqueueClip(', `  window.__queueTest={ai(){resetQueuesForModeSwitch('ai');config.glassesMode='ai';captureFailure='';isRecording=true;segmenter=new SpeechSegmenter();},resetCaptureBuffer(){resetQueuesForModeSwitch(config.glassesMode,true,true);renderLiveHUD();},ensureModel:ensureModelLoaded,gateway:gatewayFetch,refreshIcons(){queueHudIcons(true);},microphone:toggleVoiceRecording,dismiss:dismissAIWindow,headIMU:handleHeadIMU,headWait(){return headTransition?.catch(()=>{});},headState(){return {paused:headPaused,imu:headImuActive,phase:headCalibrationPhase,uncertain:micCloseUncertain};},audit:hintAudit,stack:hintStack,addHint(title,text){displayHintCard({topic:title,kind:'key',evidence:title},text);},lifetime:hintLifetime,showHint(title,text,transcript){answerAutoCloseEligible=!!text;answerVoicePrompt='';answerTitle=title;answerText=text;captionFinal=transcript;captionStable=captionDraft='';startHintLifetime();renderLiveHUD();},settings:applyLiveSettings,preview:observeAIPreview,clearSettings(){chatSettingsCache.clear();},hintGate,liveTranslations,translationHistory,enqueueClip,drainAI,drainClips,stopVoiceRecording,reset(){resetQueuesForModeSwitch('translate');config.glassesMode='translate';},state(){return{received:receivedCaptureAudio,bytes:recordedBytes,captureStatus:captureStatus(),answer:answerText,title:answerTitle,ids:pendingClips.map(c=>c.segmentId),failure:captureFailure,recording:isRecording,engine:activeSttEngine,mode:config.glassesMode,active:activeUtterance?.id,previewBusy};},record(){isRecording=true;segmenter=new SpeechSegmenter();}};
   function enqueueClip(`);
 const elements = new Map();
 function element(id) {
@@ -11,7 +11,7 @@ function element(id) {
   }
   return elements.get(id);
 }
-let modelFailure=false;
+let modelFailure=false;let ensureReplies=[];
 let modelCatalog=[{key:'test-model',display_name:'Test Model'}];
 let nextHintProof=undefined;
 let llmMode='standard', chatReply=null, cueReply=null, chromeText=null, appleText='Apple 번역 결과';
@@ -31,7 +31,7 @@ let nativeSaved = '';
 const documentHandlers = {};
 let deviceHandler;
 let handler; const imuCalls=[];const audioCalls=[]; const updates=[]; const requests=[]; let startup; let shutdown;let nativePage,validatePage=()=>{};const rebuilds=[];const imageUpdates=[];
-const bridge={async imuControl(open,pace){imuCalls.push([open,pace]);return true;},async getDeviceInfo(){return{model:'g2',sn:'glasses-1',status:{sn:'glasses-1',connectType:'connected',batteryLevel:82}};},onDeviceStatusChanged(fn){deviceHandler=fn;return()=>{};},async getLocalStorage(){return nativeSaved;},async setLocalStorage(key,value){nativeSaved=value;return true;},async createStartUpPageContainer(p){validatePage(p);startup=nativePage=p;return 0;},async rebuildPageContainer(p){validatePage(p);nativePage=p;rebuilds.push(p);return true;},onEvenHubEvent(fn){handler=fn;},async textContainerUpgrade(p){const container=nativePage.textObject.find(c=>c.containerID===p.containerID);assert.ok(container,`text update targets missing container ${p.containerID}`);if(p.content!==undefined)container.content=p.content;if(p.textColor!==undefined)container.textColor=p.textColor;updates.push(p);return true;},async updateImageRawData(p){imageUpdates.push(p);return 'success';},async audioControl(...args){audioCalls.push(args);return true;},async shutDownPageContainer(mode){shutdown=mode;return true;}};
+const bridge={async imuControl(open,pace){imuCalls.push([open,pace]);return true;},async getDeviceInfo(){return{model:'g2',sn:'glasses-1',status:{sn:'glasses-1',connectType:'connected',batteryLevel:82}};},onDeviceStatusChanged(fn){deviceHandler=fn;return()=>{};},async getLocalStorage(){return nativeSaved;},async setLocalStorage(key,value){nativeSaved=value;return true;},async createStartUpPageContainer(p){validatePage(p);startup=nativePage=p;return 0;},async rebuildPageContainer(p){validatePage(p);nativePage=p;rebuilds.push(p);return true;},onEvenHubEvent(fn){handler=fn;},async textContainerUpgrade(p){const container=nativePage.textObject.find(c=>c.containerID===p.containerID);assert.ok(container,`text update targets missing container ${p.containerID}`);if(p.content!==undefined && !(p.containerID===3 && !p.content.trim()))container.content=p.content;if(p.textColor!==undefined)container.textColor=p.textColor;updates.push(p);return true;},async updateImageRawData(p){imageUpdates.push(p);return 'success';},async audioControl(...args){audioCalls.push(args);return true;},async shutDownPageContainer(mode){shutdown=mode;return true;}};
 const chunks=['data: {"choices":[{"delta":{"con','tent":"안녕"}}]}\n\ndata: {"choices":[{"delta":{"content":"하세요"}}]}\n\ndata: [DONE]\n\n'];
 // Simulate gateway-owned proof events; dedicated cases override this default.
 function withHintProof(reply,body){
@@ -55,6 +55,7 @@ const context={DKST_DEFAULT_SERVER_URL:'https://192.168.1.4:2806',waitForEvenApp
  if(url.endsWith('/api/config'))return{ok:true,json:async()=>({llm_mode:llmMode,context_strategy:'retrieval'})};
  if(url.endsWith('/api/auth/check'))return{ok:true,json:async()=>({authenticated:opts.headers?.Authorization==='Bearer test-session'})};
  if(url.endsWith('/api/login'))return{ok:true,json:async()=>({token:'test-session'})};
+ if(url.endsWith('/api/models/ensure')){if(ensureReplies.length){const reply=ensureReplies.shift();return typeof reply==='function'?await reply(opts):reply;}const model=JSON.parse(opts.body).model;return {ok:true,json:async()=>({status:'ready',model,instance_id:model})};}
  if(url.endsWith('/api/models') && modelFailure)return{ok:false,status:503};
  if(url.endsWith('/api/models'))return{ok:true,json:async()=>({models:modelCatalog})};
  if(url.includes('/api/stt/transcripts?'))return{ok:true,json:async()=>({entries:[{startedAt:'2026-11-12T05:00:00Z',endedAt:'2026-11-12T05:00:01Z',text:'긴 전사 기록 '.repeat(10000)}]})};
@@ -213,14 +214,16 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.deepEqual(normalizeModels({models:[{name:{bad:true}},{id:'[object Object]'}]}),[]);
  vm.runInNewContext(src,context);
  await tick();
- assert.equal(startup.containerTotalNum,7,'waiting must not reserve an empty AI box');
- assert.equal(startup.imageObject.length,2);
+ assert.equal(startup.containerTotalNum,8,'waiting has three header images without reserving an empty AI box');
+ assert.equal(startup.imageObject.length,3);
+ assert.ok(element('hud-state-icon').src.endsWith('status-idle.png'));assert.ok(element('hud-mode-icon').src.endsWith('mode-ai.png'));
  assert.equal(startup.imageObject.find(c=>c.containerID===5).width,24);
- assert.equal(startup.imageObject.find(c=>c.containerID===6).height,24);
- const hp=startup.textObject.find(c=>c.containerID===7),hw=startup.textObject.find(c=>c.containerID===8),hi=startup.imageObject.find(c=>c.containerID===6),hm=startup.imageObject.find(c=>c.containerID===5),hn=startup.textObject.find(c=>c.containerID===3);
+ const hp=startup.textObject.find(c=>c.containerID===7),hw=startup.textObject.find(c=>c.containerID===8),hm=startup.imageObject.find(c=>c.containerID===5),hn=startup.textObject.find(c=>c.containerID===3);
  assert.equal(startup.textObject.find(c=>c.containerID===8).textColor,2);
+ assert.equal(element('hud-transcript-body').style.color,'#008033');assert.equal(element('hud-transcript-body').style.textShadow,'none');
+ for(const id of [2,3,4,7])assert.equal(startup.textObject.find(c=>c.containerID===id).textColor,2,'secondary HUD content must start dim');
  assert.equal(element('hud-trigger-keyword').style.opacity,'0.5');
- assert.equal(hp.content,'[AI');assert.ok(hi.xPosition>=hp.xPosition+hp.width);assert.ok(hw.xPosition>=hi.xPosition+hi.width);assert.ok(hm.xPosition>=hw.xPosition+hw.width);assert.ok(hn.xPosition>=hm.xPosition+hm.width);assert.match(hn.content,/^\|/);
+ assert.equal(hp.content,'[');assert.ok(hw.xPosition>=hp.xPosition+hp.width);assert.ok(hm.xPosition>=hw.xPosition+hw.width);assert.ok(hn.xPosition>=hm.xPosition+hm.width);assert.equal(hn.content,' ');
  assert.ok(!startup.textObject.some(c=>c.containerID===1));
  const txArea=startup.textObject.find(c=>c.containerName==='transcript');
  assert.equal(txArea.yPosition,27);assert.equal(txArea.height,81);assert.equal(txArea.isEventCapture,1);
@@ -239,6 +242,27 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.match(element('hud-status-text').textContent,/\| 82%$/,'ring battery must be ignored');
  deviceHandler({sn:'glasses-1',batteryLevel:0});
  assert.match(element('hud-status-text').textContent,/\| 0%$/);
+ // Native instance resolution is shared across callers and all LLM roles.
+ const readyResponse={ok:true,json:async()=>({status:'ready',model:'cold-role',instance_id:'cold-role:2'})};
+ let finishModel;
+ ensureReplies=[()=>new Promise(resolve=>{finishModel=()=>resolve(readyResponse);})];
+ const modelCalls=requests.length,modelAbort=new AbortController();
+ const prepareOne=context.window.__queueTest.ensureModel('cold-role',modelAbort.signal);await tick();
+ const prepareTwo=context.window.__queueTest.ensureModel('cold-role',undefined,true);
+ modelAbort.abort();await assert.rejects(prepareOne,{name:'AbortError'});
+ assert.equal(requests.slice(modelCalls).filter(r=>r.url.endsWith('/api/models/ensure')).length,1,'forced retry joins an in-flight load');
+ finishModel();assert.equal(await prepareTwo,true);
+ for(const role of [{glasses_client:true},{glasses_task:'translation_preview',glasses_client:true},{glasses_hint:true,glasses_hint_phase:'judge'}]){
+   ensureReplies=[readyResponse];
+   await context.window.__queueTest.gateway('https://192.168.1.4:2806/api/chat',{method:'POST',body:JSON.stringify({model:'cold-role',...role})});
+   assert.equal(JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body).model,'cold-role:2','chat, translation and judgment must use the verified instance');
+ }
+ ensureReplies=[{ok:false,status:503,text:async()=>'native model server unavailable'}];
+ assert.equal(await context.window.__queueTest.ensureModel('cold-role'),false);
+ assert.match(element('model-load-status').textContent,/준비 실패/);
+ ensureReplies=[readyResponse];assert.equal(await context.window.__queueTest.ensureModel('cold-role'),true,'failed checks are not cached as success');
+ // Isolated transport tests above must not affect subsequent chat call counts.
+ requests.splice(modelCalls);
  assert.equal(element('login-status-label').textContent,'');
  assert.equal(element('server-url').value,'https://192.168.1.4:2806');
  handler({audioEvent:{audioPcm:[1,2]}}); handler({textEvent:{eventType:1}}); await tick();
@@ -253,7 +277,14 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.equal(JSON.parse(nativeSaved).serverUrl,'https://192.168.1.4:2806');
  handler({sysEvent:{eventSource:1}}); await tick();
  assert.deepEqual(audioCalls[0],[true,'glasses']);
+ // Emulate a device whose partial header updates ignore blank strings.
+ nativePage.textObject.find(c=>c.containerID===3).content='| 오디오 수신 대기';
  handler({audioEvent:{audioPcm:Array(9600).fill(2)}});
+ assert.equal(context.window.__queueTest.state().received,true);
+ assert.ok(element('hud-state-icon').src.endsWith('status-listening.png'));
+ for(let i=0;i<150 && nativePage.textObject.find(c=>c.containerID===3)?.content.includes('오디오 수신 대기');i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(nativePage.textObject.find(c=>c.containerID===3).content,' ','first PCM must recreate a blank header even when blank partial updates are ignored');
+
  context.window.__queueTest.microphone(); await tick();await tick();
  const stt=requests.find(r=>r.url.endsWith('/api/stt/transcribe'));
  assert.equal(Buffer.from(JSON.parse(stt.opts.body).audio,'base64').length,9600);
@@ -278,6 +309,9 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.equal(element('hud-trigger-keyword').style.opacity,'1','voice trigger brightens only its header text');
  for(let i=0;i<150 && nativePage.textObject.find(c=>c.containerID===8)?.textColor!==4;i++)await new Promise(resolve=>setTimeout(resolve,20));
  assert.equal(nativePage.textObject.find(c=>c.containerID===8).textColor,4);
+ for(let i=0;i<150 && nativePage.textObject.find(c=>c.containerID===4)?.textColor!==4;i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(nativePage.textObject.find(c=>c.containerID===4).textColor,4,'active voice question brightens its transcript');
+ assert.equal(element('hud-transcript-body').style.color,'var(--accent-green)');
  assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,originalChatCount+1,'trigger should call the existing gateway chat');
  const triggerBody=JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
  assert.doesNotMatch(triggerBody.messages.at(-1).content,/오늘 회의/,'ambient transcripts must not enter explicit AI chat history');
@@ -290,14 +324,17 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.equal(element('hud-trigger-keyword').style.opacity,'0.5','response completion restores dim wake text');
  for(let i=0;i<150 && nativePage.textObject.find(c=>c.containerID===8)?.textColor!==2;i++)await new Promise(resolve=>setTimeout(resolve,20));
  assert.equal(nativePage.textObject.find(c=>c.containerID===8).textColor,2);
+ for(let i=0;i<150 && nativePage.textObject.find(c=>c.containerID===4)?.textColor!==2;i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(nativePage.textObject.find(c=>c.containerID===4).textColor,2,'after the answer, ordinary transcription returns to dim');
+ assert.equal(element('hud-transcript-body').style.color,'#008033');
  const chatCount=requests.filter(r=>r.url.endsWith('/api/chat')).length;
  const finalsBeforePreview=requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).length;
  nextTranscript='이븐 임시로 인식한 문장';
  for(let i=0;i<15;i++)handler({audioEvent:{audioPcm:speech}});
  await tick();await tick();
  assert.ok(requests.some(r=>r.url.endsWith('/api/stt/preview')));
- assert.equal(element('hud-trigger-keyword').style.opacity,'0.5','uncommitted preview text must not activate the trigger');
- assert.match(element('hud-screen').innerHTML,/임시로 인식/,'draft must appear before silence/end of utterance');
+ assert.equal(element('hud-trigger-keyword').style.opacity,'1','preview wake immediately activates trigger display');
+ assert.match(element('hud-screen').innerHTML,/이븐: 임시로 인식한 문장/,'wake input box shows live STT immediately');
  assert.equal(requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).length,finalsBeforePreview);
  assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,chatCount,'draft trigger must not call AI');
  assert.doesNotMatch(element('transcript-log').textContent,/임시로 인식/,'draft must not enter saved history');
@@ -356,6 +393,23 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.match(element('hud-notice').textContent,/\|/);
  // Stop must bypass any pending preview inference.
  bridge.audioControl=normalAudioControl;element('voice-mode').value='continuous';
+ // PCM can arrive before the SDK's open acknowledgement. Do not overwrite
+ // received state with the startup waiting hint when the acknowledgement lands.
+ let finishEarlyOpen;
+ bridge.audioControl=(open,...args)=>{audioCalls.push([open,...args]);return open?new Promise(resolve=>{finishEarlyOpen=()=>resolve(true);}):Promise.resolve(true);};
+ const earlyStart=context.window.__queueTest.microphone();await tick();await tick();await tick();
+ assert.equal(typeof finishEarlyOpen,'function');
+ handler({audioEvent:{audioPcm:Buffer.alloc(3200)}});await tick();
+ assert.equal(context.window.__queueTest.state().received,true);
+ finishEarlyOpen();await earlyStart;await tick();
+ assert.doesNotMatch(element('action-hint').textContent,/오디오 수신 대기/);
+ assert.doesNotMatch(element('hud-header-message').textContent,/오디오 수신 대기/);
+ context.window.__queueTest.resetCaptureBuffer();
+ assert.equal(context.window.__queueTest.state().bytes,0);
+ assert.equal(context.window.__queueTest.state().received,true,'buffer reset must not forget that the microphone is delivering PCM');
+ assert.notEqual(context.window.__queueTest.state().captureStatus,'오디오 수신 대기');
+ await context.window.__queueTest.stopVoiceRecording(false);bridge.audioControl=normalAudioControl;
+
  context.window.__queueTest.microphone();await tick();await tick();
  holdPreview=true;nextTranscript='정지 전에 도착하지 않은 자막';
  for(let i=0;i<15;i++)handler({audioEvent:{audioPcm:speech}});
@@ -516,7 +570,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  const beforeWake=requests.filter(r=>r.url.endsWith('/api/chat')).length;
  nextTranscript='이븐';utterance();await tick();await tick();await tick();
  assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,beforeWake,'wake-only must not spend an LLM request');
- assert.match(element('hud-screen').innerHTML,/네, 이븐입니다. 말씀하세요./);
+ assert.match(element('hud-screen').innerHTML,/이븐: 듣는 중\.\.\./);
  assert.match(element('hud-notice').textContent,/질문 대기/);
  assert.equal(element('hud-trigger-keyword').style.opacity,'1','wake-only acknowledgement stays bright while waiting for the question');
  chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:'쿠푸왕의 피라미드에 대한 답변입니다.'})+'\n\n');
@@ -538,7 +592,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  holdChat=true;element('chat-input').value='취소할 오래된 질문';element('text-chat-form').handlers.submit({preventDefault(){}});
  await tick();await tick();
  nextTranscript='이븐';utterance();await tick();await tick();await tick();
- assert.match(element('hud-screen').innerHTML,/네, 이븐입니다. 말씀하세요./);assert.doesNotMatch(element('hud-screen').innerHTML,/AI 오류/);
+ assert.match(element('hud-screen').innerHTML,/이븐: 듣는 중\.\.\./);assert.doesNotMatch(element('hud-screen').innerHTML,/AI 오류/);
  chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:'새 질문에 대한 정상 답변입니다.'})+'\n\n');
  nextTranscript='다시 물어볼 내용';utterance();await tick();await tick();await tick();
  privateChat=JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
@@ -557,6 +611,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  // Switch to Translate mode via menu item 2
  handler({menuItemClickEvent:{itemID:2}});await tick();
  assert.equal(element('glasses-mode').value,'translate');
+ assert.ok(element('hud-mode-icon').src.endsWith('mode-translate.png'));assert.equal(element('hud-trigger-keyword').hidden,false);
  await new Promise(r=>setTimeout(r,800));
  const beforeSelf=requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).length;
  utterance('self');await tick();await tick();
@@ -567,6 +622,8 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.equal(Math.floor((translationBox.height-6)/27),5);
  assert.ok(replyBox.height>=4*27);assert.equal(translationBox.yPosition+translationBox.height,replyBox.yPosition);
  assert.equal(replyBox.yPosition+replyBox.height,288);
+ assert.equal(replyBox.textColor,4,'translation reply choices remain readable');
+ assert.equal(translationBox.textColor,4);assert.equal(translationBox.borderColor,2,'decoration is dimmer than translation text');
  assert.equal(translatedLayout.menuObject.menuItems.length,10);
  assert.match(element('hud-screen').innerHTML,/번역 · 추천 답변/);
  chatReply=sseReply('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify({translation:"커피 드시겠어요?",positive:"네, 주세요.\nYes, please.",negative:"괜찮습니다.\nNo, thank you."})}}]})+'\n\ndata: [DONE]\n\n');
@@ -763,6 +820,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  for(let i=0;i<4;i++)handler({audioEvent:{audioPcm:speech,speakerRole:'other'}});
  await tick();await tick();await tick();await tick();
  assert.equal(queue.state().ids.length,2,'both archive clips remain preserved while storage is held');
+ assert.ok(element('hud-state-icon').src.endsWith('status-transcribing.png'));
  assert.equal(requests.filter(r=>r.url.endsWith('/api/stt/preview')).length,duringArchive,'same-engine previews wait instead of interrupting native finalization');
  releaseFinal();await tick();await tick();await tick();
  assert.equal(queue.state().ids.length,0);
@@ -1095,6 +1153,8 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.ok(element('hud-mic-icon').src.endsWith('phone-mic-off.png'));
  assert.ok(imageUpdates.some(u=>u.containerID===5 && u.imageData.length===288));
  assert.ok(imageUpdates.some(u=>u.containerID===6 && u.imageData.length===288));
+ for(let i=0;i<150 && !imageUpdates.some(u=>u.containerID===11 && u.imageData.length===288);i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.ok(imageUpdates.some(u=>u.containerID===11 && u.imageData.length===288));
  // A native open acknowledgement without PCM must show phone/iOS guidance.
  const beforeNoAudioTimer=context.setTimeout;let noPhoneAudio;
  context.setTimeout=(fn,ms)=>ms===6000?(noPhoneAudio=fn,beforeNoAudioTimer(()=>{},60000)):beforeNoAudioTimer(fn,ms);
@@ -1339,8 +1399,8 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  const originalImageUpdate=bridge.updateImageRawData;
  bridge.updateImageRawData=async()=> 'sendFailed';
  queue.refreshIcons();
- for(let i=0;i<100 && !updates.some(u=>u.containerID===3 && u.content.startsWith('[폰 꺼짐]'));i++)await new Promise(resolve=>setTimeout(resolve,20));
- assert.ok(updates.some(u=>u.containerID===3 && u.content.startsWith('[폰 꺼짐]')),'image failure must retain text updates with explicit source/mic state');
+ for(let i=0;i<100 && !updates.some(u=>u.containerID===3 && /^\[(?:AI|번역) 폰 꺼짐\]/u.test(u.content || ''));i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.ok(updates.some(u=>u.containerID===3 && /^\[(?:AI|번역) 폰 꺼짐\]/u.test(u.content || '')),'image failure must retain text updates with explicit source/mic state');
  bridge.updateImageRawData=originalImageUpdate;
 
  // AI uses its content height; transcription stays at most three rows with blank space below.
@@ -1534,12 +1594,12 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  element('hide-transcript').checked=true;await element('hide-transcript').handlers.change();
  assert.equal(element('trigger-transcript-only').checked,true);assert.equal(element('hide-transcript').checked,true);
  queue.dismiss();nextTranscript='이븐';queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'both-options-wake-only');for(let i=0;i<10;i++)await tick();
- assert.match(queue.state().answer,/말씀하세요/);
+ assert.match(queue.state().answer,/이븐: 듣는 중\.\.\./);
  holdChat=true;chatReply=null;nextTranscript='피라미드 높이를 알려줘';queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'both-options-followup');for(let i=0;i<12;i++)await tick();
- assert.match(element('hud-screen').innerHTML,/hud-transcript-body">피라미드 높이를 알려줘/,'wake-only acknowledgement must yield to the question preview');
+ assert.match(element('hud-screen').innerHTML,/hud-ai-body">이븐: 피라미드 높이를 알려줘/,'wake-only acknowledgement must yield to the question preview');
  releaseChat();for(let i=0;i<12;i++)await tick();queue.dismiss();holdChat=true;chatReply=null;
  nextTranscript='이븐 청동기 시대가 언제인가요';queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'both-options-question');for(let i=0;i<10;i++)await tick();
- assert.match(element('hud-screen').innerHTML,/hud-transcript-body">청동기 시대가 언제인가요/,'show the sent question while waiting for the first answer');
+ assert.match(element('hud-screen').innerHTML,/hud-ai-body">이븐: 청동기 시대가 언제인가요/,'show the sent question while waiting for the first answer');
  releaseChat();for(let i=0;i<10;i++)await tick();
  assert.equal(queue.state().title,'청동기 시대가 언제인가요');
  assert.ok(!element('hud-screen').innerHTML.includes('hud-transcript-box'),'never duplicate the title beneath a visible AI answer when both options are on');
@@ -1555,6 +1615,8 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  const previewWakeStart=requests.length;
  queue.preview({mode:'ai',segmentId:'preview-wake'},{text:'이븐 새로운 질문입니다'},{stable:'이븐 새로운 질문입니다'});
  for(let i=0;i<8;i++)await tick();
+ assert.match(queue.state().answer,/이븐: 새로운 질문입니다/, 'preview wake must immediately display trigger word input box');
+ assert.equal(element('hud-trigger-keyword').style.opacity,'1','preview wake must brighten wake keyword immediately');
  assert.equal(requests.slice(previewWakeStart).filter(r=>r.url.endsWith('/api/config')).length,1);
  assert.equal(requests.slice(previewWakeStart).filter(r=>r.url.endsWith('/api/chat')).length,0,'preview must never send an unconfirmed voice question');
  nextTranscript='이븐 새로운 질문입니다';queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'preview-wake');
@@ -1607,7 +1669,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  stackSnapshots.push({html:element('hud-screen').innerHTML,native:JSON.parse(JSON.stringify(nativePage))});
  fs.writeFileSync('/private/tmp/dkst-card-stack-preview.json',JSON.stringify(stackSnapshots));
  nextTranscript='이븐';queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'stack-wake-only');for(let i=0;i<15;i++)await tick();
- assert.equal(queue.stack.cards.length,0,'explicit wake acknowledgement retains its single answer window');assert.match(queue.state().answer,/말씀하세요/);
+ assert.equal(queue.stack.cards.length,0,'explicit wake acknowledgement retains its single answer window');assert.match(queue.state().answer,/이븐: 듣는 중\.\.\./);
  queue.dismiss();
  element('trigger-transcript-only').checked=true;await element('trigger-transcript-only').handlers.change();
  element('hint-auto-close').checked=true;await element('hint-auto-close').handlers.change();element('hint-seconds-per-line').value='2.5';await element('hint-seconds-per-line').handlers.change();

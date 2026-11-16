@@ -57,7 +57,7 @@ function conversationHint(data,proof){
     const support=evidence.join(' '),numbers=new Set(numberKey(support).split('|'));
     const outputNumbers=new Set(numberKey(text).split('|'));
     const valuesChanged=[...outputNumbers].some(n=>n && !numbers.has(n)) || [...numbers].some(n=>n && !outputNumbers.has(n)) || negative(text)!==negative(support);
-    const grams=value=>{const chars=Array.from(nameKey(value).replace(/[^\p{L}\p{N}]/gu,''));return new Set(chars.slice(1).map((_,i)=>chars[i]+chars[i+1]));};
+    const grams=value=>{const chars=Array.from(nameKey(value).replace(/^(?:결론|비교|이유|요점|결정|핵심|일정|회의|준비|준비물|내용|참고)[:：]\s*/u,'').replace(/[^\p{L}\p{N}]/gu,''));return new Set(chars.slice(1).map((_,i)=>chars[i]+chars[i+1]));};
     const outputGrams=grams(text),sourceGrams=grams(support);
     const overlap=[...outputGrams].filter(g=>sourceGrams.has(g)).length;
     // A heading alone is not a summary. If the model omits the useful values

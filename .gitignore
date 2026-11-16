@@ -57,3 +57,7 @@ all_funcs.txt
 
 !internal/mcp/hint_events_test.go
 !internal/core/glasses_hint_events_test.go
+
+!internal/core/model_ensure_test.go
+
+!internal/core/llm_connections_test.go

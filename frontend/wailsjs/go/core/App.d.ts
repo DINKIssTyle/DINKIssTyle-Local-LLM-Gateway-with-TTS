@@ -57,6 +57,8 @@ export function GetEmbeddingModelConfig():Promise<core.EmbeddingModelConfig>;
 
 export function GetLLMApiToken():Promise<string>;
 
+export function GetLLMConnections():Promise<Array<core.LLMConnection>>;
+
 export function GetLicenseText():Promise<string>;
 
 export function GetManagedModelDownloads():Promise<Array<core.ManagedModelDownloadState>>;
@@ -88,6 +90,8 @@ export function GetUserDisabledTools(arg1:string):Promise<Array<string>>;
 export function GetUserDisallowedCommands(arg1:string):Promise<Array<string>>;
 
 export function GetUserDisallowedDirectories(arg1:string):Promise<Array<string>>;
+
+export function GetUserLLMConnections(arg1:string):Promise<Array<core.LLMConnection>>;
 
 export function GetUserMemoryRetentionConfig(arg1:string):Promise<mcp.MemoryRetentionConfig>;
 
@@ -139,6 +143,8 @@ export function SetEnableTools(arg1:boolean):Promise<void>;
 
 export function SetLLMApiToken(arg1:string):Promise<void>;
 
+export function SetLLMConnections(arg1:Array<core.LLMConnectionUpdate>):Promise<void>;
+
 export function SetLLMEndpoint(arg1:string):Promise<void>;
 
 export function SetLLMMode(arg1:string):Promise<void>;
@@ -164,6 +170,8 @@ export function SetUserDisabledTools(arg1:string,arg2:Array<string>):Promise<voi
 export function SetUserDisallowedCommands(arg1:string,arg2:Array<string>):Promise<void>;
 
 export function SetUserDisallowedDirectories(arg1:string,arg2:Array<string>):Promise<void>;
+
+export function SetUserLLMAPIKeys(arg1:string,arg2:Record<string, string>):Promise<void>;
 
 export function SetUserMemoryRetentionConfig(arg1:string,arg2:mcp.MemoryRetentionConfig):Promise<void>;
 

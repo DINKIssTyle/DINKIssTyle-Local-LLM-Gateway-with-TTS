@@ -26,11 +26,12 @@ import (
 
 // UserSettings holds user-specific overrides
 type UserSettings struct {
-	ApiEndpoint     *string `json:"api_endpoint,omitempty"`
-	ApiToken        *string `json:"api_token,omitempty"`
-	SecondaryModel  *string `json:"secondary_model,omitempty"`
-	LLMMode         *string `json:"llm_mode,omitempty"`
-	ContextStrategy *string `json:"context_strategy,omitempty"`
+	LLMAPIKeys      map[string]string `json:"llm_api_keys,omitempty"`
+	ApiEndpoint     *string           `json:"api_endpoint,omitempty"`
+	ApiToken        *string           `json:"api_token,omitempty"`
+	SecondaryModel  *string           `json:"secondary_model,omitempty"`
+	LLMMode         *string           `json:"llm_mode,omitempty"`
+	ContextStrategy *string           `json:"context_strategy,omitempty"`
 	// TTS state is kept browser-local now, but these fields remain for legacy users.json reads.
 	EnableTTS             *bool                      `json:"enable_tts,omitempty"`
 	EnableTools           *bool                      `json:"enable_tools,omitempty"`

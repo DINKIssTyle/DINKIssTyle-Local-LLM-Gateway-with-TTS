@@ -940,6 +940,7 @@ func cancelCurrentChat(userID string) bool {
 }
 
 type savedTurnTitleOptions struct {
+	UserID         string
 	ModelID        string
 	SecondaryModel string
 	APIToken       string
@@ -2358,6 +2359,9 @@ func normalizeSavedTurnTemperature(temp float64) float64 {
 
 func parseSavedTurnTitleOptionsFromBody(r *http.Request) (savedTurnTitleOptions, error) {
 	var opts savedTurnTitleOptions
+	if r != nil {
+		opts.UserID = r.Header.Get("X-User-ID")
+	}
 	if r == nil || r.Body == nil {
 		return opts, nil
 	}
@@ -2634,6 +2638,24 @@ func callLLMInternal(ctx context.Context, prompt string, opts savedTurnTitleOpti
 		llmMode = "standard"
 	}
 
+	titleToken := strings.TrimSpace(opts.APIToken)
+	if titleToken == "" {
+		titleToken = globalApp.llmApiToken
+	}
+	connectionID, rawModel, routeErr := splitRoutedModel(modelID)
+	if routeErr != nil {
+		return ""
+	}
+	if connectionID != "" {
+		connection, err := globalApp.resolveLLMConnection(connectionID, opts.UserID, globalApp.authMgr)
+		if err != nil {
+			return ""
+		}
+		endpoint = connection.Endpoint
+		titleToken = connection.APIKey
+		llmMode = connection.Mode
+		modelID = rawModel
+	}
 	systemPrompt := "You are a master at writing concise saved-chat titles. Return only valid JSON in the form {\"title\":\"...\"}. No markdown fences. No explanations."
 	var (
 		reqURL  string
@@ -2667,7 +2689,7 @@ func callLLMInternal(ctx context.Context, prompt string, opts savedTurnTitleOpti
 		"mode":        llmMode,
 		"temperature": normalizeSavedTurnTemperature(opts.Temperature),
 		"endpoint":    reqURL,
-		"has_api_key": strings.TrimSpace(opts.APIToken) != "" || strings.TrimSpace(globalApp.llmApiToken) != "",
+		"has_api_key": strings.TrimSpace(titleToken) != "",
 		"__payload":   payload,
 	})
 
@@ -2685,16 +2707,9 @@ func callLLMInternal(ctx context.Context, prompt string, opts savedTurnTitleOpti
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	if opts.APIToken != "" || globalApp.llmApiToken != "" {
-		token := strings.TrimSpace(opts.APIToken)
-		if token == "" {
-			token = strings.TrimSpace(globalApp.llmApiToken)
-		}
-		if strings.HasPrefix(strings.ToLower(token), "bearer ") {
-			token = token[7:]
-		}
-		req.Header.Set("Authorization", "Bearer "+token)
-	} else {
+	if titleToken != "" {
+		req.Header.Set("Authorization", "Bearer "+sanitizeLLMToken(titleToken))
+	} else if connectionID == "" {
 		req.Header.Set("Authorization", "Bearer lm-studio")
 	}
 
@@ -3172,6 +3187,13 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 		handleChat(w, r, app, authMgr)
 	}))
 	mux.HandleFunc("/api/models", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
+		handleModels(w, r, app, authMgr)
+	}))
+	mux.HandleFunc("/api/models/ensure", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost && r.Method != http.MethodOptions {
+			http.Error(w, "Method not allowed", 405)
+			return
+		}
 		handleModels(w, r, app, authMgr)
 	}))
 	mux.HandleFunc("/api/models/unload", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
@@ -3947,6 +3969,7 @@ func handleSavedTurns() http.HandlerFunc {
 			}
 
 			titleOpts := savedTurnTitleOptions{
+				UserID:         userID,
 				ModelID:        strings.TrimSpace(req.ModelID),
 				SecondaryModel: strings.TrimSpace(req.SecondaryModel),
 				APIToken:       strings.TrimSpace(req.APIToken),
@@ -4273,14 +4296,37 @@ func handleModels(w http.ResponseWriter, r *http.Request, app *App, authMgr *Aut
 		}
 
 		endpoint, token, mode := resolveModelAPIConfig(r, app, authMgr, req.Mode)
-		if err := app.LoadModelWithConfig(req.Model, endpoint, token, mode); err != nil {
-			log.Printf("[handleModels] Load failed: %v", err)
-			http.Error(w, fmt.Sprintf("Failed to load model: %v", err), http.StatusBadGateway)
+		connectionID, rawModel, err := splitRoutedModel(req.Model)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
 			return
 		}
-
+		manage := true
+		if connectionID != "" {
+			connection, err := app.resolveLLMConnection(connectionID, r.Header.Get("X-User-ID"), authMgr)
+			if err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			endpoint, token, mode = connection.Endpoint, connection.APIKey, connection.Mode
+			manage = connection.ManageModels
+		}
+		_ = mode
+		ready := modelReady{Model: rawModel, InstanceID: rawModel}
+		if manage {
+			ready, err = ensureLoadedModel(r.Context(), rawModel, endpoint, token)
+		}
+		if err != nil {
+			log.Printf("[handleModels] Model preparation failed: %v", err)
+			http.Error(w, fmt.Sprintf("Model preparation failed: %v", err), http.StatusBadGateway)
+			return
+		}
+		if connectionID != "" {
+			ready.Model = routedModel(connectionID, ready.Model)
+			ready.InstanceID = routedModel(connectionID, ready.InstanceID)
+		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "Model loaded"})
+		json.NewEncoder(w).Encode(map[string]string{"status": "ready", "model": ready.Model, "instance_id": ready.InstanceID})
 		return
 	}
 
@@ -4289,6 +4335,10 @@ func handleModels(w http.ResponseWriter, r *http.Request, app *App, authMgr *Aut
 		return
 	}
 
+	if len(app.GetLLMConnections()) > 0 {
+		mergedModelCatalog(w, r, app, authMgr)
+		return
+	}
 	// Try to fetch fresh models
 	endpoint, token, mode := resolveModelAPIConfig(r, app, authMgr, r.URL.Query().Get("mode"))
 	bodyBytes, err := app.FetchAndCacheModelsWithConfig(endpoint, token, mode)
@@ -4345,6 +4395,24 @@ func handleModelUnload(w http.ResponseWriter, r *http.Request, app *App, authMgr
 	}
 
 	endpoint, token, mode := resolveModelAPIConfig(r, app, authMgr, req.Mode)
+	connectionID, rawInstance, routeErr := splitRoutedModel(req.InstanceID)
+	if routeErr != nil {
+		http.Error(w, routeErr.Error(), 400)
+		return
+	}
+	if connectionID != "" {
+		connection, err := app.resolveLLMConnection(connectionID, r.Header.Get("X-User-ID"), authMgr)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		if !connection.ManageModels {
+			http.Error(w, "이 연결은 모델 메모리 관리를 지원하지 않습니다", 400)
+			return
+		}
+		endpoint, token, mode = connection.Endpoint, connection.APIKey, connection.Mode
+	}
+	req.InstanceID = rawInstance
 	if err := app.UnloadModelWithConfig(req.InstanceID, endpoint, token, mode); err != nil {
 		log.Printf("[handleModelUnload] Unload failed: %v", err)
 		http.Error(w, fmt.Sprintf("Failed to unload model: %v", err), http.StatusBadGateway)
@@ -4547,6 +4615,27 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	if glassesHint && hintPhase != "direct" && hintResearch.Source != "memory" {
 		enableMemory = false
 	}
+	var routedBody map[string]any
+	_ = json.Unmarshal(body, &routedBody)
+	selectedModel, _ := routedBody["model"].(string)
+	connectionID, rawModel, routeErr := splitRoutedModel(selectedModel)
+	if routeErr != nil {
+		http.Error(w, routeErr.Error(), 400)
+		return
+	}
+	if connectionID != "" {
+		connection, err := app.resolveLLMConnection(connectionID, userID, authMgr)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		endpointRaw = connection.Endpoint
+		tokenRaw = connection.APIKey
+		llmMode = connection.Mode
+		contextStrategy = normalizeContextStrategyForMode(llmMode, contextStrategy)
+		routedBody["model"] = rawModel
+		body, _ = json.Marshal(routedBody)
+	}
 	hintLookupEnabled := enableTools
 	if glassesHint && hintPhase == "answer" && (hintResearch.Source == "internal" || hintResearch.RequireGrounding) {
 		// Grounded hints fetch evidence once on the server. The writer gets no
@@ -4564,6 +4653,13 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	}
 	if hintJudge || translationTask {
 		llmMode = "standard"
+	}
+	if connectionID != "" {
+		if err := normalizeConnectionPayload(routedBody, llmMode); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		body, _ = json.Marshal(routedBody)
 	}
 
 	toolExecCtx := toolruntime.ExecutionContext{
