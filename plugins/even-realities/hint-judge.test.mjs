@@ -151,3 +151,38 @@ assert.equal(parseHintJudgment(JSON.stringify({span:2,topic:'잘 알겠습니다
 const failedDiagnostics=[];
 await assert.rejects(()=>requestHintJudgment({job:{text:'피라미드'},onDiagnostic:event=>failedDiagnostics.push(event),fetch:async()=>({ok:true,json:async()=>({response:'{"span":99}'})})}),/비어 있어/);
 assert.equal(failedDiagnostics.filter(event=>event.reason==='judge_invalid_response').length,2,'each attempt emits once, without a duplicated terminal response');
+
+// Fabricated fixtures: unresolved referring clauses are not named terms.
+const unclear=compactJudgeContext({text:'그 조건을 만족하는 거라면 만들 수 있다고 합니다.'});
+assert.equal(parseHintJudgment(JSON.stringify({span:1,topic:'그 조건을 만족하는 거',need:'그 의미 설명',kind:'term',source:'internal'}),unclear).reason,'unresolved_hint_subject');
+const patent=compactJudgeContext({text:'어떤 제작자가 도구 특허를 냈다고 하는데 명칭은 아직 말하지 않았습니다.'});
+const genericPatent=parseHintJudgment(JSON.stringify({span:1,topic:'특허',need:'특허를 등록할 때 요구되는 기본 요건',kind:'term',source:'web'}),patent);
+assert.ok(genericPatent.hint);assert.equal(genericPatent.plan.topic,'특허');
+assert.match(judgePrompts(patent).systemPrompt,/without identifying evidence/);
+assert.match(judgePrompts(patent).systemPrompt,/compound description is not automatically a proper name/);
+
+const unknownInventor=compactJudgeContext({text:'그 제작자는 그걸로 도구 특허를 등록했다고 합니다.'});
+assert.equal(parseHintJudgment(JSON.stringify({span:1,topic:'도구 특허',need:'등록한 특허의 구체적인 내용',kind:'term',source:'internal'}),unknownInventor).reason,'unresolved_hint_subject');
+assert.ok(parseHintJudgment(JSON.stringify({span:1,topic:'특허',need:'특허 등록을 위한 일반적인 요건',kind:'term',source:'web'}),unknownInventor).hint,'an unidentified inventor does not prevent general patent guidance');
+console.log('PASS: unresolved clauses and unidentified past-action lookups skip without a schema retry; general concepts remain selectable');
+
+const numbered=compactJudgeContext({text:'조경에서는 나무를 모아 심습니다. 다음은 색소에 관한 이야기입니다.'});
+const correctedSpan=parseHintJudgment(JSON.stringify({span:2,topic:'조경',need:'모아 심기가 경관에 주는 효과',kind:'term',source:'web'}),numbered);
+assert.ok(correctedSpan.hint);assert.ok(correctedSpan.spanRecovered);assert.match(correctedSpan.focus,/조경/);
+const ambiguous=compactJudgeContext({text:'조경은 공간을 다룹니다. 조경에는 나무를 씁니다. 다른 이야기입니다.'});
+assert.equal(parseHintJudgment(JSON.stringify({span:3,topic:'조경',need:'식재의 기본 원리',kind:'term',source:'web'}),ambiguous),null,'multiple possible source numbers are never guessed');
+let issue='';
+assert.equal(parseHintJudgment(JSON.stringify({span:1,topic:'조경에서는 나무를 모아 심습니다.',need:'식재 원리',kind:'term',source:'web'}),numbered,r=>{issue=r;}),null);assert.equal(issue,'sentence_topic');
+assert.equal(parseHintJudgment(JSON.stringify({span:1,topic:'조경',need:'mechanism',kind:'term',source:'internal'}),numbered,r=>{issue=r;}),null);assert.equal(issue,'generic_task');
+let countRepair=0;
+const repairTask=await requestHintJudgment({job:{text:'나무의 잎은 계절에 따라 달라집니다.'},fetch:async(url,opts)=>{
+ const sent=JSON.parse(opts.body);countRepair++;
+ if(countRepair===2)assert.match(sent.messages[0].content,/previous need was only a category/);
+ return {ok:true,json:async()=>({response:JSON.stringify(countRepair===1?{span:1,topic:'나무',need:'mechanism',kind:'term',source:'internal'}:{span:1,topic:'나무',need:'계절에 따라 잎 색이 달라지는 생물학적 원리',kind:'term',source:'web'})})};
+}});
+assert.equal(countRepair,2);assert.equal(repairTask.plan.topic,'나무');
+console.log('PASS: uniquely recoverable source-number errors, sentence topics and empty research labels repaired within one retry');
+
+let failedReselection=0;
+await assert.rejects(()=>requestHintJudgment({job:{text:'나무가 있습니다.'},fetch:async()=>{failedReselection++;return {ok:true,json:async()=>({response:JSON.stringify({span:1,topic:'나무가 있습니다.',need:'mechanism',kind:'term',source:'internal'})})};}}),error=>error.code==='judge_invalid_response');
+assert.equal(failedReselection,2,'semantic reselection never starts an unbounded loop');

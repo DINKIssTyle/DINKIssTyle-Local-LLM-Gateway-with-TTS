@@ -1,4 +1,4 @@
-import {acknowledgementOnly} from './hint-quality.mjs';
+import {acknowledgementOnly,unresolvedTermTopic,unresolvedSpecificTask,hintTaskIssue} from './hint-quality.mjs';
 import {judgePrompts,hintJudgeRepairPrompt} from './prompts.mjs';
 export {judgePrompts} from './prompts.mjs';
 import {HINT_LABELS,INFORMATION_HINT_KINDS,isInformationHintPlan} from './hint-policy.mjs';
@@ -65,14 +65,24 @@ export function unwrapHintObject(raw){
   }
   return null;
 }
-export function parseHintJudgment(raw,context){
+export function parseHintJudgment(raw,context,onInvalid=()=>{}){
   let data=unwrapHintObject(raw);
   const modern=data && Object.hasOwn(data,'span');
   if(modern){
     if(!Number.isInteger(data.span) || data.span<0 || data.span>=context.evidenceChoices.length)return null;
     if(data.span===0)return {hint:false,reason:'llm_skip',backend:'llm',continuity:'unknown'};
+    const topicKey=value=>String(value || '').normalize('NFC').toLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
+    let spanRecovered=false;
+    if(typeof data.topic==='string' && topicKey(data.topic).length>=2 && !topicKey(context.evidenceChoices[data.span]).includes(topicKey(data.topic))){
+      const matches=context.evidenceChoices.flatMap((text,index)=>index>0 && topicKey(text).includes(topicKey(data.topic))?[index]:[]);
+      if(matches.length!==1){onInvalid('topic_span_mismatch');return null;}
+      data={...data,span:matches[0]};spanRecovered=true;
+    }
     const evidence=context.evidenceChoices[data.span];
     if(acknowledgementOnly(evidence))return {hint:false,reason:'llm_skip',backend:'llm',continuity:'unknown'};
+    const taskIssue=hintTaskIssue(data.topic,data.need);
+    if(taskIssue){onInvalid(taskIssue);return null;}
+    if(spanRecovered)data={...data,spanRecovered:true};
     const kindAliases={mechanism:'term',definition:'term',comparison:'term',factcheck:'verify',fact_check:'verify'};
     data={...data,kind:kindAliases[data.kind] || data.kind,hint:true,evidence:data.span,question:data.need};
   }
@@ -84,6 +94,7 @@ export function parseHintJudgment(raw,context){
   }
   if(data?.hint===true && (data.kind==='recap' || data.source==='conversation'))return {hint:false,reason:'conversation_summary_disabled',backend:'llm',continuity};
   if(data?.hint!==true || !isInformationHintPlan(data))return null;
+  if(data.kind==='term' && unresolvedTermTopic(data.topic))return {hint:false,reason:'unresolved_hint_subject',backend:'llm',continuity};
   for(const [key,max] of [['topic',80],['evidence',160],['question',180]])if(typeof data[key]!=='string' || !data[key].trim() || Array.from(data[key]).length>max)return null;
   let evidence=data.evidence.trim();
   if(context.latest && evidence.includes(context.latest))evidence=context.latest;
@@ -92,12 +103,13 @@ export function parseHintJudgment(raw,context){
   const key=value=>String(value).normalize('NFC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
   // A source number cannot ground an unrelated topic or an empty sentence ending.
   if(!key(evidence).includes(key(data.topic)) || key(data.topic).length<2)return null;
+  if(data.source==='internal' && unresolvedSpecificTask(data.question,evidence))return {hint:false,reason:'unresolved_hint_subject',backend:'llm',continuity};
   if(data.kind!==undefined && !Object.hasOwn(HINT_LABELS,data.kind))return null;
   // A definition/claim needs external verification even when the small model
   // accidentally calls it a conversation summary. Correct the route, not the evidence.
   const source=data.source;
   const plan={kind:data.kind || 'key',evidence,topic:data.topic.trim(),question:data.question.trim(),source,knownFacts:[context.latest]};
-  return {hint:true,...(modern?{}:{continuity}),category:data.source==='memory'?'recall':'background',focus:evidence,reason:'llm_topic',backend:'llm',plan};
+  return {hint:true,...(data.spanRecovered?{spanRecovered:true}:{}),...(modern?{}:{continuity}),category:data.source==='memory'?'recall':'background',focus:evidence,reason:'llm_topic',backend:'llm',plan};
 }
 const schema={type:'object',properties:{span:{type:'integer'},topic:{type:'string',maxLength:40},need:{type:'string',maxLength:100},kind:{type:'string',enum:INFORMATION_HINT_KINDS},source:{type:'string',enum:['internal','web','memory']}},required:['span','topic','need','kind','source'],additionalProperties:false};
 // Keep sentences intact. Only oversized sentences need clause/word boundaries;
@@ -124,7 +136,7 @@ export async function requestHintJudgment({fetch,server,headers,model,job,shown=
   const prompts=judgePrompts(context,{preferWeb,sensitivity,targetLang});
   const requestSchema={...schema,properties:{...schema.properties,span:{type:'integer',enum:context.evidenceChoices.map((_,index)=>index)}}};
   const controller=new AbortController(),started=Date.now();
-  let timedOut=false,attempt=0,requestMs=0,readMs=0,lastRaw='',phase='request',lastDiagnostic='';
+  let timedOut=false,attempt=0,requestMs=0,readMs=0,lastRaw='',phase='request',lastDiagnostic='',invalidReason='';
   const diagnostic=(reason,extra={})=>{const key=JSON.stringify([reason,Math.min(attempt+1,2),phase,extra]);if(key===lastDiagnostic)return;lastDiagnostic=key;try{onDiagnostic({reason,model,role:'hintDecision',attempt:Math.min(attempt+1,2),phase,elapsedMs:Date.now()-started,requestMs,readMs,...extra});}catch{}};
   let rejectAbort;
   const interrupted=new Promise((_,reject)=>{rejectAbort=reject;});
@@ -138,7 +150,7 @@ export async function requestHintJudgment({fetch,server,headers,model,job,shown=
   try{
     for(attempt=0;attempt<2;attempt++){
       if(controller.signal.aborted)await interrupted;
-      const repair=hintJudgeRepairPrompt(attempt);
+      const repair=hintJudgeRepairPrompt(attempt,invalidReason);
       phase='request';requestMs=readMs=0;lastRaw='';
       const requestStart=Date.now();
       const response=await Promise.race([fetch(`${server}/api/chat`,{method:'POST',headers,signal:controller.signal,body:JSON.stringify({model,stream:true,store:false,glasses_hint:true,glasses_hint_phase:'judge',max_tokens:384,temperature:.1,chat_template_kwargs:{enable_thinking:false},response_format:{type:'json_schema',json_schema:{name:'hint_judgment',strict:true,schema:requestSchema}},messages:[{role:'system',content:prompts.systemPrompt+repair},{role:'user',content:prompts.userPrompt}]})}),interrupted]);
@@ -148,8 +160,9 @@ export async function requestHintJudgment({fetch,server,headers,model,job,shown=
       lastRaw=await Promise.race([readHintPlanResponse(response,{signal:controller.signal,onProgress:text=>{lastRaw=text;}}),interrupted]);
       readMs=Date.now()-readStart;
       if(controller.signal.aborted)await interrupted;
-      const result=parseHintJudgment(lastRaw,context);
-      diagnostic(result?'judge_response':'judge_invalid_response',{response:Array.from(String(lastRaw)).slice(0,1200).join('')});
+      invalidReason='';
+      const result=parseHintJudgment(lastRaw,context,reason=>{invalidReason=reason;});
+      diagnostic(result?'judge_response':'judge_invalid_response',{response:Array.from(String(lastRaw)).slice(0,1200).join(''),...(invalidReason?{validation:invalidReason}:{}),...(result?.spanRecovered?{spanRecovered:true}:{})});
       if(result)return {...result,repairAttempts:attempt,elapsedMs:Date.now()-started,observedText:context.latest,contextEstimatedTokens:context.estimatedTokens,contextBudget:context.budget};
     }
     throw Object.assign(Error('힌트 판별의 제목·작업·원문 근거가 비어 있어 표시할 수 없습니다'),{code:'judge_invalid_response'});

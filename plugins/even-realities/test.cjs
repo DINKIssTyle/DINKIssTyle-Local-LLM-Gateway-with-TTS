@@ -1354,10 +1354,30 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  queue.hintGate.reset({forgetHistory:true});judgeReply={hint:false};const smallJudgeSkipStart=requests.length;
  queue.hintGate.observe('점심 맛있었어. 내일 만나자.',{id:'judge-skip'});for(let i=0;i<10;i++)await tick();
  assert.ok(!requests.slice(smallJudgeSkipStart).some(r=>r.url.endsWith('/api/chat') && JSON.parse(r.opts.body).glasses_hint_phase==='answer'));
+ for(const [topic,need,text] of [
+  ['그 조건을 만족하는 거','그 의미 설명','그 조건을 만족하는 거라면 만들 수 있다고 합니다.'],
+  ['도구 특허','등록한 특허의 구체적인 내용','그 제작자는 그걸로 도구 특허를 등록했다고 합니다.']
+ ]){
+  queue.hintGate.reset({forgetHistory:true});const unresolvedStart=requests.length;
+  judgeReply={span:1,topic,need,kind:'term',source:'internal'};
+  queue.hintGate.observe(text,{id:'unresolved-'+topic});for(let i=0;i<15;i++)await tick();
+  const sent=requests.slice(unresolvedStart).filter(r=>r.url.endsWith('/api/chat')).map(r=>JSON.parse(r.opts.body));
+  assert.equal(sent.filter(body=>body.glasses_hint_phase==='judge').length,1,'a semantically unresolved selection skips without a format retry');
+  assert.ok(!sent.some(body=>body.glasses_hint_phase==='answer'),'unresolved references never start lookup/writer requests');
+ }
  queue.hintGate.reset({forgetHistory:true});judgeError=true;hintDecision={error:true};
  queue.hintGate.observe('청동기 시대에는 청동을 사용했대.',{id:'judge-error'});for(let i=0;i<10;i++)await tick();
  assert.equal(queue.state().recording,true,'judge errors must never stop transcription');assert.match(element('hint-judge-status').textContent,/지연\/오류/);
  judgeError=false;hintDecision={hint:false};
+ // A grammatical sentence mislabelled as a topic cannot start a source lookup.
+ queue.hintGate.reset({forgetHistory:true});queue.ai();
+ const sentenceTopicStart=requests.length;
+ judgeReply={span:1,topic:'나무는 색이 달라집니다.',need:'mechanism',kind:'term',source:'internal'};
+ queue.hintGate.observe('나무는 색이 달라집니다.',{id:'sentence-topic-repair'});for(let i=0;i<20;i++)await tick();
+ const sentenceRequests=requests.slice(sentenceTopicStart).filter(r=>r.url.endsWith('/api/chat')).map(r=>JSON.parse(r.opts.body));
+ assert.equal(sentenceRequests.filter(body=>body.glasses_hint_phase==='judge').length,2);
+ assert.ok(!sentenceRequests.some(body=>body.glasses_hint_phase==='answer'));
+ assert.equal(queue.state().recording,true,'bad topic retries never stop STT');
  // A continuation without the topic name must not discard a finished hint.
  // Queue a second distinct hint before the first finishes; wait BEFORE its writer call.
  queue.ai();queue.hintGate.intervalMs=0;queue.hintGate.settleMs=0;queue.hintGate.generationIntervalMs=0;
@@ -1405,7 +1425,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  const stackSecond='대기는 온도 변화에 따라 층으로 구분하며 각 층에서 나타나는 현상이 다릅니다.';
  chunks.splice(0,chunks.length,'data: '+JSON.stringify({type:'request.complete',final_assistant_content:JSON.stringify({fact:stackFirst,adds_information:true,kind:'term'})})+'\n\n');
  holdChat=true;chatReply=null;releaseChat=null;
- judgeReply={span:1,topic:'해양',need:'definition',kind:'term',source:'internal'};
+ judgeReply={span:1,topic:'해양',need:'해양의 기본 정의와 염분의 역할',kind:'term',source:'internal'};
  queue.hintGate.observe('해양이라고 하는 동네 말이죠?',{id:'stack-definition-draft',preview:true});for(let i=0;i<20;i++)await tick();
  assert.equal(typeof releaseChat,'function');
  queue.hintGate.validatePreview('stack-definition-draft','해양이라고 하는 종류의 환경입니다.');

@@ -23,3 +23,21 @@ export function acknowledgementOnly(text){
   const compact=key(text);
   return !!compact && /^(?:(?:네|예|응|어|음|아|맞아요|그렇구나|알겠어|알겠습니다|잘알겠습니다|고마워|감사합니다|고맙습니다)|(?:okay|ok|yes|yeah|hmm|thanks|thankyou|understood))+$/iu.test(compact);
 }
+
+// Structural unresolved reference, not a dictionary of accepted/rejected names.
+export function unresolvedTermTopic(topic){
+  return /^(?:이|그|저)\s+.+(?:하는|되는|한다는|된다는)\s*(?:거|것)(?:[은는이가을를])?$/u.test(String(topic || '').trim());
+}
+
+export function unresolvedSpecificTask(need,evidence){
+  // An unspecified person's past action is not a general knowledge question.
+  // Do not infer their identity or silently invent the missing object.
+  return /그(?:분|사람|것|걸|거|장비|제품)/u.test(String(evidence || '')) && /(?:낸|만든|개발한|발명한|등록한|출원한).{0,24}(?:내용|분야|명칭|이름|종류)/u.test(String(need || ''));
+}
+
+export function hintTaskIssue(topic,need){
+  topic=String(topic || '').trim();need=String(need || '').trim();
+  if(Array.from(topic).length>40 || /[.!?。！？]$/u.test(topic) || /(?:합니다|됩니다|입니다|다릅니다|있습니다|없습니다|안되냐|할까요|하나요|모아\s*심어|남아\s*있는\s*것)$/u.test(topic))return 'sentence_topic';
+  if(/^(?:definition|meaning|mechanism|comparison|설명|정의|의미|원리)$/iu.test(need))return 'generic_task';
+  return '';
+}
