@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import * as p from './prompts.mjs';
+import * as p from './test-support/gateway-prompts.mjs';
 const original='새로운 유전자를 등록합니다.',context={text:'[1] '+original};
 for(const [target,name] of [['ko','Korean'],['en','English'],['ja','Japanese'],['zh','Chinese'],['es','Spanish'],['fr','French'],['de','German'],['vi','Vietnamese'],['th','Thai']]){
  assert.equal(p.outputLanguageName(target),name);

@@ -16,6 +16,7 @@ import (
 	"crypto/x509/pkix"
 	"database/sql"
 	"dinkisstyle-chat/internal/chatharness"
+	"dinkisstyle-chat/internal/evenrealities"
 	"dinkisstyle-chat/internal/mcp"
 	"dinkisstyle-chat/internal/promptkit"
 	"dinkisstyle-chat/internal/skillkit"
@@ -4442,6 +4443,16 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	}
 	defer r.Body.Close()
 
+	body, structuredGlassesRequest, err := evenrealities.AssembleRequest(body)
+	if errors.Is(err, evenrealities.ErrUnresolvedTask) {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	// A client may only restrict a request into ambient, read-only hint mode.
 	var hintEnvelope map[string]interface{}
 	_ = json.Unmarshal(body, &hintEnvelope)
@@ -4657,7 +4668,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	if (hintJudge || translationTask) && !nativeAmbient {
 		llmMode = "standard"
 	}
-	if connectionID != "" {
+	if connectionID != "" || structuredGlassesRequest {
 		if err := normalizeConnectionPayload(routedBody, llmMode); err != nil {
 			http.Error(w, err.Error(), 400)
 			return
@@ -4842,6 +4853,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			var proof hintGrounding
 			proof, evidence, researchErr = prepareHintGrounding(chatCtx, toolruntime.Default, toolExecCtx, hintLookupEnabled, hintResearch)
 			if researchErr == nil {
+				proof.Model = rawModel
+				proof.PromptRevision = evenrealities.PromptRevision
 				verifiedHint = &proof
 			}
 		} else {

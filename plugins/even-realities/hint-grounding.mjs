@@ -1,4 +1,4 @@
-import {usefulHintText,completeHintQuote} from './hint-quality.mjs';
+import {usefulHintText,completeHintQuote,hintContentIssue} from './hint-quality.mjs';
 import {unwrapHintObject,HINT_LABELS} from './hint-judge.mjs';
 
 const textKey=text=>String(text || '').normalize('NFC').replace(/\s+/gu,' ').trim();
@@ -11,9 +11,13 @@ const numberKey=text=>(String(text).match(/[+-]?\d+(?:[.,]\d+)*/gu) || []).join(
 export function validateHintGrounding(raw,proof){
   if(proof?.version!==1 || !['known','quote','conversation'].includes(proof.mode))return {ok:false,reason:'missing_proof'};
   const data=unwrapHintObject(raw);
-  if(!data)return {ok:false,reason:'no_fact'};
+  if(proof.mode==='quote' && proof.task_oriented===true){
+    let selection=data;
+    if(!selection){try{const value=JSON.parse(String(raw).trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,''));if(Array.isArray(value))selection=value;}catch{}}
+    return selection?validateContextHintSelection(selection,proof):{ok:false,reason:'invalid_hint_response'};
+  }
+  if(!data)return {ok:false,reason:'invalid_hint_response'};
   if(proof.mode==='conversation')return conversationHint(data,proof);
-  if(proof.mode==='quote' && proof.task_oriented===true)return validateContextHintSelection(data,proof);
   if(proof.mode==='quote' && Object.hasOwn(data,'selection')){
     if(!Number.isInteger(data.selection) || data.selection<0)return {ok:false,reason:'invalid_source_selection'};
     if(data.selection===0)return {ok:false,reason:'source_does_not_answer_task'};
@@ -22,14 +26,15 @@ export function validateHintGrounding(raw,proof){
     return selected?validateHintGrounding(JSON.stringify(selected),proof):{ok:false,reason:'invalid_source_selection'};
   }
   if(proof.mode==='quote' && data.record===0 && data.adds_information===false && Array.isArray(data.sentences) && !data.sentences.length)return {ok:false,reason:'source_does_not_answer_task'};
-  if(data.adds_information!==true)return {ok:false,reason:'no_fact'};
+  if(data.adds_information!==true)return {ok:false,reason:data.adds_information===false?'no_additional_information':'no_fact'};
   const kind=Object.hasOwn(HINT_LABELS,proof.kind)?proof.kind:data.kind;
   if(proof.mode==='known'){
     if(typeof data.fact!=='string' || !data.fact.trim())return {ok:false,reason:'no_fact'};
     if(typeof proof.topic!=='string' || !proof.topic.trim())return {ok:false,reason:'unknown_name'};
     const allowed=[proof.topic,...(Array.isArray(proof.aliases)?proof.aliases:[])].map(nameKey);
     if(!proof.task_oriented && data.topic && !allowed.includes(nameKey(data.topic)))return {ok:false,reason:'unverified_name'};
-    if(!usefulHintText(data.fact,proof.topic))return {ok:false,reason:'no_information_value'};
+    const issue=hintContentIssue(data.fact,{topic:proof.topic,task:proof.task});
+    if(issue)return {ok:false,reason:issue};
     return {ok:true,fact:data.fact.trim(),topic:proof.topic.trim(),kind,source:'internal'};
   }
   if(Object.hasOwn(data,'record') || Object.hasOwn(data,'sentences')){
@@ -106,22 +111,43 @@ function conversationHint(data,proof){
 // Contextual tasks are grounded by actual conversation AND exact source text.
 // A broad cue such as movies is not a claimed proper name in retrieved records.
 function validateContextHintSelection(data,proof){
-  const ids=Array.isArray(data.selections)?data.selections:Number.isInteger(data.selection)?(data.selection?[data.selection]:[]):null;
-  if(!ids || ids.length>3 || ids.some(id=>!Number.isInteger(id) || id<1) || new Set(ids).size!==ids.length)return {ok:false,reason:'invalid_source_selection'};
-  if(!ids.length)return {ok:false,reason:'source_does_not_answer_task'};
-  const choices=(proof.records || []).slice(0,4).flatMap((record,index)=>(Array.isArray(record.spans)?record.spans:[]).slice(0,16).map(text=>({record,index,text})));
-  const selected=[...ids].sort((a,b)=>a-b).map(id=>choices[id-1]);
-  if(selected.some(choice=>!choice) || selected.some(choice=>choice.index!==selected[0].index))return {ok:false,reason:'invalid_source_selection'};
+  const records=(proof.records || []).slice(0,4);
+  let selected,normalized='';
+  if(!Array.isArray(data) && (Object.hasOwn(data,'record') || Object.hasOwn(data,'sentences'))){
+    if(['selections','selection','choices','source_selections','source_selection','selected_items'].some(key=>Object.hasOwn(data,key)))return {ok:false,reason:'invalid_source_selection'};
+    if(data.record===0 && Array.isArray(data.sentences) && !data.sentences.length)return {ok:false,reason:'source_does_not_answer_task'};
+    if(!Number.isInteger(data.record) || data.record<1 || data.record>records.length || !Array.isArray(data.sentences) || !data.sentences.length || data.sentences.length>3)return {ok:false,reason:'invalid_source_selection'};
+    const record=records[data.record-1],ids=data.sentences;
+    if(ids.some((id,i)=>!Number.isInteger(id) || id<1 || id>Math.min(16,record.spans?.length || 0) || (i && id<=ids[i-1])))return {ok:false,reason:'invalid_source_selection'};
+    selected=ids.map(id=>({record,index:data.record-1,sentence:id,text:record.spans[id-1]}));
+  }else{
+    const aliases=['selections','selection','choices','source_selections','source_selection','selected_items'];
+    const keys=Array.isArray(data)?[]:aliases.filter(key=>Object.hasOwn(data,key));
+    if(!Array.isArray(data) && keys.length!==1)return {ok:false,reason:'invalid_source_selection'};
+    const value=Array.isArray(data)?data:data[keys[0]];
+    const ids=Number.isInteger(value)?(value?[value]:[]):value;
+    if(!Array.isArray(ids) || ids.length>3 || ids.some(id=>!Number.isInteger(id) || id<1) || new Set(ids).size!==ids.length)return {ok:false,reason:'invalid_source_selection'};
+    if(!ids.length)return {ok:false,reason:'source_does_not_answer_task'};
+    const choices=records.flatMap((record,index)=>(Array.isArray(record.spans)?record.spans:[]).slice(0,16).map((text,sentence)=>({record,index,sentence:sentence+1,text})));
+    selected=[...ids].sort((a,b)=>a-b).map(id=>choices[id-1]);
+    if(selected.some(choice=>!choice))return {ok:false,reason:'invalid_source_selection'};
+    if(selected.some(choice=>choice.index!==selected[0].index))return {ok:false,reason:'mixed_source_records'};
+    if(Array.isArray(data) || keys[0]!=='selections')normalized=Array.isArray(data)?'flat_array':keys[0];
+  }
   const record=selected[0].record;
   if(proof.source!=='memory' && !/^https?:\/\//i.test(record.url || ''))return {ok:false,reason:'unsupported_quote_or_name'};
   const texts=[];
   for(const choice of selected){
     if(typeof choice.text!=='string' || typeof record.text!=='string' || !textKey(record.text).includes(textKey(choice.text)))return {ok:false,reason:'unsupported_quote_or_name'};
     const text=completeHintQuote(choice.text);
-    if(Array.from(text).length<12 || Array.from(text).length>800 || !usefulHintText(text,record.title))return {ok:false,reason:'incomplete_or_empty_source'};
+    if(Array.from(text).length<12 || Array.from(text).length>800)return {ok:false,reason:'incomplete_or_empty_source'};
+    const issue=hintContentIssue(text,{topic:record.title,task:proof.task});
+    if(issue)return {ok:false,reason:issue};
     texts.push(text);
   }
+  const issue=hintContentIssue(texts.join('\n'),{topic:record.title,task:proof.task});
+  if(issue)return {ok:false,reason:issue};
   const topic=Array.from(String(record.title || '').trim()).slice(0,80).join('');
   if(!topic)return {ok:false,reason:'unverified_name'};
-  return {ok:true,fact:texts.join('\n'),topic,kind:Object.hasOwn(HINT_LABELS,proof.kind)?proof.kind:'key',source:proof.source,reference:{title:record.title,url:record.url || ''}};
+  return {ok:true,normalized,selection:{record:selected[0].index+1,sentences:selected.map(choice=>choice.sentence)},fact:texts.join('\n'),topic,kind:Object.hasOwn(HINT_LABELS,proof.kind)?proof.kind:'key',source:proof.source,reference:{title:record.title,url:record.url || ''}};
 }

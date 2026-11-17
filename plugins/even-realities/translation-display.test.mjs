@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {getTextWidth} from '@evenrealities/pretext';
 import {parseTranslationDisplay,translationReplyText,translationPhoneText} from './translation-display.mjs';
-import {buildModePrompts} from './hud-status.mjs';
+import {buildModePrompts} from './test-support/gateway-prompts.mjs';
 
 const parsed=parseTranslationDisplay('**[번역]** 커피 드시겠어요?\n한 잔 더 있어요.\n[긍정] Yes, please. — 네, 주세요.\n[부정] No, thank you. — 괜찮습니다.\n[중립] Maybe later.');
 assert.equal(parsed.translation,'커피 드시겠어요?\n한 잔 더 있어요.');

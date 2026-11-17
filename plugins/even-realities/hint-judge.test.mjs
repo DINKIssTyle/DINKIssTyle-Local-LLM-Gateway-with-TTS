@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import {hintPresentation,judgePrompts,suggestedHintJudge,normalizeHintBudget,estimateHintTokens,compactJudgeContext,parseHintJudgment,requestHintJudgment,hintEvidenceChoices} from './hint-judge.mjs';
+import {hintPresentation,suggestedHintJudge,normalizeHintBudget,estimateHintTokens,compactJudgeContext,parseHintJudgment,requestHintJudgment as sendHintJudgment,hintEvidenceChoices} from './hint-judge.mjs';
+import {judgePrompts} from './test-support/gateway-prompts.mjs';
+import {expandGatewayRequest} from './test-support/gateway-prompts.mjs';
+const requestHintJudgment=options=>sendHintJudgment({...options,fetch:(url,opts)=>options.fetch(url,{...opts,body:JSON.stringify(expandGatewayRequest(JSON.parse(opts.body)))})});
 assert.equal(normalizeHintBudget(1),300);assert.equal(normalizeHintBudget(9999),800);assert.equal(normalizeHintBudget(undefined),600);
 for(const budget of [300,400,500,600,700,800])for(const sample of ['청동기 시대가 언제였는지 궁금하다. ','MacBook Air M4 weight 13-inch and 15-inch. ','🕶️こんにちは 한국어 English 123? ']){
  const c=compactJudgeContext({text:sample.repeat(100),context:sample.repeat(100)},sample.repeat(100),[{term:'피라미드'}],budget);

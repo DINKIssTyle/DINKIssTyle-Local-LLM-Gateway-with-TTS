@@ -18,6 +18,12 @@ func TestHintEventValidation(t *testing.T) {
 	if !validHintEvent(diagnostic) {
 		t.Fatal("bounded judge diagnostics rejected")
 	}
+	for _, stage := range []string{"generation", "device_error"} {
+		diagnostic.Stage = stage
+		if !validHintEvent(diagnostic) {
+			t.Fatal("bounded writer/transport diagnostics rejected")
+		}
+	}
 	bad := base
 	bad.Stage = "execute_command"
 	if validHintEvent(bad) {

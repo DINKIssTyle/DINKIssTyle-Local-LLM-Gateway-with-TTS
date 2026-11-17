@@ -106,3 +106,30 @@ assert.equal(validateHintGrounding('{"selections":[1]}',{...contextual,records:[
 assert.equal(validateHintGrounding('{"selections":[1]}',{...contextual,records:[{...contextual.records[0],url:'javascript:bad'}]}).ok,false);
 assert.equal(validateHintGrounding(JSON.stringify({...good,support_quote:day,topic:'영화'}),{...source,topic:'영화',records:contextual.records}).ok,false,'legacy name verification stays strict');
 console.log('PASS: situation-based chart cards, source-backed headings, date/result excerpts, no cross-source metrics and unchanged legacy name verification');
+
+// One record with local sentence IDs: no guessing global IDs or mixing sources.
+const local=validateHintGrounding('{"record":1,"sentences":[1,2]}',contextual);
+assert.equal(local.fact,day+'\n'+ranking);assert.deepEqual(local.selection,{record:1,sentences:[1,2]});
+assert.equal(validateHintGrounding('{"record":0,"sentences":[]}',contextual).reason,'source_does_not_answer_task');
+for(const payload of [{record:0,sentences:[1]},{record:3,sentences:[1]},{record:1,sentences:[2,1]},{record:1,sentences:[1,1]},{record:1,sentences:[3]},{record:1,sentences:['1']},{record:1,sentences:[1],selections:[3]}])assert.equal(validateHintGrounding(JSON.stringify(payload),contextual).ok,false);
+for(const alias of ['choices','selection','source_selections','source_selection','selected_items']){
+ const result=validateHintGrounding(JSON.stringify({[alias]:[1,2]}),contextual);
+ assert.ok(result.ok);assert.equal(result.normalized,alias);assert.equal(result.fact,local.fact);
+ assert.equal(validateHintGrounding(JSON.stringify({[alias]:[1,3]}),contextual).reason,'mixed_source_records');
+}
+assert.equal(validateHintGrounding('{"choices":[1],"selections":[2]}',contextual).ok,false,'ambiguous alternative selections must not be guessed');
+assert.equal(validateHintGrounding('{"1":[1,2]}',contextual).ok,false,'numeric object keys do not imply record or sentence meanings');
+assert.equal(validateHintGrounding('[1,2]',contextual).fact,local.fact);
+assert.equal(validateHintGrounding('JSON with selections: [1]',contextual).reason,'invalid_hint_response','never extract arbitrary numbers from prose');
+const missing='제공된 대화 내용만으로는 해당 물체의 종류를 파악하기 어렵습니다.';
+assert.equal(validateHintGrounding(JSON.stringify({fact:missing,adds_information:true}),{...known,task_oriented:true,topic:'물체의 종류 알아보기'}).reason,'insufficient_context');
+const heading='교육의 목표와 논의를 시작할 방향';
+assert.equal(validateHintGrounding(JSON.stringify({fact:heading,adds_information:true}),{...known,task_oriented:true,topic:heading}).reason,'heading_only');
+const nav='지역별 더 자세한 날씨는 기상청 날씨누리 앱을 참고하시기 바랍니다.';
+const navProof={...contextual,records:[{title:'날씨 서비스',url:'https://example.com/weather',text:nav,spans:[nav]}]};
+assert.equal(validateHintGrounding('{"record":1,"sentences":[1]}',navProof).reason,'navigation_only');
+const limitation='이 실험만으로 인과관계를 확정할 수는 없으며, 대조군을 둔 반복 실험이 필요합니다.';
+assert.ok(validateHintGrounding(JSON.stringify({fact:limitation,adds_information:true}),{...known,task_oriented:true,topic:'실험 해석의 한계'}).ok,'concrete factual limitations are useful information');
+console.log('PASS: canonical per-record references, safe flat aliases, source isolation, no prose recovery, insufficient-context/title/navigation rejection and useful uncertainty');
+
+assert.equal(validateHintGrounding(JSON.stringify({fact:'지역 교육의 목표에 대한 논의와 시작 방향',adds_information:true}),{...known,task_oriented:true,topic:'지역 교육의 목표에 대한 논의를 시작해야 하는 이유와 실제 실행 방향',task:'지역 교육의 목표에 대한 논의를 시작할 구체적인 방법'}).reason,'heading_only','shortened task headings are not a substantive answer');

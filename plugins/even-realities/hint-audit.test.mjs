@@ -15,3 +15,8 @@ console.log('PASS: bounded asynchronous hint history, stage bodies, credential i
 history.record({jobId:'diagnostic',stage:'decision_response',reason:'judge_invalid_response',text:JSON.stringify({response:'not json',elapsedMs:25})});
 await history.flush();while(history.active)await new Promise(r=>setImmediate(r));
 assert.ok(sent.some(x=>x.body.events.some(e=>e.stage==='decision_response' && e.text.includes('elapsedMs'))));
+history.record({jobId:'writer',stage:'generation',reason:'request_sent',text:JSON.stringify({model:'synthetic-role',task:'answer'})});
+history.record({jobId:'sdk',stage:'device_error',reason:'sdk_transport_error',text:JSON.stringify({message:'timeout',connected:false})});
+await history.flush();while(history.active)await new Promise(r=>setImmediate(r));
+assert.ok(sent.some(x=>x.body.events.some(e=>e.stage==='generation' && e.text.includes('synthetic-role'))));
+assert.ok(sent.some(x=>x.body.events.some(e=>e.stage==='device_error' && e.text.includes('timeout'))));

@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import {llmTranslation,stableTranslationPreview} from './llm-translation.mjs';
+import {llmTranslation as sendTranslation,stableTranslationPreview} from './llm-translation.mjs';
+import {expandGatewayRequest} from './test-support/gateway-prompts.mjs';
+const llmTranslation=options=>sendTranslation({...options,fetch:(url,opts)=>options.fetch(url,{...opts,body:JSON.stringify(expandGatewayRequest(JSON.parse(opts.body)))})});
 assert.equal(stableTranslationPreview('Hello. unfinished','Hello. '),'Hello.');
 assert.equal(stableTranslationPreview('No punctuation yet','No punctuation yet'),'');
 assert.equal(stableTranslationPreview('First. Next. Tail','First. Next. '),'First. Next.');

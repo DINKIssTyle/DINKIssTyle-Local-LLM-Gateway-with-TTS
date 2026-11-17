@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import {limitHUDResponse,HUD_RESPONSE_POLICY} from './ai-response-limit.mjs';
+import {limitHUDResponse} from './ai-response-limit.mjs';
+import {HUD_RESPONSE_POLICY} from './test-support/gateway-prompts.mjs';
 assert.match(HUD_RESPONSE_POLICY,/500 Unicode characters/);
 assert.equal(limitHUDResponse('짧은 답변입니다.'),'짧은 답변입니다.');
 assert.equal(limitHUDResponse('가'.repeat(500)),'가'.repeat(500));

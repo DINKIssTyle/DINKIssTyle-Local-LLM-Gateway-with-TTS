@@ -20,4 +20,3 @@ export async function localTranslate(fetcher,server,headers,request,signal,timeo
   }finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);}
 }
 export function chromeTranslate(...args){return localTranslate(...args);}
-export {translationReplyPrompts} from './prompts.mjs';

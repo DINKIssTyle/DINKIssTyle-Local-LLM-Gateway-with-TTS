@@ -69,6 +69,10 @@ export class HintGate {
     // another judgment for every character in the new draft.
     if(current?.preview)current.text=String(text).slice(0,1600);
   }
+  revisedEvidence(job,id,text){
+    const entries=job?.evidenceEntries || (job?.id===id?[{id,text:job.focusText || job.text}]:[]);
+    return entries.some(evidence=>evidence.id===id && !this.sourceStillSupports(job,evidence,{id,text:String(text || '')}));
+  }
   fresh(job){const age=job.hint?(job.category==='reply'?Math.min(20000,this.displayAgeMs):this.displayAgeMs):this.maxAgeMs;return job.epoch===this.epoch && this.now()-job.at<=age;}
   // Generation acceptance is not a successful intervention.
   complete(job,{displayed=false,text='',topic=''}={}) {

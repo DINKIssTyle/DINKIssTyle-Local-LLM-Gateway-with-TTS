@@ -13,4 +13,3 @@ export function roleModelOptions(models,base,current=''){
   if(current && !models.some(m=>m.id===current))options.push({id:current,label:`${current} · 현재 목록에 없음`});
   return options;
 }
-export {translationOnlyPrompts} from './prompts.mjs';

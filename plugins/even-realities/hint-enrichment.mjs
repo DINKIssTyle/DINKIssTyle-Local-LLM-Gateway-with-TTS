@@ -1,5 +1,4 @@
 import {usefulHintText} from './hint-quality.mjs';
-export {hintPlanPrompts,hintAnswerPrompts,cuePrompts} from './prompts.mjs';
 import {HINT_LABELS,isInformationHintPlan} from './hint-policy.mjs';
 import {measureTextWrap} from '@evenrealities/pretext';
 import {cleanHintText} from './hud-status.mjs';

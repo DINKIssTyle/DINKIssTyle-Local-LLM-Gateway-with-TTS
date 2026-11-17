@@ -28,7 +28,7 @@ func validHintEvent(e mcp.HintEvent) bool {
 	if e.EventID == "" || e.JobID == "" {
 		return false
 	}
-	if e.Text != "" && e.Stage != "generated" && e.Stage != "phone_display" && e.Stage != "decision_response" {
+	if e.Text != "" && e.Stage != "generated" && e.Stage != "phone_display" && e.Stage != "decision_response" && e.Stage != "generation" && e.Stage != "device_error" {
 		return false
 	}
 	if e.OccurredAt != "" {

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import {ROLE_MODEL_KEYS,normalizeRoleModels,resolveRoleModel,llmRequestRole,roleModelOptions,translationOnlyPrompts} from './role-models.mjs';
+import {ROLE_MODEL_KEYS,normalizeRoleModels,resolveRoleModel,llmRequestRole,roleModelOptions} from './role-models.mjs';
+import {translationOnlyPrompts} from './test-support/gateway-prompts.mjs';
 assert.deepEqual(normalizeRoleModels(null),{chat:'',hintDecision:'',hint:'',translation:'',translationReply:''});
 const config={model:'base',roleModels:{chat:'chat',hint:'hint',hintDecision:'judge',translation:'translate',translationReply:'reply'}};
 for(const role of ROLE_MODEL_KEYS)assert.equal(resolveRoleModel(role,config),config.roleModels[role]);

@@ -1,4 +1,3 @@
-import {streamingTranslationPrompts} from './prompts.mjs';
 import {translationChunks} from './stable-translation.mjs';
 import {parseTranslationDisplay} from './translation-display.mjs';
 import {extractVisibleAndReasoning} from './hud-status.mjs';
@@ -12,11 +11,10 @@ export async function llmTranslation({fetch,server,headers,model,job,signal,onPa
  const controller=new AbortController(),abort=()=>controller.abort();
  if(signal?.aborted)abort();else signal?.addEventListener('abort',abort,{once:true});
  const timer=setTimeout(abort,job.draft?12000:45000);let raw='',finished=false,last='';
- const prompts=streamingTranslationPrompts(job);
  const started=Date.now();
  const publish=()=>{const visible=extractVisibleAndReasoning(raw).visibleText;const text=parseTranslationDisplay(visible).translation;if(text && text!==last){last=text;onPartial(text);}};
  try{
-  const response=await fetch(`${server}/api/chat`,{method:'POST',headers,signal:controller.signal,body:JSON.stringify({model,stream:true,store:false,glasses_client:true,glasses_task:job.draft?'translation_preview':'translation',chat_template_kwargs:{enable_thinking:false},messages:[{role:'system',content:prompts.systemPrompt},{role:'user',content:prompts.userPrompt}]})});
+  const response=await fetch(`${server}/api/chat`,{method:'POST',headers,signal:controller.signal,body:JSON.stringify({model,stream:true,glasses_request:{version:1,task:job.draft?'translation_preview':'translation_stream',text:job.prompt,source:job.source,target:job.target}})});
   if(response.status===429)return {ok:false,busy:true,reason:'번역 모델 처리 중'};
   if(!response.ok)throw Error(`LLM 번역 HTTP ${response.status}`);
   if(!response.body){const d=await response.json();raw=d.final_assistant_content ?? d.choices?.[0]?.message?.content ?? d.response ?? '';publish();}

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import {cuePrompts,parseCueResponse,fitCue,hintPlanPrompts,parseHintPlan,hintAnswerPrompts,hintResultKind,extractHintFact,readHintPlanResponse} from './hint-enrichment.mjs';
+import {parseCueResponse,fitCue,parseHintPlan,hintResultKind,extractHintFact,readHintPlanResponse} from './hint-enrichment.mjs';
+import {cuePrompts,hintPlanPrompts,hintAnswerPrompts} from './test-support/gateway-prompts.mjs';
 const observed='피라미드 영상이 나오네. 거기 청동기 시대 얘기도 나오더라.';
 const plan=parseHintPlan(JSON.stringify({topic:'피라미드',question:'이집트 피라미드는 어떤 목적으로 건립되었나?',knownFacts:['피라미드 영상이 나옴'],source:'internal'}));
 assert.equal(plan.source,'internal');

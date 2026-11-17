@@ -1,0 +1,73 @@
+package evenrealities
+
+import (
+	"encoding/json"
+	"errors"
+	"strings"
+	"testing"
+)
+
+func TestSourceSelectionContractAndProtocol(t *testing.T) {
+	data := map[string]any{"task": "가상 기준일의 관객 수 순위", "choices": []map[string]any{{"selection": 1, "record": 1, "sentence": 1, "title": "자료 A", "text": "가상 기준일의 관객 수 자료입니다."}, {"selection": 2, "record": 1, "sentence": 2, "title": "자료 A", "text": "작품 A가 집계 첫 번째입니다."}, {"selection": 3, "record": 2, "sentence": 1, "title": "자료 B", "text": "다른 집계의 결과입니다."}}}
+	for _, native := range []bool{false, true} {
+		body := map[string]any{"model": "role", "stream": true}
+		if native {
+			body["input"] = "old"
+		} else {
+			body["messages"] = []any{}
+		}
+		raw, err := PrepareSourceSelection(mustJSON(body), data, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result map[string]any
+		_ = json.Unmarshal(raw, &result)
+		if result["temperature"] != float64(0) {
+			t.Fatal("source selection must be deterministic")
+		}
+		var input string
+		if native {
+			input = result["input"].(string)
+			if result["response_format"] != nil || result["messages"] != nil {
+				t.Fatal("unsupported native grammar fields")
+			}
+			if !strings.Contains(result["system_prompt"].(string), "local sentence numbers") {
+				t.Fatal("native contract missing")
+			}
+		} else {
+			input = prompt(result, 1)
+			format := result["response_format"].(map[string]any)["json_schema"].(map[string]any)
+			if format["name"] != "hint_source_sentences" {
+				t.Fatal("missing machine-readable contract")
+			}
+			schema := format["schema"].(map[string]any)
+			if schema["additionalProperties"] != false {
+				t.Fatal("unbounded fields")
+			}
+		}
+		var source map[string]any
+		_ = json.Unmarshal([]byte(input), &source)
+		records := source["records"].([]any)
+		if len(records) != 2 || source["choices"] != nil || len(records[0].(map[string]any)["sentences"].([]any)) != 2 {
+			t.Fatal("record grouping lost")
+		}
+	}
+}
+func TestUnresolvedTasksAndInternalFactContract(t *testing.T) {
+	for _, task := range []string{"해당 물체가 무엇인지 알아내려면 추가 정보가 필요합니다.", "Ask for more context to identify this object", "Additional details are required to identify the person"} {
+		_, _, err := AssembleRequest(mustJSON(map[string]any{"glasses_request": map[string]any{"version": 1, "task": "answer", "plan": map[string]any{"source": "internal", "question": task}}}))
+		if !errors.Is(err, ErrUnresolvedTask) {
+			t.Fatalf("unanswerable task accepted: %s %v", task, err)
+		}
+	}
+	for _, task := range []string{"문 손잡이가 힘을 줄이는 지렛대 원리", "공식 접수 기한과 신청 방법에 대한 추가 정보를 제공", "공식 발표 자료에서 일정과 접수 마감일을 확인", "어떤 자료가 인과관계를 입증하는지 과학적 조건 설명"} {
+		if !actionableHintTask(task) {
+			t.Fatalf("clear general knowledge was blocked: %s", task)
+		}
+	}
+	result := assemble(t, map[string]any{"task": "answer", "plan": map[string]any{"taskOriented": true, "source": "internal", "question": "문 손잡이의 원리", "topic": "손잡이", "kind": "key"}})
+	format := result["response_format"].(map[string]any)["json_schema"].(map[string]any)
+	if format["name"] != "hint_fact" || result["max_tokens"] != float64(1024) {
+		t.Fatal("internal JSON contract missing")
+	}
+}

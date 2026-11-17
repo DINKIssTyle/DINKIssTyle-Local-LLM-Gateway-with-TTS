@@ -260,7 +260,7 @@ func TestContextualHintSearchUsesTaskNotLiteralCueName(t *testing.T) {
 		}
 		raw, _ := json.Marshal(payload)
 		selected, err := prepareHintSelectionBody(raw, proof, req)
-		if err != nil || !strings.Contains(string(selected), "Booking-rate rankings and admissions box office are different") || !strings.Contains(string(selected), "selections:") {
+		if err != nil || !strings.Contains(string(selected), "Booking rate and admissions are different") || !strings.Contains(string(selected), "local sentence numbers") {
 			t.Fatalf("context selection policy lost: %s %v", selected, err)
 		}
 	}

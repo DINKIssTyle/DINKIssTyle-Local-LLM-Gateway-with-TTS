@@ -299,3 +299,12 @@ assert.equal(contextualDefinition.sourceStillSupports(contextualJob,{text:'movie
 assert.equal(contextualDefinition.sourceStillSupports(contextualJob,{text:'movie'},{text:'We discussed moviemaking this weekend.'}),false,'a changed Latin name is not the same anchor');
 assert.equal(contextualDefinition.sourceStillSupports({...contextualJob,hintPlan:{...contextualJob.hintPlan,anchor:'watch movies'}},{text:'watch movies'},{text:'We watch movies at weekends.'}),true);
 contextualDefinition.reset();
+
+const revisionGate=new HintGate({decide:async()=>({hint:false}),onHint:()=>{}});
+const provisional={id:'draft-a',preview:true,text:'가상 장치의 작동 원리',focusText:'가상 장치',hintPlan:{taskOriented:true,anchor:'가상 장치',topic:'장치의 원리'}};
+assert.equal(revisionGate.revisedEvidence(provisional,'draft-a','전혀 다른 최종 전사입니다.'),true);
+assert.equal(revisionGate.revisedEvidence(provisional,'draft-a','가상 장치의 원리를 더 설명합니다.'),false);
+assert.equal(revisionGate.revisedEvidence(provisional,'different-segment','전혀 다른 최종 전사입니다.'),false,'new speech must not retract an older valid card');
+const collectedRevision={...provisional,evidenceEntries:[{id:'draft-b',preview:true,text:'가상 장치'}]};
+assert.equal(revisionGate.revisedEvidence(collectedRevision,'draft-b','다른 물건의 최종 전사'),true);
+revisionGate.reset();

@@ -1,4 +1,3 @@
-export {HUD_RESPONSE_POLICY} from './prompts.mjs';
 // Last resort for models that ignore the requested limit. Prefer a whole sentence.
 export function limitHUDResponse(text,max=500){
  const chars=Array.from(String(text || '').trim());if(chars.length<=max)return chars.join('');

@@ -402,5 +402,3 @@ export function cleanHintText(text) {
   for(let i=0;i<3;i++) {const next=result.replace(wrapped,'').replace(plain,'').trim();if(next===result)break;result=next;}
   return result;
 }
-
-export {buildModePrompts} from './prompts.mjs';

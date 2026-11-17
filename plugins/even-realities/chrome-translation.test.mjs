@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import {localTranslate,chromeTranslate,translationReplyPrompts} from './chrome-translation.mjs';
+import {localTranslate,chromeTranslate} from './chrome-translation.mjs';
+import {translationReplyPrompts} from './test-support/gateway-prompts.mjs';
 let request;
 const success=await chromeTranslate(async(url,options)=>{request={url,options};return {ok:true,json:async()=>({status:'ready',text:' Hello ',source:'ko',target:'en'})};},'https://gateway',{'Authorization':'Bearer test'}, {text:'안녕',source:'ko',target:'en'});
 assert.equal(success.text,'Hello');assert.equal(request.url,'https://gateway/api/translate/chrome');

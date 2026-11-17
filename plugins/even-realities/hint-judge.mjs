@@ -1,6 +1,4 @@
 import {acknowledgementOnly,unresolvedTermTopic,unresolvedSpecificTask,hintTaskIssue} from './hint-quality.mjs';
-import {judgePrompts,hintJudgeRepairPrompt} from './prompts.mjs';
-export {judgePrompts} from './prompts.mjs';
 import {HINT_LABELS,INFORMATION_HINT_KINDS,isInformationHintPlan} from './hint-policy.mjs';
 export {HINT_LABELS} from './hint-policy.mjs';
 import {readHintPlanResponse} from './hint-enrichment.mjs';
@@ -42,7 +40,7 @@ export function compactJudgeContext(job,shown='',_candidates=[],limit=600){
   const evidenceChoices=hintEvidenceChoices(latest);
   const numbered=value=>hintEvidenceChoices(value).slice(1).map(part=>`[${evidenceChoices.indexOf(part)}] ${part}`).join('\n');
   const text=`${collected?'Recent conversation':'Reference (pronoun resolution only)'}:\n${collected?numbered(prior):prior}\nLatest:\n${numbered(current)}`;
-  return {text,latest,prior,evidenceChoices,estimatedTokens:estimateHintTokens(text)+evidenceChoices.length*2,budget};
+  return {text,latest,prior,current,collected,evidenceChoices,estimatedTokens:estimateHintTokens(text)+evidenceChoices.length*2,budget};
 }
 export function unwrapHintObject(raw){
   let value=raw;
@@ -117,7 +115,6 @@ export function parseHintJudgment(raw,context,onInvalid=()=>{}){
   const plan={...(modern?{taskOriented:true}:{}),kind:data.kind || 'key',evidence,topic:data.topic.trim(),question:data.question.trim(),source,knownFacts:[context.latest]};
   return {hint:true,...(data.spanRecovered?{spanRecovered:true}:{}),...(modern?{}:{continuity}),category:data.source==='memory'?'recall':'background',focus:evidence,reason:'llm_topic',backend:'llm',plan};
 }
-const schema={type:'object',properties:{task:{type:'string',maxLength:180},anchor:{type:'string',maxLength:160},source:{type:'string',enum:['internal','web','memory']},kind:{type:'string',enum:INFORMATION_HINT_KINDS}},required:['task','anchor','source','kind'],additionalProperties:false};
 // Keep sentences intact. Only oversized sentences need clause/word boundaries;
 // the 160-code-point hard ceiling matches the evidence validator.
 export function hintEvidenceChoices(text){
@@ -139,8 +136,6 @@ export function hintEvidenceChoices(text){
 }
 export async function requestHintJudgment({fetch,server,headers,model,job,shown='',limit=600,signal,preferWeb=true,sensitivity='balanced',targetLang='ko',timeoutMs=12000,onDiagnostic=()=>{}}){
   const context=compactJudgeContext(job,shown,[],limit);
-  const prompts=judgePrompts(context,{preferWeb,sensitivity,targetLang});
-  const requestSchema=schema;
   const controller=new AbortController(),started=Date.now();
   let timedOut=false,attempt=0,requestMs=0,readMs=0,lastRaw='',phase='request',lastDiagnostic='',invalidReason='';
   const diagnostic=(reason,extra={})=>{const key=JSON.stringify([reason,Math.min(attempt+1,2),phase,extra]);if(key===lastDiagnostic)return;lastDiagnostic=key;try{onDiagnostic({reason,model,role:'hintDecision',attempt:Math.min(attempt+1,2),phase,elapsedMs:Date.now()-started,requestMs,readMs,...extra});}catch{}};
@@ -156,10 +151,9 @@ export async function requestHintJudgment({fetch,server,headers,model,job,shown=
   try{
     for(attempt=0;attempt<2;attempt++){
       if(controller.signal.aborted)await interrupted;
-      const repair=hintJudgeRepairPrompt(attempt,invalidReason);
       phase='request';requestMs=readMs=0;lastRaw='';
       const requestStart=Date.now();
-      const response=await Promise.race([fetch(`${server}/api/chat`,{method:'POST',headers,signal:controller.signal,body:JSON.stringify({model,stream:true,store:false,glasses_hint:true,glasses_hint_phase:'judge',max_tokens:384,temperature:.1,chat_template_kwargs:{enable_thinking:false},response_format:{type:'json_schema',json_schema:{name:'context_hint_task',strict:true,schema:requestSchema}},messages:[{role:'system',content:prompts.systemPrompt+repair},{role:'user',content:prompts.userPrompt}]})}),interrupted]);
+      const response=await Promise.race([fetch(`${server}/api/chat`,{method:'POST',headers,signal:controller.signal,body:JSON.stringify({model,stream:true,glasses_request:{version:1,task:'judge',judge:{recent:context.prior,latest:context.current,collected:context.collected},preferWeb,sensitivity,target:targetLang,repair:attempt}})}),interrupted]);
       requestMs=Date.now()-requestStart;
       if(!response.ok)throw Object.assign(Error(`힌트 판별 HTTP ${response.status}`),{code:'judge_http_error',status:response.status});
       phase='response';const readStart=Date.now();
