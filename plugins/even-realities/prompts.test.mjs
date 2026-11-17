@@ -7,7 +7,7 @@ for(const [target,name] of [['ko','Korean'],['en','English'],['ja','Japanese'],[
  const chat=p.buildModePrompts('ai',{targetLang:target,prompt:original,conversationContext:'이전 발화'});
  const hint=p.hintAnswerPrompts(plan,'',target);
  for(const result of [chat,hint]){assert.ok(result.systemPrompt.includes('visible answer in '+name));assert.doesNotMatch(result.systemPrompt,/[가-힣]/u);assert.ok(result.userPrompt.includes(original),'data is never translated before selection/generation');}
- assert.ok(p.judgePrompts(context,{targetLang:target}).systemPrompt.includes('information card will be written in '+name));
+ assert.ok(p.judgePrompts(context,{targetLang:target}).systemPrompt.includes('Cards are written in '+name));
  const reply=p.translationReplyPrompts(original,'translation','auto',target);
  assert.ok(reply.userPrompt.includes('Target language: '+name));assert.match(reply.systemPrompt,/two lines/);assert.match(reply.systemPrompt,/original speech language/);
  assert.ok(p.streamingTranslationPrompts({source:'auto',target,prompt:original}).userPrompt.includes(original));
@@ -20,16 +20,27 @@ console.log('PASS: English-only instructions, nine target languages, unchanged A
 
 const summaryPrompt=p.hintAnswerPrompts({source:'conversation',kind:'recap',topic:'정리',question:'요약'}).systemPrompt;
 assert.match(summaryPrompt,/Return HINT_SKIP/);assert.match(summaryPrompt,/Do not relabel a recap as key/);
-assert.match(p.judgePrompts(context).systemPrompt,/Do not output recaps/);
+assert.match(p.judgePrompts(context).systemPrompt,/No automatic recaps/);
 assert.match(p.hintPlanPrompts(original,'','background').systemPrompt,/conversation and recap are disabled/);
 
 const activePolicy=p.judgePrompts(context,{sensitivity:'active'}).systemPrompt;
-assert.match(activePolicy,/A single mention is enough/);
-assert.match(activePolicy,/different useful facet/);
-assert.match(activePolicy,/Still skip unclear ASR/);
+assert.match(activePolicy,/A single clear mention is enough/);
+assert.match(activePolicy,/useful new angle/);
+assert.match(activePolicy,/skip unsupported guesses/);
 assert.doesNotMatch(p.judgePrompts(context,{sensitivity:'balanced'}).systemPrompt,/low intervention threshold/);
 
 const application=p.hintAnswerPrompts({topic:'물리학',kind:'term',source:'internal',question:'고고학에서 물리학이 활용되는 구체적 사례',knownFacts:[]});
 assert.match(application.systemPrompt,/application, comparison or mechanism tasks take priority/);
 assert.match(application.systemPrompt,/return only the selection integer/);
 assert.match(application.userPrompt,/고고학에서 물리학이 활용되는 구체적 사례/);
+
+const situational=p.judgePrompts(context).systemPrompt;
+assert.match(situational,/Plan one concrete lookup or explanation/);
+assert.match(situational,/Movie-going can invite current local box office/);
+assert.match(situational,/a named film can invite its story, release or cast/);
+assert.match(situational,/booking|metric/);
+assert.match(situational,/not a vocabulary lesson/);
+const contextualWriter=p.hintAnswerPrompts({taskOriented:true,question:'현재 국내 관객 수 상위 작품과 집계일',knownFacts:['영화 보러 갈까 합니다.']});
+assert.ok(contextualWriter.systemPrompt.length<1200);
+assert.match(contextualWriter.userPrompt,/현재 국내 관객 수 상위 작품과 집계일/);
+assert.doesNotMatch(contextualWriter.systemPrompt,/Role: autonomous information provider|HINT_CLASSIFICATION|quote mode/);

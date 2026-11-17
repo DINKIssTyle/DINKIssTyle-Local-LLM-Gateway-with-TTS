@@ -108,6 +108,8 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  Object.assign(context,await import('./stable-translation.mjs'));
  Object.assign(context,await import('./engine-preparation.mjs'));
  Object.assign(context,await import('./chat-deadline.mjs'));
+ const {HUDTransport}=await import('./hud-transport.mjs');context.HUDTransport=class extends HUDTransport{constructor(options){super({...options,intervalMs:0});}};
+ Object.assign(context,await import('./abortable-wait.mjs'));
  Object.assign(context,await import('./header-layout.mjs'));
  Object.assign(context,await import('./hud-brightness.mjs'));
  Object.assign(context,await import('./ai-response-limit.mjs'));
@@ -246,6 +248,16 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.match(element('hud-status-text').textContent,/\| 82%$/,'ring battery must be ignored');
  deviceHandler({sn:'glasses-1',batteryLevel:0});
  assert.match(element('hud-status-text').textContent,/\| 0%$/);
+ // A disconnected bridge keeps the phone UI responsive and sends no HUD work.
+ for(let i=0;i<5;i++)await tick();
+ deviceHandler({sn:'glasses-1',connectType:'disconnected'});await tick();
+ const disconnectedWrites=updates.length+imageUpdates.length+rebuilds.length;
+ for(let i=0;i<100;i++)context.window.__queueTest.refreshIcons();
+ await tick();assert.equal(updates.length+imageUpdates.length+rebuilds.length,disconnectedWrites);
+ assert.match(context.window.__queueTest.state().captureStatus,/안경 연결 대기/);
+ deviceHandler({sn:'glasses-1',connectType:'connected',batteryLevel:0});
+ for(let i=0;i<10;i++)await tick();
+ assert.ok(rebuilds.length>0,'reconnect repaints the current layout');
  // Native instance resolution is shared across callers and all LLM roles.
  const readyResponse={ok:true,json:async()=>({status:'ready',model:'cold-role',instance_id:'cold-role:2'})};
  let finishModel;
@@ -1230,7 +1242,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  // Native selection pages must not apply a value on scroll or accidentally start capture.
  const menuOpens=audioCalls.filter(call=>call[0]).length;
  handler({menuItemClickEvent:{itemID:4}});
- for(let i=0;i<100 && !rebuilds.at(-1)?.listObject;i++)await new Promise(resolve=>setTimeout(resolve,20));
+ for(let i=0;i<100 && rebuilds.at(-1)?.textObject?.[0]?.content!=='인식 언어';i++)await new Promise(resolve=>setTimeout(resolve,20));
  const pickerPage=rebuilds.at(-1);
  assert.equal(pickerPage.listObject[0].itemContainer.itemCount,10);
  assert.equal(pickerPage.textObject[0].content,'인식 언어');
@@ -1491,8 +1503,24 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  const localizedRequest=requests.slice(localizationRequests).find(r=>r.url.endsWith('/api/translate/chrome'));
  assert.ok(localizedRequest);assert.equal(JSON.parse(localizedRequest.opts.body).text,definition,'only the verified source text reaches translation');assert.equal(JSON.parse(localizedRequest.opts.body).target,'en');
  const localizedJudge=requests.slice(localizationRequests).filter(r=>r.url.endsWith('/api/chat')).map(r=>JSON.parse(r.opts.body)).find(b=>b.glasses_hint_phase==='judge');
- assert.match(localizedJudge.messages[0].content,/information card will be written in English/);
+ assert.match(localizedJudge.messages[0].content,/Cards are written in English/);
  chromeText=null;await queue.settings({translateTargetLang:'ko'});
+ // Contextual aid: ordinary movie-going leads to current rankings, not a
+ // definition of the word movie or a literal-name search in the source title.
+ queue.ai();queue.hintGate.collectContext=false;queue.hintGate.settleMs=0;
+ const rankDate='가상 검증일 기준 국내 극장 관객 수 집계 자료입니다.';
+ const rankResult='가상 작품 A가 일별 관객 수 순위에서 첫 번째입니다.';
+ const rankingProof={version:1,mode:'quote',source:'web',task_oriented:true,topic:'영화',kind:'key',task:'현재 한국 극장 관객 수 순위와 집계 기준일',records:[{title:'가상 국내 관객 수 집계',url:'https://example.com/fictional-chart',text:rankDate+' '+rankResult,spans:[rankDate,rankResult]}]};
+ nextHintProof=rankingProof;
+ judgeReply={span:1,topic:'영화',need:rankingProof.task,kind:'key',source:'web'};
+ chatReply=sseReply('data: '+JSON.stringify({type:'request.complete',final_assistant_content:'{"selections":[1,2]}'})+'\n\n');
+ const contextAidStart=requests.length;
+ queue.hintGate.observe('주말에는 극장에서 영화 한 편 볼까 해요.',{id:'context-movie-card'});for(let i=0;i<35;i++)await tick();
+ const contextPayload=requests.slice(contextAidStart).filter(r=>r.url.endsWith('/api/chat')).map(r=>JSON.parse(r.opts.body)).find(body=>body.glasses_hint_phase==='answer');
+ assert.ok(contextPayload.hint_research.task_oriented);assert.equal(contextPayload.hint_research.query,rankingProof.task);
+ assert.match(queue.state().title,/가상 국내 관객 수 집계/);
+ assert.equal(queue.state().answer,rankDate+'\n'+rankResult);
+ assert.equal(queue.hintGate.currentTopic,'영화','verified source headline must not become the next conversation topic');
  await queue.stopVoiceRecording(false);
  element('model-hint-decision').value='__jev__';await element('model-hint-decision').handlers.change();
  await queue.stopVoiceRecording(false);
@@ -1586,7 +1614,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.equal(element('hud-ai-body').style.color,'rgb(0, 64, 26)');
  assert.equal(queue.state().answer,'유지할 힌트','dimming never replaces displayed content');
  element('hud-full-ai').checked=true;element('hud-full-ai').handlers.change();
- for(let i=0;i<150 && nativePage.textObject.find(c=>c.containerID===1)?.textColor!==4;i++)await new Promise(resolve=>setTimeout(resolve,20));
+ for(let i=0;i<150 && (nativePage.textObject.find(c=>c.containerID===1)?.textColor!==4 || nativePage.textObject.find(c=>c.containerID===9)?.textColor!==4);i++)await new Promise(resolve=>setTimeout(resolve,20));
  assert.equal(nativePage.textObject.find(c=>c.containerID===1).textColor,4);
  assert.equal(nativePage.textObject.find(c=>c.containerID===9).textColor,4);
  assert.equal(audioCalls.length,audioBeforeAIExemption);

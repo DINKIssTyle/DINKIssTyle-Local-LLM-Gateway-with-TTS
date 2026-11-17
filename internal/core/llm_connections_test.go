@@ -318,3 +318,12 @@ func TestNativeHintContractDoesNotInviteSchemaCopying(t *testing.T) {
 		t.Fatal("ambient policy lost")
 	}
 }
+
+func TestNativeContextTaskContractIsCompactAndQuoteBased(t *testing.T) {
+	body := map[string]any{"system_prompt": "Choose situational help.", "response_format": map[string]any{"json_schema": map[string]any{"name": "context_hint_task", "schema": map[string]any{"type": "object", "properties": map[string]any{"anchor": map[string]any{"type": "string"}}}}}}
+	prepareNativeAmbientPayload(body)
+	system := fmt.Sprint(body["system_prompt"])
+	if !strings.Contains(system, "task (useful information task") || !strings.Contains(system, "anchor (short exact quote") || strings.Contains(system, `"properties"`) || strings.Contains(system, "span (integer") {
+		t.Fatalf("unexpected contextual contract: %s", system)
+	}
+}

@@ -292,3 +292,10 @@ definitionGate.entries[0].text='VX라고 하는 종류의 무기 20';
 assert.equal(definitionGate.rejectionReason(definitionJob),'transcript_changed');
 definitionGate.reset();
 console.log('PASS: reported definition cancellation fixed without ignoring removed names, negation or numeric corrections');
+
+const contextualDefinition=new HintGate({decide:async()=>({hint:false}),onHint:()=>{}});
+const contextualJob={generationStartedAt:0,hintPlan:{taskOriented:true,topic:'What information would help with the movie?',anchor:'movie',evidence:'movie',kind:'key'}};
+assert.equal(contextualDefinition.sourceStillSupports(contextualJob,{text:'movie'},{text:'We discussed a movie this weekend.'}),true,'spaces must preserve Latin anchor boundaries');
+assert.equal(contextualDefinition.sourceStillSupports(contextualJob,{text:'movie'},{text:'We discussed moviemaking this weekend.'}),false,'a changed Latin name is not the same anchor');
+assert.equal(contextualDefinition.sourceStillSupports({...contextualJob,hintPlan:{...contextualJob.hintPlan,anchor:'watch movies'}},{text:'watch movies'},{text:'We watch movies at weekends.'}),true);
+contextualDefinition.reset();

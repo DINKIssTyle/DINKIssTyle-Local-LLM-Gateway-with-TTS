@@ -35,13 +35,13 @@ for(const [kind,label] of Object.entries({term:'용어',key:'정보',verify:'확
 }
 assert.equal(parseHintJudgment(JSON.stringify({...value,kind:'invented'}),context),null);
 assert.ok(sent.response_format.json_schema.schema.required.includes('kind'));
-assert.match(judgePrompts(context).systemPrompt,/Do not .*create reminders/);
+assert.match(judgePrompts(context).systemPrompt,/No automatic recaps or reminders/);
 assert.ok(!hintPresentation({topic:'legacy'}).title.includes('undefined'));
 
 const uncertainPrompt=judgePrompts(context).systemPrompt;
-assert.match(uncertainPrompt,/typos, missing words and recognition errors/);
-assert.match(uncertainPrompt,/never correct or translate that evidence/);
-assert.match(uncertainPrompt,/No category quotas/);
+assert.match(uncertainPrompt,/ASR may be wrong/);
+assert.match(uncertainPrompt,/never invent a title, person, date, number or missing negation/);
+assert.match(uncertainPrompt,/Plan the useful task before the label/);
 assert.equal(sent.response_format.json_schema.schema.properties.kind.enum[0],'key');
 
 const isolated=compactJudgeContext({text:'디지털 시대의 변화',context:''},'[청동기 시대] 이전 힌트 본문');
@@ -53,7 +53,7 @@ const changedSkip=parseHintJudgment(JSON.stringify({hint:false,topic:'내일 날
 assert.equal(changedSkip.continuity,'changed');assert.equal(changedSkip.topic,'내일 날씨');
 assert.equal(parseHintJudgment(JSON.stringify({hint:false,topic:'없는 주제',evidence:'없는 원문',continuity:'changed'}),continuityContext).topic,undefined,'ungrounded skip cannot change the current topic');
 for(const budget of [300,600,800])assert.ok(compactJudgeContext({text:'대화 중인 새 발화'.repeat(100),context:'참고'.repeat(100),activeTopic:'아주 긴 현재 주제 이름입니다'.repeat(10)},'',[],budget).estimatedTokens<=budget);
-assert.ok(sent.response_format.json_schema.schema.required.includes('span'));
+assert.ok(sent.response_format.json_schema.schema.required.includes('anchor'));
 
 const conversation=compactJudgeContext({text:'금요일 오후 3시에 회의해요.\n장소는 2층입니다.\n노트북을 가져와 주세요.',latestText:'노트북을 가져와 주세요.',context:'금요일 오후 3시에 회의해요.\n장소는 2층입니다.'},'',[],600);
 assert.match(conversation.text,/Recent conversation/);assert.match(conversation.latest,/금요일 오후 3시/);assert.match(conversation.latest,/노트북/);
@@ -68,7 +68,7 @@ const numberedChoice=conversation.evidenceChoices.findIndex(e=>e.includes('금�
 assert.ok(numberedChoice>0);
 const chosen=parseHintJudgment(JSON.stringify({hint:true,kind:'schedule',source:'conversation',topic:'회의 준비',evidence:numberedChoice,question:'일정과 준비물 정리'}),conversation);
 assert.equal(chosen.hint,false);assert.equal(parseHintJudgment(JSON.stringify({...value,evidence:999}),conversation),null);
-assert.equal(sent.response_format.json_schema.schema.properties.span.type,'integer');
+assert.equal(sent.response_format.json_schema.schema.properties.anchor.type,'string');
 
 let repairs=0;
 const repaired=await requestHintJudgment({server:'http://test',model:'small',job:{text:'피라미드의 큰 돌을 어떻게 옮겼을까.'},fetch:async(url,opts)=>{repairs++;const body=JSON.parse(opts.body);assert.ok(!body.response_format.json_schema.schema.anyOf);return {ok:true,json:async()=>({response:JSON.stringify(repairs===1?{...value,hint:true,topic:'',evidence:0}:{...value,evidence:1})})};}});
@@ -80,7 +80,7 @@ const compactPrompt=judgePrompts(context).systemPrompt;
 assert.ok(compactPrompt.length<2400,'classifier instructions must stay compact');
 assert.doesNotMatch(compactPrompt,/예시|피라미드|EBITDA|구상성단/,'no few-shot examples or example topics in the classifier');
 assert.match(compactPrompt,/unfinished Latest/);
-assert.match(compactPrompt,/ignore uncertain parts/);
+assert.match(compactPrompt,/use clear context/);
 const news='국가자격시험에 대해서도 전수조사를 실시하고 이상징후가 있었는지 점검할 방침입니다.';
 assert.deepEqual(hintEvidenceChoices(news),['',news],'never split a normal sentence or 방침 into 40-character fragments');
 const fragmented=compactJudgeContext({latestText:'오늘 오후 상급기관인 고용노동부와',context:news,text:news+' 오늘 오후 상급기관인 고용노동부와'},'',[],800);
@@ -105,7 +105,7 @@ await requestHintJudgment({server:'http://test',model:'small',job:{text:transcri
 assert.match(cleanRequest.messages[1].content,/미국국립보건원/);
 assert.match(cleanRequest.messages[1].content,/리디자인/);
 assert.doesNotMatch(JSON.stringify(cleanRequest.messages),/Names|임의의 후보/,'neither prompt contains a dictionary candidate list');
-assert.match(judgePrompts(plain).systemPrompt,/units or comparison subjects are unclear/);
+assert.match(judgePrompts(plain).systemPrompt,/keep location, time and metric distinct/);
 
 const diagnostics=[];
 await assert.rejects(()=>requestHintJudgment({job:{text:'유전자 정보의 등록'},timeoutMs:10,onDiagnostic:data=>diagnostics.push(data),fetch:async()=>new Promise(()=>{})}),error=>error.code==='judge_timeout');
@@ -141,7 +141,7 @@ assert.equal(parseHintJudgment(JSON.stringify({...value,evidence:0}),context),nu
 const staleTopic=compactJudgeContext({text:'열수 분출공 이야기',activeTopic:'피라미드'});
 assert.doesNotMatch(staleTopic.text,/피라미드/);
 assert.ok(!sent.response_format.json_schema.schema.anyOf);
-assert.deepEqual(sent.response_format.json_schema.schema.required,['span','topic','need','kind','source']);
+assert.deepEqual(sent.response_format.json_schema.schema.required,['task','anchor','source','kind']);
 console.log('PASS: compact span contract, real biology comparison, grounded topic, positive-zero rejection and stale topic removal');
 
 assert.equal(parseHintJudgment(JSON.stringify({...selection,kind:'mechanism'}),biology).plan.kind,'term');
@@ -158,8 +158,8 @@ assert.equal(parseHintJudgment(JSON.stringify({span:1,topic:'그 조건을 만�
 const patent=compactJudgeContext({text:'어떤 제작자가 도구 특허를 냈다고 하는데 명칭은 아직 말하지 않았습니다.'});
 const genericPatent=parseHintJudgment(JSON.stringify({span:1,topic:'특허',need:'특허를 등록할 때 요구되는 기본 요건',kind:'term',source:'web'}),patent);
 assert.ok(genericPatent.hint);assert.equal(genericPatent.plan.topic,'특허');
-assert.match(judgePrompts(patent).systemPrompt,/without identifying evidence/);
-assert.match(judgePrompts(patent).systemPrompt,/compound description is not automatically a proper name/);
+assert.match(judgePrompts(patent).systemPrompt,/Skip unclear identities/);
+assert.match(judgePrompts(patent).systemPrompt,/evidence, not a card title or word to define/);
 
 const unknownInventor=compactJudgeContext({text:'그 제작자는 그걸로 도구 특허를 등록했다고 합니다.'});
 assert.equal(parseHintJudgment(JSON.stringify({span:1,topic:'도구 특허',need:'등록한 특허의 구체적인 내용',kind:'term',source:'internal'}),unknownInventor).reason,'unresolved_hint_subject');
@@ -177,7 +177,7 @@ assert.equal(parseHintJudgment(JSON.stringify({span:1,topic:'조경',need:'mecha
 let countRepair=0;
 const repairTask=await requestHintJudgment({job:{text:'나무의 잎은 계절에 따라 달라집니다.'},fetch:async(url,opts)=>{
  const sent=JSON.parse(opts.body);countRepair++;
- if(countRepair===2)assert.match(sent.messages[0].content,/previous need was only a category/);
+ if(countRepair===2)assert.match(sent.messages[0].content,/not just a category/);
  return {ok:true,json:async()=>({response:JSON.stringify(countRepair===1?{span:1,topic:'나무',need:'mechanism',kind:'term',source:'internal'}:{span:1,topic:'나무',need:'계절에 따라 잎 색이 달라지는 생물학적 원리',kind:'term',source:'web'})})};
 }});
 assert.equal(countRepair,2);assert.equal(repairTask.plan.topic,'나무');
@@ -186,3 +186,13 @@ console.log('PASS: uniquely recoverable source-number errors, sentence topics an
 let failedReselection=0;
 await assert.rejects(()=>requestHintJudgment({job:{text:'나무가 있습니다.'},fetch:async()=>{failedReselection++;return {ok:true,json:async()=>({response:JSON.stringify({span:1,topic:'나무가 있습니다.',need:'mechanism',kind:'term',source:'internal'})})};}}),error=>error.code==='judge_invalid_response');
 assert.equal(failedReselection,2,'semantic reselection never starts an unbounded loop');
+
+const movieContext=compactJudgeContext({text:'주말에 영화 한 편 볼까 합니다.'});
+const taskPlan=parseHintJudgment(JSON.stringify({anchor:'영화 한 편',task:'현재 한국 극장 관객 수 순위와 집계 기준일',source:'web',kind:'key'}),movieContext);
+assert.ok(taskPlan.hint);assert.ok(taskPlan.plan.taskOriented);assert.equal(taskPlan.focus,'영화 한 편');
+assert.equal(taskPlan.plan.question,'현재 한국 극장 관객 수 순위와 집계 기준일');
+assert.equal(taskPlan.plan.topic,taskPlan.plan.question,'research task, not copied noun, identifies the pending card');
+assert.equal(parseHintJudgment('{"task":"","anchor":"쉬는 중","source":"internal","kind":""}',movieContext).hint,false);
+for(const bad of [{anchor:'없는 영화 제목'},{task:'mechanism'},{source:'run_command'},{task:'가'.repeat(181)}])assert.equal(parseHintJudgment(JSON.stringify({anchor:'영화 한 편',task:'현재 한국 극장 관객 수 순위와 집계 기준일',source:'web',kind:'key',...bad}),movieContext),null);
+assert.equal(parseHintJudgment(JSON.stringify({anchor:'영화 한 편',task:'현재 한국 극장 관객 수 순위와 집계 기준일',source:'web',kind:'other'}),movieContext).plan.kind,'key','display taxonomy cannot veto a useful grounded task');
+assert.ok(!movieContext.text.includes('CurrentTopic'));

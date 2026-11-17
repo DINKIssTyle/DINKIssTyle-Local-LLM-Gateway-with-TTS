@@ -90,3 +90,19 @@ assert.equal(validateHintGrounding(JSON.stringify({record:0,sentences:[],adds_in
 assert.equal(validateHintGrounding(JSON.stringify({selection:1}),physicsProof).fact,archaeology);
 assert.equal(validateHintGrounding(JSON.stringify({selection:0}),physicsProof).reason,'source_does_not_answer_task');
 for(const selection of [-1,2,'1',null,1.5])assert.equal(validateHintGrounding(JSON.stringify({selection}),physicsProof).ok,false);
+
+// Movie-going is a context cue, not a requirement for a chart title to repeat
+// the word movie. Fictional data test the protocol, not actual rankings.
+const day='가상 기준일의 국내 극장 관객 수 통계입니다.';
+const ranking='가상 작품 A가 관객 수 집계에서 첫 번째입니다.';
+const contextual={version:1,mode:'quote',source:'web',task_oriented:true,topic:'영화',kind:'key',records:[{title:'가상 일별 관객 수 집계',url:'https://example.com/chart',text:day+' '+ranking,spans:[day,ranking]},{title:'다른 지표',url:'https://example.com/booking',text:'가상 예매율 집계는 관객 수 순위와 다른 자료입니다.',spans:['가상 예매율 집계는 관객 수 순위와 다른 자료입니다.']}]};
+const chart=validateHintGrounding('{"selections":[1,2]}',contextual);
+assert.ok(chart.ok);assert.equal(chart.fact,day+'\n'+ranking);assert.equal(chart.topic,contextual.records[0].title);
+assert.equal(validateHintGrounding('{"selections":[1,3]}',contextual).ok,false,'one card cannot combine ranks/metrics from unrelated sources');
+for(const selections of [[1,1],[99],['1'],[1,2,3,4]])assert.equal(validateHintGrounding(JSON.stringify({selections}),contextual).ok,false);
+assert.equal(validateHintGrounding('{"selections":[]}',contextual).reason,'source_does_not_answer_task');
+assert.equal(validateHintGrounding('{"selection":1}',contextual).ok,true,'a single reference remains compatible');
+assert.equal(validateHintGrounding('{"selections":[1]}',{...contextual,records:[{...contextual.records[0],spans:['출처에 존재하지 않는 다른 내용을 여기서 만들었습니다.']}]}).ok,false);
+assert.equal(validateHintGrounding('{"selections":[1]}',{...contextual,records:[{...contextual.records[0],url:'javascript:bad'}]}).ok,false);
+assert.equal(validateHintGrounding(JSON.stringify({...good,support_quote:day,topic:'영화'}),{...source,topic:'영화',records:contextual.records}).ok,false,'legacy name verification stays strict');
+console.log('PASS: situation-based chart cards, source-backed headings, date/result excerpts, no cross-source metrics and unchanged legacy name verification');

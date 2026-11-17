@@ -32,24 +32,16 @@ function tailWithin(text,budget){
   }
   return chars.slice(i).join('').trim();
 }
-function headWithin(text,budget){
-  let output='',cost=0;
-  for(const c of String(text || '')){const n=estimateHintTokens(c);if(cost+n>budget)break;cost+=n;output+=c;}
-  return output.trim();
-}
 export function compactJudgeContext(job,shown='',_candidates=[],limit=600){
   const budget=normalizeHintBudget(limit),reserve=120;
   const collected=typeof job.latestText==='string';
   const current=tailWithin(collected?job.latestText:job.text,Math.floor((budget-reserve)*(collected ? .45 : .76)));
   const remaining=budget-reserve-estimateHintTokens(current);
   const prior=tailWithin(job.context,Math.floor(remaining*(collected ? .8 : .35)));
-  const topic=headWithin(job.activeTopic,24);
-  const compact=value=>String(value || '').normalize('NFC').toLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
-  const activeTopic=compact([prior,current].join(' ')).includes(compact(topic))?topic:'';
   const latest=collected?[prior,current].filter(Boolean).join('\n'):current;
   const evidenceChoices=hintEvidenceChoices(latest);
   const numbered=value=>hintEvidenceChoices(value).slice(1).map(part=>`[${evidenceChoices.indexOf(part)}] ${part}`).join('\n');
-  const text=`CurrentTopic (continuity only):\n${activeTopic}\n${collected?'Recent conversation':'Reference (pronoun resolution only)'}:\n${collected?numbered(prior):prior}\nLatest:\n${numbered(current)}`;
+  const text=`${collected?'Recent conversation':'Reference (pronoun resolution only)'}:\n${collected?numbered(prior):prior}\nLatest:\n${numbered(current)}`;
   return {text,latest,prior,evidenceChoices,estimatedTokens:estimateHintTokens(text)+evidenceChoices.length*2,budget};
 }
 export function unwrapHintObject(raw){
@@ -67,10 +59,24 @@ export function unwrapHintObject(raw){
 }
 export function parseHintJudgment(raw,context,onInvalid=()=>{}){
   let data=unwrapHintObject(raw);
+  if(data && (Object.hasOwn(data,'task') || Object.hasOwn(data,'anchor'))){
+    if(typeof data.task!=='string')return null;
+    const task=data.task.trim();
+    if(!task)return {hint:false,reason:'llm_skip',backend:'llm',continuity:'unknown'};
+    if(/^https?:\/\/\S+$/iu.test(task)){onInvalid('task_is_url');return null;}
+    const anchor=typeof data.anchor==='string'?data.anchor.trim():'';
+    if(Array.from(task).length<4 || Array.from(task).length>180 || Array.from(anchor).length<2 || Array.from(anchor).length>160 || !context.latest.includes(anchor)){onInvalid('invalid_task_anchor');return null;}
+    if(acknowledgementOnly(anchor))return {hint:false,reason:'llm_skip',backend:'llm',continuity:'unknown'};
+    if(hintTaskIssue('',task)){onInvalid('generic_task');return null;}
+    if(!['internal','web','memory'].includes(data.source))return null;
+    if(data.source==='internal' && unresolvedSpecificTask(task,anchor))return {hint:false,reason:'unresolved_hint_subject',backend:'llm',continuity:'unknown'};
+    const kind=INFORMATION_HINT_KINDS.includes(data.kind)?data.kind:'key';
+    return {hint:true,category:data.source==='memory'?'recall':'background',focus:anchor,reason:'context_task',backend:'llm',plan:{taskOriented:true,anchor,topic:Array.from(task).slice(0,80).join(''),question:task,kind,source:data.source,evidence:anchor,knownFacts:[context.latest]}};
+  }
   const modern=data && Object.hasOwn(data,'span');
   if(modern){
     if(!Number.isInteger(data.span) || data.span<0 || data.span>=context.evidenceChoices.length)return null;
-    if(data.span===0)return {hint:false,reason:'llm_skip',backend:'llm',continuity:'unknown'};
+    if(data.span===0){if(String(data.need || '').trim() || String(data.topic || '').trim()){onInvalid('contradictory_skip');return null;}return {hint:false,reason:'llm_skip',backend:'llm',continuity:'unknown'};}
     const topicKey=value=>String(value || '').normalize('NFC').toLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
     let spanRecovered=false;
     if(typeof data.topic==='string' && topicKey(data.topic).length>=2 && !topicKey(context.evidenceChoices[data.span]).includes(topicKey(data.topic))){
@@ -108,10 +114,10 @@ export function parseHintJudgment(raw,context,onInvalid=()=>{}){
   // A definition/claim needs external verification even when the small model
   // accidentally calls it a conversation summary. Correct the route, not the evidence.
   const source=data.source;
-  const plan={kind:data.kind || 'key',evidence,topic:data.topic.trim(),question:data.question.trim(),source,knownFacts:[context.latest]};
+  const plan={...(modern?{taskOriented:true}:{}),kind:data.kind || 'key',evidence,topic:data.topic.trim(),question:data.question.trim(),source,knownFacts:[context.latest]};
   return {hint:true,...(data.spanRecovered?{spanRecovered:true}:{}),...(modern?{}:{continuity}),category:data.source==='memory'?'recall':'background',focus:evidence,reason:'llm_topic',backend:'llm',plan};
 }
-const schema={type:'object',properties:{span:{type:'integer'},topic:{type:'string',maxLength:40},need:{type:'string',maxLength:100},kind:{type:'string',enum:INFORMATION_HINT_KINDS},source:{type:'string',enum:['internal','web','memory']}},required:['span','topic','need','kind','source'],additionalProperties:false};
+const schema={type:'object',properties:{task:{type:'string',maxLength:180},anchor:{type:'string',maxLength:160},source:{type:'string',enum:['internal','web','memory']},kind:{type:'string',enum:INFORMATION_HINT_KINDS}},required:['task','anchor','source','kind'],additionalProperties:false};
 // Keep sentences intact. Only oversized sentences need clause/word boundaries;
 // the 160-code-point hard ceiling matches the evidence validator.
 export function hintEvidenceChoices(text){
@@ -134,7 +140,7 @@ export function hintEvidenceChoices(text){
 export async function requestHintJudgment({fetch,server,headers,model,job,shown='',limit=600,signal,preferWeb=true,sensitivity='balanced',targetLang='ko',timeoutMs=12000,onDiagnostic=()=>{}}){
   const context=compactJudgeContext(job,shown,[],limit);
   const prompts=judgePrompts(context,{preferWeb,sensitivity,targetLang});
-  const requestSchema={...schema,properties:{...schema.properties,span:{type:'integer',enum:context.evidenceChoices.map((_,index)=>index)}}};
+  const requestSchema=schema;
   const controller=new AbortController(),started=Date.now();
   let timedOut=false,attempt=0,requestMs=0,readMs=0,lastRaw='',phase='request',lastDiagnostic='',invalidReason='';
   const diagnostic=(reason,extra={})=>{const key=JSON.stringify([reason,Math.min(attempt+1,2),phase,extra]);if(key===lastDiagnostic)return;lastDiagnostic=key;try{onDiagnostic({reason,model,role:'hintDecision',attempt:Math.min(attempt+1,2),phase,elapsedMs:Date.now()-started,requestMs,readMs,...extra});}catch{}};
@@ -153,7 +159,7 @@ export async function requestHintJudgment({fetch,server,headers,model,job,shown=
       const repair=hintJudgeRepairPrompt(attempt,invalidReason);
       phase='request';requestMs=readMs=0;lastRaw='';
       const requestStart=Date.now();
-      const response=await Promise.race([fetch(`${server}/api/chat`,{method:'POST',headers,signal:controller.signal,body:JSON.stringify({model,stream:true,store:false,glasses_hint:true,glasses_hint_phase:'judge',max_tokens:384,temperature:.1,chat_template_kwargs:{enable_thinking:false},response_format:{type:'json_schema',json_schema:{name:'hint_judgment',strict:true,schema:requestSchema}},messages:[{role:'system',content:prompts.systemPrompt+repair},{role:'user',content:prompts.userPrompt}]})}),interrupted]);
+      const response=await Promise.race([fetch(`${server}/api/chat`,{method:'POST',headers,signal:controller.signal,body:JSON.stringify({model,stream:true,store:false,glasses_hint:true,glasses_hint_phase:'judge',max_tokens:384,temperature:.1,chat_template_kwargs:{enable_thinking:false},response_format:{type:'json_schema',json_schema:{name:'context_hint_task',strict:true,schema:requestSchema}},messages:[{role:'system',content:prompts.systemPrompt+repair},{role:'user',content:prompts.userPrompt}]})}),interrupted]);
       requestMs=Date.now()-requestStart;
       if(!response.ok)throw Object.assign(Error(`힌트 판별 HTTP ${response.status}`),{code:'judge_http_error',status:response.status});
       phase='response';const readStart=Date.now();

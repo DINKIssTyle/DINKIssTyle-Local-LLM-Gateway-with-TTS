@@ -355,6 +355,10 @@ func prepareNativeAmbientPayload(body map[string]any) {
 			if schema, ok := spec["schema"]; ok {
 				contract, _ := json.Marshal(schema)
 				system, _ := body["system_prompt"].(string)
+
+				if spec["name"] == "context_hint_task" {
+					contract = []byte("Return one JSON object: task (useful information task, empty string to skip), anchor (short exact quote from input speech, without source numbers), source (web/internal/memory), kind (key/term/verify/schedule). Plan situational help, not a vocabulary card. No null values or schema definitions.")
+				}
 				if spec["name"] == "hint_judgment" {
 					contract = []byte("Return one JSON object with span (integer source number; 0 means skip), topic (exact phrase in that span; empty for skip), need (short missing-information task; empty for skip), kind (key/term/verify/schedule), source (internal/web/memory). No hint/evidence/continuity fields, schema definitions or null values. A positive span must be one of the numbered sources in the input.")
 				}

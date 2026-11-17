@@ -199,7 +199,7 @@ func TestBundledWikipediaSearchLoadsWithoutDiagnostics(t *testing.T) {
 	for _, s := range result.Available {
 		if s.Namespace == "builtin:wikipedia-search" {
 			found = true
-			if s.DisplayName != "위키백과 검색 (Wikimedia)" {
+			if s.DisplayName != "위키백과 검색 (Wikipedia)" {
 				t.Fatalf("unexpected display name: %q", s.DisplayName)
 			}
 			break

@@ -230,3 +230,67 @@ func TestHintSelectorReplacesConflictingWriterFormat(t *testing.T) {
 		}
 	}
 }
+
+func TestContextualHintSearchUsesTaskNotLiteralCueName(t *testing.T) {
+	registry := toolruntime.NewRegistry()
+	calls := 0
+	query := "현재 한국 극장 관객 수 순위와 집계 기준일"
+	err := registry.Register(toolruntime.Definition{Name: "search_web", InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}}}`)}, func(_ context.Context, _ toolruntime.ExecutionContext, args json.RawMessage) (toolruntime.Result, error) {
+		calls++
+		var input map[string]string
+		_ = json.Unmarshal(args, &input)
+		if calls == 1 && input["query"] != query {
+			t.Errorf("self-contained task changed into keyword search: %q", input["query"])
+		}
+		return toolruntime.Result{Content: "Title: 가상 일별 관객 수 집계\nLink: https://example.com/chart\nSnippet: 가상 기준일의 국내 극장 관객 수 통계입니다. 가상 작품 A가 관객 수 집계에서 첫 번째입니다."}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := hintResearchRequest{TaskOriented: true, RequireGrounding: true, Source: "web", Topic: query, Kind: "key", Query: query, Observed: "주말에 극장에서 영화 볼까 해요", Anchor: "영화", AllowWeb: true}
+	proof, _, err := prepareHintGrounding(context.Background(), registry, toolruntime.ExecutionContext{}, true, req)
+	if err != nil || !proof.TaskOriented || proof.Mode != "quote" || len(proof.Records) != 1 {
+		t.Fatalf("task-based chart lookup failed: %+v %v", proof, err)
+	}
+	for _, native := range []bool{false, true} {
+		payload := map[string]any{"model": "role", "stream": true, "messages": []map[string]string{{"role": "user", "content": "old"}}}
+		if native {
+			delete(payload, "messages")
+			payload["input"] = "old"
+		}
+		raw, _ := json.Marshal(payload)
+		selected, err := prepareHintSelectionBody(raw, proof, req)
+		if err != nil || !strings.Contains(string(selected), "Booking-rate rankings and admissions box office are different") || !strings.Contains(string(selected), "selections:") {
+			t.Fatalf("context selection policy lost: %s %v", selected, err)
+		}
+	}
+	req.Topic = "새로운 정보 과제"
+	req.Anchor = "피라미드" // Fabricated evidence cannot override actual speech.
+	if _, _, err = prepareHintGrounding(context.Background(), registry, toolruntime.ExecutionContext{}, true, req); err == nil || calls != 1 {
+		t.Fatal("unrelated old topic bypassed conversation anchoring")
+	}
+	req.Topic = "영화"
+	req.Anchor = "영화"
+	req.TaskOriented = false
+	if _, _, err = prepareHintGrounding(context.Background(), registry, toolruntime.ExecutionContext{}, true, req); err == nil {
+		t.Fatal("legacy proper-name verification was relaxed")
+	}
+}
+
+func TestContextTaskStableInternalAndFreshLookup(t *testing.T) {
+	req := hintResearchRequest{TaskOriented: true, RequireGrounding: true, Source: "internal", Topic: "손잡이 원리", Kind: "key", Query: "문 손잡이가 힘을 줄여주는 원리", Observed: "문 손잡이가 돌아가는 이유가 궁금해요", Anchor: "문 손잡이", AllowWeb: false}
+	proof, _, err := prepareHintGrounding(context.Background(), toolruntime.NewRegistry(), toolruntime.ExecutionContext{}, false, req)
+	if err != nil || proof.Mode != "known" || !proof.TaskOriented {
+		t.Fatalf("stable internal help gated by dictionary: %+v %v", proof, err)
+	}
+	req.Query = "현재 한국 박스오피스 관객 수 순위"
+	req.Topic = req.Query
+	if _, _, err = prepareHintGrounding(context.Background(), toolruntime.NewRegistry(), toolruntime.ExecutionContext{}, false, req); err == nil {
+		t.Fatal("current rankings must not be generated from internal knowledge without a source")
+	}
+	req.Query = "특정 생소한 단어의 정의"
+	req.Kind = "term"
+	if _, _, err = prepareHintGrounding(context.Background(), toolruntime.NewRegistry(), toolruntime.ExecutionContext{}, false, req); err == nil {
+		t.Fatal("uncertain definitions bypassed source lookup")
+	}
+}

@@ -98,6 +98,7 @@ export class HintGate {
     if(!topic || !evidence || !job.text.includes(evidence) || job.sequence<this.topicDecisionSequence)return;
     const latest=this.entries.filter(e=>!briefAcknowledgement(e.text)).at(-1);
     if(latest && latest.sequence>job.sequence && latest.id!==job.id)return;
+    if(decision.plan?.taskOriented){this.currentTopic=topic;this.topicDecisionSequence=job.sequence;return;}
     const before=compactTopic(this.currentTopic),next=compactTopic(topic);
     const compatible=before===next || Math.min(before.length,next.length)>=3 && (before.includes(next) || next.includes(before));
     // A missing name in the next sentence is not proof of a topic change.
@@ -117,8 +118,8 @@ export class HintGate {
   }
   sourceStillSupports(job,evidence,current){
     if(!current)return false;
-    const plan=job.hintPlan || {},topic=compactTopic(plan.topic);
-    if(/^[a-z0-9]+$/u.test(topic) && !new RegExp('(?:^|[^a-z0-9])'+topic+'(?=$|[^a-z0-9])','iu').test(compactEvidence(current.text)))return false;
+    const plan=job.hintPlan || {},anchorName=plan.anchor || plan.topic,topic=compactTopic(anchorName);
+    if(/^[a-z0-9]+$/iu.test(String(anchorName || '').trim()) && !new RegExp('(?:^|[^a-z0-9])'+topic+'(?=$|[^a-z0-9])','iu').test(String(current.text).normalize('NFC')))return false;
     if(compactEvidence(current.text).includes(compactEvidence(evidence.text)))return true;
     // A general definition is anchored to the unchanged name, not every word
     // in its unstable ASR clause. Other research tasks retain full evidence.

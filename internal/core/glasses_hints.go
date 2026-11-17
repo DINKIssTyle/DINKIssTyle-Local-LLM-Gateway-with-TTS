@@ -405,6 +405,7 @@ func readOnlyHintTools(disabled []string) []string {
 
 type hintResearchRequest struct {
 	RequireGrounding bool   `json:"require_grounding"`
+	TaskOriented     bool   `json:"task_oriented,omitempty"`
 	Topic            string `json:"topic"`
 	Kind             string `json:"kind"`
 	Observed         string `json:"observed"`

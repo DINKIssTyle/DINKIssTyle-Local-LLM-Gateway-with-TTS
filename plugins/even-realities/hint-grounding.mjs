@@ -13,6 +13,7 @@ export function validateHintGrounding(raw,proof){
   const data=unwrapHintObject(raw);
   if(!data)return {ok:false,reason:'no_fact'};
   if(proof.mode==='conversation')return conversationHint(data,proof);
+  if(proof.mode==='quote' && proof.task_oriented===true)return validateContextHintSelection(data,proof);
   if(proof.mode==='quote' && Object.hasOwn(data,'selection')){
     if(!Number.isInteger(data.selection) || data.selection<0)return {ok:false,reason:'invalid_source_selection'};
     if(data.selection===0)return {ok:false,reason:'source_does_not_answer_task'};
@@ -27,7 +28,7 @@ export function validateHintGrounding(raw,proof){
     if(typeof data.fact!=='string' || !data.fact.trim())return {ok:false,reason:'no_fact'};
     if(typeof proof.topic!=='string' || !proof.topic.trim())return {ok:false,reason:'unknown_name'};
     const allowed=[proof.topic,...(Array.isArray(proof.aliases)?proof.aliases:[])].map(nameKey);
-    if(data.topic && !allowed.includes(nameKey(data.topic)))return {ok:false,reason:'unverified_name'};
+    if(!proof.task_oriented && data.topic && !allowed.includes(nameKey(data.topic)))return {ok:false,reason:'unverified_name'};
     if(!usefulHintText(data.fact,proof.topic))return {ok:false,reason:'no_information_value'};
     return {ok:true,fact:data.fact.trim(),topic:proof.topic.trim(),kind,source:'internal'};
   }
@@ -100,4 +101,27 @@ function conversationHint(data,proof){
   const generic=/^(?:대화|내용|상황|관련|자료|정보|핵심|요점|일정|회의|준비|진행|검토|사항|정리|요약|및|중|입니다|합니다|[\s·:：,./])+$/u;
   if(points.every(p=>generic.test(p)) || (!recovered && points.length===1 && source.replace(/\s/g,'').length<60 && textKey(source)===textKey(fact)))return {ok:false,reason:'no_summary_value'};
   return {ok:true,fact,topic:proof.topic,kind:proof.kind,source:'conversation'};
+}
+
+// Contextual tasks are grounded by actual conversation AND exact source text.
+// A broad cue such as movies is not a claimed proper name in retrieved records.
+function validateContextHintSelection(data,proof){
+  const ids=Array.isArray(data.selections)?data.selections:Number.isInteger(data.selection)?(data.selection?[data.selection]:[]):null;
+  if(!ids || ids.length>3 || ids.some(id=>!Number.isInteger(id) || id<1) || new Set(ids).size!==ids.length)return {ok:false,reason:'invalid_source_selection'};
+  if(!ids.length)return {ok:false,reason:'source_does_not_answer_task'};
+  const choices=(proof.records || []).slice(0,4).flatMap((record,index)=>(Array.isArray(record.spans)?record.spans:[]).slice(0,16).map(text=>({record,index,text})));
+  const selected=[...ids].sort((a,b)=>a-b).map(id=>choices[id-1]);
+  if(selected.some(choice=>!choice) || selected.some(choice=>choice.index!==selected[0].index))return {ok:false,reason:'invalid_source_selection'};
+  const record=selected[0].record;
+  if(proof.source!=='memory' && !/^https?:\/\//i.test(record.url || ''))return {ok:false,reason:'unsupported_quote_or_name'};
+  const texts=[];
+  for(const choice of selected){
+    if(typeof choice.text!=='string' || typeof record.text!=='string' || !textKey(record.text).includes(textKey(choice.text)))return {ok:false,reason:'unsupported_quote_or_name'};
+    const text=completeHintQuote(choice.text);
+    if(Array.from(text).length<12 || Array.from(text).length>800 || !usefulHintText(text,record.title))return {ok:false,reason:'incomplete_or_empty_source'};
+    texts.push(text);
+  }
+  const topic=Array.from(String(record.title || '').trim()).slice(0,80).join('');
+  if(!topic)return {ok:false,reason:'unverified_name'};
+  return {ok:true,fact:texts.join('\n'),topic,kind:Object.hasOwn(HINT_LABELS,proof.kind)?proof.kind:'key',source:proof.source,reference:{title:record.title,url:record.url || ''}};
 }
