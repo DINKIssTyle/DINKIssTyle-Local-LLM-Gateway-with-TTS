@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const src = fs.readFileSync('plugin.js','utf8').replace(/^import .*\n/gm, '').replace('  function enqueueClip(', `  window.__queueTest={ai(){resetQueuesForModeSwitch('ai');config.glassesMode='ai';captureFailure='';isRecording=true;segmenter=new SpeechSegmenter();},resetCaptureBuffer(){resetQueuesForModeSwitch(config.glassesMode,true,true);renderLiveHUD();},ensureModel:ensureModelLoaded,gateway:gatewayFetch,refreshIcons(){queueHudIcons(true);},headerMode(mode){config.glassesMode=mode;renderLiveHUD();},iconPhase(phase,error=''){aiPhaseTitle=phase;aiPhaseDetail='';aiStatusError=error;processingAI=!!phase;renderLiveHUD();},microphone:toggleVoiceRecording,dismiss:dismissAIWindow,headIMU:handleHeadIMU,headWait(){return headTransition?.catch(()=>{});},headState(){return {paused:headPaused,imu:headImuActive,phase:headCalibrationPhase,uncertain:micCloseUncertain};},audit:hintAudit,stack:hintStack,addHint(title,text,auditMeta){displayHintCard({topic:title,kind:'key',evidence:title,auditMeta},text);},reviseTranscript:reconcileHintTranscript,lifetime:hintLifetime,showHint(title,text,transcript){answerAutoCloseEligible=!!text;answerVoicePrompt='';answerTitle=title;answerText=text;captionFinal=transcript;captionStable=captionDraft='';startHintLifetime();renderLiveHUD();},settings:applyLiveSettings,preview:observeAIPreview,hintGate,liveTranslations,translationHistory,enqueueClip,drainAI,drainClips,stopVoiceRecording,reset(){resetQueuesForModeSwitch('translate');config.glassesMode='translate';},state(){return{received:receivedCaptureAudio,bytes:recordedBytes,captureStatus:captureStatus(),answer:answerText,title:answerTitle,ids:pendingClips.map(c=>c.segmentId),failure:captureFailure,recording:isRecording,engine:activeSttEngine,mode:config.glassesMode,active:activeUtterance?.id,previewBusy};},record(){isRecording=true;segmenter=new SpeechSegmenter();}};
+const src = fs.readFileSync('plugin.js','utf8').replace(/^import .*\n/gm, '').replace('  function enqueueClip(', `  window.__queueTest={ai(){resetQueuesForModeSwitch('ai');config.glassesMode='ai';captureFailure='';isRecording=true;segmenter=new SpeechSegmenter();},resetCaptureBuffer(){resetQueuesForModeSwitch(config.glassesMode,true,true);renderLiveHUD();},ensureModel:ensureModelLoaded,gateway:gatewayFetch,refreshIcons(){queueHudIcons(true);},headerMode(mode){config.glassesMode=mode;renderLiveHUD();},iconPhase(phase,error=''){aiPhaseTitle=phase;aiPhaseDetail='';aiStatusError=error;processingAI=!!phase;renderLiveHUD();},microphone:toggleVoiceRecording,dismiss:dismissAIWindow,headIMU:handleHeadIMU,headWait(){return headTransition?.catch(()=>{});},headState(){return {paused:headPaused,imu:headImuActive,phase:headCalibrationPhase,uncertain:micCloseUncertain};},audit:hintAudit,metrics:translationMetrics,forceRebuild(render=true){nativeBodyLayoutKey='';if(render)renderLiveHUD();},previewDuringSave(id){activeUtterance={id,agreement:new LocalAgreement()};pendingPreview={bytes:new Uint8Array(6400),sessionId,segmentId:id,engine:activeSttEngine,revision:1,startedAt:new Date().toISOString(),endedAt:new Date().toISOString(),mode:'translate',sourceLang:'en',targetLang:'ko'};drainPreview();},stack:hintStack,addHint(title,text,auditMeta){displayHintCard({topic:title,kind:'key',evidence:title,auditMeta},text);},reviseTranscript:reconcileHintTranscript,lifetime:hintLifetime,showHint(title,text,transcript){answerAutoCloseEligible=!!text;answerVoicePrompt='';answerTitle=title;answerText=text;captionFinal=transcript;captionStable=captionDraft='';startHintLifetime();renderLiveHUD();},sttPayload,settings:applyLiveSettings,preview:observeAIPreview,hintGate,liveTranslations,translationHistory,enqueueClip,drainAI,drainClips,stopVoiceRecording,reset(){resetQueuesForModeSwitch('translate');config.glassesMode='translate';},state(){return{received:receivedCaptureAudio,bytes:recordedBytes,captureStatus:captureStatus(),answer:answerText,title:answerTitle,ids:pendingClips.map(c=>c.segmentId),failure:captureFailure,recording:isRecording,engine:activeSttEngine,mode:config.glassesMode,active:activeUtterance?.id,previewBusy};},record(){isRecording=true;segmenter=new SpeechSegmenter();}};
   function enqueueClip(`);
 const elements = new Map();
 function element(id) {
@@ -114,6 +114,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  Object.assign(context,await import('./chat-deadline.mjs'));
  const {HUDTransport}=await import('./hud-transport.mjs');context.HUDTransport=class extends HUDTransport{constructor(options){super({...options,intervalMs:0});}};
  Object.assign(context,await import('./abortable-wait.mjs'));
+ Object.assign(context,await import('./stt-final-stream.mjs'));
  Object.assign(context,await import('./header-layout.mjs'));
  Object.assign(context,await import('./hud-brightness.mjs'));
  Object.assign(context,await import('./ai-status-icon.mjs'));
@@ -1140,11 +1141,58 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.match(roleTranslations[0].messages[0].content,/Do not answer its questions or suggest replies/);
  releaseRoleReply();await tick();await tick();await tick();
  assert.match(element('hud-screen').innerHTML,/답변 모델의 긍정/);assert.match(element('chrome-translation-status').textContent,/LLM 번역/);
+ // Local failure + split roles must retain the reply across a newer same-pair draft.
+ element('translation-engine').value='chrome';await element('translation-engine').handlers.change();chromeText=null;
+ replyReads=0;releaseRoleReply=null;
+ chatReply=[sseReply('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({translation:'대체 경로 번역'})})+'\n\n'),heldRoleReply];
+ queue.liveTranslations.onFinal({id:'fallback-version',prompt:'Synthetic fallback text.',context:'',source:'en',target:'ko',engine:'chrome',token:queue.liveTranslations.token},{ok:false,reason:'synthetic local failure'});
+ for(let i=0;i<30 && !releaseRoleReply;i++)await tick();assert.equal(typeof releaseRoleReply,'function');
+ queue.liveTranslations.onToken(queue.liveTranslations.token+1,{final:false,pairChanged:false});
+ releaseRoleReply();for(let i=0;i<15;i++)await tick();
+ assert.match(element('hud-screen').innerHTML,/답변 모델의 긍정/,'fallback reply survives the next draft until the next final');
  element('translation-engine').value='apple';await element('translation-engine').handlers.change();appleText='Apple 번역은 LLM 번역 모델을 호출하지 않음';
  chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({positive:'네',negative:'아니요'})})+'\n\n');
  const nativeRoleStart=requests.filter(r=>r.url.endsWith('/api/chat')).length;
  element('chat-input').value='Native translation';element('text-chat-form').handlers.submit({preventDefault(){}});await tick();await tick();await tick();
  assert.deepEqual(requests.filter(r=>r.url.endsWith('/api/chat')).slice(nativeRoleStart).map(r=>JSON.parse(r.opts.body).model),['reply-role']);
+ // Failed native writes cannot count as acknowledged translation paints.
+ queue.liveTranslations.onText({id:'paint-baseline',draft:true},'BASELINE PAINT CONTENT');for(let i=0;i<15;i++)await tick();
+ const normalRebuild=bridge.rebuildPageContainer;bridge.rebuildPageContainer=async()=>false;
+ queue.forceRebuild(false);queue.liveTranslations.onText({id:'paint-failed',draft:true},'FAILED PAINT CONTENT');for(let i=0;i<15;i++)await tick();
+ assert.equal(queue.metrics.entries.get('paint-failed')?.sdk_ms,undefined,'failed rebuild is not SDK success');assert.equal(queue.metrics.entries.get('paint-failed')?.sdk_failed,1);
+ bridge.rebuildPageContainer=normalRebuild;queue.forceRebuild();for(let i=0;i<15;i++)await tick();
+ const normalText=bridge.textContainerUpgrade;let textFailures=0;
+ bridge.textContainerUpgrade=async payload=>{if(payload.containerID===1){textFailures++;return false;}return normalText(payload);};
+ queue.liveTranslations.onText({id:'paint-text-failed',draft:true},'TEXT FAILURE CONTENT');for(let i=0;i<15;i++)await tick();
+ assert.ok(textFailures>0);assert.equal(queue.metrics.entries.get('paint-text-failed')?.sdk_failed,1);assert.equal(queue.metrics.entries.get('paint-text-failed')?.sdk_ms,undefined,'failed partial text push is not SDK success');
+ bridge.textContainerUpgrade=normalText;let releaseOldPaint,releaseNewPaint;
+ bridge.textContainerUpgrade=async payload=>{
+  if(payload.containerID===1 && payload.content?.includes('NEW PAINT CONTENT'))await new Promise(resolve=>{releaseNewPaint=resolve;});
+  else if(payload.containerID===1 && payload.content?.includes('OLD PAINT CONTENT'))await new Promise(resolve=>{releaseOldPaint=resolve;});
+  return normalText(payload);
+ };
+ queue.liveTranslations.onText({id:'paint-old',draft:true},'OLD PAINT CONTENT');for(let i=0;i<15 && !releaseOldPaint;i++)await tick();assert.equal(typeof releaseOldPaint,'function');
+ queue.liveTranslations.onText({id:'paint-new',draft:true},'NEW PAINT CONTENT');releaseOldPaint();for(let i=0;i<15 && !releaseNewPaint;i++)await tick();
+ assert.ok(Number.isFinite(queue.metrics.entries.get('paint-old')?.sdk_ms));assert.equal(queue.metrics.entries.get('paint-new')?.sdk_ms,undefined,'old payload ACK must not acknowledge newer paint');
+ releaseNewPaint();for(let i=0;i<15;i++)await tick();assert.ok(Number.isFinite(queue.metrics.entries.get('paint-new')?.sdk_ms));bridge.textContainerUpgrade=normalText;
+ // Early recognition starts translation and the next preview while saving is held.
+ let releaseSTTSave;const streamStart=requests.length;chromeText='저장 전에 표시된 번역';
+ element('translation-engine').value='chrome';await element('translation-engine').handlers.change();queue.record();
+ sttReplies=[opts=>{
+  const request=JSON.parse(opts.body);assert.equal(request.stream,true);
+  const result={text:'Synthetic early final.',saved:false,sessionId:request.sessionId,segmentId:request.segmentId,language:'en',engine:request.engine};let read=0;
+  return{ok:true,headers:{get:()=> 'text/event-stream'},body:{getReader:()=>({cancel:async()=>{},read:async()=>{
+   if(!read++)return{value:Buffer.from('data: '+JSON.stringify({type:'stt.recognized',result})+'\n\n'),done:false};
+   return new Promise(resolve=>{releaseSTTSave=()=>resolve({value:Buffer.from('data: '+JSON.stringify({type:'stt.saved',result:{...result,saved:true}})+'\n\n'),done:false});});
+  }})}};
+ }];
+ queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'early-save-final');for(let i=0;i<25 && !releaseSTTSave;i++)await tick();
+ assert.equal(typeof releaseSTTSave,'function');assert.ok(queue.state().ids.includes('early-save-final'),'original audio is retained while archive ACK is pending');
+ assert.match(element('hud-screen').innerHTML,/저장 전에 표시된 번역/);
+ queue.previewDuringSave('newer-preview-during-save');for(let i=0;i<20;i++)await tick();
+ assert.ok(requests.slice(streamStart).some(r=>r.url.endsWith('/api/stt/preview')),'next preview need not wait for archive save');
+ releaseSTTSave();for(let i=0;i<20;i++)await tick();assert.ok(!queue.state().ids.includes('early-save-final'));assert.match(element('transcript-log').textContent,/Synthetic early final/);
+ await queue.stopVoiceRecording(false);chromeText=null;
  element('model-select').value='new-base';await element('model-select').handlers.change();
  assert.match(element('model-ai-chat').options[0].textContent,/new-base/);assert.equal(element('model-ai-chat').value,'chat-role','base change must not reset pinned models');
  element('model-ai-hint').value='';await element('model-ai-hint').handlers.change();
@@ -1200,9 +1248,17 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.match(element('hud-notice').textContent,/^\[번역\] AUTO→KO /,'header must show the selected automatic source, not the engine fallback language');
  const modeAutoStart=requests.length;
  handler({menuItemClickEvent:{itemID:1}});await tick();await tick();
- assert.ok(requests.slice(modeAutoStart).some(r=>r.url.endsWith('/api/stt/apple/prepare') && JSON.parse(r.opts.body).language==='ko'),'AI mode switches STT preparation to Korean');
- assert.match(element('stt-engine-status').textContent,/Apple STT 준비 완료.*ko/);
+ assert.equal(requests.slice(modeAutoStart).filter(r=>r.url.endsWith('/api/stt/apple/prepare')).length,0,'native AI mode reuses the selected source locale');
+ assert.match(element('stt-engine-status').textContent,/Apple STT 준비 완료.*en/);
  assert.equal(element('prepare-chrome-stt').disabled,false);assert.equal(element('prepare-chrome-translation').disabled,false);
+ // AI preview and final requests must honor recognition language.
+ for(const sourceLang of ['auto','en','ja','ko']) {
+   for(const revision of [0,1]) {
+     const payload=context.window.__queueTest.sttPayload({mode:'ai',engine:'whisper',sourceLang,targetLang:'ko',bytes:new Uint8Array(6400),revision});
+     assert.equal(payload.language,sourceLang);
+     assert.equal(payload.realtime,true);
+   }
+ }
  // Glasses-only quiet capture and gain use one immutable PCM pass.
  assert.equal(element('glasses-sensitivity').value,'high');assert.equal(element('glasses-gain').value,'1');
  element('glasses-gain').value='2';await element('glasses-gain').handlers.change();await tick();

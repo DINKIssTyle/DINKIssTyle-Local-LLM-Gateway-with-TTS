@@ -1,5 +1,5 @@
-// Provisional text never enters the LLM or transcript store. One active
-// translation plus one latest pending revision bounds work while speaking.
+// Stable speech can be translated live; drafts never request reply examples
+// or archive transcripts. Keep one active translation and one latest revision.
 export class LiveTranslationQueue {
   constructor({translate,onText,onFinal,onToken=()=>{},onBusy=()=>{},onFailure=()=>{},onMeasure=()=>{},intervalMs=250,now=()=>Date.now()}){
     Object.assign(this,{translate,onText,onFinal,onToken,onBusy,onFailure,onMeasure,intervalMs,now});

@@ -1,3 +1,4 @@
+import {abortableWait} from './abortable-wait.mjs';
 import {translationChunks} from './stable-translation.mjs';
 import {parseTranslationDisplay} from './translation-display.mjs';
 import {extractVisibleAndReasoning} from './hud-status.mjs';
@@ -10,16 +11,17 @@ export function stableTranslationPreview(text,stable){
 export async function llmTranslation({fetch,server,headers,model,job,signal,onPartial=()=>{}}){
  const controller=new AbortController(),abort=()=>controller.abort();
  if(signal?.aborted)abort();else signal?.addEventListener('abort',abort,{once:true});
- const timer=setTimeout(abort,job.draft?12000:45000);let raw='',finished=false,last='';
+ const timer=setTimeout(abort,job.draft?12000:45000);let raw='',finished=false,last='',reader=null;
+ const cancelReader=()=>{try{Promise.resolve(reader?.cancel?.()).catch(()=>{});}catch{}};
  const started=Date.now();
- const publish=()=>{const visible=extractVisibleAndReasoning(raw).visibleText;const text=parseTranslationDisplay(visible).translation;if(text && text!==last){last=text;onPartial(text);}};
+ const publish=()=>{if(controller.signal.aborted)return;const visible=extractVisibleAndReasoning(raw).visibleText;const text=parseTranslationDisplay(visible).translation;if(text && text!==last){last=text;onPartial(text);}};
  try{
-  const response=await fetch(`${server}/api/chat`,{method:'POST',headers,signal:controller.signal,body:JSON.stringify({model,stream:true,glasses_request:{version:1,task:job.draft?'translation_preview':'translation_stream',text:job.prompt,source:job.source,target:job.target}})});
+  const response=await abortableWait(fetch(`${server}/api/chat`,{method:'POST',headers,signal:controller.signal,body:JSON.stringify({model,stream:true,glasses_request:{version:1,task:job.draft?'translation_preview':'translation_stream',text:job.prompt,source:job.source,target:job.target}})}),controller.signal);
   if(response.status===429)return {ok:false,busy:true,reason:'번역 모델 처리 중'};
   if(!response.ok)throw Error(`LLM 번역 HTTP ${response.status}`);
-  if(!response.body){const d=await response.json();raw=d.final_assistant_content ?? d.choices?.[0]?.message?.content ?? d.response ?? '';publish();}
+  if(!response.body){const d=await abortableWait(response.json(),controller.signal);raw=d.final_assistant_content ?? d.choices?.[0]?.message?.content ?? d.response ?? '';publish();}
   else{
-   const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='',event='';
+   reader=response.body.getReader();const decoder=new TextDecoder();let buffer='',event='';
    const line=value=>{if(finished)return;value=value.replace(/\r$/,'');if(!value){event='';return;}if(value.startsWith('event:')){event=value.slice(6).trim();return;}if(!value.startsWith('data:'))return;
     const text=value.slice(5).trim();if(!text)return;if(text==='[DONE]'){finished=true;return;}if(event==='error')throw Error(text);
     const d=JSON.parse(text),type=d.type || event;if(d.error || type==='error')throw Error(typeof d.error==='string'?d.error:d.error?.message || d.message || '번역 오류');
@@ -29,7 +31,7 @@ export async function llmTranslation({fetch,server,headers,model,job,signal,onPa
     else raw+=d.choices?.[0]?.delta?.content || '';
     if(type==='request.complete')finished=true;publish();
    };
-   while(true){const {done,value}=await reader.read();buffer+=decoder.decode(value,{stream:!done});const lines=buffer.split('\n');buffer=lines.pop();for(const value of lines)line(value);if(done){if(buffer)line(buffer);break;}if(finished){Promise.resolve(reader.cancel?.()).catch(()=>{});break;}}
+   while(true){const {done,value}=await abortableWait(reader.read(),controller.signal,cancelReader);buffer+=decoder.decode(value,{stream:!done});const lines=buffer.split('\n');buffer=lines.pop();for(const value of lines)line(value);if(done){if(buffer)line(buffer);break;}if(finished)break;}
   }
   if(controller.signal.aborted)throw Error('LLM 번역 취소 또는 시간 초과');
   const visible=extractVisibleAndReasoning(raw).visibleText.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'');
@@ -37,5 +39,5 @@ export async function llmTranslation({fetch,server,headers,model,job,signal,onPa
   if(!last)throw Error('번역문을 받지 못했습니다');
   return {ok:true,text:last,timings:{server_ms:undefined},elapsedMs:Date.now()-started};
  }catch(error){if(signal?.aborted)throw error;return {ok:false,reason:error.message};}
- finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);}
+ finally{cancelReader();try{reader?.releaseLock?.();}catch{}clearTimeout(timer);signal?.removeEventListener('abort',abort);}
 }

@@ -133,6 +133,7 @@ func handleSTTStatus(app *App) http.HandlerFunc {
 }
 
 type STTTranscribeRequest struct {
+	Stream       bool   `json:"stream,omitempty"`
 	Engine       string `json:"engine"`
 	Fallback     bool   `json:"fallback"`
 	Realtime     bool   `json:"realtime"`
@@ -392,20 +393,20 @@ func handleSTTAudio(app *App, preview bool) http.HandlerFunc {
 			return
 		}
 
-		if strings.TrimSpace(transcribedText) != "" {
+		finishSTTResponse(w, &resp, metadata.Stream, requestStarted, func() error {
+			if strings.TrimSpace(transcribedText) == "" {
+				return nil
+			}
 			word := strings.TrimSpace(metadata.TriggerWord)
 			resp.Triggered, resp.Prompt, resp.MatchedTrigger = matchSTTTrigger(transcribedText, aliases)
 			entry := mcp.TranscriptEntry{UserID: r.Header.Get("X-User-ID"), SessionID: metadata.SessionID, SegmentID: metadata.SegmentID, StartedAt: start.Format(time.RFC3339Nano), EndedAt: end.Format(time.RFC3339Nano), Text: transcribedText, TriggerWord: word, Triggered: resp.Triggered}
 			saveStarted := time.Now()
-			if err := mcp.SaveTranscript(entry); err != nil {
-				http.Error(w, "Transcript could not be saved: "+err.Error(), 500)
-				return
-			}
+			err := mcp.SaveTranscript(entry)
 			resp.Timings["save_ms"] = float64(time.Since(saveStarted).Microseconds()) / 1000
-			resp.Saved = true
-		}
-		resp.Timings["server_ms"] = float64(time.Since(requestStarted).Microseconds()) / 1000
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
+			if err == nil {
+				resp.Saved = true
+			}
+			return err
+		})
 	}
 }

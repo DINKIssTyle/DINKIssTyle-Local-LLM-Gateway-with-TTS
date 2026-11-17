@@ -21,6 +21,7 @@ import {headerLayout} from './header-layout.mjs';
 import {HudIconStore,microphoneIcon,hudIconPath,captureStatusIcon,iconHeaderMessage} from './hud-icons.mjs';
 import {EnginePreparation,waitForPreparation} from './engine-preparation.mjs';
 import {HUDTransport} from './hud-transport.mjs';
+import {readFinalTranscription} from './stt-final-stream.mjs';
 import {abortableWait} from './abortable-wait.mjs';
 import {chatDeadline,chatFailureMessage} from './chat-deadline.mjs';
 import {ROLE_MODEL_KEYS,normalizeRoleModels,resolveRoleModel,llmRequestRole,roleModelOptions} from './role-models.mjs';
@@ -559,7 +560,7 @@ import { LocalAgreement } from './local-agreement.mjs';
   function engineSpec(kind,overrides={}){
     return {kind,server:config.serverUrl,headers:getAuthHeaders({'Content-Type':'application/json'}),
       engine:kind==='stt'?config.sttEngine:localEngine(),
-      language:normalizeGlassesMode(config.glassesMode)==='translate'?resolveTranslateSourceLang({sourceLang:config.translateSourceLang,targetLang:config.translateTargetLang}):'ko',
+      language:resolveSTTLanguage({mode:normalizeGlassesMode(config.glassesMode),engine:overrides.engine || config.sttEngine,sourceLang:config.translateSourceLang,targetLang:config.translateTargetLang}),
       source:resolveTranslateSourceLang({sourceLang:config.translateSourceLang,targetLang:config.translateTargetLang}),target:config.translateTargetLang || 'ko',...overrides};
   }
   function canonicalSpec(spec){
@@ -633,8 +634,8 @@ import { LocalAgreement } from './local-agreement.mjs';
   let translationPaint=null;
   const translationMetrics=new TranslationMetrics({onUpdate:entry=>{
     const el=document.getElementById('translation-latency');if(!el)return;
-    const labels={stt_http_ms:'STT 왕복',stt_server_ms:'STT 서버',stt_lock_ms:'STT 잠금 대기',stt_engine_ms:'STT 엔진',save_ms:'저장',translation_queue_ms:'번역 대기',translation_http_ms:'번역 왕복',translation_server_ms:'번역 서버',first_text_ms:'첫 번역',sdk_ms:'안경 전송'};
-    el.textContent=Object.entries(labels).filter(([key])=>entry[key]!==undefined).map(([key,label])=>`${label} ${entry[key]}ms`).join(' · ')+(entry.upload_bytes!==undefined?` · 오디오 ${entry.upload_bytes}/${entry.audio_bytes ?? '?'}B`:'');
+    const labels={stt_first_result_ms:'STT 인식 도착',stt_http_ms:'STT 왕복',stt_server_ms:'STT 서버',stt_lock_ms:'STT 잠금 대기',stt_engine_ms:'STT 엔진',save_ms:'저장',translation_queue_ms:'번역 대기',translation_http_ms:'번역 왕복',translation_server_ms:'번역 서버',first_text_ms:'첫 번역',sdk_ms:'안경 최근 성공'};
+    el.textContent=Object.entries(labels).filter(([key])=>entry[key]!==undefined).map(([key,label])=>`${label} ${entry[key]}ms`).join(' · ')+(entry.upload_bytes!==undefined?` · 오디오 ${entry.upload_bytes}/${entry.audio_bytes ?? '?'}B`:'')+(entry.sdk_failed?' · 안경 전송 실패':'');
   }});
   const llmTranslationCache=new Map();
   let previewRetryTimer=null;
@@ -655,7 +656,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     },
     onText:(job,text)=>{
       if(normalizeGlassesMode(config.glassesMode)!=='translate')return;
-      translationPaint={id:job.id,at:Date.now(),acked:false};
+      translationPaint={id:job.id,at:Date.now(),acked:false,content:''};
       liveTranslationDraft=job.draft;
       translationFailure='';translationDisplay={...translationDisplay,translation:text,pronunciation:''};answerText=text;
       translationHistory.update(job.historyId || job.id,text,{final:!job.draft,revision:job.id});
@@ -1428,6 +1429,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     const titleChanged=nextTitle!==lastAITitleContent;lastAITitleContent=nextTitle;
     const nextSecondTitle=body.titles?.[1] || '',secondTitleChanged=nextSecondTitle!==lastSecondAITitleContent;lastSecondAITitleContent=nextSecondTitle;
     const nextAI=body.show?String(aiWindowText || '').slice(0,2000):'';
+    if(translateMode && translationPaint && translationPaint.content!==nextAI)translationPaint={...translationPaint,content:nextAI,acked:false};
     const nextTx=body.showTranscript?String(transcriptFullText || '').slice(0,2000):'';
     const txBrightness=hudTextBrightness(4),txBrightnessChanged=txBrightness!==lastTranscriptBrightness;
     lastTranscriptBrightness=txBrightness;
@@ -1444,7 +1446,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       if(translateMode || !body.show || (!body.cards && !body.titleHeight))pendingHUD.delete(9);
       if(body.cards?.length>1 && secondTitleChanged)pendingHUD.set(10,{containerID:10,containerName:'hint-title-older',content:nextSecondTitle});
       if(!(body.cards?.length>1))pendingHUD.delete(10);
-      if(body.show && aiChanged)pendingHUD.set(1,{containerID:1,containerName:'gateway',content:nextAI,auditHints:visibleHintAudits()});
+      if(body.show && aiChanged)pendingHUD.set(1,{containerID:1,containerName:'gateway',content:nextAI,auditHints:visibleHintAudits(),translationPaint:translateMode?translationPaint:null});
       if(!body.show)pendingHUD.delete(1);
       if(!body.showTranscript)pendingHUD.delete(4);
       if(body.showTranscript && (txChanged || txBrightnessChanged))pendingHUD.set(4,{containerID:4,containerName:'transcript',content:nextTx});
@@ -1457,13 +1459,20 @@ import { LocalAgreement } from './local-agreement.mjs';
     renderLiveHUD(pageInfo);
   }
 
+  function acknowledgeTranslationPaint(paint,content){
+    if(!paint || paint.content!==content)return;
+    const values={sdk_failed:0};
+    if(!paint.acked){paint.acked=true;values.sdk_ms=Date.now()-paint.at;}
+    translationMetrics.record(paint.id,values);
+  }
+
   // Serialize and coalesce updates so streamed tokens do not flood Bluetooth.
   async function flushHUD() {
     if (sendingHUD || !hudTransport.ready) return;
-    sendingHUD = true;let sendingHintMeta=[];
+    sendingHUD = true;let sendingHintMeta=[],sendingPaint=null;
     try {
       while (displayReady && hudTransport.ready) {
-        sendingHintMeta=[];
+        sendingHintMeta=[];sendingPaint=null;
         if(headPaused){
           if(!nativeHeadBlank){
             if(!await hudTransport.call(()=>bridge.rebuildPageContainer(blankHeadPage())))throw Error('빈 화면 전환 실패');
@@ -1487,9 +1496,10 @@ import { LocalAgreement } from './local-agreement.mjs';
         if(nativeBodyLayoutKey!==body.key || nativePickerKey || nativeMenuSource!==config.audioInputSource || nativeTranslateLayout!==translate || nativeHeaderLayoutKey!==header.key){
           const paint=translationPaint;const shownHints=visibleHintAudits();sendingHintMeta=shownHints;
           const page=hudPage(translate,header,body);
+          sendingPaint=translate && body.show && paint && page.textObject.some(c=>c.containerID===1 && c.content===paint.content)?paint:null;
           const success=await hudTransport.call(()=>bridge.rebuildPageContainer(page));
-          if(translate && body.show && paint && !paint.acked){paint.acked=true;translationMetrics.record(paint.id,{sdk_ms:Date.now()-paint.at});}
           if(!success)throw new Error('안경 화면 배치 변경 실패');
+          if(translate && body.show)acknowledgeTranslationPaint(paint,page.textObject.find(c=>c.containerID===1)?.content);
           if(!translate && body.show)shownHints.forEach(hintDeviceDisplayed);
           const allowed=new Set([...page.textObject,...page.imageObject].map(c=>c.containerID));
           for(const id of pendingHUD.keys())if(!allowed.has(id))pendingHUD.delete(id);
@@ -1515,16 +1525,16 @@ import { LocalAgreement } from './local-agreement.mjs';
             hudImagesDisabled=true;pendingHUD.delete(5);pendingHUD.delete(6);pendingHUD.delete(11);queueHudIcons();
           }
         }else{
-          const paint=translationPaint;
-          const {auditHints:shownHints=[],...payload}=update;sendingHintMeta=shownHints;
+          const {auditHints:shownHints=[],translationPaint:paint,...payload}=update;sendingHintMeta=shownHints;sendingPaint=id===1 && translate && paint?.content===payload.content?paint:null;
           const success = await hudTransport.call(()=>bridge.textContainerUpgrade({...payload,textColor:hudTextBrightness(id)}));
-          if(id===1 && translate && paint && !paint.acked){paint.acked=true;translationMetrics.record(paint.id,{sdk_ms:Date.now()-paint.at});}
           if (!success) throw new Error('안경 화면 갱신 실패');
+          if(id===1 && translate)acknowledgeTranslationPaint(paint,payload.content);
           shownHints.forEach(hintDeviceDisplayed);
         }
 
       }
     } catch (err) {
+      if(sendingPaint)translationMetrics.record(sendingPaint.id,{sdk_failed:1});
       sendingHintMeta.forEach(meta=>auditHint(meta,'device_error',{reason:'sdk_transport_error',text:JSON.stringify({message:String(err.message || err).slice(0,240),connected:hudTransport.connected})}));
       console.warn('Bridge display push error:', err);
       updateConnectionState(false, err.message);
@@ -2024,15 +2034,20 @@ import { LocalAgreement } from './local-agreement.mjs';
     return fallbackTranslateSourceLang(clip);
   }
 
-  function sttPayload(clip, overrideLang = '') {
-    let lang = overrideLang;
-    if (!lang) {
-      if (clip.mode === 'translate') {
-        lang = (clip.engine || activeSttEngine)==='whisper' && clip.targetLang==='ko'?'auto':resolveTranslateSourceLang(clip);
-      } else {
-        lang = 'ko';
-      }
+  function resolveSTTLanguage(clip) {
+    const engine=clip.engine || activeSttEngine;
+    const source=String(clip.sourceLang || config.translateSourceLang || 'auto').trim().toLowerCase();
+    const target=clip.targetLang || config.translateTargetLang || 'ko';
+    // Native recognizers require a locale; Whisper supports automatic detection.
+    if(engine==='whisper') {
+      if(clip.mode==='translate' && target==='ko')return 'auto';
+      return /^[a-z]{2}$/.test(source)?source:'auto';
     }
+    return resolveTranslateSourceLang({...clip,sourceLang:source,targetLang:target});
+  }
+
+  function sttPayload(clip, overrideLang = '') {
+    const lang=overrideLang || resolveSTTLanguage(clip);
     return {engine:clip.engine || activeSttEngine,fallback:config.sttFallback!==false,audio:uint8ArrayToBase64(clip.bytes),format:'pcm',sampleRate:16000,language:lang,
       realtime:clip.mode==='ai',sessionId:clip.sessionId,segmentId:clip.segmentId,revision:clip.revision || 0,
       startedAt:clip.startedAt,endedAt:clip.endedAt,triggerWord:clip.triggerWord || '',speechFilter:clip.speechFilter};
@@ -2040,9 +2055,9 @@ import { LocalAgreement } from './local-agreement.mjs';
 
   async function drainPreview() {
     if (previewBusy || previewRetryTimer || !pendingPreview || !isRecording) return;
-    // Each engine has one recognizer. Finish the previous segment before a new
-    // preview can replace its native session or repeatedly win the same lock.
-    if((activeFinalClip && activeFinalClip.engine===pendingPreview.engine) || pendingClips.some(clip=>clip.engine===pendingPreview.engine))return;
+    // Each engine has one recognizer. Wait for final inference, but allow a
+    // newer preview after stt.recognized while the old result is being archived.
+    if((activeFinalClip && !activeFinalClip.inferenceDone && activeFinalClip.engine===pendingPreview.engine) || pendingClips.some(clip=>!clip.inferenceDone && clip.engine===pendingPreview.engine))return;
     const snapshot = pendingPreview; pendingPreview = null; previewBusy = true;
     const controller = new AbortController();
     previewAbortController = controller;
@@ -2224,7 +2239,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         transcriptText += `[${time}] ${text}\n`;
         els.transcriptLog.textContent = transcriptText;
         if(headPaused || clip.epoch!==undefined && clip.epoch!==recognitionEpoch)continue;
-        captionFinal=text;transcriptStatusMessage='';
+        if(clip.mode!=='translate' || !(Date.parse(clip.startedAt)<translationDirection.latest)){captionFinal=text;transcriptStatusMessage='';}
         transcriptContext.push(text);if(transcriptContext.length>8)transcriptContext.shift();
         const clipMode = normalizeGlassesMode(clip.mode || config.glassesMode);
         const clipTargetLang = clip.targetLang || config.translateTargetLang || 'ko';
@@ -2294,7 +2309,8 @@ import { LocalAgreement } from './local-agreement.mjs';
     try {
       if(clip.mode==='ai')voiceLatency.mark(clip.segmentId,'stt_sent');
       const sttSentAt=Date.now();
-      const payload = sttPayload(clip);
+      clip.inferenceDone=false;
+      const payload = {...sttPayload(clip),stream:clip.mode==='translate'};
       let res = await gatewayFetch(`${config.serverUrl}/api/stt/transcribe`, {
         method: 'POST', headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(payload), signal: controller.signal,
@@ -2305,7 +2321,16 @@ import { LocalAgreement } from './local-agreement.mjs';
         err.retryable=[408,425,429].includes(res.status) || res.status>=500;
         throw err;
       }
-      const data = await res.json();
+      const data = await readFinalTranscription(res,{signal:controller.signal,onRecognized:recognized=>{
+        if(!recognized || recognized.sessionId!==clip.sessionId || recognized.segmentId!==clip.segmentId)return;
+        clip.inferenceDone=true;
+        translationMetrics.record(clip.segmentId,{stt_first_result_ms:Date.now()-sttSentAt});
+        if(clip.epoch===recognitionEpoch && sessionId===clip.sessionId && normalizeGlassesMode(config.glassesMode)==='translate' && recognized.text?.trim() && !recognized.rejected){
+          enqueueTranslation(clip.segmentId,recognized.text.trim(),transcriptContext.slice(-2).join('\n').slice(-800),clip.sourceLang || 'auto',clip.targetLang || 'ko',
+            {sessionId:clip.sessionId,detectedLanguage:recognized.language,sttEngine:recognized.engine || clip.engine,joinSentence:String(clip.engine || '').startsWith('chrome-') && clip.continuous,startedAt:clip.startedAt,endedAt:clip.endedAt});
+        }
+        if(pendingPreview)drainPreview();
+      }});
       if(data.warning)els.sttEngineStatus.textContent=data.warning;
       if(clip.mode==='translate')translationMetrics.record(clip.segmentId,{stt_http_ms:Date.now()-sttSentAt,stt_server_ms:data.timings?.server_ms ?? data.timings?.stt_ms,stt_lock_ms:data.timings?.lock_ms,stt_engine_ms:data.timings?.engine_ms,save_ms:data.timings?.save_ms,upload_bytes:clip.bytes.length,audio_bytes:clip.bytes.length});
       if (data.text?.trim() && !data.saved) {
@@ -2594,6 +2619,7 @@ import { LocalAgreement } from './local-agreement.mjs';
           if(!translationDisplay.translation && config.chromeTranslation!==false)translationDisplay.translation=previousTranslation;
           if(chromeText && !options.replyOnly)translationDisplay.translation=chromeText;
           answerText=translationDisplay.translation;
+          if(answerText!==previousTranslation)translationPaint={id:options.translationRevisionId || options.translationHistoryId || String(options.translationToken || 'fallback'),at:Date.now(),acked:false,content:''};
           if(!options.replyOnly && (chromeText || parsedTranslation.translation))translationHistory.update(options.translationHistoryId,answerText,{final:commitReplies || !!chromeText,revision:options.translationRevisionId || options.translationHistoryId});
           els.chatOutput.textContent=translationPhoneText(translationDisplay);
         } else {
@@ -2820,7 +2846,7 @@ import { LocalAgreement } from './local-agreement.mjs';
 
       if(separateLLMReplies){
         els.chromeTranslationStatus.textContent='LLM 번역 완료 · 지정한 번역 답변 모델로 생성 중';
-        enqueueAI(newID(),prompt,conversationContext,'translate',targetLang || config.translateTargetLang,{replyOnly:true,chromeTranslationText:answerText,chromeAttempted:true,translationSource:chromeSource,translationToken:options.translationToken,translationHistoryId:options.translationHistoryId,translationRevisionId:options.translationRevisionId,translatedBy:'LLM'});
+        enqueueAI(newID(),prompt,conversationContext,'translate',targetLang || config.translateTargetLang,{replyOnly:true,replyVersion:options.replyVersion ?? translationReplyVersion,chromeTranslationText:answerText,chromeAttempted:true,translationSource:chromeSource,translationToken:options.translationToken,translationHistoryId:options.translationHistoryId,translationRevisionId:options.translationRevisionId,translatedBy:'LLM'});
       }
       if(options.chatSession && requestChatScope===chatScope()){
         chatMemory.remember(requestChatScope,prompt,answerText);

@@ -1,3 +1,4 @@
+import {abortableWait} from './abortable-wait.mjs';
 // This bridge talks only to the user's authenticated gateway. The request carries provisional or finalized text, never microphone PCM.
 // Transcription may come from Whisper or the separately selected Chrome STT engine.
 export async function localTranslate(fetcher,server,headers,request,signal,timeoutMs=8000,engine="chrome"){
@@ -9,8 +10,8 @@ export async function localTranslate(fetcher,server,headers,request,signal,timeo
   signal?.addEventListener('abort',abort,{once:true});
   const timer=setTimeout(abort,timeoutMs);
   try{
-    const response=await fetcher(`${server}/api/translate/${engine}`,{method:'POST',headers,body:JSON.stringify(request),signal:controller.signal});
-    const data=await response.json();
+    const response=await abortableWait(fetcher(`${server}/api/translate/${engine}`,{method:'POST',headers,body:JSON.stringify(request),signal:controller.signal}),controller.signal);
+    const data=await abortableWait(response.json(),controller.signal);
     if(response.status===429 || data.status==='busy')return {ok:false,busy:true,reason:data.error || '번역 처리 중'};
     if(!response.ok || data.status!=='ready' || typeof data.text!=='string' || !data.text.trim())return {ok:false,needsPrepare:['needs_prepare','needs-prepare','downloadable','unavailable'].includes(data.status) || /준비.*먼저|언어.*설치/i.test(data.error || ''),reason:data.error || `${label} 번역 준비가 필요합니다`};
     return {ok:true,text:data.text.trim(),source:data.source,target:data.target,timings:data.timings};

@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import {readFinalTranscription} from './stt-final-stream.mjs';
+const chunk=(type,result)=>({done:false,value:Buffer.from('data: '+JSON.stringify({type,result})+'\n\n')});
+let save,seen=[],cancelled=0,read=0;
+const result=readFinalTranscription({headers:{get:()=> 'text/event-stream'},body:{getReader:()=>({read:async()=>++read===1?chunk('stt.recognized',{text:'synthetic',saved:false}):new Promise(resolve=>{save=()=>resolve(chunk('stt.saved',{text:'synthetic',saved:true}));}),cancel:()=>{cancelled++;}})}},{onRecognized:r=>seen.push(r)});
+await new Promise(resolve=>setImmediate(resolve));assert.equal(seen.length,1);assert.equal(seen[0].saved,false);
+let settled=false;result.then(()=>settled=true);await new Promise(resolve=>setImmediate(resolve));assert.equal(settled,false,'audio must remain retained until saved');
+save();assert.equal((await result).saved,true);assert.equal(cancelled,1);
+const failure={headers:{get:()=> 'text/event-stream'},body:{getReader:()=>({read:async()=>({value:Buffer.from('data: {"type":"stt.error","message":"archive failed","retryable":true}\n\n')}),cancel:async()=>{}})}};
+await assert.rejects(()=>readFinalTranscription(failure),e=>e.retryable===true);
+const c=new AbortController();let entered,close=0;
+const started=new Promise(resolve=>entered=resolve);
+const stalled=readFinalTranscription({headers:{get:()=> 'text/event-stream'},body:{getReader:()=>({read(){entered();return new Promise(()=>{});},cancel(){close++;}})}},{signal:c.signal});
+await started;c.abort();await assert.rejects(stalled,{name:'AbortError'});assert.ok(close>=1);
+assert.deepEqual(await readFinalTranscription({json:async()=>({text:'old JSON',saved:true})}),{text:'old JSON',saved:true});
+console.log('PASS: early recognition, durable final acknowledgment, save failure, old JSON and ignored reader abort');

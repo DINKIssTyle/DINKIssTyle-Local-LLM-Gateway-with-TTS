@@ -64,3 +64,5 @@ all_funcs.txt
 
 !internal/evenrealities/*_test.go
 !internal/core/evenrealities_request_test.go
+
+!internal/core/stt_final_stream_test.go

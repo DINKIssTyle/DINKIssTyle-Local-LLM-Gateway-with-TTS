@@ -24,3 +24,9 @@ const unavailable=await localTranslate(async()=>({status:503,ok:false,json:async
 const transient=await localTranslate(async()=>({status:500,ok:false,json:async()=>({status:'error',error:'temporary'})}),'',{},{});assert.equal(transient.needsPrepare,false);
 
 const needsApple=await localTranslate(async()=>({status:503,ok:false,json:async()=>({status:'error',error:'서버에서 Apple 번역 준비를 먼저 실행해 주세요'})}),'',{}, {},undefined,1000,'apple');assert.equal(needsApple.needsPrepare,true);
+const ignoredAbort=new AbortController();let beginJSON;
+const begunJSON=new Promise(resolve=>beginJSON=resolve);
+const ignoredJSON=localTranslate(async()=>({ok:true,json(){beginJSON();return new Promise(()=>{});}}),'',{}, {text:'Synthetic'},ignoredAbort.signal,1000,'apple');
+await begunJSON;ignoredAbort.abort();await assert.rejects(ignoredJSON,{name:'AbortError'});
+const timedOutJSON=await localTranslate(async()=>({ok:true,json:()=>new Promise(()=>{})}),'',{}, {text:'Synthetic'},undefined,5,'chrome');
+assert.equal(timedOutJSON.ok,false);assert.match(timedOutJSON.reason,/시간 초과/);

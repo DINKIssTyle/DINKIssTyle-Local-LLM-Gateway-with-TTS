@@ -19,3 +19,14 @@ const cancelled=new AbortController();cancelled.abort();const aborted=await asse
 console.log('PASS: stable sentence-only previews, streamed translations, terminal completion, dedicated role/policy, busy and cancellation');
 const incomplete=await llmTranslation({job:{prompt:'test'},fetch:async()=>({ok:true,json:async()=>({response:'{"translation":"unfinished'})})});
 assert.equal(incomplete.ok,false,'truncated JSON cannot be cached as a completed sentence');
+
+// Abort must settle even if the WebView stream ignores its fetch signal.
+let reading,readerCancelled=0;
+const entered=new Promise(resolve=>reading=resolve),stop=new AbortController();
+const stuck=sendTranslation({job:{prompt:'Synthetic speech.'},signal:stop.signal,fetch:async()=>({ok:true,body:{getReader:()=>({read(){reading();return new Promise(()=>{});},cancel(){readerCancelled++;return new Promise(()=>{});}})}})});
+await entered;stop.abort();await assert.rejects(stuck,{name:'AbortError'});assert.ok(readerCancelled>=1);
+const jsonStop=new AbortController();let jsonReading;
+const jsonEntered=new Promise(resolve=>jsonReading=resolve);
+const jsonStuck=sendTranslation({job:{prompt:'Synthetic.'},signal:jsonStop.signal,fetch:async()=>({ok:true,json(){jsonReading();return new Promise(()=>{});}})});
+await jsonEntered;jsonStop.abort();await assert.rejects(jsonStuck,{name:'AbortError'});
+console.log('PASS: uncooperative SSE/JSON readers abort without retaining the translation operation');
