@@ -1,3 +1,5 @@
+export function normalizeAIIconPosition(value){if(value===null || value==='' || typeof value==='boolean')return 552;const n=Number(value);return Number.isFinite(n)?Math.max(0,Math.min(552,Math.round(n))):552;}
+export function aiIconPositionLabel(value){const x=normalizeAIIconPosition(value);return (x===0?'좌 · ':x===276?'중앙 · ':x===552?'우 · ':'')+x+'px';}
 export const normalizeAIHeaderLayout=value=>value==='status-icon'?'status-icon':'standard';
 export function aiStatusIcon({error=false,preparing=false,listening=false,audio=false,transcribing=false,working=false,phase='',progress=null}={}){
  if(error)return {key:'status-warning',label:'오류 · 연결 확인'};

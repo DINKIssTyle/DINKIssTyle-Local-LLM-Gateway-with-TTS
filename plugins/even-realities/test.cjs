@@ -272,6 +272,27 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.equal(nativePage.textObject.find(c=>c.containerID===3).content,' ');
  assert.ok(element('hud-status-row').classList.contains('ai-icon-header'));
  assert.equal(JSON.parse(nativeSaved).aiHeaderLayout,'status-icon');
+ assert.equal(element('ai-icon-position').disabled,false);
+ for(const [position,x,label] of [[0,0,'좌 · 0px'],[123,123,'123px'],[124,124,'124px'],[276,276,'중앙 · 276px'],[400,400,'400px'],[552,552,'우 · 552px']]){
+  element('ai-icon-position').value=String(position);element('ai-icon-position').handlers.input();
+  for(let i=0;i<150 && nativePage.imageObject[0]?.xPosition!==x;i++)await new Promise(resolve=>setTimeout(resolve,20));
+  assert.equal(nativePage.imageObject[0].xPosition,x);
+  assert.equal(element('hud-status-row').style['--ai-icon-percent'],position/552*100+'%');
+  assert.equal(element('hud-status-row').style['--ai-icon-compensation'],position/552*24+'px');
+  assert.equal(element('ai-icon-position-value').textContent,label);
+  assert.equal(JSON.parse(nativeSaved).aiIconPosition,position);
+  const notice=nativePage.textObject.find(c=>c.containerID===3);
+  assert.ok(notice.xPosition+notice.width<=x || notice.xPosition>=x+24,'blank touch container must leave the icon unobscured');
+ }
+
+ const beforeDragRebuilds=rebuilds.length,beforeDragSaved=nativeSaved;
+ for(let x=100;x<=277;x++){element('ai-icon-position').value=String(x);element('ai-icon-position').handlers.input();}
+ assert.equal(nativeSaved,beforeDragSaved,'rapid dragging does not write native storage for each pixel');
+ element('ai-icon-position').handlers.change();
+ for(let i=0;i<150 && nativePage.imageObject[0]?.xPosition!==277;i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(nativePage.imageObject[0].xPosition,277);assert.equal(JSON.parse(nativeSaved).aiIconPosition,277);
+ assert.ok(rebuilds.length<=beforeDragRebuilds+1,'a rapid drag commits one coalesced native layout');
+
  context.window.__queueTest.headerMode('translate');
  for(let i=0;i<150 && nativePage.imageObject.length!==3;i++)await new Promise(resolve=>setTimeout(resolve,20));
  assert.ok(nativePage.textObject.some(c=>c.containerID===2),'translation retains clock and full header with compact preference saved');
@@ -289,6 +310,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  element('ai-header-layout').value='standard';element('ai-header-layout').handlers.change();
  for(let i=0;i<150 && nativePage.imageObject.length!==3;i++)await new Promise(resolve=>setTimeout(resolve,20));
  assert.equal(nativePage.imageObject.length,3);assert.ok(nativePage.textObject.some(c=>c.containerID===2));
+ assert.equal(element('ai-icon-position').disabled,true);
  assert.equal(audioCalls.length,layoutMicCalls,'layout changes must not restart microphones');
  assert.ok(!element('hud-status-row').classList.contains('ai-icon-header'));
  // Native instance resolution is shared across callers and all LLM roles.
@@ -1868,11 +1890,12 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  element('hint-auto-close').checked=true;await element('hint-auto-close').handlers.change();element('hint-seconds-per-line').value='2.5';await element('hint-seconds-per-line').handlers.change();
  element('head-gesture-enabled').checked=true;await element('head-gesture-enabled').handlers.change();await queue.stopVoiceRecording(false);
  const restoredPrepareStart=requests.length;
- nativeSaved=JSON.stringify({...JSON.parse(nativeSaved),aiHeaderLayout:'status-icon'});
+ nativeSaved=JSON.stringify({...JSON.parse(nativeSaved),aiHeaderLayout:'status-icon',aiIconPosition:276});
  elements.clear();
  vm.runInNewContext(src,context);await tick();await tick();
  assert.equal(element('server-url').value,'https://192.168.1.4:2806');
  assert.equal(element('ai-header-layout').value,'status-icon','AI header choice restores with native settings');
+ assert.equal(element('ai-icon-position').value,'276','saved center position restores');
  assert.equal(element('head-gesture-enabled').checked,true);assert.equal(context.window.__queueTest.headState().imu,true,'saved head gesture starts IMU after startup');
  assert.match(element('login-status-label').textContent,/인증됨/,'new WebView with empty browser storage must restore native login');
  assert.equal(element('auth-password').value,'');
@@ -1884,9 +1907,10 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.equal(element('audio-input-source').value,'phone','phone source must survive native settings restore');
  assert.equal(element('glasses-sensitivity').value,'very_high');assert.equal(element('glasses-gain').value,'4');
  assert.ok(requests.slice(restoredPrepareStart).some(r=>r.url.endsWith('/api/stt/apple/prepare')),'restored native settings prepare after authenticated reconnect');
- const legacy=JSON.parse(nativeSaved);delete legacy.aiHeaderLayout;delete legacy.translationEngine;delete legacy.audioInputSource;delete legacy.glassesInput;legacy.chromeTranslation=false;nativeSaved=JSON.stringify(legacy);
+ const legacy=JSON.parse(nativeSaved);delete legacy.aiHeaderLayout;delete legacy.aiIconPosition;delete legacy.translationEngine;delete legacy.audioInputSource;delete legacy.glassesInput;legacy.chromeTranslation=false;nativeSaved=JSON.stringify(legacy);
  elements.clear();vm.runInNewContext(src,context);await tick();await tick();
  assert.equal(element('ai-header-layout').value,'standard','missing layout preference defaults to existing full header');
+ assert.equal(element('ai-icon-position').value,'552','missing position defaults to the original right edge');
  assert.equal(element('translation-engine').value,'llm','legacy native preferences must preserve LLM translation after asynchronous restore');
  assert.equal(element('chrome-translation').checked,false);
  assert.equal(element('audio-input-source').value,'glasses','legacy settings default to glasses');

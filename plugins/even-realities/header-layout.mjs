@@ -1,11 +1,12 @@
+import {normalizeAIIconPosition} from './ai-status-icon.mjs';
 import {getTextWidth} from '@evenrealities/pretext';
 function fit(text,maxWidth,suffix=''){
  if(getTextWidth(text+suffix)<=maxWidth)return text+suffix;
  const chars=Array.from(text);while(chars.length && getTextWidth(chars.join('')+'…'+suffix)>maxWidth)chars.pop();return chars.join('')+'…'+suffix;
 }
 // Three 24px bitmaps share the existing 27px header. Clock starts at x=400.
-export function headerLayout(translate,{trigger='',source='auto',target='ko',iconOnly=false}={}){
- if(!translate && iconOnly)return {iconOnly:true,prefix:{x:0,width:1,content:' '},wake:{x:1,width:1,content:' '},modeIconX:0,micIconX:0,stateIconX:552,x:0,width:548,key:'ai-status-icon'};
+export function headerLayout(translate,{trigger='',source='auto',target='ko',iconOnly=false,iconPosition=552}={}){
+ if(!translate && iconOnly){const stateIconX=normalizeAIIconPosition(iconPosition),left=stateIconX>=276;return {iconOnly:true,prefix:{x:0,width:1,content:' '},wake:{x:1,width:1,content:' '},modeIconX:0,micIconX:0,stateIconX,x:left?0:stateIconX+28,width:left?stateIconX-4:548-stateIconX,key:'ai-status-icon-'+stateIconX};}
  source=String(source || 'auto');target=String(target || 'ko');trigger=String(trigger || '');
  const prefix={x:0,width:Math.ceil(getTextWidth('['))+2,content:'['};
  const modeIconX=prefix.width+2;

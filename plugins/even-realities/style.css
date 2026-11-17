@@ -602,7 +602,13 @@ summary:focus-visible { outline:2px solid var(--accent-blue); outline-offset:2px
 .hud-ai-box { border-color:var(--hud-ai-color,var(--accent-green)); }
 
 /* Optional AI header: a single native-size status icon at the right edge. */
-.hud-status.ai-icon-header .hud-notice-group { width:100%; justify-content:flex-end; gap:0; }
+.hud-status.ai-icon-header .hud-notice-group { width:100%; justify-content:flex-start; gap:0; }
 .hud-status.ai-icon-header .hud-notice-group > :not(#hud-state-icon),
 .hud-status.ai-icon-header > #hud-status-text { display:none; }
 .hud-status.ai-icon-header { min-height:27px; }
+
+.ai-icon-position-settings input[type="range"] { width:100%; padding:0; accent-color:var(--accent-green); }
+.ai-icon-position-settings output { margin-left:8px; color:var(--text-secondary); }
+.range-position-labels { display:flex; justify-content:space-between; font-size:12px; color:var(--text-secondary); }
+
+.hud-status.ai-icon-header #hud-state-icon { margin-left:calc(var(--ai-icon-percent,100%) - var(--ai-icon-compensation,24px)); }
