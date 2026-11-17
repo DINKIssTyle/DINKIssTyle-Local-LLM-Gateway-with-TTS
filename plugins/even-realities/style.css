@@ -600,3 +600,9 @@ summary:focus-visible { outline:2px solid var(--accent-blue); outline-offset:2px
 .hud-transcript-label { color:var(--hud-transcript-color,var(--accent-green)); opacity:1; text-shadow:none; }
 
 .hud-ai-box { border-color:var(--hud-ai-color,var(--accent-green)); }
+
+/* Optional AI header: a single native-size status icon at the right edge. */
+.hud-status.ai-icon-header .hud-notice-group { width:100%; justify-content:flex-end; gap:0; }
+.hud-status.ai-icon-header .hud-notice-group > :not(#hud-state-icon),
+.hud-status.ai-icon-header > #hud-status-text { display:none; }
+.hud-status.ai-icon-header { min-height:27px; }

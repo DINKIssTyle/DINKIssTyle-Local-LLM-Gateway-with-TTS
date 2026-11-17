@@ -6,7 +6,7 @@
     <title>
       DKST AI Gateway for Even Realities G2
     </title>
-    <link rel="stylesheet" href="style.css?v=2.24.24">
+    <link rel="stylesheet" href="style.css?v=2.24.25">
   </head>
   <body>
     <div class="plugin-container">
@@ -21,7 +21,7 @@
               DKST Gateway
             </div>
             <div style="font-size: 11px; color: var(--text-secondary);">
-              Even Realities G2 · <span id="plugin-build-version">2.24.24</span>
+              Even Realities G2 · <span id="plugin-build-version">2.24.25</span>
             </div>
           </div>
         </div>
@@ -43,7 +43,7 @@
             P 1/1
           </span>
         </div>
-        <div class="hud-status" aria-label="현재 시각과 안경 배터리">
+        <div id="hud-status-row" class="hud-status" aria-label="현재 시각과 안경 배터리">
           <div class="hud-notice-group">
             <span id="hud-mode-label">
               [
@@ -554,6 +554,11 @@
           </span>
         </summary>
         <div class="settings-section-body">
+          <div class="form-group">
+            <label for="ai-header-layout">AI 모드 상단 레이아웃</label>
+            <select id="ai-header-layout"><option value="standard">기본 · 호출어와 상태, 시각·배터리</option><option value="status-icon">간결 · 우측 상태 아이콘 하나</option></select>
+            <p class="setting-help">간결 모드는 상단 문구와 시각·배터리를 숨기고, 듣기·전사·생각·프롬프트 진행·답변 생성·문제 상태를 아이콘 하나로 표시합니다. 번역 모드에는 적용하지 않습니다.</p>
+          </div>
           <div class="form-group hud-dimming-settings">
             <label class="setting-toggle"><input type="checkbox" id="hud-dim-enabled"><span>일부 화면 어둡게 하기</span></label>
             <label for="hud-dim-level">어둡게 표시할 밝기 <output id="hud-dim-value" for="hud-dim-level">25%</output></label>
@@ -896,7 +901,7 @@
         </button>
       </div>
     </div>
-    <script src="bundle.js?v=2.24.24">
+    <script src="bundle.js?v=2.24.25">
     </script>
   </body>
 </html>

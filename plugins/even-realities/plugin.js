@@ -16,6 +16,7 @@ import {adaptiveHUD,hintWindow} from './adaptive-hud.mjs';
 import {hintPresentation,JEV_ONLY,normalizeHintBudget,requestHintJudgment,suggestedHintJudge} from './hint-judge.mjs';
 import {SETTINGS_MENUS,settingsMenuItems,settingsPickerPage} from './settings-menu.mjs';
 import {GlassesInputProcessor,normalizeGlassesInput,inputSegmentOptions,levelDb,GLASSES_THRESHOLDS} from './glasses-input.mjs';
+import {aiStatusIcon,normalizeAIHeaderLayout} from './ai-status-icon.mjs';
 import {headerLayout} from './header-layout.mjs';
 import {HudIconStore,microphoneIcon,hudIconPath,captureStatusIcon,iconHeaderMessage} from './hud-icons.mjs';
 import {EnginePreparation,waitForPreparation} from './engine-preparation.mjs';
@@ -63,7 +64,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     aiHintMode: true,
     hintSensitivity: 'balanced',
     hintWebSearch: true,
-    hudDimEnabled:true,hudDimLevel:1,hudFullTranscript:false,hudFullAI:true,
+    aiHeaderLayout:'standard',hudDimEnabled:true,hudDimLevel:1,hudFullTranscript:false,hudFullAI:true,
     hideTranscript:false,
     triggerTranscriptOnly:false,
     hintAutoClose:false,
@@ -190,6 +191,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     }
     if(els.hudScreen){els.hudScreen.style.setProperty('--hud-ai-color',hudBorderPreviewColor(config));els.hudScreen.style.setProperty('--hud-transcript-color',hudPreviewColor(hudTextBrightness(4)));}
   }
+  let aiStatusError='';
   let lastTranscriptBrightness=null;
   function wakeInputDisplay(name,question=''){const q=String(question || '').trim();return `${name}: ${q?`${q} …`:'듣는 중...'}`;}
   function finishWakeJob(token){if(token!==undefined)voiceWakeJobs.delete(token);queueHudIcons();}
@@ -276,7 +278,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     hintJudgeStatus:document.getElementById('hint-judge-status'),
     hintSensitivity: document.getElementById('hint-sensitivity'),
     hintWebSearch: document.getElementById('hint-web-search'),
-    hudDimEnabled:document.getElementById('hud-dim-enabled'),hudDimLevel:document.getElementById('hud-dim-level'),hudDimValue:document.getElementById('hud-dim-value'),hudFullTranscript:document.getElementById('hud-full-transcript'),hudFullAI:document.getElementById('hud-full-ai'),
+    aiHeaderLayout:document.getElementById('ai-header-layout'),hudHeader:document.getElementById('hud-status-row'),hudDimEnabled:document.getElementById('hud-dim-enabled'),hudDimLevel:document.getElementById('hud-dim-level'),hudDimValue:document.getElementById('hud-dim-value'),hudFullTranscript:document.getElementById('hud-full-transcript'),hudFullAI:document.getElementById('hud-full-ai'),
     hideTranscript:document.getElementById('hide-transcript'),
     triggerTranscriptOnly:document.getElementById('trigger-transcript-only'),
     headGestureEnabled:document.getElementById('head-gesture-enabled'),
@@ -496,6 +498,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       const model=resolveRoleModel('hintDecision',config);
       const useLLM=!!model && model!==JEV_ONLY;
       job.auditSession=sessionId;job.auditJobID=`${sessionId}-${job.epoch}-${job.sequence}`;
+      aiStatusError='';if(iconOnlyHeader())queueHudIcons();
       const readAdvice=async(advisory,adviceSignal)=>{
         const res=await gatewayFetch(`${config.serverUrl}/api/glasses/hint-decision`,{
           method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),signal:adviceSignal,
@@ -504,7 +507,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         if(!res.ok)throw new Error(`HTTP ${res.status}${res.status===404?' · 게이트웨이 업데이트 필요':''}`);
         return res.json();
       };
-      if(!useLLM){const result=await readAdvice(false,signal);auditHint(job,'decision',{reason:result.hint?'jev_selected':result.reason || 'jev_skip',kind:result.category || ''});return result;}
+      if(!useLLM){try{const result=await readAdvice(false,signal);auditHint(job,'decision',{reason:result.hint?'jev_selected':result.reason || 'jev_skip',kind:result.category || ''});return result;}catch(error){if(!signal.aborted)aiStatusError=String(error.message || error);throw error;}}
       if(processingAI && !activeAIJob?.hint)return {hint:false,defer:true,reason:'answer_priority'};
       if(previewWakeId || pendingTrigger || activeAIJob && !activeAIJob.hint || pendingAI.some(job=>job.chatSession))return {hint:false,reason:'chat_priority'};
       if(signal.aborted)return {hint:false,reason:'cancelled'};
@@ -518,6 +521,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         return result;
       }catch(error){
         if(signal.aborted)throw error;
+        aiStatusError=String(error.message || error);
         auditHint(job,'skipped',{reason:error.code || 'judge_request_error'});
         els.hintJudgeStatus.textContent=`판별 LLM 지연/오류 · 전사 계속 · ${error.message}`;
         return {hint:false,reason:error.code || 'judge_request_error'};
@@ -537,7 +541,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       els.hintStatus.textContent=activeAIJob?.hint && activeAIJob.generationStartedAt!==undefined?'새 주제 확인 · 생성 중인 힌트 완료 후 반영':'새 주제 확인 · 대기 후보 갱신';
     },
     onAudit:(job,details)=>auditHint(job,details.stage,details),
-    onStatus:text=>{els.hintStatus.textContent=text;}
+    onStatus:text=>{els.hintStatus.textContent=text;if(iconOnlyHeader())Promise.resolve().then(()=>queueHudIcons());}
   });
 
   function ensureHintComparisonScope(){
@@ -679,15 +683,24 @@ import { LocalAgreement } from './local-agreement.mjs';
     const on=isRecording && !capturePreparing && !pendingMicOpen && !micCloseUncertain;
     return {source,on,key:microphoneIcon(source,on)};
   }
+  function iconOnlyHeader(){return normalizeGlassesMode(config.glassesMode)==='ai' && normalizeAIHeaderLayout(config.aiHeaderLayout)==='status-icon';}
+  function compactAIStatus(){
+    const match=String(aiPhaseTitle).match(/\((\d+)%\)/);
+    return aiStatusIcon({error:!!captureFailure || micCloseUncertain || !!aiStatusError || hudImagesDisabled || !hudTransport.connected,
+      preparing:capturePreparing || !!pendingMicOpen || !!micStopPromise,listening:captureListening(),audio:receivedCaptureAudio,
+      transcribing:draining || pendingClips.length>0 || previewBusy,
+      working:processingAI || isThinking || !!hintGate.inflight,phase:aiPhaseTitle+' '+aiPhaseDetail,progress:match?Number(match[1]):null});
+  }
   function hudCaptureIcon(){return captureStatusIcon({listening:captureListening() && receivedCaptureAudio,preparing:capturePreparing || !!pendingMicOpen || !!micStopPromise,transcribing:draining || pendingClips.length>0,error:!!captureFailure || micCloseUncertain});}
   function visibleHeaderMessage(){return hudImagesDisabled?currentHUDHeader(true):iconHeaderMessage(currentHUDHeader(true));}
   function currentHeaderLayout(translate=normalizeGlassesMode(config.glassesMode)==='translate'){
-    const layout=headerLayout(translate,{trigger:triggerLabels()[0] || '',source:translationDirection.pair.split('>')[0] || config.translateSourceLang || 'auto',target:translationDirection.pair.split('>')[1] || config.translateTargetLang || 'ko'});
+    const layout=headerLayout(translate,{iconOnly:!translate && iconOnlyHeader(),trigger:triggerLabels()[0] || '',source:translationDirection.pair.split('>')[0] || config.translateSourceLang || 'auto',target:translationDirection.pair.split('>')[1] || config.translateTargetLang || 'ko'});
     // Recreate the header once when capture becomes ready, even on firmware
     // that ignores blank partial updates. PCM/STT capture keeps running.
-    return {...layout,key:JSON.stringify([layout.key,captureListening() && receivedCaptureAudio,normalizeHUDDimming(config)])};
+    return {...layout,key:JSON.stringify([layout.key,!layout.iconOnly && captureListening() && receivedCaptureAudio,normalizeHUDDimming(config),iconOnlyHeader() && hudImagesDisabled])};
   }
   function nativeHUDNotice(){
+    if(iconOnlyHeader())return hudImagesDisabled?'!':' ';
     const {source,on}=hudMicrophoneState(),translate=normalizeGlassesMode(config.glassesMode)==='translate';
     const fallback=hudImagesDisabled?`[${translate?'번역':'AI'} ${source==='phone'?'폰':'안경'} ${on?'녹음':'꺼짐'}] `:'';
     // A space explicitly clears the previous firmware text. An empty string
@@ -698,6 +711,8 @@ import { LocalAgreement } from './local-agreement.mjs';
     const mic=hudMicrophoneState(),translate=normalizeGlassesMode(config.glassesMode)==='translate';
     if(els.hudMicIcon){els.hudMicIcon.src=hudIconPath(mic.key);els.hudMicIcon.alt=`${mic.source==='phone'?'휴대폰':'안경'} 마이크 ${mic.on?'켜짐':'꺼짐'}`;}
     const layout=currentHeaderLayout(translate);
+    els.hudHeader?.classList.toggle('ai-icon-header',!!layout.iconOnly);
+    els.hudHeader?.setAttribute?.('aria-label',layout.iconOnly?compactAIStatus().label:'현재 시각과 안경 배터리');
     els.hudModeLabel.textContent=layout.prefix.content;
     els.hudTriggerKeyword.textContent=layout.wake?.content || '';els.hudTriggerKeyword.hidden=false;
     const brightness=wakeBrightness();els.hudTriggerKeyword.style.opacity=String(hudLuminance(brightness));
@@ -705,10 +720,11 @@ import { LocalAgreement } from './local-agreement.mjs';
     els.hudHeaderMessage.style.opacity='1';
     els.hudHeaderMessage.style.color=hudPreviewColor(hudTextBrightness(3));
     if(els.hudMicIcon)els.hudMicIcon.style.opacity=String(hudLuminance(hudTextBrightness(5)));
-    const state=hudCaptureIcon(),modeIcon=translate?'mode-translate':'mode-ai';
-    for(const [element,key,label] of [[els.hudModeIcon,modeIcon,translate?'번역':'AI'],[els.hudStateIcon,state,({'status-idle':'대기중','status-listening':'듣는중','status-transcribing':'전사 처리중'})[state]]])if(element){element.src=hudIconPath(key);element.alt=label;element.style.opacity=String(hudLuminance(hudTextBrightness(6)));}
+    const compact=layout.iconOnly?compactAIStatus():null;
+    const state=compact?.key || hudCaptureIcon(),modeIcon=translate?'mode-translate':'mode-ai';
+    for(const [element,key,label] of [[els.hudModeIcon,modeIcon,translate?'번역':'AI'],[els.hudStateIcon,state,compact?.label || ({'status-idle':'대기중','status-listening':'듣는중','status-transcribing':'전사 처리중'})[state]]])if(element){element.src=hudIconPath(key);element.alt=label;element.style.opacity=String(hudLuminance(hudTextBrightness(6)));}
     if(!displayReady || headPaused)return;
-    if(force || lastWakeBrightness!==brightness){lastWakeBrightness=brightness;pendingHUD.set(8,{containerID:8,containerName:'wake-word',textColor:brightness});}
+    if(!layout.iconOnly && (force || lastWakeBrightness!==brightness)){lastWakeBrightness=brightness;pendingHUD.set(8,{containerID:8,containerName:'wake-word',textColor:brightness});}
     if(typeof bridge.updateImageRawData!=='function')hudImagesDisabled=true;
     if(hudImagesDisabled){
       const content=nativeHUDNotice();
@@ -716,7 +732,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       if(pendingHUD.size)flushHUD();
       return;
     }
-    const icons=[[5,'mic-state',mic.key],[6,'mode-state',modeIcon],[11,'capture-state',state]];
+    const icons=layout.iconOnly?[[11,'capture-state',state]]:[[5,'mic-state',mic.key],[6,'mode-state',modeIcon],[11,'capture-state',state]];
     for(const [id,name,key] of icons)if(force || lastHudIconKeys.get(id)!==`${key}:${hudTextBrightness(id)}`){
       lastHudIconKeys.set(id,`${key}:${hudTextBrightness(id)}`);pendingHUD.set(id,{containerID:id,containerName:name,icon:key});
     }
@@ -763,6 +779,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     config.hintContextTokens=normalizeHintBudget(config.hintContextTokens);els.hintContextTokens.value=String(config.hintContextTokens);
     els.hintSensitivity.value=config.hintSensitivity || 'balanced';
     if(els.hintWebSearch)els.hintWebSearch.checked=config.hintWebSearch!==false;
+    config.aiHeaderLayout=normalizeAIHeaderLayout(config.aiHeaderLayout);els.aiHeaderLayout.value=config.aiHeaderLayout;
     syncHUDDimmingControls();
     config.hideTranscript=config.hideTranscript===true;els.hideTranscript.checked=config.hideTranscript;
     config.triggerTranscriptOnly=config.triggerTranscriptOnly===true;els.triggerTranscriptOnly.checked=config.triggerTranscriptOnly;
@@ -924,6 +941,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     config.hintContextTokens=normalizeHintBudget(els.hintContextTokens.value);
     config.hintSensitivity=els.hintSensitivity.value || 'balanced';
     config.hintWebSearch=els.hintWebSearch?.checked!==false;
+    config.aiHeaderLayout=normalizeAIHeaderLayout(els.aiHeaderLayout.value);
     config.hideTranscript=els.hideTranscript.checked===true;
     config.triggerTranscriptOnly=els.triggerTranscriptOnly.checked===true;
     config.hintCardCount=hintCardCount(els.hintCardCount.value);config.hintAutoClose=els.hintAutoClose.checked===true;config.hintSecondsPerLine=secondsPerHintLine(els.hintSecondsPerLine.value);
@@ -1117,6 +1135,12 @@ import { LocalAgreement } from './local-agreement.mjs';
           ],
         },
       };
+      if(layout.iconOnly){
+        page.imageObject=hudImagesDisabled?[]:page.imageObject.filter(c=>c.containerID===11);
+        page.textObject=page.textObject.filter(c=>![2,7,8].includes(c.containerID));
+        const notice=page.textObject.find(c=>c.containerID===3);
+        if(hudImagesDisabled){notice.xPosition=552;notice.width=24;}
+      }
       if(body.cards?.length>1){
         const titles=page.textObject.filter(c=>c.containerID===9 || c.containerID===10);
         page.textObject=[...page.textObject.filter(c=>c.containerID!==9 && c.containerID!==10),...titles];
@@ -1443,10 +1467,13 @@ import { LocalAgreement } from './local-agreement.mjs';
         const body=currentBodyLayout();
         if(nativeBodyLayoutKey!==body.key || nativePickerKey || nativeMenuSource!==config.audioInputSource || nativeTranslateLayout!==translate || nativeHeaderLayoutKey!==header.key){
           const paint=translationPaint;const shownHints=visibleHintAudits();sendingHintMeta=shownHints;
-          const success=await hudTransport.call(()=>bridge.rebuildPageContainer(hudPage(translate,header,body)));
+          const page=hudPage(translate,header,body);
+          const success=await hudTransport.call(()=>bridge.rebuildPageContainer(page));
           if(translate && body.show && paint && !paint.acked){paint.acked=true;translationMetrics.record(paint.id,{sdk_ms:Date.now()-paint.at});}
           if(!success)throw new Error('안경 화면 배치 변경 실패');
           if(!translate && body.show)shownHints.forEach(hintDeviceDisplayed);
+          const allowed=new Set([...page.textObject,...page.imageObject].map(c=>c.containerID));
+          for(const id of pendingHUD.keys())if(!allowed.has(id))pendingHUD.delete(id);
           nativePickerKey='';nativeMenuSource=config.audioInputSource;nativeTranslateLayout=translate;nativeHeaderLayoutKey=header.key;nativeBodyLayoutKey=body.key;
           if(!body.show)pendingHUD.delete(1);
           if(translate || !body.show || (!body.cards && !body.titleHeight))pendingHUD.delete(9);
@@ -1491,7 +1518,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     const date=new Date();
     const text = hudStatusText(glassesBattery,date);
     els.hudStatus.textContent = text;
-    if (displayReady && text !== lastStatus) {
+    if (displayReady && !iconOnlyHeader() && text !== lastStatus) {
       pendingHUD.set(2, {containerID: 2, containerName: 'status', content: rightAlignedStatusText(glassesBattery,date)});
       flushHUD();
     }
@@ -1521,6 +1548,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     message=currentHUDHeader();
     if(els.hudNotice.textContent===message)return;
     els.hudNotice.textContent = message;
+    if(iconOnlyHeader())return;
     // The left header is bounded so a long wake word cannot wrap into the body.
     const content = nativeHUDNotice();
     if (displayReady) {
@@ -1814,6 +1842,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     config.hintContextTokens=normalizeHintBudget(els.hintContextTokens.value);
     config.hintSensitivity=els.hintSensitivity.value || 'balanced';
     config.hintWebSearch=els.hintWebSearch?.checked!==false;
+    config.aiHeaderLayout=normalizeAIHeaderLayout(els.aiHeaderLayout.value);
     config.hideTranscript=els.hideTranscript.checked===true;
     config.triggerTranscriptOnly=els.triggerTranscriptOnly.checked===true;
     config.hintCardCount=hintCardCount(els.hintCardCount.value);config.hintAutoClose=els.hintAutoClose.checked===true;config.hintSecondsPerLine=secondsPerHintLine(els.hintSecondsPerLine.value);
@@ -2415,6 +2444,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     let receivedVisibleAnswer=false;
     let chromeText=options.chromeTranslationText || '';let chromeSource=options.translationSource || resolveTranslateSourceLang({targetLang});
     let cueDisplayed=false;let cueTopic='';let hintSkipReason='not_completed';
+    aiStatusError='';
     const controller = new AbortController();
     aiAbortController = controller;
     const deadline=chatDeadline(controller,{chatSession:options.chatSession===true,hint:options.hint===true,setTimer:setTimeout,clearTimer:clearTimeout});
@@ -2784,6 +2814,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         playTTS(answerText);
       }
     } catch (err) {
+      if(!controller.signal.aborted)aiStatusError=String(err.message || err);
       if(options.hint)hintSkipReason=controller.signal.aborted?(options.cancelReason || (deadline.reason()?'writer_timeout':'canceled')):'writer_error';
       if(translationStale(options) || options.chatEpoch && options.chatEpoch!==chatEpoch)return;
       if (controller.signal.aborted && aiAbortedByModeSwitch) {
@@ -3138,6 +3169,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     els.hintSecondsPerLine.addEventListener('change',updateHintLifetimeSettings);
     els.triggerTranscriptOnly.addEventListener('change',setTriggerTranscriptOnly);
     els.hudScreen.addEventListener('click',event=>{const card=event.target?.closest?.('.hud-ai-box');if(card)dismissAIWindow(card.dataset?.hintCard);});
+    els.aiHeaderLayout.addEventListener('change',()=>{settingsEdited=true;config.aiHeaderLayout=normalizeAIHeaderLayout(els.aiHeaderLayout.value);renderLiveHUD();persistSettings().catch(console.warn);});
     els.hudDimLevel.addEventListener('input',updateHUDDimming);
     for(const el of [els.hudDimEnabled,els.hudFullTranscript,els.hudFullAI])el.addEventListener('change',updateHUDDimming);
     els.hideTranscript.addEventListener('change',()=>setTranscriptHidden(els.hideTranscript.checked));

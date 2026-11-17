@@ -1,12 +1,13 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const src = fs.readFileSync('plugin.js','utf8').replace(/^import .*\n/gm, '').replace('  function enqueueClip(', `  window.__queueTest={ai(){resetQueuesForModeSwitch('ai');config.glassesMode='ai';captureFailure='';isRecording=true;segmenter=new SpeechSegmenter();},resetCaptureBuffer(){resetQueuesForModeSwitch(config.glassesMode,true,true);renderLiveHUD();},ensureModel:ensureModelLoaded,gateway:gatewayFetch,refreshIcons(){queueHudIcons(true);},microphone:toggleVoiceRecording,dismiss:dismissAIWindow,headIMU:handleHeadIMU,headWait(){return headTransition?.catch(()=>{});},headState(){return {paused:headPaused,imu:headImuActive,phase:headCalibrationPhase,uncertain:micCloseUncertain};},audit:hintAudit,stack:hintStack,addHint(title,text,auditMeta){displayHintCard({topic:title,kind:'key',evidence:title,auditMeta},text);},reviseTranscript:reconcileHintTranscript,lifetime:hintLifetime,showHint(title,text,transcript){answerAutoCloseEligible=!!text;answerVoicePrompt='';answerTitle=title;answerText=text;captionFinal=transcript;captionStable=captionDraft='';startHintLifetime();renderLiveHUD();},settings:applyLiveSettings,preview:observeAIPreview,hintGate,liveTranslations,translationHistory,enqueueClip,drainAI,drainClips,stopVoiceRecording,reset(){resetQueuesForModeSwitch('translate');config.glassesMode='translate';},state(){return{received:receivedCaptureAudio,bytes:recordedBytes,captureStatus:captureStatus(),answer:answerText,title:answerTitle,ids:pendingClips.map(c=>c.segmentId),failure:captureFailure,recording:isRecording,engine:activeSttEngine,mode:config.glassesMode,active:activeUtterance?.id,previewBusy};},record(){isRecording=true;segmenter=new SpeechSegmenter();}};
+const src = fs.readFileSync('plugin.js','utf8').replace(/^import .*\n/gm, '').replace('  function enqueueClip(', `  window.__queueTest={ai(){resetQueuesForModeSwitch('ai');config.glassesMode='ai';captureFailure='';isRecording=true;segmenter=new SpeechSegmenter();},resetCaptureBuffer(){resetQueuesForModeSwitch(config.glassesMode,true,true);renderLiveHUD();},ensureModel:ensureModelLoaded,gateway:gatewayFetch,refreshIcons(){queueHudIcons(true);},headerMode(mode){config.glassesMode=mode;renderLiveHUD();},iconPhase(phase,error=''){aiPhaseTitle=phase;aiPhaseDetail='';aiStatusError=error;processingAI=!!phase;renderLiveHUD();},microphone:toggleVoiceRecording,dismiss:dismissAIWindow,headIMU:handleHeadIMU,headWait(){return headTransition?.catch(()=>{});},headState(){return {paused:headPaused,imu:headImuActive,phase:headCalibrationPhase,uncertain:micCloseUncertain};},audit:hintAudit,stack:hintStack,addHint(title,text,auditMeta){displayHintCard({topic:title,kind:'key',evidence:title,auditMeta},text);},reviseTranscript:reconcileHintTranscript,lifetime:hintLifetime,showHint(title,text,transcript){answerAutoCloseEligible=!!text;answerVoicePrompt='';answerTitle=title;answerText=text;captionFinal=transcript;captionStable=captionDraft='';startHintLifetime();renderLiveHUD();},settings:applyLiveSettings,preview:observeAIPreview,hintGate,liveTranslations,translationHistory,enqueueClip,drainAI,drainClips,stopVoiceRecording,reset(){resetQueuesForModeSwitch('translate');config.glassesMode='translate';},state(){return{received:receivedCaptureAudio,bytes:recordedBytes,captureStatus:captureStatus(),answer:answerText,title:answerTitle,ids:pendingClips.map(c=>c.segmentId),failure:captureFailure,recording:isRecording,engine:activeSttEngine,mode:config.glassesMode,active:activeUtterance?.id,previewBusy};},record(){isRecording=true;segmenter=new SpeechSegmenter();}};
   function enqueueClip(`);
 const elements = new Map();
 function element(id) {
   if (!elements.has(id)) {
-    const node={value:'',checked:true,textContent:'',style:{setProperty(name,value){this[name]=value;}},hidden:true,focus(){},handlers:{},options:[],classList:{add(){},remove(){},toggle(){}},addEventListener(type,fn){const previous=this.handlers[type];this.handlers[type]=previous?(...args)=>{const first=previous(...args);return fn(...args) ?? first;}:fn;},appendChild(opt){this.options.push(opt);if(!this.value)this.value=opt.value;}};
+    const classes=new Set();
+    const node={value:'',checked:true,textContent:'',style:{setProperty(name,value){this[name]=value;}},hidden:true,focus(){},handlers:{},options:[],classList:{add(...values){values.forEach(v=>classes.add(v));},remove(...values){values.forEach(v=>classes.delete(v));},contains(v){return classes.has(v);},toggle(v,force){const on=force===undefined?!classes.has(v):!!force;if(on)classes.add(v);else classes.delete(v);return on;}},addEventListener(type,fn){const previous=this.handlers[type];this.handlers[type]=previous?(...args)=>{const first=previous(...args);return fn(...args) ?? first;}:fn;},appendChild(opt){this.options.push(opt);if(!this.value)this.value=opt.value;}};
     let markup='';Object.defineProperty(node,'innerHTML',{get(){return markup;},set(value){markup=value;if(value==='')this.options=[];}});elements.set(id,node);
   }
   return elements.get(id);
@@ -115,6 +116,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  Object.assign(context,await import('./abortable-wait.mjs'));
  Object.assign(context,await import('./header-layout.mjs'));
  Object.assign(context,await import('./hud-brightness.mjs'));
+ Object.assign(context,await import('./ai-status-icon.mjs'));
  Object.assign(context,await import('./ai-response-limit.mjs'));
  Object.assign(context,await import('./hint-localization.mjs'));
  Object.assign(context,await import('./glasses-input.mjs'));
@@ -261,6 +263,34 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  deviceHandler({sn:'glasses-1',connectType:'connected',batteryLevel:0});
  for(let i=0;i<10;i++)await tick();
  assert.ok(rebuilds.length>0,'reconnect repaints the current layout');
+ // Optional AI header: exactly one right-edge image, with no stale text updates.
+ const layoutMicCalls=audioCalls.length;
+ element('ai-header-layout').value='status-icon';element('ai-header-layout').handlers.change();
+ for(let i=0;i<150 && nativePage.imageObject.length!==1;i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(nativePage.imageObject.length,1);assert.equal(nativePage.imageObject[0].containerID,11);assert.equal(nativePage.imageObject[0].xPosition,552);
+ assert.ok(!nativePage.textObject.some(c=>[2,7,8].includes(c.containerID)),'compact header removes clock, prefix and wake word');
+ assert.equal(nativePage.textObject.find(c=>c.containerID===3).content,' ');
+ assert.ok(element('hud-status-row').classList.contains('ai-icon-header'));
+ assert.equal(JSON.parse(nativeSaved).aiHeaderLayout,'status-icon');
+ context.window.__queueTest.headerMode('translate');
+ for(let i=0;i<150 && nativePage.imageObject.length!==3;i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.ok(nativePage.textObject.some(c=>c.containerID===2),'translation retains clock and full header with compact preference saved');
+ assert.ok(!element('hud-status-row').classList.contains('ai-icon-header'));
+ context.window.__queueTest.headerMode('ai');
+ for(let i=0;i<150 && nativePage.imageObject.length!==1;i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(nativePage.imageObject.length,1);
+
+ for(const [phase,key] of [['생각 중','status-thinking'],['프롬프트 처리 중 (32%)','status-prompt-2'],['프롬프트 처리 중','status-prompt-unknown'],['답변 작성 중','mode-ai']]){
+  context.window.__queueTest.iconPhase(phase);for(let i=0;i<3;i++)await tick();
+  assert.ok(element('hud-state-icon').src.endsWith('/'+key+'.png'));assert.equal(nativePage.imageObject.length,1);
+ }
+ context.window.__queueTest.iconPhase('생각 중','synthetic failure');assert.ok(element('hud-state-icon').src.endsWith('/status-warning.png'));
+ context.window.__queueTest.iconPhase('');
+ element('ai-header-layout').value='standard';element('ai-header-layout').handlers.change();
+ for(let i=0;i<150 && nativePage.imageObject.length!==3;i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(nativePage.imageObject.length,3);assert.ok(nativePage.textObject.some(c=>c.containerID===2));
+ assert.equal(audioCalls.length,layoutMicCalls,'layout changes must not restart microphones');
+ assert.ok(!element('hud-status-row').classList.contains('ai-icon-header'));
  // Native instance resolution is shared across callers and all LLM roles.
  const readyResponse={ok:true,json:async()=>({status:'ready',model:'cold-role',instance_id:'cold-role:2'})};
  let finishModel;
@@ -1838,9 +1868,11 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  element('hint-auto-close').checked=true;await element('hint-auto-close').handlers.change();element('hint-seconds-per-line').value='2.5';await element('hint-seconds-per-line').handlers.change();
  element('head-gesture-enabled').checked=true;await element('head-gesture-enabled').handlers.change();await queue.stopVoiceRecording(false);
  const restoredPrepareStart=requests.length;
+ nativeSaved=JSON.stringify({...JSON.parse(nativeSaved),aiHeaderLayout:'status-icon'});
  elements.clear();
  vm.runInNewContext(src,context);await tick();await tick();
  assert.equal(element('server-url').value,'https://192.168.1.4:2806');
+ assert.equal(element('ai-header-layout').value,'status-icon','AI header choice restores with native settings');
  assert.equal(element('head-gesture-enabled').checked,true);assert.equal(context.window.__queueTest.headState().imu,true,'saved head gesture starts IMU after startup');
  assert.match(element('login-status-label').textContent,/인증됨/,'new WebView with empty browser storage must restore native login');
  assert.equal(element('auth-password').value,'');
@@ -1852,8 +1884,9 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.equal(element('audio-input-source').value,'phone','phone source must survive native settings restore');
  assert.equal(element('glasses-sensitivity').value,'very_high');assert.equal(element('glasses-gain').value,'4');
  assert.ok(requests.slice(restoredPrepareStart).some(r=>r.url.endsWith('/api/stt/apple/prepare')),'restored native settings prepare after authenticated reconnect');
- const legacy=JSON.parse(nativeSaved);delete legacy.translationEngine;delete legacy.audioInputSource;delete legacy.glassesInput;legacy.chromeTranslation=false;nativeSaved=JSON.stringify(legacy);
+ const legacy=JSON.parse(nativeSaved);delete legacy.aiHeaderLayout;delete legacy.translationEngine;delete legacy.audioInputSource;delete legacy.glassesInput;legacy.chromeTranslation=false;nativeSaved=JSON.stringify(legacy);
  elements.clear();vm.runInNewContext(src,context);await tick();await tick();
+ assert.equal(element('ai-header-layout').value,'standard','missing layout preference defaults to existing full header');
  assert.equal(element('translation-engine').value,'llm','legacy native preferences must preserve LLM translation after asynchronous restore');
  assert.equal(element('chrome-translation').checked,false);
  assert.equal(element('audio-input-source').value,'glasses','legacy settings default to glasses');

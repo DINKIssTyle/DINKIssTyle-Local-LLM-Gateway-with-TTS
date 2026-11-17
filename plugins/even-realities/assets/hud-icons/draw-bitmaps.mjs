@@ -2,6 +2,7 @@
 import {writeFile} from 'node:fs/promises';
 import {deflateSync} from 'node:zlib';
 const W=24,H=24;
+const only=process.argv.find(arg=>arg.startsWith('--only='))?.slice(7).split(',');
 function crc32(data){let crc=0xffffffff;for(const byte of data){crc^=byte;for(let i=0;i<8;i++)crc=(crc>>>1)^((crc&1)?0xedb88320:0);}return (crc^0xffffffff)>>>0;}
 function chunk(type,data){const name=Buffer.from(type),size=Buffer.alloc(4),sum=Buffer.alloc(4);size.writeUInt32BE(data.length);sum.writeUInt32BE(crc32(Buffer.concat([name,data])));return Buffer.concat([size,name,data,sum]);}
 function png(pixels){
@@ -23,16 +24,26 @@ function mic(c,off){
 }
 function glasses(c){c.path([[1,10],[3,7],[11,7],[13,10]]);c.path([[1,11],[6,11],[6,15],[2,15],[1,11]]);c.path([[8,11],[13,11],[12,15],[8,15],[8,11]]);c.line(6,12,8,12);}
 function phone(c){c.path([[3,2],[10,2],[11,3],[11,20],[10,21],[3,21],[2,20],[2,3],[3,2]]);c.line(5,4,8,4);c.line(5,19,8,19);}
-if(!process.argv.includes('--new-only')){
+if(!only && !process.argv.includes('--new-only')){
 for(const source of ['glasses','phone'])for(const state of ['on','off']){const c=canvas();(source==='phone'?phone:glasses)(c);mic(c,state==='off');await writeFile(new URL(`${source}-mic-${state}.png`,import.meta.url),png(c.p));}
 const ai=canvas();ai.path([[3,4],[20,4],[20,17],[10,17],[5,21],[5,17],[3,17],[3,4]]);ai.line(7,9,7,12);ai.line(11,7,11,14);ai.line(15,9,15,12);await writeFile(new URL('ai-trigger.png',import.meta.url),png(ai.p));
 
 }
 const statusDrawings={
+ 'status-thinking':c=>{c.path([[11,4],[8,2],[5,3],[4,6],[2,8],[2,12],[4,14],[3,17],[5,20],[8,21],[11,19],[11,4]]);c.path([[13,4],[16,2],[19,3],[20,6],[22,8],[22,12],[20,14],[21,17],[19,20],[16,21],[13,19],[13,4]]);c.path([[5,7],[8,7],[9,10],[6,12],[5,15],[8,17]]);c.path([[19,7],[16,7],[15,10],[18,12],[19,15],[16,17]]);c.line(6,4,7,5);c.line(18,4,17,5);},
+ 'status-warning':c=>{c.path([[12,2],[23,21],[1,21],[12,2]]);c.path([[12,5],[20,19],[4,19],[12,5]]);c.line(11,9,11,14);c.line(12,9,12,14);c.line(11,17,12,17);},
  'status-idle':c=>{c.line(5,2,19,2);c.line(5,22,19,22);c.path([[7,3],[7,7],[12,12],[17,7],[17,3]]);c.path([[7,21],[7,17],[12,12],[17,17],[17,21]]);c.line(9,6,15,6);c.line(9,19,15,19);},
  'status-listening':c=>{for(const [x,top,bottom] of [[3,10,14],[6,6,18],[9,9,15],[12,3,21],[15,8,16],[18,5,19],[21,10,14]]){c.line(x,top,x,bottom);c.line(x+1,top,x+1,bottom);}},
  'status-transcribing':c=>{c.path([[3,2],[14,2],[19,7],[19,21],[3,21],[3,2]]);c.path([[14,2],[14,7],[19,7]]);c.line(6,8,10,8);c.line(6,11,12,11);c.line(6,15,9,15);c.line(6,18,9,18);for(let i=0;i<3;i++)c.line(11+i,18,20+i,9);c.path([[11,18],[10,21],[13,20]]);},
  'mode-ai':c=>{c.path([[5,7],[19,7],[20,8],[20,18],[19,19],[5,19],[4,18],[4,8],[5,7]]);c.line(12,3,12,6);c.line(10,2,14,2);c.line(1,10,1,16);c.line(2,12,4,12);c.line(22,10,22,16);c.line(20,12,22,12);c.line(8,11,9,11);c.line(8,12,9,12);c.line(15,11,16,11);c.line(15,12,16,12);c.line(9,16,15,16);},
  'mode-translate':c=>{c.path([[1,2],[14,2],[14,12],[8,12],[5,15],[5,12],[1,12],[1,2]]);c.path([[4,10],[7,4],[10,10]]);c.line(5,8,9,8);c.path([[10,10],[22,10],[22,21],[19,21],[19,23],[16,21],[10,21],[10,10]]);c.line(16,12,16,13);c.line(13,14,20,14);c.line(14,16,19,19);c.line(19,16,14,19);}
 };
-for(const [name,draw] of Object.entries(statusDrawings)){const c=canvas();draw(c);await writeFile(new URL(name+'.png',import.meta.url),png(c.p));}
+for(const frame of [...Array.from({length:9},(_,i)=>i),'unknown'])statusDrawings['status-prompt-'+frame]=c=>{
+ for(let i=0;i<64;i++){
+  const angle=-Math.PI/2+i*Math.PI/32;
+  if(i%4===0)c.dot(Math.round(11.5+10*Math.cos(angle)),Math.round(11.5+10*Math.sin(angle)));
+  if(frame==='unknown'?(i>=4&&i<20):i<frame*8)for(const r of [8,9,10])c.dot(Math.round(11.5+r*Math.cos(angle)),Math.round(11.5+r*Math.sin(angle)));
+ }
+};
+for(const [name,draw] of Object.entries(statusDrawings)){
+ if(only && !only.includes(name))continue;const c=canvas();draw(c);await writeFile(new URL(name+'.png',import.meta.url),png(c.p));}

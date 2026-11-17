@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import {aiStatusIcon,normalizeAIHeaderLayout} from './ai-status-icon.mjs';
+import {headerLayout} from './header-layout.mjs';
+const active={listening:true,audio:true};
+assert.equal(normalizeAIHeaderLayout('status-icon'),'status-icon');assert.equal(normalizeAIHeaderLayout('bad'),'standard');
+assert.equal(aiStatusIcon(active).key,'status-listening');
+assert.equal(aiStatusIcon({...active,transcribing:true}).key,'status-transcribing');
+assert.equal(aiStatusIcon({...active,working:true,phase:'생각 중 (2초)'}).key,'status-thinking');
+assert.equal(aiStatusIcon({...active,working:true,phase:'답변 작성 중'}).key,'mode-ai');
+assert.equal(aiStatusIcon({...active,working:true,phase:'프롬프트 처리 중',progress:32}).key,'status-prompt-2');
+assert.equal(aiStatusIcon({...active,working:true,phase:'프롬프트 처리 중',progress:100}).key,'status-prompt-8');
+assert.equal(aiStatusIcon({...active,working:true,phase:'프롬프트 처리 중'}).key,'status-prompt-unknown');
+for(const progress of [NaN,Infinity,'32'])assert.equal(aiStatusIcon({...active,working:true,phase:'프롬프트 처리 중',progress}).key,'status-prompt-unknown');
+for(const state of [{},{listening:true,audio:false},{...active,preparing:true},{...active,error:true},{...active,error:true,working:true,phase:'답변 작성 중'}])assert.equal(aiStatusIcon(state).key,'status-warning');
+assert.equal(aiStatusIcon({transcribing:true}).key,'status-transcribing','final STT may finish after mic is stopped');
+const compact=headerLayout(false,{iconOnly:true});assert.equal(compact.stateIconX,552);assert.equal(compact.stateIconX+24,576);assert.ok(compact.width<=compact.stateIconX);
+assert.notEqual(headerLayout(true,{iconOnly:true}).key,compact.key,'translation retains the full header');
+console.log('PASS: optional right-edge AI header, phase precedence, quantized real progress and explicit unknown/error states');

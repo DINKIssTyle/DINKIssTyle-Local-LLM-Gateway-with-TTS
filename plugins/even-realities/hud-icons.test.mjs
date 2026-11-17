@@ -22,9 +22,9 @@ for(const [key,{width,height}] of Object.entries(HUD_ICONS)){
  while(pos<png.length){const size=png.readUInt32BE(pos),type=png.toString('ascii',pos+4,pos+8);if(type==='IDAT')parts.push(png.subarray(pos+8,pos+8+size));pos+=size+12;}
  const rows=inflateSync(Buffer.concat(parts));assert.equal(rows.length,24*4);assert.ok(rows.some(v=>v!==0));fingerprints.add(rows.toString('hex'));
 }
-assert.equal(fingerprints.size,9,'each source, mode and capture state must have a distinct editable bitmap');
+assert.equal(fingerprints.size,Object.keys(HUD_ICONS).length,'each source, mode and capture state must have a distinct editable bitmap');
 for(const translate of [true,false]){const {x,width}=headerLayout(translate);assert.equal(x+width,396);assert.ok(x>=28);assert.equal(1+24<=27,true,'icons must remain inside existing header row');}
-console.log('PASS: nine native-size 24×24 bitmaps, packed Gray4/alpha, coalesced raster cache, failed-load retry and non-overlapping header layout');
+console.log('PASS: native-size 24×24 bitmaps, packed Gray4/alpha, coalesced raster cache, failed-load retry and non-overlapping header layout');
 
 for(const trigger of ['이븐','웬즈데이','a'.repeat(40),'가'.repeat(40),'']){
  const layout=headerLayout(false,{trigger}),{prefix,wake,micIconX,x,width}=layout;

@@ -2,7 +2,9 @@ export const HUD_ICONS={
   'glasses-mic-on':{width:24,height:24},'glasses-mic-off':{width:24,height:24},
   'phone-mic-on':{width:24,height:24},'phone-mic-off':{width:24,height:24},
   'mode-ai':{width:24,height:24},'mode-translate':{width:24,height:24},
-  'status-idle':{width:24,height:24},'status-listening':{width:24,height:24},'status-transcribing':{width:24,height:24}
+  'status-idle':{width:24,height:24},'status-listening':{width:24,height:24},'status-transcribing':{width:24,height:24},
+  'status-thinking':{width:24,height:24},'status-warning':{width:24,height:24},
+  ...Object.fromEntries([...Array.from({length:9},(_,i)=>'status-prompt-'+i),'status-prompt-unknown'].map(key=>[key,{width:24,height:24}]))
 };
 export const hudIconPath=key=>`assets/hud-icons/${key}.png`;
 export function microphoneIcon(source,on){return `${source==='phone'?'phone':'glasses'}-mic-${on?'on':'off'}`;}

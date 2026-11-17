@@ -4,7 +4,8 @@ function fit(text,maxWidth,suffix=''){
  const chars=Array.from(text);while(chars.length && getTextWidth(chars.join('')+'…'+suffix)>maxWidth)chars.pop();return chars.join('')+'…'+suffix;
 }
 // Three 24px bitmaps share the existing 27px header. Clock starts at x=400.
-export function headerLayout(translate,{trigger='',source='auto',target='ko'}={}){
+export function headerLayout(translate,{trigger='',source='auto',target='ko',iconOnly=false}={}){
+ if(!translate && iconOnly)return {iconOnly:true,prefix:{x:0,width:1,content:' '},wake:{x:1,width:1,content:' '},modeIconX:0,micIconX:0,stateIconX:552,x:0,width:548,key:'ai-status-icon'};
  source=String(source || 'auto');target=String(target || 'ko');trigger=String(trigger || '');
  const prefix={x:0,width:Math.ceil(getTextWidth('['))+2,content:'['};
  const modeIconX=prefix.width+2;
