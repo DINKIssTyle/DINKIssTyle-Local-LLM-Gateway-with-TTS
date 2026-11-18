@@ -8,7 +8,7 @@ for(const enabled of [true,false])for(const level of [0,1,2,3,4])for(const trans
  const c={hudDimEnabled:enabled,hudDimLevel:level,hudFullTranscript:transcript,hudFullAI:ai},dim=enabled?level:4;
  for(const id of [2,3,5,6,7,8,11])assert.equal(hudBrightness(id,c),dim,'all persistent status text and microphone/state/mode icons dim together');
  assert.equal(hudBrightness(4,c),transcript?4:dim);
- for(const id of [1,9,10])assert.equal(hudBrightness(id,c),ai?4:dim,'both hint cards and answers respect the exemption');
+ for(const id of [1,9,10,12])assert.equal(hudBrightness(id,c),ai?4:dim,'both hint cards and answers respect the exemption');
  for(const id of [1,4])assert.equal(hudBrightness(id,c,{translate:true}),4,'translation and suggested replies stay readable');
  assert.equal(hudBrightness(8,c,{wakeActive:true}),4,'activated wake word retains its established bright feedback');
 }

@@ -6,7 +6,7 @@
     <title>
       DKST AI Gateway for Even Realities G2
     </title>
-    <link rel="stylesheet" href="style.css?v=2.24.28">
+    <link rel="stylesheet" href="style.css?v=2.24.31">
   </head>
   <body>
     <div class="plugin-container">
@@ -21,7 +21,7 @@
               DKST Gateway
             </div>
             <div style="font-size: 11px; color: var(--text-secondary);">
-              Even Realities G2 · <span id="plugin-build-version">2.24.28</span>
+              Even Realities G2 · <span id="plugin-build-version">2.24.31</span>
             </div>
           </div>
         </div>
@@ -559,11 +559,20 @@
             <select id="ai-header-layout"><option value="standard">기본 · 호출어와 상태, 시각·배터리</option><option value="status-icon">간결 · 상태 아이콘 하나</option></select>
             <p class="setting-help">간결 모드는 상단 문구와 시각·배터리를 숨기고, 듣기·전사·생각·프롬프트 진행·답변 생성·문제 상태를 아이콘 하나로 표시합니다. 번역 모드에는 적용하지 않습니다.</p>
           </div>
+          <div class="form-group">
+            <label for="translation-layout">번역 모드 레이아웃</label>
+            <select id="translation-layout"><option value="standard">기본 · 번역과 예상 답변</option><option value="subtitles">자막 전용 · 번역문만 표시</option></select>
+          </div>
+          <div class="form-group">
+            <label for="subtitle-lines">자막 표시 줄 수</label>
+            <select id="subtitle-lines"><option value="1">1줄</option><option value="2" selected>2줄</option><option value="3">3줄</option><option value="4">4줄</option><option value="5">5줄</option></select>
+            <p class="setting-help">화면 최하단에 최근 번역문을 표시하고 바로 위에 상태 아이콘 하나를 표시합니다.</p>
+          </div>
           <div class="form-group ai-icon-position-settings">
             <label for="ai-icon-position">상태 아이콘 위치 <output id="ai-icon-position-value" for="ai-icon-position">우 · 552px</output></label>
             <input id="ai-icon-position" type="range" min="0" max="552" step="1" value="552" aria-label="상태 아이콘 위치" aria-valuetext="우">
             <div class="range-position-labels" aria-hidden="true"><span>좌</span><span>중앙</span><span>우</span></div>
-            <p class="setting-help">간결 레이아웃의 상태 아이콘 위치를 1픽셀 단위로 조절합니다.</p>
+            <p class="setting-help">AI 간결 레이아웃과 번역 자막 전용 레이아웃이 같은 아이콘 위치를 사용합니다.</p>
           </div>
           <div class="form-group hud-dimming-settings">
             <label class="setting-toggle"><input type="checkbox" id="hud-dim-enabled"><span>일부 화면 어둡게 하기</span></label>
@@ -907,7 +916,7 @@
         </button>
       </div>
     </div>
-    <script src="bundle.js?v=2.24.28">
+    <script src="bundle.js?v=2.24.31">
     </script>
   </body>
 </html>

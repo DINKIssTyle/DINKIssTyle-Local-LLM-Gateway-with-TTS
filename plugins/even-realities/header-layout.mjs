@@ -15,3 +15,12 @@ export function headerLayout(translate,{trigger='',source='auto',target='ko',ico
  const micIconX=wake.x+wake.width+4,stateIconX=micIconX+28,x=stateIconX+28,width=396-x;
  return {prefix,wake,modeIconX,micIconX,stateIconX,x,width,key:JSON.stringify([translate,tail,modeIconX,micIconX,stateIconX])};
 }
+
+// Share the bracket and wake label only on dense two-card pages. Preserve the
+// bitmap gap using the same glyph metrics as the normal header.
+export function stackedHeaderLabel(layout){
+ let content=layout.prefix.content;
+ const gap=layout.wake.x-layout.prefix.x;
+ while(getTextWidth(content+' ')<=gap)content+=' ';
+ return {xPosition:layout.prefix.x,width:layout.wake.x+layout.wake.width-layout.prefix.x,content:content+layout.wake.content};
+}

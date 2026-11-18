@@ -60,8 +60,8 @@ export class HintStack {
   }
 }
 
-// Two fixed title containers + ONE body container leave room for the transcript
-// and the four header texts within the SDK's eight-text-container limit.
+// Shared layout coordinates for the preview and native page. The native page
+// gives each card its own title/body frames and consolidates dense header text.
 export function stackedHintPresentation(stack,hideTranscript=false){
   const source=stack.cards.slice(0,2);if(!source.length)return null;
   let cards,height,titleHeight,bodyHeight;
@@ -82,7 +82,8 @@ export function stackedHintPresentation(stack,hideTranscript=false){
     height=y-27;titleHeight=27;bodyHeight=height-titleHeight;
   }
   stack.setView(cards);
-  // A blank text row reserves the second fixed title's location in the body.
+  // Combined presentation text for generic consumers. The native two-card page
+  // uses each card's visibleText in a separate frame, without overlaying titles.
   const nativeBody=cards.map((card,i)=>i===cards.length-1?card.visibleText:[...card.visibleText.split('\n'),...Array(Math.max(0,card.rows-card.visibleText.split('\n').length)).fill(''),''].join('\n')).join('\n');
   const titles=cards.map(card=>aiTitleLine(card.title,card.remaining));
   return {key:`stack-${cards.length}-${cards.map(card=>card.rows).join('-')}-${hideTranscript}`,show:true,showTranscript:!hideTranscript,hint:true,height,titleHeight,bodyHeight,

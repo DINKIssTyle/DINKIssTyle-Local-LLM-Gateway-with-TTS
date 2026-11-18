@@ -5,7 +5,7 @@ export class TranslationHistory {
   constructor({maxLines=30,maxChars=6000,width=570,visibleLines=5}={}){
     Object.assign(this,{maxLines,maxChars,width,visibleLines});this.reset();
   }
-  reset(){this.entries=[];this.follow=true;this.offset=0;}
+  reset(){this.entries=[];this.follow=true;this.offset=0;this.trimmedLines=0;}
   text(){return this.entries.flatMap(entry=>entry.lines).join('\n');}
   update(id,text,{final=false,revision=id}={}){
     text=String(text || '').trim();
@@ -23,6 +23,7 @@ export class TranslationHistory {
       chars-=this.entries[0].lines.shift().length;count--;removed++;
       if(!this.entries[0].lines.length)this.entries.shift();
     }
+    this.trimmedLines+=removed;
     if(!this.follow)this.offset=Math.max(0,this.offset-removed);
     this.offset=Math.min(this.offset,Math.max(0,count-this.visibleLines));
     return true;

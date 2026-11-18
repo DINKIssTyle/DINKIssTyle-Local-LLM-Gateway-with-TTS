@@ -6,7 +6,7 @@ export function normalizeHUDDimming(config={}){
 export function hudBrightness(id,config={}, {translate=false,wakeActive=false}={}){
   const c=normalizeHUDDimming(config),dim=c.hudDimEnabled?c.hudDimLevel:4;
   if(id===8 && !translate && wakeActive)return 4;
-  if(id===1 || id===9 || id===10)return translate || c.hudFullAI?4:dim;
+  if(id===1 || id===9 || id===10 || id===12)return translate || c.hudFullAI?4:dim;
   if(id===4)return translate || c.hudFullTranscript?4:dim;
   return dim;
 }

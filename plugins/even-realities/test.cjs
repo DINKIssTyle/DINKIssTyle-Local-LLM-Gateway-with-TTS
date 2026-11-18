@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const src = fs.readFileSync('plugin.js','utf8').replace(/^import .*\n/gm, '').replace('  function enqueueClip(', `  window.__queueTest={ai(){resetQueuesForModeSwitch('ai');config.glassesMode='ai';captureFailure='';isRecording=true;segmenter=new SpeechSegmenter();},resetCaptureBuffer(){resetQueuesForModeSwitch(config.glassesMode,true,true);renderLiveHUD();},ensureModel:ensureModelLoaded,gateway:gatewayFetch,refreshIcons(){queueHudIcons(true);},headerMode(mode){config.glassesMode=mode;renderLiveHUD();},iconPhase(phase,error=''){aiPhaseTitle=phase;aiPhaseDetail='';aiStatusError=error;processingAI=!!phase;renderLiveHUD();},microphone:toggleVoiceRecording,dismiss:dismissAIWindow,headIMU:handleHeadIMU,headWait(){return headTransition?.catch(()=>{});},headState(){return {paused:headPaused,imu:headImuActive,phase:headCalibrationPhase,uncertain:micCloseUncertain};},audit:hintAudit,metrics:translationMetrics,forceRebuild(render=true){nativeBodyLayoutKey='';if(render)renderLiveHUD();},previewDuringSave(id){activeUtterance={id,agreement:new LocalAgreement()};pendingPreview={bytes:new Uint8Array(6400),sessionId,segmentId:id,engine:activeSttEngine,revision:1,startedAt:new Date().toISOString(),endedAt:new Date().toISOString(),mode:'translate',sourceLang:'en',targetLang:'ko'};drainPreview();},stack:hintStack,addHint(title,text,auditMeta){displayHintCard({topic:title,kind:'key',evidence:title,auditMeta},text);},reviseTranscript:reconcileHintTranscript,lifetime:hintLifetime,showHint(title,text,transcript){answerAutoCloseEligible=!!text;answerVoicePrompt='';answerTitle=title;answerText=text;captionFinal=transcript;captionStable=captionDraft='';startHintLifetime();renderLiveHUD();},sttPayload,settings:applyLiveSettings,preview:observeAIPreview,hintGate,liveTranslations,translationHistory,enqueueClip,drainAI,drainClips,stopVoiceRecording,reset(){resetQueuesForModeSwitch('translate');config.glassesMode='translate';},state(){return{received:receivedCaptureAudio,bytes:recordedBytes,captureStatus:captureStatus(),answer:answerText,title:answerTitle,ids:pendingClips.map(c=>c.segmentId),failure:captureFailure,recording:isRecording,engine:activeSttEngine,mode:config.glassesMode,active:activeUtterance?.id,previewBusy};},record(){isRecording=true;segmenter=new SpeechSegmenter();}};
+const src = fs.readFileSync('plugin.js','utf8').replace(/^import .*\n/gm, '').replace('  function enqueueClip(', `  window.__queueTest={ai(){resetQueuesForModeSwitch('ai');config.glassesMode='ai';captureFailure='';isRecording=true;segmenter=new SpeechSegmenter();},resetCaptureBuffer(){resetQueuesForModeSwitch(config.glassesMode,true,true);renderLiveHUD();},ensureModel:ensureModelLoaded,gateway:gatewayFetch,refreshIcons(){queueHudIcons(true);},headerMode(mode){config.glassesMode=mode;renderLiveHUD();},iconPhase(phase,error=''){aiPhaseTitle=phase;aiPhaseDetail='';aiStatusError=error;processingAI=!!phase;renderLiveHUD();},microphone:toggleVoiceRecording,dismiss:dismissAIWindow,headIMU:handleHeadIMU,headWait(){return headTransition?.catch(()=>{});},headState(){return {paused:headPaused,imu:headImuActive,phase:headCalibrationPhase,uncertain:micCloseUncertain};},audit:hintAudit,metrics:translationMetrics,forceRebuild(render=true){nativeBodyLayoutKey='';if(render)renderLiveHUD();},previewDuringSave(id){activeUtterance={id,agreement:new LocalAgreement()};pendingPreview={bytes:new Uint8Array(6400),sessionId,segmentId:id,engine:activeSttEngine,revision:1,startedAt:new Date().toISOString(),endedAt:new Date().toISOString(),mode:'translate',sourceLang:'en',targetLang:'ko'};drainPreview();},stack:hintStack,addHint(title,text,auditMeta){displayHintCard({topic:title,kind:'key',evidence:title,auditMeta},text);},reviseTranscript:reconcileHintTranscript,lifetime:hintLifetime,showHint(title,text,transcript){answerAutoCloseEligible=!!text;answerVoicePrompt='';answerTitle=title;answerText=text;captionFinal=transcript;captionStable=captionDraft='';startHintLifetime();renderLiveHUD();},enableIcons(){hudImagesDisabled=false;lastHudIconKeys.clear();},sttPayload,settings:applyLiveSettings,preview:observeAIPreview,hintGate,liveTranslations,translationHistory,enqueueClip,drainAI,drainClips,stopVoiceRecording,reset(){resetQueuesForModeSwitch('translate');config.glassesMode='translate';},state(){return{received:receivedCaptureAudio,bytes:recordedBytes,captureStatus:captureStatus(),answer:answerText,title:answerTitle,ids:pendingClips.map(c=>c.segmentId),failure:captureFailure,recording:isRecording,engine:activeSttEngine,mode:config.glassesMode,active:activeUtterance?.id,previewBusy};},record(){isRecording=true;segmenter=new SpeechSegmenter();}};
   function enqueueClip(`);
 const elements = new Map();
 function element(id) {
@@ -44,7 +44,7 @@ function withHintProof(reply,body){
  return {...reply,json:async()=>({...await reply.json(),hint_grounding:proof})};
 }
 const context={DKST_DEFAULT_SERVER_URL:'https://192.168.1.4:2806',waitForEvenAppBridge:async()=>bridge,AudioInputSource:{Glasses:'glasses',Phone:'phone'},OsEventTypeList:{CLICK_EVENT:0,DOUBLE_CLICK_EVENT:3},console,TextDecoder,Uint8Array,URL,AbortController,setTimeout:(fn,ms)=>{const timer=setTimeout(fn,ms);if(ms>=1000)timer.unref();return timer;},clearTimeout,alert(){},localStorage:{getItem(){return null;},setItem(){}},window:{location:{origin:'https://192.168.1.4:2806',hostname:'192.168.1.4'},btoa:s=>Buffer.from(s,'binary').toString('base64')},document:{body:{style:{overflow:''}},activeElement:{focus(){}},addEventListener(type,fn){documentHandlers[type]=fn;},readyState:'complete',getElementById:element,createElement:()=>({})},fetch:async(url,opts={})=>{
- if(url.endsWith('/api/chat') && opts.body){const wire=JSON.parse(opts.body);if(wire.glasses_request)opts={...opts,body:JSON.stringify(context.expandGatewayRequest(wire,llmMode))};}
+ if(url.endsWith('/api/chat') && opts.body){const wire=JSON.parse(opts.body);if(wire.glasses_request)opts={...opts,glassesTask:wire.glasses_request.task,body:JSON.stringify(context.expandGatewayRequest(wire,llmMode))};}
  requests.push({url,opts});
  if(url.includes('/api/glasses/hint-events'))return{ok:true,json:async()=>url.includes('?')?{events:[]}:{saved:true}};
  if(url.endsWith('/api/glasses/hint-compare'))return{ok:true,json:async()=>({checked:true,duplicate:hintComparison[JSON.parse(opts.body).kind]===true})};
@@ -1900,11 +1900,25 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.ok(nativePage.textObject.some(c=>c.containerID===4),'transcript remains available with two cards');
  assert.match(nativePage.textObject.find(c=>c.containerID===9).content,/두 번째 제목/);
  assert.match(nativePage.textObject.find(c=>c.containerID===10).content,/첫 번째 제목/);
- assert.ok(nativePage.textObject.find(c=>c.containerID===10).zOrderIndex>nativePage.textObject.find(c=>c.containerID===1).zOrderIndex,'second pinned title must render above the shared body');
+ const nativeCards=nativePage.textObject.filter(c=>[1,9,10,12].includes(c.containerID));
+ assert.equal(nativeCards.length,4,'each card must have its own title and body');
+ for(let i=0;i<nativeCards.length;i++)for(let j=i+1;j<nativeCards.length;j++)assert.ok(nativeCards[i].yPosition+nativeCards[i].height<=nativeCards[j].yPosition || nativeCards[j].yPosition+nativeCards[j].height<=nativeCards[i].yPosition,'native card rectangles must never overlap');
  assert.ok(nativePage.textObject.every(c=>c.yPosition+c.height<=288));
  const stackSnapshots=[{html:element('hud-screen').innerHTML,native:JSON.parse(JSON.stringify(nativePage))}];
  const bodies=nativePage.textObject.find(c=>c.containerID===1).content;
- assert.ok(bodies.includes('최신 본문') && bodies.includes('오래된 본문'));assert.ok(!bodies.includes('제목'),'both titles stay outside the scrolling body');
+ assert.ok(bodies.includes('최신 본문'));assert.ok(!bodies.includes('오래된 본문'));assert.match(nativePage.textObject.find(c=>c.containerID===12).content,/오래된 본문/);assert.ok(!bodies.includes('제목'),'both titles stay outside the scrolling body');
+ const topBeforeOlderScroll=nativePage.textObject.find(c=>c.containerID===1).content;
+ const olderBefore=nativePage.textObject.find(c=>c.containerID===12).content;
+ queue.stack.scroll(1,queue.stack.cards[1].id);
+ for(let i=0;i<100 && nativePage.textObject.find(c=>c.containerID===12).content===olderBefore;i++)await new Promise(r=>setTimeout(r,10));
+ assert.notEqual(nativePage.textObject.find(c=>c.containerID===12).content,olderBefore,'older body must receive independent scroll updates');
+ assert.equal(nativePage.textObject.find(c=>c.containerID===1).content,topBeforeOlderScroll);
+ element('ai-header-layout').value='status-icon';await element('ai-header-layout').handlers.change();
+ for(let i=0;i<100 && nativePage.textObject.some(c=>c.containerID===8);i++)await new Promise(r=>setTimeout(r,10));
+ assert.ok(nativePage.textObject.some(c=>c.containerID===12));assert.ok(nativePage.textObject.length<=8);
+ element('ai-header-layout').value='standard';await element('ai-header-layout').handlers.change();
+ for(let i=0;i<100 && !nativePage.textObject.some(c=>c.containerID===8);i++)await new Promise(r=>setTimeout(r,10));
+ assert.equal(nativePage.textObject.length,8);assert.ok(!nativePage.textObject.some(c=>c.containerID===7),'dense full header merges bracket and wake label');
  queue.addHint('세 번째 제목','교체된 새 본문');assert.deepEqual(Array.from(queue.stack.cards,c=>c.title),['[정보] 세 번째 제목','[정보] 두 번째 제목']);
  const cardMicCalls=audioCalls.length;handler({textEvent:{eventType:0}});await tick();
  assert.equal(queue.stack.cards.length,1);assert.match(queue.state().title,/두 번째 제목/);assert.equal(queue.state().recording,true);assert.equal(audioCalls.length,cardMicCalls,'tap removes a card without toggling STT');
@@ -1945,13 +1959,62 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  element('trigger-transcript-only').checked=true;await element('trigger-transcript-only').handlers.change();
  element('hint-auto-close').checked=true;await element('hint-auto-close').handlers.change();element('hint-seconds-per-line').value='2.5';await element('hint-seconds-per-line').handlers.change();
  element('head-gesture-enabled').checked=true;await element('head-gesture-enabled').handlers.change();await queue.stopVoiceRecording(false);
+ // Subtitle-only translation uses bottom rows and the shared AI icon position.
+ queue.enableIcons();queue.headerMode('translate');queue.translationHistory.reset();
+ element('translation-layout').value='subtitles';await element('translation-layout').handlers.change();
+ assert.equal(element('ai-icon-position').disabled,false,'subtitle icon position remains editable with standard AI header');
+ for(const rows of [1,2,3,4,5]) {
+   queue.translationHistory.reset();queue.translationHistory.update('subtitles',Array.from({length:8},(_,i)=>`번역 자막 ${i+1}`).join('\n'));
+   element('subtitle-lines').value=String(rows);await element('subtitle-lines').handlers.change();
+   for(let i=0;i<100 && (nativePage.textObject[0]?.height!==rows*27 || nativePage.textObject.length!==1);i++)await new Promise(r=>setTimeout(r,10));
+   assert.deepEqual(Array.from(nativePage.textObject,c=>c.containerID),[1]);
+   const caption=nativePage.textObject[0];assert.equal(caption.borderWidth,0);assert.equal(caption.paddingLength,0);
+   assert.equal(caption.yPosition+caption.height,288);assert.equal(caption.height,rows*27);
+   assert.equal(caption.content.split('\n').length,7%rows+1);assert.ok(caption.content.endsWith('번역 자막 8'));
+   assert.deepEqual(Array.from(nativePage.imageObject,c=>c.containerID),[11]);
+   assert.equal(nativePage.imageObject[0].yPosition+27,caption.yPosition);
+   assert.equal(element('hud-status-row').hidden,true);assert.equal(element('hud-page-indicator').hidden,true);
+   assert.doesNotMatch(element('hud-screen').innerHTML,/예상 답변|hud-ai-box|hud-transcript-box/);
+ }
+ for(const x of [0,276,552]){
+   element('ai-icon-position').value=String(x);await element('ai-icon-position').handlers.change();
+   for(let i=0;i<100 && nativePage.imageObject[0]?.xPosition!==x;i++)await new Promise(r=>setTimeout(r,10));
+   assert.equal(nativePage.imageObject[0].xPosition,x,'translation uses the shared AI slider');
+ }
+ queue.translationHistory.reset();queue.translationHistory.update('short-subtitle','한 줄 자막');queue.headerMode('translate');
+ for(let i=0;i<100 && !nativePage.textObject[0].content.endsWith('한 줄 자막');i++)await new Promise(r=>setTimeout(r,10));
+ assert.equal(nativePage.textObject[0].content,'한 줄 자막','a new subtitle page starts at its first row');
+ assert.equal(JSON.parse(nativeSaved).translationLayout,'subtitles');assert.equal(JSON.parse(nativeSaved).subtitleLines,5);
+ // Page boundaries continue across history pruning (30-row memory cap).
+ element('subtitle-lines').value='4';await element('subtitle-lines').handlers.change();queue.translationHistory.reset();
+ for(let i=1;i<=41;i++){
+   queue.translationHistory.update('page-'+i,'자막 '+i,{final:true});queue.headerMode('translate');
+   const expected=Array.from({length:(i-1)%4+1},(_,j)=>'자막 '+(i-((i-1)%4)+j)).join('\n');
+   for(let n=0;n<100 && nativePage.textObject[0].content!==expected;n++)await new Promise(r=>setTimeout(r,5));
+   assert.equal(nativePage.textObject[0].content,expected,'full subtitle page clears before the next row, including after pruning');
+ }
+ const subtitleChatStart=requests.filter(r=>r.url.endsWith('/api/chat')).length;
+ for(const engine of ['llm','apple','chrome'])queue.liveTranslations.onFinal({id:'subtitle-'+engine,prompt:'Synthetic subtitle.',context:'',source:'en',target:'ko',engine,token:queue.liveTranslations.token},{ok:true,text:'자막 번역'});
+ await tick();await tick();
+ assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,subtitleChatStart,'successful subtitles never request reply generation');
+ chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({translation:'대체 번역 자막'})})+'\n\ndata: [DONE]\n\n');
+ queue.liveTranslations.onFinal({id:'subtitle-fallback',prompt:'Synthetic fallback subtitle.',context:'',source:'en',target:'ko',engine:'apple',token:queue.liveTranslations.token},{ok:false,reason:'synthetic failure'});
+ await tick();await tick();await tick();
+ const subtitleRequests=requests.filter(r=>r.url.endsWith('/api/chat')).slice(subtitleChatStart).map(r=>JSON.parse(r.opts.body));
+ assert.equal(subtitleRequests.length,1);assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.glassesTask,'translation_only','local fallback requests only translation, never combined replies');
+
+ element('translation-layout').value='standard';await element('translation-layout').handlers.change();
+ for(let i=0;i<100 && !nativePage.textObject.some(c=>c.containerID===2);i++)await new Promise(r=>setTimeout(r,10));
+ assert.ok(nativePage.textObject.some(c=>c.containerID===2),'standard header restores');assert.ok(nativePage.textObject.some(c=>c.containerID===4),'reply examples restore');
+ assert.equal(element('hud-status-row').hidden,false);queue.headerMode('ai');
  const restoredPrepareStart=requests.length;
- nativeSaved=JSON.stringify({...JSON.parse(nativeSaved),aiHeaderLayout:'status-icon',aiIconPosition:276});
+ nativeSaved=JSON.stringify({...JSON.parse(nativeSaved),aiHeaderLayout:'status-icon',aiIconPosition:276,translationLayout:'subtitles',subtitleLines:3});
  elements.clear();
  vm.runInNewContext(src,context);await tick();await tick();
  assert.equal(element('server-url').value,'https://192.168.1.4:2806');
  assert.equal(element('ai-header-layout').value,'status-icon','AI header choice restores with native settings');
  assert.equal(element('ai-icon-position').value,'276','saved center position restores');
+ assert.equal(element('translation-layout').value,'subtitles');assert.equal(element('subtitle-lines').value,'3','subtitle settings restore');
  assert.equal(element('head-gesture-enabled').checked,true);assert.equal(context.window.__queueTest.headState().imu,true,'saved head gesture starts IMU after startup');
  assert.match(element('login-status-label').textContent,/인증됨/,'new WebView with empty browser storage must restore native login');
  assert.equal(element('auth-password').value,'');
@@ -1963,8 +2026,9 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.equal(element('audio-input-source').value,'phone','phone source must survive native settings restore');
  assert.equal(element('glasses-sensitivity').value,'very_high');assert.equal(element('glasses-gain').value,'4');
  assert.ok(requests.slice(restoredPrepareStart).some(r=>r.url.endsWith('/api/stt/apple/prepare')),'restored native settings prepare after authenticated reconnect');
- const legacy=JSON.parse(nativeSaved);delete legacy.aiHeaderLayout;delete legacy.aiIconPosition;delete legacy.translationEngine;delete legacy.audioInputSource;delete legacy.glassesInput;legacy.chromeTranslation=false;nativeSaved=JSON.stringify(legacy);
+ const legacy=JSON.parse(nativeSaved);delete legacy.translationLayout;delete legacy.subtitleLines;delete legacy.aiHeaderLayout;delete legacy.aiIconPosition;delete legacy.translationEngine;delete legacy.audioInputSource;delete legacy.glassesInput;legacy.chromeTranslation=false;nativeSaved=JSON.stringify(legacy);
  elements.clear();vm.runInNewContext(src,context);await tick();await tick();
+ assert.equal(element('translation-layout').value,'standard');assert.equal(element('subtitle-lines').value,'2');
  assert.equal(element('ai-header-layout').value,'standard','missing layout preference defaults to existing full header');
  assert.equal(element('ai-icon-position').value,'552','missing position defaults to the original right edge');
  assert.equal(element('translation-engine').value,'llm','legacy native preferences must preserve LLM translation after asynchronous restore');
