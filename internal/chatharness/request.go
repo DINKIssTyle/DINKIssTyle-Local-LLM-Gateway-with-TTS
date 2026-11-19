@@ -13,6 +13,7 @@ import (
 const defaultToolTurnMaxTokens = 4096
 
 type RequestInput struct {
+	HUDOutput         bool
 	PromptProfile     string
 	Body              []byte
 	EndpointRaw       string
@@ -106,7 +107,7 @@ func PrepareRequest(input RequestInput) (PreparedRequest, error) {
 	if !glassesProfile {
 		compactTaskInstructions = promptkit.BuildCompactTaskInstructions(prepared.InitialUserInputText)
 	}
-	shouldInjectRuntime := glassesProfile || input.EnableTools || includeRetrievalMemory || strings.TrimSpace(input.SkillInstructions) != "" || compactTaskInstructions != ""
+	shouldInjectRuntime := glassesProfile || input.EnableTools || includeRetrievalMemory || strings.TrimSpace(input.SkillInstructions) != "" || compactTaskInstructions != "" || input.HUDOutput
 
 	if shouldInjectRuntime {
 		if useNativeTools {
@@ -132,6 +133,9 @@ func PrepareRequest(input RequestInput) (PreparedRequest, error) {
 				RetrievalInjected: includeRetrievalMemory && input.RetrievalInjected,
 				UserProfileFacts:  input.UserProfileFacts,
 			}) + extraInstr
+		}
+		if input.HUDOutput {
+			extraInstr += "\n" + promptkit.BuildHUDOutputInstructions()
 		}
 		prepared.InjectedPrompt = promptkit.InjectPrompt(reqMap, extraInstr)
 

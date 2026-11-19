@@ -29,3 +29,9 @@ func BuildGlassesRuntimeInstructions(useNativeTools bool, tools []ToolDefinition
 	lines = append(lines, toolGuidelineEndMarker)
 	return strings.Join(lines, "\n")
 }
+
+// BuildHUDOutputInstructions changes presentation only, after the same runtime
+// tools, memory and skill instructions used by web chat have been injected.
+func BuildHUDOutputInstructions() string {
+	return "### SMART GLASSES OUTPUT FORMAT ###\nFor this response, present the same verified answer as web chat in concise plain prose within 500 Unicode characters. This output format overrides citation/link/heading instructions in runtime guidance, skills and tool results. Omit source names, citation markers, URLs, Markdown links, headings, greetings and process commentary. Keep essential titles, times, places, quantities and qualifications. Use tools and skills normally to verify facts; omitting visible sources does not mean skipping verification. Do not ask permission to finish the requested lookup.\n### END SMART GLASSES OUTPUT FORMAT ###"
+}

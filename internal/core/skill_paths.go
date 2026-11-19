@@ -7,6 +7,7 @@ package core
 
 import (
 	bundledata "dinkisstyle-chat/bundle"
+	"dinkisstyle-chat/internal/promptkit"
 	"dinkisstyle-chat/internal/skillkit"
 	"fmt"
 	"log"
@@ -127,15 +128,28 @@ func resolveBundledSkillsDir(exePath, cwd, goos string) string {
 	return filepath.Join("bundle", skillsDirName, "builtin")
 }
 
-func compileActiveSkills(userText string) skillkit.Compilation {
+func compileActiveSkills(userText string, toolLists ...[]promptkit.ToolDefinition) skillkit.Compilation {
+	var excluded []string
+	if len(toolLists) > 0 {
+		available := map[string]bool{}
+		for _, tool := range toolLists[0] {
+			available[tool.Name] = true
+		}
+		for skill, tool := range map[string]string{"google-gmail": "gmail_search", "google-drive": "google_drive_search", "google-calendar": "google_calendar_search"} {
+			if !available[tool] {
+				excluded = append(excluded, skill)
+			}
+		}
+	}
 	userDir := getWritableSkillsDir()
 	var setupDiagnostic *skillkit.Diagnostic
 	if err := ensureUserSkillsDir(userDir); err != nil {
 		setupDiagnostic = &skillkit.Diagnostic{Path: userDir, Message: err.Error()}
 	}
 	result := skillkit.LoadAndCompile(skillkit.Config{
-		BuiltinDir: getBundledSkillsDir(),
-		UserDir:    userDir,
+		BuiltinDir:    getBundledSkillsDir(),
+		ExcludedNames: excluded,
+		UserDir:       userDir,
 	}, userText)
 	if setupDiagnostic != nil {
 		result.Diagnostics = append(result.Diagnostics, *setupDiagnostic)

@@ -49,3 +49,27 @@ func TestGlassesPlanDoesNotAdvertiseDisabledTools(t *testing.T) {
 		t.Fatal("disabled tool advertised in planning prompt")
 	}
 }
+
+func TestGlassesChatUsesWebRuntimeWithHUDPresentation(t *testing.T) {
+	for _, mode := range []string{"standard", "stateful"} {
+		t.Run(mode, func(t *testing.T) {
+			body := []byte(`{"model":"test","messages":[{"role":"user","content":"오늘 일정"}]}`)
+			if mode == "stateful" {
+				body = []byte(`{"model":"test","input":"오늘 일정","system_prompt":"Current task"}`)
+			}
+			prepared, err := PrepareRequest(RequestInput{HUDOutput: true, PromptProfile: "chat", Body: body, LLMMode: mode, ContextStrategy: "retrieval", EnableTools: true, EnableMemory: true, Tools: testToolDefinitions(), RecentContext: "CURRENT_CHAT_MEMORY", ActiveContext: "RETRIEVED_ACCOUNT_FACTS", SkillInstructions: "GOOGLE_CALENDAR_SKILL: search all subscribed calendars; cite links.", RetrievalInjected: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := string(prepared.Body)
+			for _, want := range []string{"CURRENT_CHAT_MEMORY", "RETRIEVED_ACCOUNT_FACTS", "GOOGLE_CALENDAR_SKILL", "get_current_time", "SMART GLASSES OUTPUT FORMAT", "500 Unicode characters", "Omit source names"} {
+				if !strings.Contains(text, want) {
+					t.Fatalf("%s lost %s: %s", mode, want, text)
+				}
+			}
+			if strings.Contains(text, "GLASSES REQUEST CONTEXT") {
+				t.Fatal("interactive chat entered lightweight ambient runtime")
+			}
+		})
+	}
+}

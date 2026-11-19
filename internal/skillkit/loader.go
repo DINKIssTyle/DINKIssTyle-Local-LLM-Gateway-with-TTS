@@ -16,10 +16,11 @@ import (
 const (
 	defaultMaxFileBytes   = 64 * 1024
 	defaultMaxSelected    = 3
-	defaultMaxPromptChars = 8000
+	defaultMaxPromptChars = 12000
 )
 
 type Config struct {
+	ExcludedNames  []string
 	BuiltinDir     string
 	UserDir        string
 	MaxFileBytes   int64
@@ -73,7 +74,20 @@ func LoadAndCompile(config Config, userText string) Compilation {
 		diagnostics = append(diagnostics, issues...)
 	}
 
-	selected := selectSkills(all, userText, len(all))
+	filtered := all[:0]
+	for _, skill := range all {
+		excluded := false
+		for _, name := range config.ExcludedNames {
+			if skill.Name == name {
+				excluded = true
+				break
+			}
+		}
+		if !excluded {
+			filtered = append(filtered, skill)
+		}
+	}
+	selected := selectSkills(filtered, userText, len(filtered))
 	prompt, included, issues := compilePrompt(selected, config.MaxPromptChars)
 	diagnostics = append(diagnostics, issues...)
 
@@ -127,6 +141,9 @@ func discoverRoot(root, source string, maxFileBytes int64) ([]Skill, []Diagnosti
 	for _, entry := range entries {
 		name := entry.Name()
 		path := filepath.Join(root, name)
+		if name == ".DS_Store" && entry.Type().IsRegular() {
+			continue
+		}
 		if strings.HasPrefix(name, ".") {
 			diagnostics = append(diagnostics, Diagnostic{Path: path, Message: "hidden skill directories are not allowed"})
 			continue

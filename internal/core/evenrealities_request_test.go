@@ -111,3 +111,39 @@ func TestUnresolvedHintTaskStopsBeforeModelCall(t *testing.T) {
 		t.Fatalf("status=%d calls=%d %s", w.Code, calls, w.Body.String())
 	}
 }
+
+func TestInteractiveGlassesChatRoutesThroughWebRuntime(t *testing.T) {
+	for _, kind := range []string{"structured_session", "structured_single", "legacy"} {
+		t.Run(kind, func(t *testing.T) {
+			calls := 0
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				var request map[string]any
+				_ = json.NewDecoder(r.Body).Decode(&request)
+				raw, _ := json.Marshal(request)
+				text := string(raw)
+				if strings.Contains(text, "GLASSES REQUEST CONTEXT") || request["glasses_chat"] != nil || request["glasses_client"] != nil {
+					t.Fatal("interactive chat leaked a marker or used ambient runtime")
+				}
+				for _, want := range []string{"AVAILABLE SKILL PROCEDURES", "SMART GLASSES OUTPUT FORMAT", "500 Unicode characters", "get_current_time"} {
+					if !strings.Contains(text, want) {
+						t.Errorf("web pipeline missing %s", want)
+					}
+				}
+				fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"일정 확인 결과입니다.\"}}]}\n\ndata: [DONE]\n\n")
+			}))
+			defer upstream.Close()
+			var body []byte
+			if kind == "legacy" {
+				body = []byte(`{"model":"test","stream":true,"glasses_client":true,"messages":[{"role":"user","content":"오늘 일정"}]}`)
+			} else {
+				body, _ = json.Marshal(map[string]any{"model": "test", "stream": true, "glasses_request": map[string]any{"version": 1, "task": "chat", "text": "오늘 일정", "chatSession": kind == "structured_session", "directQuestion": true}})
+			}
+			w := httptest.NewRecorder()
+			handleChat(w, httptest.NewRequest("POST", "/api/chat", strings.NewReader(string(body))), &App{llmEndpoint: upstream.URL, llmMode: "standard", enableTools: true}, &AuthManager{users: map[string]*User{}})
+			if calls != 1 || w.Code != 200 {
+				t.Fatalf("calls=%d status=%d %s", calls, w.Code, w.Body.String())
+			}
+		})
+	}
+}

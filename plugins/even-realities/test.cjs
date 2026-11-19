@@ -95,6 +95,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  validatePage=page=>{const result=validateEvenHubPageContainer(page);assert.equal(result.valid,true,JSON.stringify(result));};
  for(const module of ['./hint-quality.mjs','./translation-direction.mjs','./audio-upload.mjs','./translation-metrics.mjs','./llm-translation.mjs','./hint-audit.mjs'])Object.assign(context,await import(module));
  Object.assign(context,await import('./head-gesture.mjs'));
+ Object.assign(context,await import('./startup-stt.mjs'));
  const autoCloseModule=await import('./hint-autoclose.mjs');Object.assign(context,autoCloseModule);
  context.HintLifetime=class extends autoCloseModule.HintLifetime{constructor(options){super({...options,now:()=>hintClock,schedule:fn=>{hintJobs.push(fn);return hintJobs.length;},cancel:()=>{}});}};
  Object.assign(context,await import('./adaptive-hud.mjs'));
@@ -347,8 +348,9 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.equal(element('model-select').value,'test-model');
  assert.equal(JSON.parse(nativeSaved).authToken,'test-session','token must persist in native SDK storage');
  assert.equal(JSON.parse(nativeSaved).serverUrl,'https://192.168.1.4:2806');
- handler({sysEvent:{eventSource:1}}); await tick();
+ assert.equal(context.window.__queueTest.state().recording,true,'first login automatically starts STT after bridge/settings readiness');
  assert.deepEqual(audioCalls[0],[true,'glasses']);
+ assert.equal(audioCalls.filter(call=>call[0]===true).length,1,'startup checks must open the microphone once');
  // Emulate a device whose partial header updates ignore blank strings.
  nativePage.textObject.find(c=>c.containerID===3).content='| 오디오 수신 대기';
  handler({audioEvent:{audioPcm:Array(9600).fill(2)}});
@@ -995,17 +997,17 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.equal(queue.state().recording,false,'two-minute backlog pauses capture');
  assert.ok(queue.state().ids.includes('pressure-preserved'),'backpressure must preserve the pending audio');
  releaseFinal();await tick();await tick();
- // AI mode drops failures/backlog and keeps the microphone running.
+ // AI mode preserves pre-recognition audio so queued wake calls cannot vanish.
  queue.ai();
  const skippedResponse={ok:true,json:async()=>({text:'',saved:false,rejected:true})};
  const liveStart=requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).length;
- sttReplies=[()=>new Promise(resolve=>{releaseFinal=()=>resolve(skippedResponse);}),skippedResponse];
+ sttReplies=[()=>new Promise(resolve=>{releaseFinal=()=>resolve(skippedResponse);}),...Array(5).fill(skippedResponse)];
  for(let i=0;i<6;i++)queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),`live-${i}`);
- await tick();assert.deepEqual(Array.from(queue.state().ids),['live-0','live-5']);
- releaseFinal();await tick();await tick();await tick();
+ await tick();assert.deepEqual(Array.from(queue.state().ids),['live-0','live-1','live-2','live-3','live-4','live-5']);
+ releaseFinal();for(let i=0;i<15;i++)await tick();
  assert.equal(queue.state().recording,true);assert.equal(queue.state().ids.length,0);
  const liveRequests=requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).slice(liveStart).map(r=>JSON.parse(r.opts.body));
- assert.deepEqual(liveRequests.map(r=>r.segmentId),['live-0','live-5']);
+ assert.deepEqual(liveRequests.map(r=>r.segmentId),['live-0','live-1','live-2','live-3','live-4','live-5']);
  assert.ok(liveRequests.every(r=>r.realtime===true));
  for(const status of [503,401]) {
    sttReplies=[{ok:false,status,text:async()=>'simulated failure'},skippedResponse];
@@ -1015,7 +1017,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
    assert.equal(queue.state().failure,'');assert.equal(queue.state().ids.length,0);
  }
  let timeoutLive=true;
- context.setTimeout=(fn,ms)=>ms===12000 && timeoutLive ? (timeoutLive=false,setTimeout(fn,0)) : normalTimer(fn,ms);
+ context.setTimeout=(fn,ms)=>ms===120000 && timeoutLive ? (timeoutLive=false,setTimeout(fn,0)) : normalTimer(fn,ms);
  sttReplies=[opts=>new Promise((resolve,reject)=>opts.signal.addEventListener('abort',()=>{const err=new Error('aborted');err.name='AbortError';reject(err);})),skippedResponse];
  queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'live-timeout');queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'after-live-timeout');
  await new Promise(resolve=>setTimeout(resolve,260));await tick();context.setTimeout=normalTimer;
@@ -1819,8 +1821,11 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.ok(!nativePage.textObject.find(c=>c.containerID===1).content.includes('고정된 제목'));
  fs.writeFileSync('/private/tmp/dkst-pinned-panel-preview.json',JSON.stringify({html:element('hud-screen').innerHTML,native:nativePage}));
  const closeTapMic=audioCalls.length;handler({textEvent:{}});await tick();await tick();
- assert.equal(queue.state().answer,'');assert.equal(queue.state().recording,true);assert.equal(audioCalls.length,closeTapMic,'tap closes only the panel');
+ assert.equal(queue.state().answer,'');assert.equal(queue.state().recording,true);assert.equal(audioCalls.length,closeTapMic,'tap closes the response without muting');
+ handler({sysEvent:{eventType:0}});await tick();assert.match(queue.state().answer,/듣는 중/,'tap from a closed window arms a question');
  assert.equal(queue.lifetime.active,false);
+ nextTranscript='탭으로 호출한 질문입니다';queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'tap-question');for(let i=0;i<15;i++)await tick();
+ assert.equal(queue.state().title,'탭으로 호출한 질문입니다');
  element('hide-transcript').checked=false;await element('hide-transcript').handlers.change();
  element('trigger-transcript-only').checked=true;await element('trigger-transcript-only').handlers.change();
  assert.equal(element('hide-transcript').checked,false);
@@ -1829,7 +1834,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  nextTranscript='이븐';queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'wake-awaiting');for(let i=0;i<8;i++)await tick();
  assert.ok(element('hud-screen').innerHTML.includes('hud-transcript-box'),'ordinary transcript remains visible even before a wake question');
  assert.equal(element('hud-trigger-keyword').style.opacity,'1');
- handler({sysEvent:{eventType:0}});await tick();assert.equal(queue.state().recording,true);assert.equal(element('hud-trigger-keyword').style.opacity,'0.25');
+ handler({sysEvent:{eventType:0}});await tick();assert.equal(queue.state().recording,true);assert.equal(element('hud-trigger-keyword').style.opacity,'0.25','tap cancels question waiting');assert.equal(queue.state().answer,'');
  holdChat=true;chatReply=null;nextTranscript='이븐 피라미드를 누가 지었나요';queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'wake-with-question');for(let i=0;i<10;i++)await tick();
  assert.match(element('hud-screen').innerHTML,/피라미드를 누가 지었나요/);assert.ok(!element('hud-screen').innerHTML.includes('이븐 피라미드를'));
  assert.equal(element('hud-trigger-keyword').style.opacity,'1');
@@ -1843,7 +1848,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  queue.showHint('기존 힌트','잠시 보이는 힌트','전사');holdChat=true;chatReply=null;
  element('chat-input').value='닫아서 취소할 새 질문';element('text-chat-form').handlers.submit({preventDefault(){}});for(let i=0;i<5;i++)await tick();
  const lateReply=releaseChat;handler({textEvent:{eventType:0}});lateReply();for(let i=0;i<12;i++)await tick();
- assert.equal(queue.state().answer,'');assert.equal(queue.state().recording,true,'late response cannot reopen a dismissed panel');
+ assert.equal(queue.state().answer,'');assert.equal(queue.state().recording,true,'late response cannot reopen a dismissed window');
  // Hiding alone must still hide an active wake question.
  element('hide-transcript').checked=true;await element('hide-transcript').handlers.change();
  element('trigger-transcript-only').checked=false;await element('trigger-transcript-only').handlers.change();
@@ -1921,8 +1926,8 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.equal(nativePage.textObject.length,8);assert.ok(!nativePage.textObject.some(c=>c.containerID===7),'dense full header merges bracket and wake label');
  queue.addHint('세 번째 제목','교체된 새 본문');assert.deepEqual(Array.from(queue.stack.cards,c=>c.title),['[정보] 세 번째 제목','[정보] 두 번째 제목']);
  const cardMicCalls=audioCalls.length;handler({textEvent:{eventType:0}});await tick();
- assert.equal(queue.stack.cards.length,1);assert.match(queue.state().title,/두 번째 제목/);assert.equal(queue.state().recording,true);assert.equal(audioCalls.length,cardMicCalls,'tap removes a card without toggling STT');
- queue.addHint('네 번째 제목','폰에서 남길 본문');const oldCardID=queue.stack.cards[1].id;
+ assert.equal(queue.stack.cards.length,1);assert.match(queue.state().title,/두 번째 제목/);assert.equal(queue.state().recording,true);assert.equal(audioCalls.length,cardMicCalls,'tap closes a visible hint without muting');
+ queue.addHint('폰에서 닫을 이전 카드','폰에서 선택할 본문');queue.addHint('네 번째 제목','폰에서 남길 본문');const oldCardID=queue.stack.cards[1].id;
  element('hud-screen').handlers.click({target:{closest:()=>({dataset:{hintCard:oldCardID}})}});await tick();
  assert.equal(queue.stack.cards.length,1);assert.match(queue.state().title,/네 번째 제목/,'phone closes the selected older card');
  element('hint-card-count').value='1';await element('hint-card-count').handlers.change();
@@ -2007,6 +2012,45 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  for(let i=0;i<100 && !nativePage.textObject.some(c=>c.containerID===2);i++)await new Promise(r=>setTimeout(r,10));
  assert.ok(nativePage.textObject.some(c=>c.containerID===2),'standard header restores');assert.ok(nativePage.textObject.some(c=>c.containerID===4),'reply examples restore');
  assert.equal(element('hud-status-row').hidden,false);queue.headerMode('ai');
+ // Closing a wake preview also cancels its later preview and final transcript.
+ queue.ai();queue.showHint('','','');element('glasses-mode').value='ai';
+ const dismissedPreviewChatCount=requests.filter(r=>r.url.endsWith('/api/chat')).length;
+ const dismissedSnapshot={mode:'ai',segmentId:'dismissed-preview-wake'};
+ queue.preview(dismissedSnapshot,{text:'이븐 취소할 질문'},{stable:'이븐 취소할 질문'});
+ assert.match(queue.state().answer,/취소할 질문/);
+ const dismissedPreviewMic=audioCalls.length;handler({sysEvent:{eventType:0}});await tick();
+ assert.equal(queue.state().answer,'');assert.equal(audioCalls.length,dismissedPreviewMic);
+ queue.preview(dismissedSnapshot,{text:'이븐 취소할 질문의 늦은 수정'},{stable:'이븐 취소할 질문의 늦은 수정'});
+ assert.equal(queue.state().answer,'','late wake preview cannot reopen the closed window');
+ sttReplies=[{ok:true,json:async()=>({text:'이븐 취소할 질문',saved:true,triggered:true,prompt:'취소할 질문'})}];
+ queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),dismissedSnapshot.segmentId);for(let i=0;i<12;i++)await tick();
+ assert.equal(queue.state().answer,'','canceled wake final cannot reopen the closed window');
+ assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,dismissedPreviewChatCount);
+ // Tap must not let an older in-flight transcript consume the next question.
+ queue.ai();queue.showHint('','','');element('glasses-mode').value='ai';holdChat=false;chatReply=null;
+ let finishPriorTapAudio;
+ sttReplies=[()=>new Promise(resolve=>{finishPriorTapAudio=()=>resolve({ok:true,json:async()=>({text:'탭 전 주변 대화',saved:true,triggered:false})});}),{ok:true,json:async()=>({text:'호출어 없이 탭한 뒤 질문',saved:true,triggered:false})}];
+ queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'before-tap-inflight');await tick();
+ const beforeTapAudioCalls=audioCalls.length;
+ handler({sysEvent:{eventType:0}});await tick();
+ assert.match(queue.state().answer,/듣는 중/);assert.equal(audioCalls.length,beforeTapAudioCalls,'AI tap must not mute an active mic');
+ finishPriorTapAudio();for(let i=0;i<10;i++)await tick();
+ assert.match(queue.state().answer,/듣는 중/,'pre-tap speech cannot consume the armed question');
+ queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'after-tap-question');for(let i=0;i<15;i++)await tick();
+ assert.equal(queue.state().title,'호출어 없이 탭한 뒤 질문');assert.equal(queue.state().recording,true);
+ // A delayed finalized wake call must still route to chat, not be discarded.
+ sttReplies=[{ok:true,json:async()=>({text:'이븐 지연된 질문',saved:true,triggered:true,prompt:'지연된 질문'})}];
+ queue.enqueueClip(Buffer.alloc(6400),true,Date.now()-30000,'delayed-wake');for(let i=0;i<15;i++)await tick();
+ assert.equal(queue.state().title,'지연된 질문','age alone must not drop a wake before recognition');
+ queue.dismiss();await queue.stopVoiceRecording(false);
+ const stoppedTapOpens=audioCalls.filter(c=>c[0]).length;
+ handler({sysEvent:{eventType:0}});handler({sysEvent:{eventType:0}});
+ for(let i=0;i<20;i++)await tick();
+ assert.equal(queue.state().recording,true,'AI tap starts STT when stopped');assert.equal(queue.state().answer,'','second tap during microphone opening cancels the window');
+ handler({sysEvent:{eventType:0}});await tick();assert.match(queue.state().answer,/듣는 중/);
+ const secondTapMic=audioCalls.length;handler({sysEvent:{eventType:0}});await tick();assert.equal(queue.state().answer,'');assert.equal(audioCalls.length,secondTapMic,'closing listening window preserves STT');
+ assert.equal(audioCalls.filter(c=>c[0]).length,stoppedTapOpens+1,'rapid taps open one microphone');
+ await queue.stopVoiceRecording(false);
  const restoredPrepareStart=requests.length;
  nativeSaved=JSON.stringify({...JSON.parse(nativeSaved),aiHeaderLayout:'status-icon',aiIconPosition:276,translationLayout:'subtitles',subtitleLines:3});
  elements.clear();

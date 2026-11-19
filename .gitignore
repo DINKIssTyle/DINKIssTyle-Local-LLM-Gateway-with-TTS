@@ -66,3 +66,7 @@ all_funcs.txt
 !internal/core/evenrealities_request_test.go
 
 !internal/core/stt_final_stream_test.go
+
+!internal/googleintegration/*_test.go
+!internal/toolruntime/google_test.go
+!internal/chatharness/calendar_evidence_test.go

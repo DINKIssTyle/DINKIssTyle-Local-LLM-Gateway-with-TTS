@@ -275,17 +275,64 @@ export namespace core {
 
 }
 
+export namespace googleintegration {
+
+	export class Settings {
+	    client_id: string;
+	    client_secret?: string;
+	    services: string[];
+
+	    static createFrom(source: any = {}) {
+	        return new Settings(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.client_id = source["client_id"];
+	        this.client_secret = source["client_secret"];
+	        this.services = source["services"];
+	    }
+	}
+	export class Status {
+	    client_id: string;
+	    has_client_secret: boolean;
+	    services: string[];
+	    authorized_services: string[];
+	    connected: boolean;
+	    email: string;
+	    pending: boolean;
+	    message: string;
+
+	    static createFrom(source: any = {}) {
+	        return new Status(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.client_id = source["client_id"];
+	        this.has_client_secret = source["has_client_secret"];
+	        this.services = source["services"];
+	        this.authorized_services = source["authorized_services"];
+	        this.connected = source["connected"];
+	        this.email = source["email"];
+	        this.pending = source["pending"];
+	        this.message = source["message"];
+	    }
+	}
+
+}
+
 export namespace mcp {
-	
+
 	export class MemoryRetentionConfig {
 	    coreDays: number;
 	    workingDays: number;
 	    ephemeralDays: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new MemoryRetentionConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.coreDays = source["coreDays"];
@@ -297,15 +344,15 @@ export namespace mcp {
 }
 
 export namespace promptkit {
-	
+
 	export class SystemPrompt {
 	    title: string;
 	    prompt: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new SystemPrompt(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.title = source["title"];

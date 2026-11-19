@@ -1273,6 +1273,7 @@
         }
     </style>
     <script src="llm-connection-ui.js?v=2.23.0"></script>
+    <script src="google-integration-ui.js?v=1"></script>
 </head>
 
 <body>
@@ -1867,6 +1868,8 @@
                     </div>
                     <div id="edit-user-llm-keys" style="margin-top:16px;display:grid;gap:12px"></div>
                 </div>
+
+                <div id="edit-user-google" style="margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--border-color)"></div>
 
                 <!-- Memory Retention Section -->
                 <div style="margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border-color);">
@@ -3991,6 +3994,7 @@
                 const userDetail = await window.go.core.App.GetUserDetail(userId);
 
                 document.getElementById('edit-user-id').value = userId;
+                window.DKSTGoogleUI?.mount(document.getElementById('edit-user-google'), {userId, api:window.go.core.App, language:()=>currentServerLanguage});
                 document.getElementById('edit-user-id-display').textContent = userId;
 
                 // Reset password fields
@@ -4114,6 +4118,7 @@
         }
 
         function closeEditUserModal() {
+            document.getElementById('edit-user-google').disposeGoogle?.();
             document.getElementById('edit-user-modal').style.display = 'none';
         }
 
@@ -4186,6 +4191,7 @@
             }
 
             try {
+                await document.getElementById('edit-user-google').saveGoogleSettings?.();
                 // Update role if changed
                 if (newRole !== editUserOriginalRole) {
                     await window.go.core.App.UpdateUserRole(userId, newRole);
@@ -4239,6 +4245,7 @@
                 .replace(/'/g, '&#39;');
         }
 
+        new MutationObserver(()=>document.getElementById('edit-user-google').refreshGoogleLanguage?.()).observe(document.documentElement,{attributes:true,attributeFilter:['lang']});
         init();
     </script>
 </body>

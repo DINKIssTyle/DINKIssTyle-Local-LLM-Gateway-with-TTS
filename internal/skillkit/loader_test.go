@@ -111,11 +111,18 @@ func TestBundledMSNWeatherSkillMatchesKoreanRequest(t *testing.T) {
 	}
 	for _, request := range []string{"요청한 지역의 현재 날씨를 알려주세요", "날씨 스킬을 이용하세요"} {
 		result := LoadAndCompile(Config{BuiltinDir: builtin}, request)
-		if len(result.Available) == 0 || result.Available[0].Namespace != "builtin:msn-weather-current" {
+		var weather *Skill
+		for i := range result.Available {
+			if result.Available[i].Namespace == "builtin:msn-weather-current" {
+				weather = &result.Available[i]
+				break
+			}
+		}
+		if weather == nil {
 			t.Fatalf("bundled weather skill was not selected for %q: %#v diagnostics=%#v", request, result.Available, result.Diagnostics)
 		}
-		if result.Available[0].DisplayName != "MSN 현재 날씨" {
-			t.Fatalf("unexpected display name: %q", result.Available[0].DisplayName)
+		if weather.DisplayName != "MSN 현재 날씨" {
+			t.Fatalf("unexpected display name: %q", weather.DisplayName)
 		}
 		if !strings.Contains(result.Prompt, "https://www.msn.com/ko-kr/weather/forecast/in-지역,도시") {
 			t.Fatalf("compiled weather instructions are incomplete: %s", result.Prompt)
@@ -210,5 +217,16 @@ func TestBundledWikipediaSearchLoadsWithoutDiagnostics(t *testing.T) {
 	}
 	if len(result.Selected) != 1 || result.Selected[0].Namespace != "builtin:wikipedia-search" {
 		t.Fatalf("expected explicit $wikipedia-search selection, got %#v", result.Selected)
+	}
+}
+
+func TestUnavailableGoogleSkillIsExcludedEvenWhenExplicit(t *testing.T) {
+	builtin := filepath.Join("..", "..", "bundle", "skills", "builtin")
+	result := LoadAndCompile(Config{BuiltinDir: builtin, ExcludedNames: []string{"google-gmail", "google-drive"}}, "$google-gmail $google-calendar")
+	if strings.Contains(result.Prompt, "gmail_search") || strings.Contains(result.Prompt, "google_drive_search") {
+		t.Fatal("unavailable Google instructions entered prompt")
+	}
+	if len(result.Selected) != 1 || result.Selected[0].Name != "google-calendar" {
+		t.Fatalf("available Calendar skill missing: %+v", result.Selected)
 	}
 }

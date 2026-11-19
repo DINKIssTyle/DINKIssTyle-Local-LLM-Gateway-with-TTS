@@ -27,7 +27,13 @@ type Definition struct {
 	Metadata    Metadata        `json:"metadata,omitempty"`
 }
 
+type GoogleAccess interface {
+	Allowed(userID, service string) bool
+	Execute(context.Context, string, string, json.RawMessage) (string, error)
+}
+
 type ExecutionContext struct {
+	Google                GoogleAccess
 	RequestID             string
 	UserID                string
 	EnableMemory          bool
@@ -102,7 +108,7 @@ func (r *Registry) List(execCtx ExecutionContext) []Definition {
 	definitions := make([]Definition, 0, len(r.order))
 	for _, name := range r.order {
 		tool := r.tools[name]
-		if disabled[name] || (tool.definition.Metadata.RequiresMemory && !execCtx.EnableMemory) {
+		if !googleToolAllowed(execCtx, name) || disabled[name] || (tool.definition.Metadata.RequiresMemory && !execCtx.EnableMemory) {
 			continue
 		}
 		definitions = append(definitions, tool.definition)
@@ -125,6 +131,9 @@ func (r *Registry) Call(ctx context.Context, execCtx ExecutionContext, name stri
 	r.mu.RUnlock()
 	if !ok {
 		return Result{IsError: true}, fmt.Errorf("tool not found: %s", name)
+	}
+	if !googleToolAllowed(execCtx, name) {
+		return Result{IsError: true}, fmt.Errorf("Google tool is not connected and enabled for this account")
 	}
 	if stringSet(execCtx.DisabledTools)[name] {
 		return Result{IsError: true}, fmt.Errorf("tool %q is disabled for this user", name)
@@ -175,6 +184,7 @@ func NewDefaultRegistry() *Registry {
 			return Result{Content: content, IsError: callErr != nil}, callErr
 		})
 	}
+	registerGoogleTools(registry)
 	return registry
 }
 

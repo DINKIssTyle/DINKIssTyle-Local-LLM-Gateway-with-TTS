@@ -105,7 +105,7 @@ func AssembleRequest(body []byte) ([]byte, bool, error) {
 		}
 	}
 	// Never forward client instructions, schemas, or a previous native conversation.
-	for _, key := range []string{"glasses_request", "messages", "input", "system_prompt", "response_format", "previous_response_id", "glasses_client", "glasses_hint", "glasses_hint_phase", "glasses_task", "hint_research"} {
+	for _, key := range []string{"glasses_request", "messages", "input", "system_prompt", "response_format", "previous_response_id", "glasses_client", "glasses_hint", "glasses_hint_phase", "glasses_task", "glasses_chat", "hint_research"} {
 		delete(envelope, key)
 	}
 	set := func(key string, value any) { envelope[key], _ = json.Marshal(value) }
@@ -177,20 +177,13 @@ func AssembleRequest(body []byte) ([]byte, bool, error) {
 		}
 		set("hint_research", researchRequest{TaskOriented: req.Plan.TaskOriented, Query: req.Plan.Question, Source: req.Plan.Source, Topic: req.Plan.Topic, Kind: values["kind"], Observed: req.Observed, Anchor: req.Anchor, AllowWeb: web, RequireGrounding: true})
 	case "chat":
+		set("glasses_chat", true)
 		concise := req.Concise == nil || *req.Concise
 		key = fmt.Sprintf("chat_%t", concise)
 		if req.ChatSession {
 			values["contextHeading"] = "Previous explicit AI chat; use it to answer follow-up questions."
-		} else {
-			set("glasses_client", true)
 		}
-		if req.DirectQuestion && !req.ChatSession {
-			set("glasses_hint", true)
-			set("glasses_hint_phase", "direct")
-			if req.ForceSearch {
-				set("hint_research", researchRequest{Query: req.Text, Source: "web"})
-			}
-		}
+
 	case "translation", "translation_only", "translation_replies", "translation_stream", "translation_preview":
 		set("glasses_client", true)
 		task := "translation"

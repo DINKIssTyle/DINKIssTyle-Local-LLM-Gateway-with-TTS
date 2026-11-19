@@ -26,8 +26,16 @@ export function ConfirmAndRunStorageMigration() {
   return window['go']['core']['App']['ConfirmAndRunStorageMigration']();
 }
 
+export function ConnectUserGoogle(arg1) {
+  return window['go']['core']['App']['ConnectUserGoogle'](arg1);
+}
+
 export function DeleteUser(arg1) {
   return window['go']['core']['App']['DeleteUser'](arg1);
+}
+
+export function DisconnectUserGoogle(arg1) {
+  return window['go']['core']['App']['DisconnectUserGoogle'](arg1);
 }
 
 export function DismissWelcome() {
@@ -172,6 +180,10 @@ export function GetUserDisallowedCommands(arg1) {
 
 export function GetUserDisallowedDirectories(arg1) {
   return window['go']['core']['App']['GetUserDisallowedDirectories'](arg1);
+}
+
+export function GetUserGoogleStatus(arg1) {
+  return window['go']['core']['App']['GetUserGoogleStatus'](arg1);
 }
 
 export function GetUserLLMConnections(arg1) {
@@ -332,6 +344,10 @@ export function SetUserDisallowedCommands(arg1, arg2) {
 
 export function SetUserDisallowedDirectories(arg1, arg2) {
   return window['go']['core']['App']['SetUserDisallowedDirectories'](arg1, arg2);
+}
+
+export function SetUserGoogleSettings(arg1, arg2) {
+  return window['go']['core']['App']['SetUserGoogleSettings'](arg1, arg2);
 }
 
 export function SetUserLLMAPIKeys(arg1, arg2) {

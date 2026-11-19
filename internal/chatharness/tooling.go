@@ -15,7 +15,7 @@ func CompactToolResult(toolName, result, originalUserText string) string {
 	return compactToolResult(toolName, result, originalUserText, nil, nil, false, false, false)
 }
 
-func compactToolResult(toolName, result, originalUserText string, completedTools, availableTools []string, nativeToolMode, finalAnswerOnly, requireFreshnessCrossCheck bool) string {
+func compactToolResult(toolName, result, originalUserText string, completedTools, availableTools []string, nativeToolMode, finalAnswerOnly, requireFreshnessCrossCheck bool, hudOutput ...bool) string {
 	result = strings.TrimSpace(result)
 	if result == "" {
 		result = "[empty]"
@@ -71,7 +71,23 @@ func compactToolResult(toolName, result, originalUserText string, completedTools
 	case "search_web", "search_web_multi", "naver_search":
 		resultLimit = 2400
 	}
-	return fmt.Sprintf("[APP TOOL RESULT — NOT A USER MESSAGE]\nOriginal user request:\n%s\n\nTool: %s\nResult:\n%s%s\n\nResponse requirements:\n- %s", originalUserText, toolName, compactText(result, resultLimit), progress, strings.Join(requirements, "\n- "))
+	formattedResult := compactText(result, resultLimit)
+	if calendar, ok := calendarEvidence(strings.TrimSpace(toolName), result); ok {
+		formattedResult = calendar
+		requirements = append(requirements, "Calendar evidence preserves all returned titles (summary), start/end times and locations. Answer from those fields directly; do not claim they were truncated. Only long descriptions may be shortened, with description_truncated:true. Report next_pages/calendars_failed as specific coverage gaps. If a requested detail is missing, read that event using its source calendar_id and id immediately rather than asking permission to finish the original request.")
+	}
+	if len(hudOutput) > 0 && hudOutput[0] {
+		for i, requirement := range requirements {
+			if strings.Contains(requirement, "cite its source links") {
+				requirements[i] = "Use retrieved evidence to verify the answer; omit visible source names, citations and links for the glasses display."
+			} else {
+				requirement = strings.ReplaceAll(requirement, "and its source links", "")
+				requirements[i] = strings.ReplaceAll(requirement, "with citations", "without visible citations or links")
+			}
+		}
+		requirements = append(requirements, promptkit.BuildHUDOutputInstructions())
+	}
+	return fmt.Sprintf("[APP TOOL RESULT — NOT A USER MESSAGE]\nOriginal user request:\n%s\n\nTool: %s\nResult:\n%s%s\n\nResponse requirements:\n- %s", originalUserText, toolName, formattedResult, progress, strings.Join(requirements, "\n- "))
 }
 
 var koreanDateMentionPattern = regexp.MustCompile(`(?:(\d{1,2})월\s*)?(\d{1,2})일`)
@@ -489,6 +505,7 @@ func ExecuteCommandBudgetFamily(command string) string {
 }
 
 type ToolFollowupInput struct {
+	HUDOutput                  bool
 	LLMMode                    string
 	ModelID                    string
 	LastResponseID             string
@@ -512,7 +529,7 @@ func PrepareToolFollowupRequest(input ToolFollowupInput) (map[string]interface{}
 	if input.LLMMode == "stateful" {
 		reqMap = map[string]interface{}{
 			"model":  input.ModelID,
-			"input":  compactToolResult(input.ToolName, input.ToolResult, input.OriginalUserText, input.CompletedTools, input.AvailableTools, false, input.FinalAnswerOnly, input.RequireFreshnessCrossCheck),
+			"input":  compactToolResult(input.ToolName, input.ToolResult, input.OriginalUserText, input.CompletedTools, input.AvailableTools, false, input.FinalAnswerOnly, input.RequireFreshnessCrossCheck, input.HUDOutput),
 			"stream": true,
 		}
 		if IsValidResponseID(input.LastResponseID) {
@@ -555,7 +572,7 @@ func PrepareToolFollowupRequest(input ToolFollowupInput) (map[string]interface{}
 			msgs = append(msgs, map[string]interface{}{
 				"role":         "tool",
 				"tool_call_id": strings.TrimSpace(input.ToolCallID),
-				"content":      compactToolResult(input.ToolName, input.ToolResult, input.OriginalUserText, input.CompletedTools, input.AvailableTools, true, input.FinalAnswerOnly, input.RequireFreshnessCrossCheck),
+				"content":      compactToolResult(input.ToolName, input.ToolResult, input.OriginalUserText, input.CompletedTools, input.AvailableTools, true, input.FinalAnswerOnly, input.RequireFreshnessCrossCheck, input.HUDOutput),
 			})
 		} else {
 			msgs = append(msgs, map[string]interface{}{
@@ -564,7 +581,7 @@ func PrepareToolFollowupRequest(input ToolFollowupInput) (map[string]interface{}
 			})
 			msgs = append(msgs, map[string]interface{}{
 				"role":    "user",
-				"content": compactToolResult(input.ToolName, input.ToolResult, input.OriginalUserText, input.CompletedTools, input.AvailableTools, true, input.FinalAnswerOnly, input.RequireFreshnessCrossCheck),
+				"content": compactToolResult(input.ToolName, input.ToolResult, input.OriginalUserText, input.CompletedTools, input.AvailableTools, true, input.FinalAnswerOnly, input.RequireFreshnessCrossCheck, input.HUDOutput),
 			})
 		}
 		reqMap["messages"] = msgs

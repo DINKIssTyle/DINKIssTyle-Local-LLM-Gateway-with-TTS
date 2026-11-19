@@ -4461,6 +4461,15 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	glassesRequest := glassesHint || glassesClient
 	task, _ := hintEnvelope["glasses_task"].(string)
 	translationTask := glassesRequest && (task == "translation" || task == "translation_preview" || task == "translation_replies")
+	glassesChat, _ := hintEnvelope["glasses_chat"].(bool)
+	// Interactive glasses chat uses the common web chat pipeline; only its
+	// final presentation differs. Hint/translation markers retain isolation.
+	glassesChat = !glassesHint && !translationTask && (glassesChat || glassesClient)
+	if glassesChat {
+		glassesRequest = false
+	}
+	delete(hintEnvelope, "glasses_chat")
+
 	delete(hintEnvelope, "glasses_task")
 	promptProfile := "chat"
 	if glassesRequest {
@@ -4482,7 +4491,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	delete(hintEnvelope, "glasses_client")
 	delete(hintEnvelope, "glasses_hint_phase")
 	delete(hintEnvelope, "hint_research")
-	if _, exists := hintEnvelope["glasses_hint"]; exists || glassesClient {
+	if _, exists := hintEnvelope["glasses_hint"]; exists || glassesClient || glassesChat {
 		delete(hintEnvelope, "glasses_hint")
 		if glassesRequest {
 			delete(hintEnvelope, "previous_response_id")
@@ -4680,6 +4689,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	}
 
 	toolExecCtx := toolruntime.ExecutionContext{
+		Google:                app.googleManager(),
 		RequestID:             clientTurnID,
 		UserID:                userID,
 		EnableMemory:          enableMemory,
@@ -4825,7 +4835,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 	var skillCompilation skillkit.Compilation
 	if !glassesRequest {
-		skillCompilation = compileActiveSkills(initialUserInputText)
+		skillCompilation = compileActiveSkills(initialUserInputText, promptTools)
 	}
 	selectedSkillNames := make([]string, 0, len(skillCompilation.Selected))
 	selectedSkillEvents := make([]map[string]string, 0, len(skillCompilation.Selected))
@@ -4882,6 +4892,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 	preparedRequest, err := chatharness.PrepareRequest(chatharness.RequestInput{
 		PromptProfile:     promptProfile,
+		HUDOutput:         glassesChat,
 		Body:              body,
 		EndpointRaw:       endpointRaw,
 		TokenRaw:          tokenRaw,
@@ -6873,6 +6884,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				ModelID:                    modelID,
 				LastResponseID:             lastResponseID,
 				ToolName:                   lastToolName,
+				HUDOutput:                  glassesChat,
 				ToolResult:                 result,
 				LastAssistantBuffer:        lastSavedBufferForTurn,
 				ReqMap:                     reqMap,

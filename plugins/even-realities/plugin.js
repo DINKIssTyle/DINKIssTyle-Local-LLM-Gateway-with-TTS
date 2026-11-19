@@ -1,3 +1,4 @@
+import {StartupSTT} from './startup-stt.mjs';
 import {TranslationDirection,pronunciationText} from './translation-direction.mjs';
 import {isInformationHintPlan} from './hint-policy.mjs';
 import {localizeVerifiedHint,hintNeedsLocalization} from './hint-localization.mjs';
@@ -168,6 +169,9 @@ import { LocalAgreement } from './local-agreement.mjs';
   const pendingAI = [];
   const knownAIJobs = new Set();
   let pendingTrigger = false;
+  let tapChatPromise=null,tapChatGeneration=0,tapQuestionAfterSequence=null,nextCaptureSequence=0;
+  let dismissedQuestionThroughSequence=0;
+  const dismissedVoiceSegments=new Set();
   const voiceWakeJobs=new Map();let nextWakeJob=0,lastWakeBrightness=null,previewWakePrompt='';
   function wakeBrightness(){return hudTextBrightness(8);}
   function hudTextBrightness(id){return hudBrightness(id,config,{translate:normalizeGlassesMode(config.glassesMode)==='translate',wakeActive:!!(previewWakeId || pendingTrigger || voiceWakeJobs.size)});}
@@ -417,7 +421,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     }
   }
   function observeAIPreview(snapshot,data,agreed){
-    if(snapshot.mode!=='ai')return;
+    if(snapshot.mode!=='ai' || dismissedVoiceSegments.has(snapshot.segmentId))return;
     reconcileHintTranscript(snapshot.segmentId,data.text);
     if(pendingTrigger){
       previewWakePrompt=String(data.text || '').trim();
@@ -787,6 +791,14 @@ import { LocalAgreement } from './local-agreement.mjs';
   }
 
   // --- Lifecycle & Initialization ---
+  let nativeSettingsReady=false;
+  let startupAuthenticatedScope='';
+  const startupAuthScope=()=>JSON.stringify([config.serverUrl,config.authToken || '',config.apiKey || '']);
+  const startupSTT=new StartupSTT({
+    state:()=>({connected:displayReady,restored:nativeSettingsReady,authenticated:!!config.serverUrl && startupAuthenticatedScope===startupAuthScope(),busy:isRecording || capturePreparing || pendingMicOpen || micBusy || micStopPromise || micCloseUncertain || pendingMicCloses.size || headPaused}),
+    start:()=>toggleVoiceRecording({fromStartup:true})
+  });
+
   async function init() {
     loadSettings();
     bindEvents();
@@ -889,7 +901,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     stopChromeSegment(activeUtterance?.id);
     liveTranslationDraft=false;liveTranslations.reset();
     if(!preserveDisplay)translationDisplay={translation:'',positive:'',negative:''};
-    pendingTrigger=false;
+    pendingTrigger=false;tapQuestionAfterSequence=null;
     hintGate.reset({forgetHistory:true});
     abortPendingPreview();
     activeUtterance = null;
@@ -1118,7 +1130,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     if(headTransition)return headTransition.catch(()=>{});
     headResumeWanted=isRecording || capturePreparing || resumeAfterSettings;
     headPaused=true;settingsPicker=null;recognitionEpoch++;hintGate.reset();hintLifetime.clear();
-    aiAbortedByModeSwitch=true;aiAbortController?.abort();pendingAI.length=0;voiceWakeJobs.clear();pendingTrigger=false;
+    aiAbortedByModeSwitch=true;aiAbortController?.abort();pendingAI.length=0;voiceWakeJobs.clear();pendingTrigger=false;tapQuestionAfterSequence=null;
     updateHeadControls();renderLiveHUD();flushHUD();
     const work=(async()=>{
       await Promise.resolve();const starting=captureTask;
@@ -1235,7 +1247,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     try {
       updateConnectionState(false, 'Even 앱 연결 대기 · 브라우저 미리보기');
       bridge = await waitForEvenAppBridge();
-      restoreNativeSettings();
+      const settingsRestored=restoreNativeSettings().finally(()=>{nativeSettingsReady=true;});
       nativeTranslateLayout=normalizeGlassesMode(config.glassesMode)==='translate';
       const initialHeaderLayout=currentHeaderLayout(nativeTranslateLayout);
       const initialBody=currentBodyLayout();
@@ -1247,6 +1259,8 @@ import { LocalAgreement } from './local-agreement.mjs';
       setupBridgeEvents();
       startHUDStatus();
       syncHeadIMU().catch(headGestureError);
+      await settingsRestored;
+      await startupSTT.attempt();
     } catch (err) {
       console.warn('Even Realities Bridge init notice:', err);
       updateConnectionState(false, `G2 연결 실패: ${err.message}`);
@@ -1330,7 +1344,7 @@ import { LocalAgreement } from './local-agreement.mjs';
             renderLiveHUD();
           }
         } else if (evType === OsEventTypeList.CLICK_EVENT) {
-          if(normalizeGlassesMode(config.glassesMode)==='ai' && answerText){dismissAIWindow();return;}
+          if(normalizeGlassesMode(config.glassesMode)==='ai'){handleAIChatTap().catch(console.warn);return;}
           toggleVoiceRecording();
         }
       });
@@ -1689,9 +1703,9 @@ import { LocalAgreement } from './local-agreement.mjs';
     }
 
     const mode = normalizeGlassesMode(config.glassesMode);
-    let idleAI = 'AI 대기 중 · 호출어로 부르거나 텍스트로 질문하세요.';
+    let idleAI = 'AI 대기 중 · 탭하거나 호출어로 부른 뒤 질문하세요.';
     if (mode === 'ai') {
-      idleAI = 'AI 모드 · 평소에는 힌트, 호출어 뒤 질문에는 AI 채팅으로 답합니다.';
+      idleAI = 'AI 모드 · 평소에는 힌트, 탭 또는 호출어 뒤 질문에는 AI 채팅으로 답합니다.';
     } else if (mode === 'translate') {
       const langShort = targetLanguageLabel(config.translateTargetLang, true);
       idleAI = `번역 모드 (→${langShort}) · 말하면 번역과 긍정/부정 답변을 표시합니다.`;
@@ -1785,7 +1799,8 @@ import { LocalAgreement } from './local-agreement.mjs';
     }
   }
 
-  async function toggleVoiceRecording({fromSourceSwitch=false,fromHeadResume=false}={}) {
+  async function toggleVoiceRecording({fromSourceSwitch=false,fromHeadResume=false,fromStartup=false}={}) {
+    if(!fromStartup)startupSTT.cancel();
     if(headPaused && !fromHeadResume){if(!fromSourceSwitch)return resumeHeadSession();return;}
     if(inputSwitchPromise && !fromSourceSwitch){resumeAfterSettings=false;await stopVoiceRecording();return;}
     // Stop has priority even while warmup or microphone-open is awaiting a reply.
@@ -1799,7 +1814,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     const controller=new AbortController();captureAbort=controller;
     els.voiceBtn?.classList.add('active');
     els.voiceBtn?.setAttribute?.('aria-label','녹음 준비 취소');
-    setHUDNotice('녹음 준비 중 · 탭하면 취소');
+    setHUDNotice('녹음 준비 중 · MIC로 취소');
     let startingTask;
     try {
       startingTask=startVoiceRecording(generation,controller.signal);
@@ -1821,6 +1836,59 @@ import { LocalAgreement } from './local-agreement.mjs';
     }
   }
 
+  function cancelCurrentVoiceQuestion(){
+    dismissedQuestionThroughSequence=nextCaptureSequence;
+    for(const id of [activeUtterance?.id,previewWakeId])if(id)dismissedVoiceSegments.add(id);
+    while(dismissedVoiceSegments.size>32)dismissedVoiceSegments.delete(dismissedVoiceSegments.values().next().value);
+    previewWakeId='';previewWakePrompt='';previewIntent.reset();
+  }
+
+  async function handleAIChatTap(){
+    if(answerText || pendingTrigger || tapChatPromise){
+      ++tapChatGeneration;cancelCurrentVoiceQuestion();
+      pendingTrigger=false;tapQuestionAfterSequence=null;
+      if(answerText)dismissAIWindow();
+      else {
+        chatEpoch++;aiAbortController?.abort();pendingAI.length=0;
+        previewWakeId='';previewWakePrompt='';voiceWakeJobs.clear();hintGate.reset();
+        answerIsWakeInput=false;answerTitle=answerVoicePrompt='';renderLiveHUD();
+      }
+      return;
+    }
+    return requestTappedAIChat();
+  }
+
+  function requestTappedAIChat(){
+    if(tapChatPromise)return tapChatPromise;
+    startupSTT.cancel();
+    const generation=++tapChatGeneration;
+    const work=(async()=>{
+      // A tap requests a question; it must never toggle off a running/opening mic.
+      const preparingGeneration=captureGeneration;
+      if(captureTask){await captureTask;if(captureGeneration!==preparingGeneration)return;}
+      if(generation!==tapChatGeneration || headPaused || normalizeGlassesMode(config.glassesMode)!=='ai')return;
+      if(!isRecording){
+        if(micCloseUncertain || pendingMicCloses.size || micStopPromise){setVoiceHint('마이크 종료 상태를 확인한 뒤 MIC 버튼으로 다시 시작하세요');return;}
+        await toggleVoiceRecording();
+      }
+      if(generation!==tapChatGeneration || !isRecording || normalizeGlassesMode(config.glassesMode)!=='ai')return;
+      // Archive pre-tap speech, but do not let it consume the armed question.
+      const prior=segmenter?.flush();
+      if(prior)enqueueClip(prior,true,recordingStarted+recordedBytes/32,activeUtterance?.id || newID());
+      activeUtterance=null;abortPendingPreview();previewIntent.reset();previewWakeId='';previewWakePrompt='';
+      if(answerText)dismissAIWindow();
+      else {chatEpoch++;aiAbortController?.abort();pendingAI.length=0;}
+      hintGate.reset();hintLifetime.clear();clearHintStack();voiceWakeJobs.clear();
+      tapQuestionAfterSequence=nextCaptureSequence;pendingTrigger=true;
+      const name=triggerLabels()[0] || 'AI';
+      answerIsWakeInput=true;answerAutoCloseEligible=false;answerVoicePrompt='';answerTitle=`${name} 질문`;answerText=wakeInputDisplay(name);
+      els.chatOutput.textContent=answerText;els.hintStatus.textContent='AI 질문 대기 · 호출어 없이 말씀하세요';
+      setHUDNotice('질문 대기');renderLiveHUD();
+    })();
+    tapChatPromise=work;
+    return work.finally(()=>{if(tapChatPromise===work)tapChatPromise=null;});
+  }
+
   function setTranscriptHidden(hidden){
     settingsEdited=true;config.hideTranscript=!!hidden;els.hideTranscript.checked=config.hideTranscript;
     renderLiveHUD();persistSettings().catch(console.warn);
@@ -1832,7 +1900,8 @@ import { LocalAgreement } from './local-agreement.mjs';
   function dismissAIWindow(cardID){
     if(normalizeGlassesMode(config.glassesMode)!=='ai' || !answerText)return false;
     const stacked=hintStackActive();
-    chatEpoch++;pendingTrigger=false;voiceWakeJobs.clear();
+    cancelCurrentVoiceQuestion();
+    chatEpoch++;pendingTrigger=false;tapQuestionAfterSequence=null;voiceWakeJobs.clear();
     for(const job of pendingAI)if(job.hint)hintGate.complete(job);
     pendingAI.length=0;hintGate.pending=null;clearTimeout(hintGate.timer);hintGate.timer=null;hintGate.inflight?.controller.abort();
     aiAbortedByModeSwitch=true;if(activeAIJob?.hint)activeAIJob.cancelReason='user_dismissed';aiAbortController?.abort();hintLifetime.clear();
@@ -1957,7 +2026,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     if(generation!==captureGeneration || signal.aborted)return;
     captureFailure = '';
     for(const clip of pendingClips)clip.attempts=0;
-    sessionId = newID(); pendingTrigger = false;
+    sessionId = newID(); pendingTrigger = false;tapQuestionAfterSequence=null;
     activeUtterance = null; pendingPreview = null; draftUtteranceId = '';
     captionStable = captionDraft = ''; captionFinal = '';
     transcriptNotice(continuousCapture ? '실시간 전사 중' : '녹음 중');
@@ -1969,7 +2038,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     updateHUD(continuousCapture
       ? '말씀하세요. 말하는 동안 자막이 갱신됩니다.' : '말씀하세요. 다시 탭하면 전송합니다.');
     micMayBeOpen=true;
-    setHUDNotice('마이크 여는 중 · 탭하면 취소');
+    setHUDNotice('마이크 여는 중 · MIC로 취소');
     const opening = Promise.resolve().then(()=>bridge.audioControl(true,captureAudioSource));
     pendingMicOpen=opening;
     // A delayed successful open must never undo a newer stop request.
@@ -1981,7 +2050,7 @@ import { LocalAgreement } from './local-agreement.mjs';
           if(micStopPromise)await micStopPromise;
           await confirmMicrophoneOff();
         } catch(err) {
-          micCloseUncertain=true;setHUDNotice('마이크 종료 확인 실패');setVoiceHint('다시 탭해 종료를 재시도하거나 앱을 완전히 닫아주세요.');
+          micCloseUncertain=true;setHUDNotice('마이크 종료 확인 실패');setVoiceHint('MIC 버튼으로 종료를 재시도하거나 앱을 완전히 닫아주세요.');
         }
       }
     },()=>{if(pendingMicOpen===opening)pendingMicOpen=null;});
@@ -2176,13 +2245,13 @@ import { LocalAgreement } from './local-agreement.mjs';
     if(mode==='ai') {
       if(lastVoiceFrameAt>=endedAt-bytes.length/32 && lastVoiceFrameAt<=endedAt)voiceLatency.mark(segmentId,'last_voice',lastVoiceFrameAt);
       voiceLatency.mark(segmentId,'clip_end',endedAt);
-      // Keep one active inference and only the newest waiting clip.
-      pendingClips=pendingClips.filter(clip=>clip.mode!=='ai' || clip===activeFinalClip);
+      // Wake words are unknown until final STT. Preserve queued PCM until
+      // recognition; dropping an older clip here can silently drop a wake call.
     }
-    pendingClips.push({ epoch:recognitionEpoch, bytes, continuous, sessionId, segmentId, mode, sourceLang, targetLang,engine:activeSttEngine,
+    pendingClips.push({ sequence:++nextCaptureSequence, epoch:recognitionEpoch, bytes, continuous, sessionId, segmentId, mode, sourceLang, targetLang,engine:activeSttEngine,
       startedAt:new Date(endedAt-bytes.length/32).toISOString(),endedAt:new Date(endedAt).toISOString(),
       triggerWord, speechFilter:config.speechFilter });
-    if(mode!=='ai' && isRecording && (pendingClips.length>=MAX_PENDING_CLIPS || pendingClips.reduce((sum,clip)=>sum+clip.bytes.length,0)>=MAX_PENDING_AUDIO_BYTES)) {
+    if(isRecording && (pendingClips.length>=MAX_PENDING_CLIPS || pendingClips.reduce((sum,clip)=>sum+clip.bytes.length,0)>=MAX_PENDING_AUDIO_BYTES)) {
       // Preserve every queued segment; bound growth by stopping capture, not deleting audio.
       stopVoiceRecording().then(()=>{
         if(!captureFailure && !isRecording) {
@@ -2208,7 +2277,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     if(!flush)stopChromeSegment(segmentId);
     activeUtterance=null;abortPendingPreview();
     const clip=hadCapture ? (continuousCapture?segmenter?.flush():mergePCM(audioBuffer)) : null;
-    if(pendingTrigger && (!flush || !clip || clip.length<3200))pendingTrigger=false;
+    if(pendingTrigger && (!flush || !clip || clip.length<3200)){pendingTrigger=false;tapQuestionAfterSequence=null;}
     audioBuffer=[];
     if((!flush || !clip) && liveTranslations.hasDraft()){liveTranslationDraft=false;liveTranslations.reset();}
     setHUDNotice('마이크 정지 중');
@@ -2221,8 +2290,8 @@ import { LocalAgreement } from './local-agreement.mjs';
       } catch(err) {
         micCloseUncertain=true;
         setHUDNotice('마이크 종료 확인 실패');
-        setVoiceHint('다시 탭해 종료를 재시도하거나 앱을 완전히 닫아주세요.');
-        updateHUD(`마이크 종료를 확인하지 못했습니다.\n${err.message}\n다시 탭하거나 앱을 완전히 닫아주세요.`);
+        setVoiceHint('MIC 버튼으로 종료를 재시도하거나 앱을 완전히 닫아주세요.');
+        updateHUD(`마이크 종료를 확인하지 못했습니다.\n${err.message}\nMIC 버튼으로 재시도하거나 앱을 완전히 닫아주세요.`);
       }
     })();
     micStopPromise=stopping;
@@ -2239,7 +2308,6 @@ import { LocalAgreement } from './local-agreement.mjs';
       while (pendingClips.length) {
         const clip = pendingClips[0];
         activeFinalClip=clip;
-        if(clip.mode==='ai' && Date.now()-Date.parse(clip.endedAt)>20000){hintGate.withdraw(clip.segmentId);if(previewWakeId===clip.segmentId)previewWakeId='';pendingClips.shift();continue;}
         let data;
         try {
           data = await processAudioTranscription(clip);
@@ -2299,7 +2367,9 @@ import { LocalAgreement } from './local-agreement.mjs';
         if(clipMode==='ai') {
           reconcileHintTranscript(clip.segmentId,text);
           const wasWaitingForQuestion=pendingTrigger;
-          const route=routeAIUtterance(data,{waiting:pendingTrigger,name:triggerLabels()[0] || data.matchedTrigger || 'AI'});
+          const eligible=clip.sequence>dismissedQuestionThroughSequence && !dismissedVoiceSegments.has(clip.segmentId) && (tapQuestionAfterSequence===null || clip.sequence>tapQuestionAfterSequence);
+          const route=eligible?routeAIUtterance(data,{waiting:pendingTrigger,name:triggerLabels()[0] || data.matchedTrigger || 'AI'}):{kind:'ambient',waiting:pendingTrigger};
+          if(route.kind!=='ambient')tapQuestionAfterSequence=null;
           pendingTrigger=route.waiting;
           if(route.kind==='ack'){
             voiceWakeJobs.clear();previewWakeId='';previewWakePrompt='';
@@ -2318,12 +2388,12 @@ import { LocalAgreement } from './local-agreement.mjs';
             directIntent={...directQuestionIntent(prompt),direct:true};
             hintGate.reset();if(activeAIJob?.hint){activeAIJob.cancelReason='chat_priority';aiAbortController?.abort();}
             els.hintStatus.textContent='AI 채팅 · 이전 질문·답변 참조';
-          }else if(isRecording && normalizeGlassesMode(config.glassesMode)==='ai'){
+          }else if(isRecording && normalizeGlassesMode(config.glassesMode)==='ai' && eligible && !pendingTrigger && Date.now()-Date.parse(clip.endedAt)<=20000){
             // Ambient questions are observed conversation too. Only the wake
             // route (or typed input) authorizes a conversational AI response.
             hintGate.observe(text,{id:clip.segmentId,at:Date.parse(clip.endedAt)});
           }
-        }else if(clipMode==='translate'){prompt=text;pendingTrigger=false;}
+        }else if(clipMode==='translate'){prompt=text;pendingTrigger=false;tapQuestionAfterSequence=null;}
         if (prompt) {
           const context=chatSession?'':clip.continuous?transcriptContext.slice(0,-1).slice(-2).join('\n').slice(-800):'';
           if(clipMode==='translate')enqueueTranslation(clip.segmentId,prompt,context,clip.sourceLang || 'auto',clipTargetLang,{sessionId:clip.sessionId,detectedLanguage:data.language,sttEngine:data.engine || clip.engine,joinSentence:String(clip.engine||'').startsWith('chrome-') && clip.continuous,startedAt:clip.startedAt,endedAt:clip.endedAt});
@@ -2342,7 +2412,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     } finally {
       activeFinalClip=null;
       draining = false;
-      if(!isRecording && !pendingClips.length)pendingTrigger=false;
+      if(!isRecording && !pendingClips.length){pendingTrigger=false;tapQuestionAfterSequence=null;}
       renderLiveHUD();
       if (!isRecording && !pendingClips.length && !micStopPromise && !pendingMicOpen && !micCloseUncertain && !pendingMicCloses.size) setVoiceHint('마이크 꺼짐 · 전사 저장 완료');
       if (pendingPreview) drainPreview();
@@ -2355,7 +2425,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     let timedOut=false;
     // Worker inference allows 90s plus cold-start time; a 20s client limit caused
     // abandoned requests and repeated inference under load.
-    const timeout = setTimeout(() => {timedOut=true;controller.abort();}, clip.mode==='ai'?12000:120000);
+    const timeout = setTimeout(() => {timedOut=true;controller.abort();}, 120000);
     try {
       if(clip.mode==='ai')voiceLatency.mark(clip.segmentId,'stt_sent');
       const sttSentAt=Date.now();
@@ -3073,9 +3143,11 @@ import { LocalAgreement } from './local-agreement.mjs';
         els.loginStatusLabel.textContent = `인증됨 (${username})`;
         els.loginStatusLabel.style.color = 'var(--accent-green)';
       }
+      startupAuthenticatedScope=startupAuthScope();
       alert('로그인 성공!');
       await fetchModelList();
       autoPrepareEngines();
+      await startupSTT.attempt();
     } catch (err) {
       const networkFailure = err instanceof TypeError || /load failed|failed to fetch/i.test(err.message);
       alert(networkFailure
@@ -3100,10 +3172,12 @@ import { LocalAgreement } from './local-agreement.mjs';
       const status = res.ok ? await res.json() : {};
       if (requestedToken !== config.authToken || requestedURL !== config.serverUrl) return;
       if (status.authenticated && els.loginStatusLabel) {
+        startupAuthenticatedScope=startupAuthScope();
         els.loginStatusLabel.textContent = `인증됨 (${config.username || 'User'})`;
         els.loginStatusLabel.style.color = 'var(--accent-green)';
         fetchModelList();
         autoPrepareEngines();
+        await startupSTT.attempt();
       } else if (requestedToken && status.authenticated === false) {
         config.authToken = '';
         await persistSettings();
@@ -3190,7 +3264,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       els.chatInput.value='';
       if(processingAI)els.chatOutput.textContent='질문을 대기열에 추가했습니다.';
       const chatSession=normalizeGlassesMode(config.glassesMode)==='ai';
-      if(chatSession){pendingTrigger=false;hintGate.reset();if(activeAIJob?.hint){activeAIJob.cancelReason='chat_priority';aiAbortController?.abort();}}
+      if(chatSession){pendingTrigger=false;tapQuestionAfterSequence=null;hintGate.reset();if(activeAIJob?.hint){activeAIJob.cancelReason='chat_priority';aiAbortController?.abort();}}
       enqueueAI(newID(),prompt,'',config.glassesMode,config.translateTargetLang,chatSession?{directQuestion:true,chatSession:true,chatEpoch,forceSearch:directQuestionIntent(prompt).search}:{});
     });
     const viewport=window.visualViewport;

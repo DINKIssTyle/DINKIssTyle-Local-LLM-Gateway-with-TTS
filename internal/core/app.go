@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"dinkisstyle-chat/internal/config"
+	"dinkisstyle-chat/internal/googleintegration"
 	"dinkisstyle-chat/internal/mcp"
 	"dinkisstyle-chat/internal/promptkit"
 	"embed"
@@ -34,6 +35,8 @@ import (
 
 // App struct for Wails binding
 type App struct {
+	googleOnce          sync.Once
+	google              *googleintegration.Manager
 	ctx                 context.Context
 	server              *http.Server // HTTPS Server
 	httpServer          *http.Server // HTTP Compatibility Server
@@ -1263,6 +1266,9 @@ func (a *App) AddUser(id, password, role string) error {
 
 // DeleteUser removes a user (exposed to Wails)
 func (a *App) DeleteUser(id string) error {
+	if err := a.googleManager().Disconnect(id, true); err != nil {
+		return err
+	}
 	return a.authMgr.DeleteUser(id)
 }
 

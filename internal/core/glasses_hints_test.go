@@ -258,7 +258,7 @@ func TestHintLiveWebEvidence(t *testing.T) {
 	t.Logf("Live search evidence received: %d chars", len([]rune(evidence)))
 }
 
-func TestGlassesRequestsIsolateGeneralChatAndPreserveStorage(t *testing.T) {
+func TestAutomaticGlassesRequestsIsolateGeneralChatAndPreserveStorage(t *testing.T) {
 	if err := mcp.InitDB(filepath.Join(t.TempDir(), "glasses-context.db")); err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +295,6 @@ func TestGlassesRequestsIsolateGeneralChatAndPreserveStorage(t *testing.T) {
 		{"glasses_hint": true, "glasses_hint_phase": "plan"},
 		{"glasses_hint": true, "glasses_hint_phase": "answer", "hint_research": map[string]string{"source": "internal", "query": "피라미드 건립 목적"}},
 		{"glasses_hint": true, "glasses_hint_phase": "direct"},
-		{"glasses_client": true},
 	} {
 		controls["model"] = "test"
 		controls["messages"] = []map[string]string{{"role": "system", "content": "CURRENT_GLASSES_TASK"}, {"role": "user", "content": "피라미드 건립 목적을 알려줘"}}

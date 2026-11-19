@@ -118,3 +118,12 @@ func BenchmarkAssembleJudge(b *testing.B) {
 		}
 	}
 }
+
+func TestEveryInteractiveChatUsesCommonPipelineWithHUDOutput(t *testing.T) {
+	for _, session := range []bool{false, true} {
+		result := assemble(t, map[string]any{"task": "chat", "text": "오늘 일정 알려줘", "chatSession": session, "directQuestion": true, "forceSearch": true})
+		if result["glasses_chat"] != true || result["glasses_client"] != nil || result["glasses_hint"] != nil || result["hint_research"] != nil {
+			t.Fatalf("interactive chat entered ambient pipeline: %+v", result)
+		}
+	}
+}
