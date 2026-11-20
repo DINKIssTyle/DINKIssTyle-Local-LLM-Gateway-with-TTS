@@ -107,14 +107,17 @@ func PrepareRequest(input RequestInput) (PreparedRequest, error) {
 	if !glassesProfile {
 		compactTaskInstructions = promptkit.BuildCompactTaskInstructions(prepared.InitialUserInputText)
 	}
-	shouldInjectRuntime := glassesProfile || input.EnableTools || includeRetrievalMemory || strings.TrimSpace(input.SkillInstructions) != "" || compactTaskInstructions != "" || input.HUDOutput
+	shouldInjectRuntime := glassesProfile || input.EnableTools || includeRetrievalMemory || strings.TrimSpace(input.SkillInstructions) != "" || compactTaskInstructions != "" || strings.TrimSpace(input.UserProfileFacts) != "" || input.HUDOutput
 
 	if shouldInjectRuntime {
 		if useNativeTools {
 			ensureChatCompletionTools(reqMap, input.Tools)
 			applyToolTurnOutputBudget(reqMap)
 		}
-		extraInstr := compactTaskInstructions + input.SkillInstructions
+		extraInstr := compactTaskInstructions
+		if !glassesProfile {
+			extraInstr = promptkit.BuildPersonalAssistantInstructions() + extraInstr
+		}
 		if glassesProfile {
 			tools := input.Tools
 			if !input.EnableTools {
@@ -122,7 +125,7 @@ func PrepareRequest(input RequestInput) (PreparedRequest, error) {
 			}
 			extraInstr = promptkit.BuildGlassesRuntimeInstructions(useNativeTools, tools)
 		} else if !prepared.IsStatefulFollowup {
-			extraInstr = promptkit.BuildRuntimeInstructions(promptkit.RuntimeInstructionsInput{
+			runtimeInstructions := promptkit.BuildRuntimeInstructions(promptkit.RuntimeInstructionsInput{
 				EnvironmentInfo:   buildEnvironmentInfo(),
 				ModelID:           extractModelID(reqMap),
 				UseNativeTools:    useNativeTools,
@@ -132,10 +135,23 @@ func PrepareRequest(input RequestInput) (PreparedRequest, error) {
 				ActiveContext:     conditionalContextValue(includeRetrievalMemory, input.ActiveContext),
 				RetrievalInjected: includeRetrievalMemory && input.RetrievalInjected,
 				UserProfileFacts:  input.UserProfileFacts,
+			})
+			extraInstr = runtimeInstructions + extraInstr
+		} else if strings.TrimSpace(input.UserProfileFacts) != "" {
+			extraInstr = promptkit.BuildRuntimeInstructions(promptkit.RuntimeInstructionsInput{
+				UserProfileFacts: input.UserProfileFacts,
 			}) + extraInstr
+		}
+		if !glassesProfile {
+			extraInstr = input.SkillInstructions + extraInstr
 		}
 		if input.HUDOutput {
 			extraInstr += "\n" + promptkit.BuildHUDOutputInstructions()
+		}
+		if !glassesProfile && input.LLMMode == "stateful" {
+			if _, hasSystemPrompt := reqMap["system_prompt"]; !hasSystemPrompt {
+				reqMap["system_prompt"] = ""
+			}
 		}
 		prepared.InjectedPrompt = promptkit.InjectPrompt(reqMap, extraInstr)
 

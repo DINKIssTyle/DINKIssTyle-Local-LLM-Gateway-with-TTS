@@ -230,3 +230,11 @@ func TestUnavailableGoogleSkillIsExcludedEvenWhenExplicit(t *testing.T) {
 		t.Fatalf("available Calendar skill missing: %+v", result.Selected)
 	}
 }
+
+func TestCurrentWeatherProcedureGetsPromptBudgetPriority(t *testing.T) {
+	builtin := filepath.Join("..", "..", "bundle", "skills", "builtin")
+	result := LoadAndCompile(Config{BuiltinDir: builtin, MaxPromptChars: 3000}, "지금 서울 날씨 어때?")
+	if len(result.Available) == 0 || result.Available[0].Namespace != "builtin:msn-weather-current" {
+		t.Fatalf("weather procedure was not prioritized under the prompt budget: %+v", result.Available)
+	}
+}

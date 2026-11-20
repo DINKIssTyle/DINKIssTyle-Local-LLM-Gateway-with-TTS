@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -75,6 +76,14 @@ func compactToolResult(toolName, result, originalUserText string, completedTools
 	if calendar, ok := calendarEvidence(strings.TrimSpace(toolName), result); ok {
 		formattedResult = calendar
 		requirements = append(requirements, "Calendar evidence preserves all returned titles (summary), start/end times and locations. Answer from those fields directly; do not claim they were truncated. Only long descriptions may be shortened, with description_truncated:true. Report next_pages/calendars_failed as specific coverage gaps. If a requested detail is missing, read that event using its source calendar_id and id immediately rather than asking permission to finish the original request.")
+	}
+	if !finalAnswerOnly && !IsBulkToolTestRequest(originalUserText) && slices.Contains(availableTools, "google_calendar_search") {
+		switch toolName {
+		case "search_memory", "read_memory", "read_memory_context":
+			requirements = append(requirements, "For a request to suggest free times using past preferences, this memory result is only the constraints step. Resolve any missing past details, then use google_calendar_search for the requested date range before proposing times.")
+		case "google_calendar_search":
+			requirements = append(requirements, "For free-time suggestions, check every proposed interval against the returned busy events and apply the user's current constraints. State the time zone and any incomplete calendar coverage. Never claim a suggestion was booked.")
+		}
 	}
 	if len(hudOutput) > 0 && hudOutput[0] {
 		for i, requirement := range requirements {

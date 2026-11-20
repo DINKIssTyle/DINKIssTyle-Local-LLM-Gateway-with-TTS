@@ -299,13 +299,13 @@ func GetToolList() []Tool {
 		},
 		{
 			Name:        "save_user_fact",
-			Description: "Save a structured fact about the user to their permanent profile. Use this when the user tells you their name, birthday, preferences, address, occupation, family info, pets, vehicles, or other personal details. These facts are automatically injected into every conversation, so they never need to be searched for. If a fact_key already exists, the value is updated.",
+			Description: "Save an explicitly stated, durable fact or preference to the user profile. For a correction, pass the exact existing profile key so the old value is replaced. Temporary requests and inferred preferences are not profile facts.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"fact_key": map[string]interface{}{
 						"type":        "string",
-						"description": "A short, unique key identifying the fact, e.g. 'name', 'birthday', 'favorite_color', 'car', 'pet_name'.",
+						"description": "The exact existing key when correcting a fact, otherwise a short stable key such as 'favorite_color'.",
 					},
 					"fact_value": map[string]interface{}{
 						"type":        "string",
@@ -1124,7 +1124,7 @@ func ExecuteToolWithContext(toolName string, argumentsJSON []byte, ctx ToolConte
 		result, err := ReadPage(args.URL)
 		if err == nil {
 			result, err = bufferToolResult(userID, toolName, "", args.URL, "", result)
-		} else {
+		} else if !isMSNWeatherPage(args.URL) {
 			if fallback, ok := bufferToolFallbackAfterError(userID, toolName, args.URL, err); ok {
 				result = fallback
 				emitTraceEvent("tool_runtime", "tool.fallback", "Using buffered fallback after page read failure", traceDetailsMap(
@@ -2194,7 +2194,11 @@ func ReadPage(pageURL string) (string, error) {
 	emitTraceEvent("tool_runtime", "read_web_page.start", "Starting page read", traceDetailsMap("url", pageURL))
 
 	cacheKey := strings.TrimSpace(pageURL)
-	if cached, ok := getTimedToolCache(pageCache, &pageCacheMu, cacheKey, pageCacheTTL); ok {
+	cacheTTL := pageCacheTTL
+	if isMSNWeatherPage(cacheKey) {
+		cacheTTL = time.Minute
+	}
+	if cached, ok := getTimedToolCache(pageCache, &pageCacheMu, cacheKey, cacheTTL); ok {
 		emitTraceEvent("tool_runtime", "read_web_page.cache_hit", "Using cached page read result", traceDetailsMap("url", pageURL, "elapsed_ms", toolDurationMs(start), "chars", len(cached)))
 		return cached, nil
 	}
@@ -2376,6 +2380,21 @@ func ReadPage(pageURL string) (string, error) {
 				return toMarkdown(tempDiv).replace(/\n\s*\n/g, "\n\n").trim();
 			})()
 		`, &res),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			if !isMSNWeatherPage(cacheKey) {
+				return nil
+			}
+			var visibleText string
+			if err := chromedp.Evaluate(`document.body.innerText`, &visibleText).Do(ctx); err == nil &&
+				currentWeatherExcerpt(visibleText) != "" {
+				var title string
+				if err := chromedp.Title(&title).Do(ctx); err == nil && strings.TrimSpace(title) != "" {
+					visibleText = "# " + strings.TrimSpace(title) + "\n\n" + visibleText
+				}
+				res = visibleText
+			}
+			return nil
+		}),
 	)
 
 	if err != nil {
@@ -2393,9 +2412,18 @@ func ReadPage(pageURL string) (string, error) {
 	return res, nil
 }
 
+func isMSNWeatherPage(pageURL string) bool {
+	parsed, err := url.Parse(pageURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	return (host == "msn.com" || strings.HasSuffix(host, ".msn.com")) &&
+		strings.Contains(strings.ToLower(parsed.Path), "/weather/forecast/")
+}
+
 func pageReadinessExpression(pageURL string) string {
-	parsed, _ := url.Parse(pageURL)
-	requireWeatherContent := strings.Contains(strings.ToLower(parsed.Hostname()), "msn.com")
+	requireWeatherContent := isMSNWeatherPage(pageURL)
 	return fmt.Sprintf(`
 		(() => {
 			if (document.readyState !== 'complete' || !document.body) return false;

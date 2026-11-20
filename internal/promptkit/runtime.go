@@ -82,6 +82,12 @@ func StripToolGuidelines(reqMap map[string]interface{}) bool {
 	return changed
 }
 
+// BuildPersonalAssistantInstructions guides the initial answer without a routing call.
+func BuildPersonalAssistantInstructions() string {
+	return "\n\nPERSONAL ASSISTANT:\n" +
+		"Answer greetings, familiar definitions, and questions already resolved by the current conversation or profile directly and briefly. Use relevant preferences naturally. A short request can still need a tool for live information, missing personal history, or an action.\n"
+}
+
 func BuildRuntimeInstructions(input RuntimeInstructionsInput) string {
 	extraInstr := ""
 	if len(input.Tools) > 0 {
@@ -230,13 +236,13 @@ func buildToolUsage(envInfo string, modelID string, useNativeTools bool, tools [
 
 		if has("search_web", "search_web_multi", "naver_search", "read_web_page", "read_buffered_source") {
 			lines = append(lines,
-				"7. FRESHNESS SOURCE QUALITY RULE: For current claims, evaluate retrieved content, dates, relevance and whether the source directly supports each claim. Prefer original reporting when available. Search or read further when needed, and answer directly with citations when sufficient. Explain specific uncertainty without blanket disclaimers about web evidence.",
+				"7. FRESHNESS SOURCE QUALITY RULE: Follow a relevant skill’s source and tool order first. For current claims, evaluate retrieved content, dates, relevance and whether the source directly supports each claim. Prefer original reporting when available. Search or read further when needed, and answer directly with citations when sufficient. Explain specific uncertainty without blanket disclaimers about web evidence.",
 				"8. Web tools return compact buffered evidence handles; decide whether further reading is needed from the evidence. Answer directly from search evidence when sufficient; call read_web_page only for specific high-value URLs or read_buffered_source for focused excerpts. Do not invent missing dates or retry failed pages/queries repeatedly.",
 			)
 		}
 		if has("search_memory", "read_memory", "read_memory_context", "save_user_fact") {
 			lines = append(lines,
-				"9. MEMORY-THEN-WEB RULE: If the user asks about prior chats, personal facts, preferences, or earlier reasons, search memory first. If memory is insufficient and the question is still a factual/public information question, then search the web.",
+				"9. MEMORY-THEN-WEB RULE: For prior chats or personal details, use the supplied context first and search memory only when it is insufficient. If memory is insufficient and the question is still a factual/public information question, then search the web.",
 			)
 		}
 		if has("execute_command") {
@@ -312,7 +318,7 @@ func nativeToolGuidelines(tools []ToolDefinition) []string {
 	}
 	if has("search_web", "search_web_multi", "naver_search", "read_web_page", "read_buffered_source", "namu_wiki") {
 		lines = append(lines,
-			"WEB: For fresh news, current events, or genuine comparison, use available search tools with complementary queries: broad discovery plus official/primary or established-news verification, using CURRENT_TIME's year.",
+			"WEB: Unless a relevant skill prescribes its own source and tool order, for fresh news, current events, or genuine comparison, use available search tools with complementary queries: broad discovery plus official/primary or established-news verification, using CURRENT_TIME's year.",
 			"WEB: Usually use one search call and at most three evidence calls. Cite returned links, answer when evidence is sufficient, and read a page/buffer only for missing high-value detail.",
 			"WEB: Use relevant retrieved evidence and cite it. Resolve material conflicts or missing details with available tools. Qualify only the affected claim; do not invent dates or facts.",
 			"WEB: For relatives, verify and distinguish biological, adopted, and step relationships; never infer birth from wording such as 'children with'.",
@@ -321,7 +327,7 @@ func nativeToolGuidelines(tools []ToolDefinition) []string {
 	if has("search_memory", "read_memory", "read_memory_context", "save_user_fact") {
 		lines = append(lines,
 			"MEMORY: For prior chats or personal facts, use provided context first, then search_memory if needed; inspect the best candidate with read_memory_context before guessing.",
-			"MEMORY: Save newly stated durable personal facts with save_user_fact, and search the web only if unresolved public facts remain.",
+			"MEMORY: Save explicitly stated durable facts and corrections with save_user_fact when available. Reuse the exact existing profile key for a correction. Temporary constraints apply only to the current task.",
 		)
 	}
 	if has("read_help") {
@@ -392,9 +398,9 @@ func buildMemoryTemplate(staticMemory string, recentContext string, userProfile 
 
 	rules := []string{
 		"1. Current user message is authoritative; use RECENT CONTEXT to resolve omitted subjects/referents (especially in Korean).",
-		"2. USER PROFILE Known Facts are ground truth for personal details; they never require search_memory.",
+		"2. The latest explicit user statement takes precedence. Otherwise prefer USER PROFILE Known Facts over older retrieved memories for the same fact.",
 		"3. For missing/uncertain past chats or facts, use 'search_memory' (then 'read_memory_context'). Do not guess.",
-		"4. Proactively use 'save_user_fact' to permanently save newly stated user facts (name, birthday, preferences, etc.).",
+		"4. When available, use save_user_fact for explicit durable facts and corrections. Reuse the exact existing key. Keep temporary conditions and inferred preferences out of the profile. Confirm persistence only after success.",
 		"5. Mention only relevant profile facts. If memory is insufficient for public facts, search the web.",
 	}
 	if retrievalInjected && strings.TrimSpace(activeContext) != "" {
@@ -433,7 +439,7 @@ func buildPassiveMemoryTemplate(recentContext string, userProfile string, active
 	sections = append(sections, "MEMORY USAGE RULES:\n"+strings.Join([]string{
 		"1. Current message is authoritative; use RECENT CONTEXT, USER PROFILE, and ACTIVE CONTEXT as reference.",
 		"2. Resolve omitted subjects/referents from RECENT CONTEXT without asking unnecessary clarifying questions.",
-		"3. USER PROFILE Known Facts are ground truth for personal details; use them when directly relevant without listing unrelated facts.",
+		"3. USER PROFILE Known Facts are ground truth unless the current user corrects them. Prefer them over older memories for the same fact and use only relevant details.",
 		"4. Do not mention tools, integrations, or hidden retrieval steps.",
 		"5. If provided memory context is insufficient, answer normally from model knowledge without guessing.",
 	}, "\n"))

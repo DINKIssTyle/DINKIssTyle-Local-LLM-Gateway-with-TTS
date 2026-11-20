@@ -396,3 +396,23 @@ func TestRecentBufferedSourcesMemoryRanksGloballyWithDiversity(t *testing.T) {
 		t.Fatalf("unrelated recent source consumed evidence budget:\n%s", result)
 	}
 }
+
+func TestMSNBufferIncludesCurrentConditionsBeforeForecast(t *testing.T) {
+	source := &BufferedWebSource{
+		URL:     "https://www.msn.com/ko-kr/weather/forecast/in-Seoul,Seoul",
+		Title:   "서울 날씨",
+		Content: "서울\n# 현재 날씨\n맑음 -2°\n습도 40%\n# 시간별 예보\n+9°",
+	}
+	got := formatBufferedSourceHandle(source)
+	for _, want := range []string{source.URL, "서울 날씨", "-2°", "습도 40%"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q from weather evidence: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "+9°") {
+		t.Fatalf("forecast leaked into current conditions: %s", got)
+	}
+	if got := currentWeatherExcerpt("현재 날씨\n로딩 중\n일기 예보 확인\n시간별\n9°"); got != "" {
+		t.Fatalf("forecast treated as current conditions: %q", got)
+	}
+}

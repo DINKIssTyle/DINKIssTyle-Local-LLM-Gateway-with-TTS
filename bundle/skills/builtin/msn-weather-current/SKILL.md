@@ -15,7 +15,7 @@ description: Check the current weather for a requested location on the Korean MS
    Preserve the comma between `지역` and `도시`. URL-encode the path when the browsing tool requires it.
 
 3. **The first web tool call MUST be `read_web_page` with that direct MSN URL.** Do not call `search_web`, `search_web_multi`, `naver_search`, or a general search provider for this request.
-4. Find the page's **현재 날씨** section and verify that its displayed location matches the request. If the page is buffered, use `read_buffered_source` only after the direct page read.
+4. Find the page's **현재 날씨** section and verify that its displayed location matches the request. If the direct result includes a current-conditions excerpt and the location matches, use it directly. If the excerpt is missing or insufficient, read the buffered source using 현재 날씨 and the requested location as the query.
 5. Report the current condition and temperature. Include feels-like temperature, precipitation, humidity, wind, or observation time only when the page exposes them.
 6. Link to the MSN Weather page used for the answer.
 

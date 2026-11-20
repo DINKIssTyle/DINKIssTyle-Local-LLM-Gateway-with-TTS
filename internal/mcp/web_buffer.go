@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -368,9 +369,35 @@ func formatBufferedSourceHandle(source *BufferedWebSource) string {
 	if source.URL != "" {
 		fmt.Fprintf(&b, "URL: %s\n", source.URL)
 	}
+	if isMSNWeatherPage(source.URL) {
+		if excerpt := currentWeatherExcerpt(source.Content); excerpt != "" {
+			fmt.Fprintf(&b, "Current conditions excerpt (verify the location): %s", excerpt)
+			return b.String()
+		}
+	}
 	fmt.Fprintf(&b, "Summary: %s\n", source.Summary)
 	fmt.Fprintf(&b, "Full content is buffered server-side for this user. Use read_buffered_source with source_id and a focused query before answering in detail.")
 	return b.String()
+}
+
+var currentWeatherHeading = regexp.MustCompile(`(?im)^[ \t#*]*(현재[ \t]*날씨|current[ \t]+(?:weather|conditions))[ \t#*:：]*(?:$|[\r\n])`)
+var weatherForecastHeading = regexp.MustCompile(`(?im)^[ \t#*]*(시간별(?:[ \t]*(?:날씨|예보))?|일별(?:[ \t]*(?:날씨|예보))?|일기[ \t]+예보[ \t]+확인|hourly(?:[ \t]+forecast)?|daily(?:[ \t]+forecast)?)[ \t#*:：]*(?:$|[\r\n])`)
+var weatherTemperature = regexp.MustCompile(`-?\d{1,3}\s*°`)
+
+func currentWeatherExcerpt(content string) string {
+	heading := currentWeatherHeading.FindStringIndex(content)
+	if heading == nil {
+		return ""
+	}
+	section := content[heading[1]:]
+	if forecast := weatherForecastHeading.FindStringIndex(section); forecast != nil {
+		section = section[:forecast[0]]
+	}
+	section = compactMemoryText(strings.TrimSpace(section), 520)
+	if !weatherTemperature.MatchString(section) {
+		return ""
+	}
+	return section
 }
 
 func isBufferedSearchTool(toolName string) bool {

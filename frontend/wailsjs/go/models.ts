@@ -276,16 +276,16 @@ export namespace core {
 }
 
 export namespace googleintegration {
-
+	
 	export class Settings {
 	    client_id: string;
 	    client_secret?: string;
 	    services: string[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.client_id = source["client_id"];
@@ -302,11 +302,11 @@ export namespace googleintegration {
 	    email: string;
 	    pending: boolean;
 	    message: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Status(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.client_id = source["client_id"];
@@ -323,16 +323,16 @@ export namespace googleintegration {
 }
 
 export namespace mcp {
-
+	
 	export class MemoryRetentionConfig {
 	    coreDays: number;
 	    workingDays: number;
 	    ephemeralDays: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new MemoryRetentionConfig(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.coreDays = source["coreDays"];
@@ -344,15 +344,15 @@ export namespace mcp {
 }
 
 export namespace promptkit {
-
+	
 	export class SystemPrompt {
 	    title: string;
 	    prompt: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new SystemPrompt(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.title = source["title"];

@@ -401,13 +401,21 @@ func platformMatches(raw, current string) bool {
 
 // Offer procedures to the LLM; do not decide relevance from keyword overlap.
 func selectSkills(skills []Skill, userText string, limit int) []scoredSkill {
+	query := strings.ToLower(userText)
 	var candidates []scoredSkill
 	for _, skill := range skills {
-		candidates = append(candidates, scoredSkill{skill: skill, explicit: explicitlyRequested(strings.ToLower(userText), skill)})
+		candidate := scoredSkill{skill: skill, explicit: explicitlyRequested(query, skill)}
+		if skill.Namespace == "builtin:msn-weather-current" && asksForCurrentWeather(query) {
+			candidate.score = 1
+		}
+		candidates = append(candidates, candidate)
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		if candidates[i].explicit != candidates[j].explicit {
 			return candidates[i].explicit
+		}
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score > candidates[j].score
 		}
 		return candidates[i].skill.Namespace < candidates[j].skill.Namespace
 	})
@@ -415,6 +423,16 @@ func selectSkills(skills []Skill, userText string, limit int) []scoredSkill {
 		candidates = candidates[:limit]
 	}
 	return candidates
+}
+
+// Recognize clear weather cues to prioritize the procedure within the prompt budget.
+func asksForCurrentWeather(query string) bool {
+	for _, cue := range []string{"날씨", "현재 기온", "지금 기온", "current weather", "weather right now"} {
+		if strings.Contains(query, cue) {
+			return true
+		}
+	}
+	return false
 }
 
 func explicitlyRequested(query string, skill Skill) bool {

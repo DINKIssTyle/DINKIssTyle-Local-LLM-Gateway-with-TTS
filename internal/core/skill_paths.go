@@ -135,7 +135,7 @@ func compileActiveSkills(userText string, toolLists ...[]promptkit.ToolDefinitio
 		for _, tool := range toolLists[0] {
 			available[tool.Name] = true
 		}
-		for skill, tool := range map[string]string{"google-gmail": "gmail_search", "google-drive": "google_drive_search", "google-calendar": "google_calendar_search"} {
+		for skill, tool := range map[string]string{"google-gmail": "gmail_search", "google-drive": "google_drive_search", "google-calendar": "google_calendar_search", "msn-weather-current": "read_web_page"} {
 			if !available[tool] {
 				excluded = append(excluded, skill)
 			}

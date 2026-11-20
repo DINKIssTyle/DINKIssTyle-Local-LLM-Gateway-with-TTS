@@ -94,6 +94,11 @@ func TestDefaultRegistryNonNetworkToolContracts(t *testing.T) {
 	if !foundFact {
 		t.Fatalf("save_user_fact did not persist %q: %#v", factKey, facts)
 	}
+	callToolForContract(t, execCtx, "save_user_fact", `{"fact_key":"codex_tool_contract_fact","fact_value":"corrected","category":"general"}`)
+	profile := mcp.FormatUserProfileForPrompt(userID)
+	if strings.Count(profile, factKey+":") != 1 || !strings.Contains(profile, factKey+": corrected") {
+		t.Fatalf("profile should contain only the corrected value: %s", profile)
+	}
 	callToolForContract(t, execCtx, "delete_user_fact", `{"fact_key":"codex_tool_contract_fact"}`)
 
 	if got := callToolForContract(t, execCtx, "execute_command", `{"command":"printf DKST_COMMAND_SENTINEL"}`); got != "DKST_COMMAND_SENTINEL" {

@@ -732,3 +732,30 @@ func TestReasoningContextPreservesUnicodeWithoutClassifyingContent(t *testing.T)
 		t.Fatal("context was rewritten")
 	}
 }
+
+func TestPrepareRequestPersonalAssistantUsesCurrentProfile(t *testing.T) {
+	for _, mode := range []string{"standard", "stateful"} {
+		t.Run(mode, func(t *testing.T) {
+			body := `{"model":"test","messages":[{"role":"user","content":"나는 언제 회의하는 게 좋다고 했지?"}]}`
+			if mode == "stateful" {
+				body = `{"model":"test","input":"나는 언제 회의하는 게 좋다고 했지?","previous_response_id":"resp_123"}`
+			}
+			prepared, err := PrepareRequest(RequestInput{
+				Body:             []byte(body),
+				LLMMode:          mode,
+				ContextStrategy:  mode,
+				EnableMemory:     true,
+				UserProfileFacts: "[preference]\n- meeting_time: 오전",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := string(prepared.Body)
+			for _, want := range []string{"directly and briefly", "meeting_time: 오전", "Prefer them over older memories"} {
+				if !strings.Contains(request, want) {
+					t.Errorf("missing %q in prepared request: %s", want, request)
+				}
+			}
+		})
+	}
+}

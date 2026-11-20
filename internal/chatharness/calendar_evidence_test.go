@@ -102,3 +102,20 @@ func TestHUDToolFollowupRetainsEvidenceAndConciseFormat(t *testing.T) {
 		t.Fatal("web chat output changed")
 	}
 }
+
+func TestCalendarAvailabilityContinuesAfterMemoryLookup(t *testing.T) {
+	input := ToolFollowupInput{
+		LLMMode: "stateful", ModelID: "local-model",
+		OriginalUserText: "지난번 조건으로 다음 주에 가능한 시간 두 개 골라줘",
+		ToolName:         "read_memory_context", ToolResult: "오전 30분 선호",
+		AvailableTools: []string{"read_memory_context", "google_calendar_search"},
+	}
+	req, _, err := PrepareToolFollowupRequest(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, _ := req["input"].(string)
+	if !strings.Contains(text, "오전 30분 선호") || !strings.Contains(text, "google_calendar_search for the requested date range before proposing times") {
+		t.Fatalf("missing calendar step after memory lookup: %s", text)
+	}
+}
