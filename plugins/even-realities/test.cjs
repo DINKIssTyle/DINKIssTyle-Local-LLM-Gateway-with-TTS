@@ -1848,8 +1848,17 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.equal(queue.state().answer,'');assert.equal(queue.state().recording,true);assert.equal(audioCalls.length,closeTapMic,'tap closes the response without muting');
  handler({sysEvent:{eventType:0}});await tick();assert.match(queue.state().answer,/듣는 중/,'tap from a closed window arms a question');
  assert.equal(queue.lifetime.active,false);
- nextTranscript='탭으로 호출한 질문입니다';queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'tap-question');for(let i=0;i<15;i++)await tick();
+ const manualTapStarts=requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).length;
+ nextTranscript='탭으로 호출한 질문입니다';
+ for(let i=0;i<6;i++)handler({audioEvent:{audioPcm:speech}});
+ await tick();
+ assert.equal(requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).length,manualTapStarts,'speech without a silence boundary remains buffered');
+ handler({sysEvent:{eventType:0}});for(let i=0;i<15;i++)await tick();
+ assert.equal(requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).length,manualTapStarts+1);
  assert.equal(queue.state().title,'탭으로 호출한 질문입니다');
+ handler({sysEvent:{eventType:0}});await tick();
+ assert.equal(queue.state().answer,'','third tap closes the answer');
+ assert.equal(audioCalls.length,closeTapMic,'manual send and close keep the microphone on');
  element('hide-transcript').checked=false;await element('hide-transcript').handlers.change();
  element('trigger-transcript-only').checked=true;await element('trigger-transcript-only').handlers.change();
  assert.equal(element('hide-transcript').checked,false);

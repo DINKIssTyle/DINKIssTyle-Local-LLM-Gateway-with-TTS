@@ -171,6 +171,7 @@ import { LocalAgreement } from './local-agreement.mjs';
   const knownAIJobs = new Set();
   let pendingTrigger = false;
   let tapChatPromise=null,tapChatGeneration=0,tapQuestionAfterSequence=null,nextCaptureSequence=0;
+  let submittedVoiceSegment='';
   let dismissedQuestionThroughSequence=0;
   const dismissedVoiceSegments=new Set();
   const voiceWakeJobs=new Map();let nextWakeJob=0,lastWakeBrightness=null,previewWakePrompt='';
@@ -420,7 +421,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     }
   }
   function observeAIPreview(snapshot,data,agreed){
-    if(snapshot.mode!=='ai' || dismissedVoiceSegments.has(snapshot.segmentId))return;
+    if(snapshot.mode!=='ai' || submittedVoiceSegment || dismissedVoiceSegments.has(snapshot.segmentId))return;
     reconcileHintTranscript(snapshot.segmentId,data.text);
     if(pendingTrigger){
       previewWakePrompt=String(data.text || '').trim();
@@ -901,7 +902,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     stopChromeSegment(activeUtterance?.id);
     liveTranslationDraft=false;liveTranslations.reset();
     if(!preserveDisplay)translationDisplay={translation:'',positive:'',negative:''};
-    pendingTrigger=false;tapQuestionAfterSequence=null;
+    pendingTrigger=false;tapQuestionAfterSequence=null;submittedVoiceSegment='';
     hintGate.reset({forgetHistory:true});
     abortPendingPreview();
     activeUtterance = null;
@@ -1130,7 +1131,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     if(headTransition)return headTransition.catch(()=>{});
     headResumeWanted=isRecording || capturePreparing || resumeAfterSettings;
     headPaused=true;settingsPicker=null;recognitionEpoch++;hintGate.reset();hintLifetime.clear();
-    aiAbortedByModeSwitch=true;aiAbortController?.abort();pendingAI.length=0;voiceWakeJobs.clear();pendingTrigger=false;tapQuestionAfterSequence=null;
+    aiAbortedByModeSwitch=true;aiAbortController?.abort();pendingAI.length=0;voiceWakeJobs.clear();pendingTrigger=false;tapQuestionAfterSequence=null;submittedVoiceSegment='';
     updateHeadControls();renderLiveHUD();flushHUD();
     const work=(async()=>{
       await Promise.resolve();const starting=captureTask;
@@ -1838,12 +1839,14 @@ import { LocalAgreement } from './local-agreement.mjs';
 
   function cancelCurrentVoiceQuestion(){
     dismissedQuestionThroughSequence=nextCaptureSequence;
+    submittedVoiceSegment='';
     for(const id of [activeUtterance?.id,previewWakeId])if(id)dismissedVoiceSegments.add(id);
     while(dismissedVoiceSegments.size>32)dismissedVoiceSegments.delete(dismissedVoiceSegments.values().next().value);
     previewWakeId='';previewWakePrompt='';previewIntent.reset();
   }
 
   async function handleAIChatTap(){
+    if(isRecording && !submittedVoiceSegment && (pendingTrigger || previewWakeId) && submitBufferedVoiceQuestion())return;
     if(answerText || pendingTrigger || tapChatPromise){
       ++tapChatGeneration;cancelCurrentVoiceQuestion();
       pendingTrigger=false;tapQuestionAfterSequence=null;
@@ -1856,6 +1859,25 @@ import { LocalAgreement } from './local-agreement.mjs';
       return;
     }
     return requestTappedAIChat();
+  }
+
+  function submitBufferedVoiceQuestion(){
+    const queued=pendingClips.find(clip=>clip.mode==='ai' && clip.epoch===recognitionEpoch &&
+      clip.sequence>dismissedQuestionThroughSequence && !dismissedVoiceSegments.has(clip.segmentId) &&
+      (pendingTrigger && (tapQuestionAfterSequence===null || clip.sequence>tapQuestionAfterSequence) || clip.segmentId===previewWakeId));
+    const bytes=queued?null:segmenter?.flush();
+    if(!queued && !bytes)return false;
+    submittedVoiceSegment=queued?.segmentId || activeUtterance?.id || newID();
+    const name=triggerLabels()[0] || 'AI';
+    answerText=previewWakePrompt?`${name}: ${previewWakePrompt}`:`${name}: 질문 전사 중…`;
+    els.chatOutput.textContent=answerText;
+    els.hintStatus.textContent='음성 입력 완료 · 질문 전사 중';
+    setHUDNotice('질문 전사 중');renderLiveHUD();
+    if(bytes){
+      activeUtterance=null;
+      enqueueClip(bytes,true,recordingStarted+recordedBytes/32,submittedVoiceSegment);
+    }
+    return true;
   }
 
   function requestTappedAIChat(){
@@ -2026,7 +2048,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     if(generation!==captureGeneration || signal.aborted)return;
     captureFailure = '';
     for(const clip of pendingClips)clip.attempts=0;
-    sessionId = newID(); pendingTrigger = false;tapQuestionAfterSequence=null;
+    sessionId = newID(); pendingTrigger = false;tapQuestionAfterSequence=null;submittedVoiceSegment='';
     activeUtterance = null; pendingPreview = null; draftUtteranceId = '';
     captionStable = captionDraft = ''; captionFinal = '';
     transcriptNotice(continuousCapture ? '실시간 전사 중' : '녹음 중');
@@ -2278,7 +2300,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     if(!flush)stopChromeSegment(segmentId);
     activeUtterance=null;abortPendingPreview();
     const clip=hadCapture ? (continuousCapture?segmenter?.flush():mergePCM(audioBuffer)) : null;
-    if(pendingTrigger && (!flush || !clip || clip.length<3200)){pendingTrigger=false;tapQuestionAfterSequence=null;}
+    if(pendingTrigger && (!flush || !clip || clip.length<3200)){pendingTrigger=false;tapQuestionAfterSequence=null;submittedVoiceSegment='';}
     audioBuffer=[];
     if((!flush || !clip) && liveTranslations.hasDraft()){liveTranslationDraft=false;liveTranslations.reset();}
     setHUDNotice('마이크 정지 중');
@@ -2325,6 +2347,7 @@ import { LocalAgreement } from './local-agreement.mjs';
             }
           }
           if(clip.mode==='ai') {
+            if(submittedVoiceSegment===clip.segmentId)submittedVoiceSegment='';
             hintGate.withdraw(clip.segmentId);if(previewWakeId===clip.segmentId)previewWakeId='';
             pendingClips.splice(pendingClips.indexOf(clip),1);
             if(clip.epoch===undefined || clip.epoch===recognitionEpoch){
@@ -2357,6 +2380,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         }
         if(!pendingClips.includes(clip))continue;
         pendingClips.splice(pendingClips.indexOf(clip),1);
+        if(submittedVoiceSegment===clip.segmentId)submittedVoiceSegment='';
         if (draftUtteranceId === clip.segmentId) { captionStable = captionDraft = ''; draftUtteranceId = ''; }
         if(previewWakeId===clip.segmentId)previewWakeId='';
         if(data.rejected || !data.text?.trim()){if(clip.mode==='ai')reconcileHintTranscript(clip.segmentId,'');hintGate.withdraw(clip.segmentId);}
@@ -2377,8 +2401,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         let chatSession=false,wakeToken;
         if(clipMode==='ai') {
           reconcileHintTranscript(clip.segmentId,text);
-          const wasWaitingForQuestion=pendingTrigger;
-          const eligible=clip.sequence>dismissedQuestionThroughSequence && !dismissedVoiceSegments.has(clip.segmentId) && (tapQuestionAfterSequence===null || clip.sequence>tapQuestionAfterSequence);
+          const eligible=!submittedVoiceSegment && clip.sequence>dismissedQuestionThroughSequence && !dismissedVoiceSegments.has(clip.segmentId) && (tapQuestionAfterSequence===null || clip.sequence>tapQuestionAfterSequence);
           const route=eligible?routeAIUtterance(data,{waiting:pendingTrigger,name:triggerLabels()[0] || data.matchedTrigger || 'AI'}):{kind:'ambient',waiting:pendingTrigger};
           if(route.kind!=='ambient')tapQuestionAfterSequence=null;
           pendingTrigger=route.waiting;
@@ -2404,7 +2427,7 @@ import { LocalAgreement } from './local-agreement.mjs';
             // route (or typed input) authorizes a conversational AI response.
             hintGate.observe(text,{id:clip.segmentId,at:Date.parse(clip.endedAt)});
           }
-        }else if(clipMode==='translate'){prompt=text;pendingTrigger=false;tapQuestionAfterSequence=null;}
+        }else if(clipMode==='translate'){prompt=text;pendingTrigger=false;tapQuestionAfterSequence=null;submittedVoiceSegment='';}
         if (prompt) {
           const context=chatSession?'':clip.continuous?transcriptContext.slice(0,-1).slice(-2).join('\n').slice(-800):'';
           if(clipMode==='translate')enqueueTranslation(clip.segmentId,prompt,context,clip.sourceLang || 'auto',clipTargetLang,{sessionId:clip.sessionId,detectedLanguage:data.language,sttEngine:data.engine || clip.engine,joinSentence:String(clip.engine||'').startsWith('chrome-') && clip.continuous,startedAt:clip.startedAt,endedAt:clip.endedAt});
@@ -2424,7 +2447,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     } finally {
       activeFinalClip=null;
       draining = false;
-      if(!isRecording && !pendingClips.length){pendingTrigger=false;tapQuestionAfterSequence=null;}
+      if(!isRecording && !pendingClips.length){pendingTrigger=false;tapQuestionAfterSequence=null;submittedVoiceSegment='';}
       renderLiveHUD();
       if (!isRecording && !pendingClips.length && !micStopPromise && !pendingMicOpen && !micCloseUncertain && !pendingMicCloses.size) setVoiceHint('마이크 꺼짐 · 전사 저장 완료');
       if (pendingPreview) drainPreview();
@@ -3310,7 +3333,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       els.chatInput.value='';
       if(processingAI)els.chatOutput.textContent='질문을 대기열에 추가했습니다.';
       const chatSession=normalizeGlassesMode(config.glassesMode)==='ai';
-      if(chatSession){pendingTrigger=false;tapQuestionAfterSequence=null;hintGate.reset();if(activeAIJob?.hint){activeAIJob.cancelReason='chat_priority';aiAbortController?.abort();}}
+      if(chatSession){pendingTrigger=false;tapQuestionAfterSequence=null;submittedVoiceSegment='';hintGate.reset();if(activeAIJob?.hint){activeAIJob.cancelReason='chat_priority';aiAbortController?.abort();}}
       enqueueAI(newID(),prompt,'',config.glassesMode,config.translateTargetLang,chatSession?{directQuestion:true,chatSession:true,chatEpoch,forceSearch:directQuestionIntent(prompt).search}:{});
     });
     const viewport=window.visualViewport;
