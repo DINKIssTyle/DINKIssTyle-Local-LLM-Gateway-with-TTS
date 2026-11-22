@@ -1,6 +1,6 @@
 {
   "name": "dkst-even-realities-plugin",
-  "version": "2.24.35",
+  "version": "2.24.36",
   "description": "DKST AI Gateway for Even Realities G2",
   "main": "plugin.js",
   "scripts": {

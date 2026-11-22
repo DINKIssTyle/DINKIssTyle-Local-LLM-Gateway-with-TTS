@@ -217,12 +217,9 @@ import { LocalAgreement } from './local-agreement.mjs';
   function subtitleOnly(){return normalizeGlassesMode(config.glassesMode)==='translate' && config.translationLayout==='subtitles';}
   function subtitleLineCount(){return Math.max(1,Math.min(5,Math.round(Number(config.subtitleLines)||2)));}
   function subtitleWindow(){
-    const lines=subtitleLineCount();
-    const win=sliceHUDWindow(translationHistory.text() || translationDisplay.translation || '',Infinity,30,570);
-    const total=win.lines.length,removed=(translationHistory.trimmedLines || 0)+win.offsetLine;
-    if(!total)return '';
-    const start=Math.max(0,total-1-((removed+total-1)%lines));
-    return win.lines.slice(start,start+lines).join('\n');
+    // Keep the preceding rows when a streamed sentence wraps. Clearing a full
+    // page at this boundary can leave only a Korean ending such as "요.".
+    return sliceHUDWindow(translationHistory.text() || translationDisplay.translation || '',Infinity,subtitleLineCount(),570).visibleText;
   }
   function syncTranslationLayoutControls(){
     config.translationLayout=config.translationLayout==='subtitles'?'subtitles':'standard';config.subtitleLines=subtitleLineCount();

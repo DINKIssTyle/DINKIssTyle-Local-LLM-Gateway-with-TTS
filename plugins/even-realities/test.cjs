@@ -1975,7 +1975,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
    assert.deepEqual(Array.from(nativePage.textObject,c=>c.containerID),[1]);
    const caption=nativePage.textObject[0];assert.equal(caption.borderWidth,0);assert.equal(caption.paddingLength,0);
    assert.equal(caption.yPosition+caption.height,288);assert.equal(caption.height,rows*27);
-   assert.equal(caption.content.split('\n').length,7%rows+1);assert.ok(caption.content.endsWith('번역 자막 8'));
+   assert.equal(caption.content.split('\n').length,rows);assert.ok(caption.content.endsWith('번역 자막 8'));
    assert.deepEqual(Array.from(nativePage.imageObject,c=>c.containerID),[11]);
    assert.equal(nativePage.imageObject[0].yPosition+27,caption.yPosition);
    assert.equal(element('hud-status-row').hidden,true);assert.equal(element('hud-page-indicator').hidden,true);
@@ -1990,14 +1990,23 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  for(let i=0;i<100 && !nativePage.textObject[0].content.endsWith('한 줄 자막');i++)await new Promise(r=>setTimeout(r,10));
  assert.equal(nativePage.textObject[0].content,'한 줄 자막','a new subtitle page starts at its first row');
  assert.equal(JSON.parse(nativeSaved).translationLayout,'subtitles');assert.equal(JSON.parse(nativeSaved).subtitleLines,5);
- // Page boundaries continue across history pruning (30-row memory cap).
+ // Rolling context survives history pruning (30-row memory cap).
  element('subtitle-lines').value='4';await element('subtitle-lines').handlers.change();queue.translationHistory.reset();
  for(let i=1;i<=41;i++){
    queue.translationHistory.update('page-'+i,'자막 '+i,{final:true});queue.headerMode('translate');
-   const expected=Array.from({length:(i-1)%4+1},(_,j)=>'자막 '+(i-((i-1)%4)+j)).join('\n');
+   const count=Math.min(i,4);
+   const expected=Array.from({length:count},(_,j)=>'자막 '+(i-count+1+j)).join('\n');
    for(let n=0;n<100 && nativePage.textObject[0].content!==expected;n++)await new Promise(r=>setTimeout(r,5));
-   assert.equal(nativePage.textObject[0].content,expected,'full subtitle page clears before the next row, including after pruning');
+   assert.equal(nativePage.textObject[0].content,expected,'only the oldest row scrolls away, including after history pruning');
  }
+ // A single newly wrapped syllable must not replace all of the readable context.
+ element('subtitle-lines').value='2';await element('subtitle-lines').handlers.change();queue.translationHistory.reset();
+ queue.translationHistory.update('orphan-ending','이전 줄입니다.\n안녕하세');queue.headerMode('translate');
+ for(let i=0;i<100 && nativePage.textObject[0].content!=='이전 줄입니다.\n안녕하세';i++)await new Promise(r=>setTimeout(r,5));
+ assert.equal(nativePage.textObject[0].content,'이전 줄입니다.\n안녕하세');
+ queue.translationHistory.update('orphan-ending','이전 줄입니다.\n안녕하세\n요.',{final:true});queue.headerMode('translate');
+ for(let i=0;i<100 && nativePage.textObject[0].content!=='안녕하세\n요.';i++)await new Promise(r=>setTimeout(r,5));
+ assert.equal(nativePage.textObject[0].content,'안녕하세\n요.','overflowing sentence ending retains the preceding line');
  const subtitleChatStart=requests.filter(r=>r.url.endsWith('/api/chat')).length;
  for(const engine of ['llm','apple','chrome'])queue.liveTranslations.onFinal({id:'subtitle-'+engine,prompt:'Synthetic subtitle.',context:'',source:'en',target:'ko',engine,token:queue.liveTranslations.token},{ok:true,text:'자막 번역'});
  await tick();await tick();
