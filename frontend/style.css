@@ -4135,3 +4135,13 @@ html[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
     background-color: var(--ai-bubble-bg);
   }
 }
+
+/* Saved turns and recorded speech share the same library cards and themes. */
+.saved-library-header { flex-direction: column; gap: 12px; }
+.saved-library-tabs { display: flex; width: 100%; padding: 4px; gap: 4px; border: 1px solid var(--border-color); border-radius: 999px; background: var(--saved-library-search-clear-bg); }
+.saved-library-tabs [role="tab"] { flex: 1; min-width: 0; padding: 9px 12px; border: 0; border-radius: 999px; background: transparent; color: var(--text-muted); font: inherit; font-weight: 600; cursor: pointer; }
+.saved-library-tabs [aria-selected="true"] { background: var(--saved-library-card-bg); box-shadow: var(--saved-library-search-shadow); color: var(--saved-library-title-color); }
+.saved-library-tabs [role="tab"]:focus-visible, .transcript-open:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 2px; }
+.transcript-open { text-align: start; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; padding: 0; }
+.transcript-day-content { white-space: pre-wrap; overflow-wrap: anywhere; }
+.transcript-more { align-self: center; margin: 8px 0 16px; }

@@ -233,7 +233,11 @@ func TestAdditionalNativeAmbientRoles(t *testing.T) {
 						t.Error("explicit chat reasoning changed")
 					}
 				} else {
-					if body["reasoning"] != "off" || body["store"] != false {
+					wantReasoning := any(nil)
+					if role == "translation" {
+						wantReasoning = "off"
+					}
+					if body["reasoning"] != wantReasoning || body["store"] != false {
 						t.Error("ambient reasoning/store policy lost")
 					}
 					for _, key := range []string{"max_tokens", "response_format", "chat_template_kwargs", "previous_response_id", "integrations", "tools"} {
@@ -244,7 +248,7 @@ func TestAdditionalNativeAmbientRoles(t *testing.T) {
 					if body["max_output_tokens"] == nil {
 						t.Error("Native output limit absent")
 					}
-					if role == "judge" && (body["max_output_tokens"] != float64(384) || !strings.Contains(fmt.Sprint(body["system_prompt"]), "JSON output contract")) {
+					if role == "judge" && (body["max_output_tokens"] != float64(1024) || !strings.Contains(fmt.Sprint(body["system_prompt"]), "JSON output contract")) {
 						t.Error("judge budget/schema contract lost")
 					}
 				}
@@ -296,7 +300,7 @@ func TestNativeAmbientReasoningCompatibilityRetry(t *testing.T) {
 	}))
 	defer upstream.Close()
 	app := &App{llmMode: "standard", llmConnections: []LLMConnection{{ID: "remote", Endpoint: upstream.URL, Mode: "stateful"}}}
-	r := httptest.NewRequest("POST", "/api/chat", strings.NewReader(`{"model":"`+routedModel("remote", "model")+`","stream":true,"glasses_hint":true,"glasses_hint_phase":"judge","messages":[{"role":"user","content":"synthetic"}]}`))
+	r := httptest.NewRequest("POST", "/api/chat", strings.NewReader(`{"model":"`+routedModel("remote", "model")+`","stream":true,"glasses_client":true,"glasses_task":"translation","messages":[{"role":"user","content":"synthetic"}]}`))
 	w := httptest.NewRecorder()
 	handleChat(w, r, app, &AuthManager{users: map[string]*User{}})
 	if calls != 2 || !strings.Contains(w.Body.String(), "ready") {

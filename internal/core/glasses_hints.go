@@ -412,6 +412,7 @@ type hintResearchRequest struct {
 	Anchor           string `json:"anchor"`
 	AllowWeb         bool   `json:"allow_web"`
 	Query            string `json:"query"`
+	SearchQuery      string `json:"search_query,omitempty"`
 	Source           string `json:"source"`
 }
 
@@ -434,7 +435,14 @@ func loadHintEvidence(ctx context.Context, registry *toolruntime.Registry, execC
 	if strings.TrimSpace(research.Query) == "" || len([]rune(research.Query)) > 300 {
 		return "", fmt.Errorf("invalid hint research query")
 	}
-	args, _ := json.Marshal(map[string]string{"query": research.Query})
+	query := research.Query
+	if research.Source == "web" && strings.TrimSpace(research.SearchQuery) != "" {
+		query = strings.TrimSpace(research.SearchQuery)
+	}
+	if len([]rune(query)) > 300 {
+		return "", fmt.Errorf("invalid hint search query")
+	}
+	args, _ := json.Marshal(map[string]string{"query": query})
 	result, err := registry.Call(ctx, execCtx, tool, args)
 	if err != nil {
 		return "", err

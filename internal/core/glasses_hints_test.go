@@ -215,6 +215,37 @@ func TestHintEvidenceRespectsSettingsAndInjectsReferences(t *testing.T) {
 	}
 }
 
+func TestHintEvidenceUsesSourceFocusedQueryOnlyForWeb(t *testing.T) {
+	registry := toolruntime.NewRegistry()
+	var queries []string
+	for _, name := range []string{"search_web", "search_memory"} {
+		err := registry.Register(toolruntime.Definition{Name: name, InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}`)}, func(_ context.Context, _ toolruntime.ExecutionContext, args json.RawMessage) (toolruntime.Result, error) {
+			var input map[string]string
+			_ = json.Unmarshal(args, &input)
+			queries = append(queries, input["query"])
+			return toolruntime.Result{Content: "Title: 자료\nLink: https://example.com/manual\nSnippet: 검증할 자료입니다."}, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	research := hintResearchRequest{Source: "web", Query: "장치의 최대 입력 전력", SearchQuery: "장치 제조사 사용 설명서 입력 전력"}
+	exec := toolruntime.ExecutionContext{EnableMemory: true}
+	for _, source := range []string{"web", "memory"} {
+		research.Source = source
+		if _, err := loadHintEvidence(context.Background(), registry, exec, true, research); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(queries) != 2 || queries[0] != research.SearchQuery || queries[1] != research.Query {
+		t.Fatalf("search query replaced the task or leaked into memory: %v", queries)
+	}
+	research.Source, research.SearchQuery = "web", strings.Repeat("가", 301)
+	if _, err := loadHintEvidence(context.Background(), registry, exec, true, research); err == nil || len(queries) != 2 {
+		t.Fatal("oversized model query reached a tool")
+	}
+}
+
 func TestHintPlanningHasNoTools(t *testing.T) {
 	var upstream map[string]interface{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

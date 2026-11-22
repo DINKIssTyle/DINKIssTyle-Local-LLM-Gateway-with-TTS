@@ -220,6 +220,20 @@ func TestBundledWikipediaSearchLoadsWithoutDiagnostics(t *testing.T) {
 	}
 }
 
+func TestHintTrustedInformationSkillLoads(t *testing.T) {
+	builtin := filepath.Join("..", "evenrealities", "skills")
+	result := LoadAndCompile(Config{BuiltinDir: builtin}, "$trusted-information 제품의 공식 사양 확인")
+	if len(result.Diagnostics) != 0 {
+		t.Fatalf("invalid bundled skills: %+v", result.Diagnostics)
+	}
+	for _, skill := range result.Selected {
+		if skill.Namespace == "builtin:trusted-information" {
+			return
+		}
+	}
+	t.Fatal("trusted-information skill not discoverable")
+}
+
 func TestUnavailableGoogleSkillIsExcludedEvenWhenExplicit(t *testing.T) {
 	builtin := filepath.Join("..", "..", "bundle", "skills", "builtin")
 	result := LoadAndCompile(Config{BuiltinDir: builtin, ExcludedNames: []string{"google-gmail", "google-drive"}}, "$google-gmail $google-calendar")

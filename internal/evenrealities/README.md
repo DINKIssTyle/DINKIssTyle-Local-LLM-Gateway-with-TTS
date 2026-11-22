@@ -62,3 +62,64 @@ No old-plugin settings migration or client-prompt fallback is provided.
 `contracts.go` owns internal fact schemas, per-record source-selection schemas and
 the structural unresolved-task guard. Native APIs retain prompt-based output
 contracts and independent reference checks; schema enforcement is not assumed.
+
+Hint research and source quality use the bundled
+`internal/evenrealities/skills/trusted-information/SKILL.md`. The planner receives
+only its active planning reference, without skill-discovery metadata or reference
+routing text; both source-selection protocols receive its selection reference. These are explicitly embedded into the isolated hint requests rather
+than depending on ordinary chat skill discovery or consuming its prompt budget. The skill and both references
+participate in `PromptRevision` so hint events identify policy changes too.
+
+The planner returns `search_query` separately from the information `task`.
+The client carries it as `plan.searchQuery`; request assembly forwards it as
+`hint_research.search_query`. Web lookup uses this source-focused query when
+present, otherwise the original task; memory lookup always uses the task.
+The task remains unchanged for answer selection. Source URLs accompany titles
+and immutable sentences so the model can assess provenance without treating a
+URL or an official-looking title as proof. No domain or advertising keyword
+blacklist is added.
+
+The context-task planner and source selector output budgets are 1024 tokens. Hint requests no longer
+force reasoning off; the model's supported/default reasoning mode applies.
+Translation retains its existing reasoning controls. The model deliberates
+privately and returns the existing compact selection JSON; reference validation
+still checks the selected immutable text independently. This can increase
+inference latency, and instructions alone do not guarantee source quality.
+
+Unit and integration tests verify assembly, packaging, query routing and output
+contracts. For an opt-in behavioral evaluation against a configured real model:
+
+```sh
+DKST_HINT_SELECTION_LIVE_URL=http://127.0.0.1:1234/v1/chat/completions \
+DKST_HINT_SELECTION_LIVE_MODEL='<loaded-model-id>' \
+go test ./internal/evenrealities -run '^TestHintSourceQualityLive$' -v -count=1
+```
+
+`DKST_HINT_SELECTION_LIVE_TOKEN` is optional. The evaluation tests both selection
+contracts with advertising/reflection-only results, vendor facts beside sales
+copy, useful technical blogs, independent comparisons, and personal experience
+that is appropriate only when requested. It uses synthetic source excerpts and
+no live search, so it evaluates selection quality rather than search recall or
+real-world source authenticity. Without an explicit endpoint and model it skips.
+
+
+The judge has a 15s gateway deadline per attempt. The client has 34s for its
+initial request and one schema repair, and the hint gate allows 38s so it cannot
+cancel the client first. Deliberation is included in these budgets. A timed-out
+or interrupted upstream stream returns a typed judge error instead of a normal
+`request.complete` carrying empty/partial JSON. The client preserves transport
+error codes and distinguishes a missing final answer from invalid grounding;
+it does not retry these as schema repairs. The regression suite includes a valid
+judgment arriving after the former 6s deadline.
+
+To check the actual configured judge connection with synthetic speech:
+
+```sh
+DKST_HINT_JUDGE_LIVE_CONFIG='<gateway-config.json>' \
+DKST_HINT_JUDGE_LIVE_MODEL_ROUTE='<configured-hint-model-route>' \
+go test ./internal/core -run '^TestGlassesJudgeConfiguredModelLive$' -v -count=1
+```
+
+This checks completed, transcript-grounded research plans through the real
+handler. It does not run web lookup, retrieve personal memory, or display a card
+on the device.

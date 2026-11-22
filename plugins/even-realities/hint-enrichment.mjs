@@ -23,7 +23,9 @@ export function parseHintPlan(raw) {
   if(!plan || plan.skip===true || !isInformationHintPlan(plan))return null;
   if(!['internal','web','memory','conversation'].includes(plan.source) || typeof plan.topic!=='string' || !plan.topic.trim() || typeof plan.question!=='string' || !plan.question.trim() || Array.from(plan.question).length>300)return null;
   if(plan.source==='conversation' && !plan.kind)return null;
-  return {topic:plan.topic.trim().slice(0,80),question:plan.question.trim(),source:plan.source,...(Object.hasOwn(HINT_LABELS,plan.kind)?{kind:plan.kind}:{}),
+  if(plan.search_query!==undefined && (typeof plan.search_query!=='string' || Array.from(plan.search_query).length>300))return null;
+  const searchQuery=plan.source==='web'?String(plan.search_query || '').trim():'';
+  return {topic:plan.topic.trim().slice(0,80),question:plan.question.trim(),...(searchQuery?{searchQuery}:{}),source:plan.source,...(Object.hasOwn(HINT_LABELS,plan.kind)?{kind:plan.kind}:{}),
     knownFacts:Array.isArray(plan.knownFacts)?plan.knownFacts.filter(v=>typeof v==='string').slice(0,6).map(v=>v.slice(0,200)):[]};
 }
 const normalized=text=>text.toLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
@@ -63,7 +65,7 @@ export async function readHintPlanResponse(res,{onProgress=()=>{},signal}={}) {
     if(!value.startsWith('data:'))return;
     const raw=value.slice(5).trim();if(!raw || raw==='[DONE]')return;
     if(event==='error')throw new Error(raw);
-    const d=JSON.parse(raw);if(d.error)throw new Error(typeof d.error==='string'?d.error:d.error.message || '힌트 계획 오류');
+    const d=JSON.parse(raw);if(d.error){const error=new Error(typeof d.error==='string'?d.error:d.error.message || '힌트 계획 오류');if(/^judge_[a-z_]+$/.test(d.error.code || ''))error.code=d.error.code;throw error;}
     if(typeof d.final_assistant_content==='string')answer=d.final_assistant_content;
     else if(d.result?.output){answer=d.result.output.filter(v=>v.type==='message').map(v=>v.content || '').join('');}
     else if((d.type || event)==='message.delta')answer+=d.content || '';

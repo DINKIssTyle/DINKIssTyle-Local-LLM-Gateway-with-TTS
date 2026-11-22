@@ -47,7 +47,7 @@ func contextualSelectionData(sourceData any) (any, map[string]any, error) {
 			if !exists {
 				index = len(records)
 				indices[id] = index
-				records = append(records, map[string]any{"record": id, "title": choice["title"], "sentences": []any{}})
+				records = append(records, map[string]any{"record": id, "title": choice["title"], "url": choice["url"], "sentences": []any{}})
 				recordIDs = append(recordIDs, id)
 			}
 			entries := records[index]["sentences"].([]any)

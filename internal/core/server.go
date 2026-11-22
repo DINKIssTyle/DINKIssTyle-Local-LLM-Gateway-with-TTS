@@ -2947,6 +2947,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	mux.HandleFunc("/api/stt/preview", AuthMiddleware(authMgr, handleSTTPreview(app)))
 	mux.HandleFunc("/api/stt/warmup", AuthMiddleware(authMgr, handleSTTWarmup()))
 	mux.HandleFunc("/api/stt/transcripts", AuthMiddleware(authMgr, handleSTTTranscripts()))
+	mux.HandleFunc("/api/stt/transcript-days", AuthMiddleware(authMgr, handleSTTTranscriptDays()))
 	mux.HandleFunc("/api/last-session", AuthMiddleware(authMgr, handleLastSession()))
 	mux.HandleFunc("/api/saved-turns", AuthMiddleware(authMgr, handleSavedTurns()))
 	mux.HandleFunc("/api/saved-turns/title-refresh", AuthMiddleware(authMgr, handleSavedTurnTitleRefresh()))
@@ -4503,7 +4504,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	if hintJudge || translationTask {
 		// Bound automatic tasks independently of interactive chat. Native additional
 		// connections adapt this budget to max_output_tokens below.
-		hintEnvelope["max_tokens"] = 384
+		hintEnvelope["max_tokens"] = 1024
 		if translationTask {
 			hintEnvelope["max_tokens"] = 1024
 			if task == "translation_replies" {
@@ -4511,7 +4512,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			}
 		}
 		delete(hintEnvelope, "max_completion_tokens")
-		hintEnvelope["chat_template_kwargs"] = map[string]any{"enable_thinking": false}
+		if translationTask {
+			hintEnvelope["chat_template_kwargs"] = map[string]any{"enable_thinking": false}
+		}
 		body, _ = json.Marshal(hintEnvelope)
 	}
 	var llmURL string
@@ -4562,7 +4565,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		}
 	}
 	if hintJudge {
-		chatTimeout = 6 * time.Second
+		// Includes prompt evaluation, private deliberation and selection JSON.
+		// The client allows two attempts within 34s; its gate allows 38s.
+		chatTimeout = 15 * time.Second
 	}
 	chatCtx, chatCancel := context.WithTimeout(baseChatCtx, chatTimeout)
 	defer chatCancel()
@@ -4671,8 +4676,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		enableMemory = false
 		contextStrategy = "none"
 	}
-	// A Native additional connection must retain its protocol for fast ambient
-	// roles: LM Studio's compatible endpoint may ignore enable_thinking=false.
+	// A Native additional connection retains its protocol-specific controls for
+	// ambient roles, including translation and hint reasoning policies.
 	nativeAmbient := connectionID != "" && llmMode == "stateful" && (hintJudge || translationTask || (glassesHint && hintPhase != "direct"))
 	if (hintJudge || translationTask) && !nativeAmbient {
 		llmMode = "standard"
@@ -4684,6 +4689,11 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		}
 		if nativeAmbient {
 			prepareNativeAmbientPayload(routedBody)
+			if glassesHint && !translationTask {
+				// Hint planning/selection needs deliberation. Let the model choose
+				// its supported reasoning mode instead of forcing reasoning off.
+				delete(routedBody, "reasoning")
+			}
 		}
 		body, _ = json.Marshal(routedBody)
 	}
@@ -5404,7 +5414,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				"elapsed_ms":  time.Since(turnStart).Milliseconds(),
 				"error":       compactText(errorMsg, 180),
 			})
-			if nativeAmbient && !nativeReasoningRetryUsed && nativeReasoningUnsupported(resp.StatusCode, errorMsg) {
+			if _, hasReasoning := reqMap["reasoning"]; nativeAmbient && hasReasoning && !nativeReasoningRetryUsed && nativeReasoningUnsupported(resp.StatusCode, errorMsg) {
 				nativeReasoningRetryUsed = true
 				delete(reqMap, "reasoning")
 				body, _ = json.Marshal(reqMap)
@@ -5512,6 +5522,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		}
 
 		reader := bufio.NewReader(resp.Body)
+		var upstreamReadErr error
 		log.Println("[handleChat-DEBUG] Starting response scanner loop")
 	streamScanLoop:
 		for {
@@ -5521,6 +5532,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 					break
 				}
 				log.Printf("[handleChat] Stream scanner error: %v", readErr)
+				upstreamReadErr = readErr
 				break
 			}
 			line := block.Raw
@@ -6524,6 +6536,17 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		}
 
 		resp.Body.Close() // Explicit close after scanner is done with this turn
+		if hintJudge && (chatCtx.Err() != nil || upstreamReadErr != nil) {
+			code, message := "judge_stream_error", "힌트 판별 응답 전송이 중단되었습니다"
+			if chatCtx.Err() == context.DeadlineExceeded {
+				code, message = "judge_timeout", "힌트 판별 서버 시간 초과"
+			} else if chatCtx.Err() == context.Canceled {
+				return
+			}
+			payload, _ := json.Marshal(map[string]any{"error": map[string]string{"code": code, "message": message}})
+			emitStreamChunk("data: " + string(payload))
+			return
+		}
 
 		if enableTools && chatToolCalls.HasCalls() {
 			calls := chatToolCalls.Calls()

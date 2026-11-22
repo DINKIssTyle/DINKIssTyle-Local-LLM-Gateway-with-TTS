@@ -20,7 +20,7 @@ assert.equal(parseHintJudgment('{"hint":false}',context).hint,false);
 assert.equal(parseHintJudgment('not json',context),null);
 let sent;
 const result=await requestHintJudgment({fetch:async(url,opts)=>{sent=JSON.parse(opts.body);return {ok:true,json:async()=>({choices:[{message:{content:JSON.stringify(value)}}]})};},server:'http://test',headers:{},model:'small',job:{text:context.latest,context:''},advisory:{hint:false},limit:300});
-assert.equal(result.hint,true,'negative JEV advice cannot veto LLM judgment');assert.equal(sent.glasses_hint_phase,'judge');assert.equal(sent.model,'small');assert.equal(sent.max_tokens,384);assert.equal(sent.store,false);assert.equal(sent.chat_template_kwargs.enable_thinking,false);
+assert.equal(result.hint,true,'negative JEV advice cannot veto LLM judgment');assert.equal(sent.glasses_hint_phase,'judge');assert.equal(sent.model,'small');assert.equal(sent.max_tokens,1024);assert.equal(sent.store,false);assert.notEqual(sent.chat_template_kwargs?.enable_thinking,false);
 assert.ok(result.contextEstimatedTokens<=300);assert.equal(sent.response_format.type,'json_schema');
 await assert.rejects(()=>requestHintJudgment({fetch:async(url,opts)=>new Promise((resolve,reject)=>opts.signal.addEventListener('abort',()=>reject(Object.assign(Error('aborted'),{name:'AbortError'})))),model:'small',job:{text:'피라미드',context:''},timeoutMs:10}),error=>error.code==='judge_timeout');
 const controller=new AbortController();controller.abort();
@@ -80,7 +80,7 @@ let skippedCalls=0;const skipped=await requestHintJudgment({server:'http://test'
 let badCalls=0;await assert.rejects(()=>requestHintJudgment({job:{text:'피라미드 이야기'},fetch:async()=>{badCalls++;return {ok:true,json:async()=>({response:'{"hint":true,"topic":"","evidence":0}'})};}}),/비어 있어/);assert.equal(badCalls,2,'format repair is bounded to one retry');
 
 const compactPrompt=judgePrompts(context).systemPrompt;
-assert.ok(compactPrompt.length<2400,'classifier instructions must stay compact');
+assert.ok(compactPrompt.length<5500,'planner instructions and its source-research reference must stay bounded');
 assert.doesNotMatch(compactPrompt,/예시|피라미드|EBITDA|구상성단/,'no few-shot examples or example topics in the classifier');
 assert.match(compactPrompt,/unfinished Latest/);
 assert.match(compactPrompt,/use clear context/);
@@ -144,7 +144,7 @@ assert.equal(parseHintJudgment(JSON.stringify({...value,evidence:0}),context),nu
 const staleTopic=compactJudgeContext({text:'열수 분출공 이야기',activeTopic:'피라미드'});
 assert.doesNotMatch(staleTopic.text,/피라미드/);
 assert.ok(!sent.response_format.json_schema.schema.anyOf);
-assert.deepEqual(sent.response_format.json_schema.schema.required,['task','anchor','source','kind']);
+assert.deepEqual(sent.response_format.json_schema.schema.required,['task','anchor','source','kind','search_query']);
 console.log('PASS: compact span contract, real biology comparison, grounded topic, positive-zero rejection and stale topic removal');
 
 assert.equal(parseHintJudgment(JSON.stringify({...selection,kind:'mechanism'}),biology).plan.kind,'term');
@@ -199,3 +199,21 @@ assert.equal(parseHintJudgment('{"task":"","anchor":"쉬는 중","source":"inter
 for(const bad of [{anchor:'없는 영화 제목'},{task:'mechanism'},{source:'run_command'},{task:'가'.repeat(181)}])assert.equal(parseHintJudgment(JSON.stringify({anchor:'영화 한 편',task:'현재 한국 극장 관객 수 순위와 집계 기준일',source:'web',kind:'key',...bad}),movieContext),null);
 assert.equal(parseHintJudgment(JSON.stringify({anchor:'영화 한 편',task:'현재 한국 극장 관객 수 순위와 집계 기준일',source:'web',kind:'other'}),movieContext).plan.kind,'key','display taxonomy cannot veto a useful grounded task');
 assert.ok(!movieContext.text.includes('CurrentTopic'));
+
+// Source-focused search remains separate from the wearer-facing information task.
+const sourceTask={task:'장치의 최대 입력 전력 확인',anchor:'피라미드',source:'web',kind:'verify',search_query:'장치 제조사 사용 설명서 입력 전력'};
+const sourcePlan=parseHintJudgment(JSON.stringify(sourceTask),context).plan;
+assert.equal(sourcePlan.question,sourceTask.task);
+assert.equal(sourcePlan.searchQuery,sourceTask.search_query);
+for(const search_query of [123,'가'.repeat(301)])assert.equal(parseHintJudgment(JSON.stringify({...sourceTask,search_query}),context),null);
+assert.equal(parseHintJudgment(JSON.stringify({...sourceTask,source:'memory'}),context).plan.searchQuery,undefined);
+
+// A server deadline/stream error must not become a grounding failure or start a schema retry.
+for(const code of ['judge_timeout','judge_stream_error']){
+ let calls=0;
+ await assert.rejects(()=>requestHintJudgment({job:{text:'손잡이의 지렛대 원리'},fetch:async()=>{calls++;return {ok:true,body:{getReader:()=>{let done=false;return {read:async()=>done?{done:true}:(done=true,{done:false,value:Buffer.from('data: '+JSON.stringify({error:{code,message:'upstream interrupted'}})+'\n\n')})};}}};}}),error=>error.code===code);
+ assert.equal(calls,1,'transport errors do not justify a schema-repair request');
+}
+let emptyCalls=0;
+await assert.rejects(()=>requestHintJudgment({job:{text:'손잡이 원리'},fetch:async()=>{emptyCalls++;return {ok:true,json:async()=>({response:''})};}}),error=>error.code==='judge_empty_response');
+assert.equal(emptyCalls,1,'a missing final answer is not insufficient transcript evidence');

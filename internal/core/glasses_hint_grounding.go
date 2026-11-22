@@ -220,7 +220,7 @@ func prepareHintSelectionBody(body []byte, proof hintGrounding, req hintResearch
 	var choices []map[string]any
 	for recordIndex, record := range proof.Records {
 		for spanIndex, text := range record.Spans {
-			choices = append(choices, map[string]any{"selection": len(choices) + 1, "record": recordIndex + 1, "sentence": spanIndex + 1, "title": record.Title, "text": text})
+			choices = append(choices, map[string]any{"selection": len(choices) + 1, "record": recordIndex + 1, "sentence": spanIndex + 1, "title": record.Title, "url": record.URL, "text": text})
 		}
 	}
 	return evenrealities.PrepareSourceSelection(body, map[string]any{"task": req.Query, "topic": proof.Topic, "already_heard": req.Observed, "as_of": proof.AsOf, "choices": choices}, proof.TaskOriented)

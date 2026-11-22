@@ -8,10 +8,11 @@ import (
 // Instruction returns a static integration policy, never user-provided text.
 func Instruction(key string) string { return glassesTemplates[key]["systemPrompt"] }
 func SelectionInstruction(contextual bool) string {
+	key := "selection_legacy"
 	if contextual {
-		return Instruction("selection_context")
+		key = "selection_context"
 	}
-	return Instruction("selection_legacy")
+	return Instruction(key) + "\n\n" + trustedInformationSkill + "\n\n" + trustedInformationSelection
 }
 
 // PrepareSourceSelection replaces the draft writer prompt with the bounded
@@ -34,15 +35,18 @@ func PrepareSourceSelection(body []byte, sourceData any, contextual bool) ([]byt
 		return nil, err
 	}
 	system := SelectionInstruction(contextual)
+	// Leave room for private deliberation on reasoning-capable backends while
+	// retaining the compact selection-only output contract on every protocol.
+	const selectionTokenBudget = 1024
 	if _, native := payload["input"]; native {
 		payload["system_prompt"] = system
 		payload["input"] = string(input)
-		payload["max_output_tokens"] = 192
+		payload["max_output_tokens"] = selectionTokenBudget
 		delete(payload, "messages")
 		delete(payload, "max_tokens")
 	} else {
 		payload["messages"] = []map[string]string{{"role": "system", "content": system}, {"role": "user", "content": string(input)}}
-		payload["max_tokens"] = 192
+		payload["max_tokens"] = selectionTokenBudget
 		delete(payload, "system_prompt")
 	}
 	delete(payload, "response_format")

@@ -118,7 +118,8 @@ func TestDefaultRegistryExposesExpectedAppTools(t *testing.T) {
 		"search_memory": true, "read_memory": true, "read_memory_context": true,
 		"delete_memory": true, "save_user_fact": true, "delete_user_fact": true,
 		"naver_search": true, "namu_wiki": true, "get_current_location": true,
-		"execute_command": true,
+		"execute_command":    true,
+		"search_transcripts": true, "read_transcripts": true,
 	}
 	for _, definition := range Default.List(ExecutionContext{EnableMemory: true}) {
 		if !expected[definition.Name] {

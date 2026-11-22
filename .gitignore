@@ -70,3 +70,6 @@ all_funcs.txt
 !internal/googleintegration/*_test.go
 !internal/toolruntime/google_test.go
 !internal/chatharness/calendar_evidence_test.go
+!internal/mcp/transcript_library_test.go
+!internal/core/stt_transcript_library_test.go
+!internal/toolruntime/transcripts_test.go

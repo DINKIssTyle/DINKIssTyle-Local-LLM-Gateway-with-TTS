@@ -8,7 +8,7 @@ import (
 )
 
 func TestSourceSelectionContractAndProtocol(t *testing.T) {
-	data := map[string]any{"task": "가상 기준일의 관객 수 순위", "choices": []map[string]any{{"selection": 1, "record": 1, "sentence": 1, "title": "자료 A", "text": "가상 기준일의 관객 수 자료입니다."}, {"selection": 2, "record": 1, "sentence": 2, "title": "자료 A", "text": "작품 A가 집계 첫 번째입니다."}, {"selection": 3, "record": 2, "sentence": 1, "title": "자료 B", "text": "다른 집계의 결과입니다."}}}
+	data := map[string]any{"task": "가상 기준일의 관객 수 순위", "choices": []map[string]any{{"selection": 1, "record": 1, "sentence": 1, "title": "자료 A", "url": "https://example.com/a", "text": "가상 기준일의 관객 수 자료입니다."}, {"selection": 2, "record": 1, "sentence": 2, "title": "자료 A", "url": "https://example.com/a", "text": "작품 A가 집계 첫 번째입니다."}, {"selection": 3, "record": 2, "sentence": 1, "title": "자료 B", "url": "https://example.com/b", "text": "다른 집계의 결과입니다."}}}
 	for _, native := range []bool{false, true} {
 		body := map[string]any{"model": "role", "stream": true}
 		if native {
@@ -51,6 +51,11 @@ func TestSourceSelectionContractAndProtocol(t *testing.T) {
 		if len(records) != 2 || source["choices"] != nil || len(records[0].(map[string]any)["sentences"].([]any)) != 2 {
 			t.Fatal("record grouping lost")
 		}
+		for i, url := range []string{"https://example.com/a", "https://example.com/b"} {
+			if records[i].(map[string]any)["url"] != url {
+				t.Fatal("source URL lost before model quality review")
+			}
+		}
 	}
 }
 func TestUnresolvedTasksAndInternalFactContract(t *testing.T) {
@@ -69,5 +74,19 @@ func TestUnresolvedTasksAndInternalFactContract(t *testing.T) {
 	format := result["response_format"].(map[string]any)["json_schema"].(map[string]any)
 	if format["name"] != "hint_fact" || result["max_tokens"] != float64(1024) {
 		t.Fatal("internal JSON contract missing")
+	}
+}
+
+func TestHintResearchSeparatesTaskAndSearchQuery(t *testing.T) {
+	task, query := "장치가 지원하는 최대 입력 전력", "장치 제조사 사용 설명서 입력 전력"
+	result := assemble(t, map[string]any{"task": "answer", "plan": map[string]any{"taskOriented": true, "source": "web", "question": task, "searchQuery": query}})
+	research := result["hint_research"].(map[string]any)
+	if research["query"] != task || research["search_query"] != query {
+		t.Fatalf("lost task/search separation: %+v", research)
+	}
+	judge := assemble(t, map[string]any{"task": "judge", "judge": map[string]any{"latest": "장치 입력 전력이 궁금해"}})
+	schema := judge["response_format"].(map[string]any)["json_schema"].(map[string]any)["schema"].(map[string]any)
+	if schema["properties"].(map[string]any)["search_query"] == nil {
+		t.Fatal("planner cannot return a source-focused search query")
 	}
 }

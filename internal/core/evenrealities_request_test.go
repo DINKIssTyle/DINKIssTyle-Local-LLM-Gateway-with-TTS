@@ -74,8 +74,13 @@ func TestEvenRealitiesAdditionalNativeTaskWithAccountKey(t *testing.T) {
 				if r.URL.Path != "/api/v1/chat" || r.Header.Get("Authorization") != "Bearer account-only" {
 					t.Error("wrong additional connection or account credential")
 				}
-				if body["model"] != "role-model" || body["input"] == nil || body["system_prompt"] == nil || body["messages"] != nil || body["reasoning"] != "off" || body["store"] != false {
+				if body["model"] != "role-model" || body["input"] == nil || body["system_prompt"] == nil || body["messages"] != nil || body["store"] != false {
 					t.Errorf("native task lost prompt or controls: %+v", body)
+				}
+				if task == "judge" && body["reasoning"] != nil {
+					t.Error("hint reasoning must follow the model's supported default")
+				} else if task != "judge" && body["reasoning"] != "off" {
+					t.Error("translation reasoning controls changed")
 				}
 				if task == "judge" && !strings.Contains(fmt.Sprint(body["system_prompt"]), "JSON output contract") {
 					t.Error("judge contract lost")

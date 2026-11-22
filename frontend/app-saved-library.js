@@ -18,6 +18,7 @@
             savedTurnModalTitleCancelBtn = null
         } = refs;
         const {
+            transcripts,
             buildSavedTurnTitleRequestPayload,
             broadcastSavedTurnsChange,
             clearComposerBackgroundTask,
@@ -85,6 +86,8 @@
         }
 
         function renderSavedLibraryList() {
+            if (transcripts?.isActive()) { transcripts.render(); return; }
+            if (savedLibrarySearchInput) savedLibrarySearchInput.placeholder = t('library.searchPlaceholder');
             if (!savedLibraryList) return;
             const items = filterSavedTurns(savedLibraryQuery);
             if (items.length === 0) {
@@ -284,9 +287,9 @@
                 savedLibraryView.classList.add('is-open');
             });
             renderSavedLibraryList();
-            loadSavedTurns();
+            if (transcripts?.isActive()) transcripts.load(); else loadSavedTurns();
             if (savedLibrarySearchInput) {
-                savedLibrarySearchInput.value = savedLibraryQuery;
+                savedLibrarySearchInput.value = transcripts?.isActive() ? transcripts.getQuery() : savedLibraryQuery;
                 updateSavedLibrarySearchClearButton();
                 const shouldAutoFocusSearch = global.matchMedia?.('(hover: hover) and (pointer: fine)')?.matches;
                 if (shouldAutoFocusSearch) {
@@ -298,6 +301,7 @@
         }
 
         function closeSavedLibrary() {
+            transcripts?.close();
             if (!savedLibraryView) return;
             if (savedLibraryCloseTimer) {
                 global.clearTimeout(savedLibraryCloseTimer);
@@ -323,12 +327,14 @@
         }
 
         function handleSavedLibrarySearch(value) {
+            if (transcripts?.isActive()) { transcripts.search(value); updateSavedLibrarySearchClearButton(); return; }
             savedLibraryQuery = value || '';
             updateSavedLibrarySearchClearButton();
             renderSavedLibraryList();
         }
 
         function clearSavedLibrarySearch() {
+            if (transcripts?.isActive()) { if(savedLibrarySearchInput)savedLibrarySearchInput.value=''; transcripts.search(''); updateSavedLibrarySearchClearButton(); return; }
             savedLibraryQuery = '';
             if (savedLibrarySearchInput) {
                 savedLibrarySearchInput.value = '';
@@ -520,6 +526,27 @@
             }
         }
 
+        function selectLibraryTab(tab) {
+            const isTranscript = tab === 'transcripts';
+            global.document.querySelectorAll('[data-library-tab]').forEach(button => {
+                const selected = button.dataset.libraryTab === tab;
+                button.setAttribute('aria-selected', String(selected));
+                button.tabIndex = selected ? 0 : -1;
+            });
+            transcripts?.setActive(isTranscript);
+            savedLibraryList?.setAttribute('aria-labelledby', isTranscript ? 'library-transcripts-tab' : 'library-saved-tab');
+            if(savedLibrarySearchInput)savedLibrarySearchInput.value=isTranscript?transcripts.getQuery():savedLibraryQuery;
+            renderSavedLibraryList(); updateSavedLibrarySearchClearButton();
+        }
+        global.document.querySelectorAll('[data-library-tab]').forEach(button => {
+            button.addEventListener('click', () => selectLibraryTab(button.dataset.libraryTab));
+            button.addEventListener('keydown', event => {
+                if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+                event.preventDefault();
+                const tab = event.key==='Home'?'saved':event.key==='End'?'transcripts':button.dataset.libraryTab==='saved'?'transcripts':'saved';
+                selectLibraryTab(tab);global.document.querySelector(`[data-library-tab="${tab}"]`)?.focus();
+            });
+        });
         return {
             cancelBackgroundTasks,
             cancelEditSavedTurnTitle,

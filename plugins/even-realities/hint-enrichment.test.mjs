@@ -86,3 +86,9 @@ assert.equal(parseHintPlan(JSON.stringify({...plan,source:'conversation',kind:'k
 assert.equal(parseHintPlan(JSON.stringify({...plan,source:'internal',kind:'recap'})),null);
 
 assert.equal(extractHintFact(JSON.stringify({fact:'피라미드에 대한 구체적인 기록이 존재함.',adds_information:true}),observed,plan),'');
+
+const focusedSearch={...plan,source:'web',search_query:'피라미드 박물관 건립 목적'};
+assert.equal(parseHintPlan(JSON.stringify(focusedSearch)).searchQuery,focusedSearch.search_query);
+assert.equal(parseHintPlan(JSON.stringify(focusedSearch)).question,focusedSearch.question);
+assert.equal(parseHintPlan(JSON.stringify({...focusedSearch,search_query:'가'.repeat(301)})),null);
+assert.equal(parseHintPlan(JSON.stringify({...focusedSearch,source:'memory'})).searchQuery,undefined);

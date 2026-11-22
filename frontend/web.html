@@ -109,7 +109,7 @@
     <link rel="stylesheet" href="icons.css?v=4">
 
     <!-- Styles -->
-    <link rel="stylesheet" href="style.css?v=14">
+    <link rel="stylesheet" href="style.css?v=15">
 
     <!-- Highlight.js -->
     <link rel="stylesheet" href="vendor/github-dark.min.css">
@@ -663,6 +663,20 @@
         </div>
     </div>
 
+    <div id="transcript-day-modal" class="modal-overlay">
+        <div class="modal saved-turn-modal" role="dialog" aria-modal="true" aria-labelledby="transcript-day-title">
+            <div class="modal-header">
+                <h2 id="transcript-day-title"></h2>
+                <button type="button" class="modal-close" data-transcript-close aria-label="Close"><span class="material-icons-round">close</span></button>
+            </div>
+            <div class="modal-body saved-turn-modal-body">
+                <div class="saved-turn-modal-actions"><button type="button" class="icon-btn" data-transcript-copy data-i18n-title="transcripts.copy" title="Copy transcripts"><span class="material-icons-round">content_copy</span></button></div>
+                <div id="transcript-day-body" class="saved-turn-modal-content transcript-day-content"></div>
+                <div class="saved-turn-modal-footer"><button type="button" class="saved-turn-close-btn" data-transcript-close data-i18n="action.close">Close</button></div>
+            </div>
+        </div>
+    </div>
+
     <div id="mermaid-diagram-modal" class="modal-overlay" onclick="if(event.target===this)closeMermaidDiagramModal()">
         <div class="modal mermaid-diagram-modal" role="dialog" aria-modal="true"
             aria-labelledby="mermaid-diagram-modal-title">
@@ -784,6 +798,10 @@
 
         <section id="saved-library-view" class="saved-library-view" hidden>
             <div class="saved-library-header">
+                <div class="saved-library-tabs" role="tablist" aria-label="Library">
+                    <button id="library-saved-tab" type="button" role="tab" data-library-tab="saved" aria-selected="true" aria-controls="saved-library-list" data-i18n="library.savedTab">Saved Turns</button>
+                    <button id="library-transcripts-tab" type="button" role="tab" data-library-tab="transcripts" aria-selected="false" aria-controls="saved-library-list" tabindex="-1" data-i18n="transcripts.tab">Transcripts</button>
+                </div>
                 <div class="saved-library-search-shell">
                     <input id="saved-library-search" type="text" placeholder="Search saved turns..."
                         oninput="handleSavedLibrarySearch(this.value)"
@@ -794,7 +812,7 @@
                     </button>
                 </div>
             </div>
-            <div id="saved-library-list" class="saved-library-list"></div>
+            <div id="saved-library-list" class="saved-library-list" role="tabpanel" aria-labelledby="library-saved-tab"></div>
         </section>
 
         <div id="preview-container">
@@ -929,8 +947,9 @@
             });
     </script>
     <script src="app-utils.js?v=3"></script>
-    <script src="app-i18n.js?v=11"></script>
-    <script src="app-saved-library.js?v=1"></script>
+    <script src="app-i18n.js?v=12"></script>
+    <script src="app-transcript-library.js?v=1"></script>
+    <script src="app-saved-library.js?v=2"></script>
     <script src="app-models.js?v=2"></script>
     <script src="supertonic3.js?v=3"></script>
     <script src="app-tts.js?v=13"></script>
@@ -940,7 +959,7 @@
     <script src="app-chat-ui.js?v=1"></script>
     <script src="app-progress-ui.js?v=1"></script>
     <script src="app-mic.js?v=3"></script>
-    <script src="app.js?v=37"></script>
+    <script src="app.js?v=38"></script>
 
 </body>
 

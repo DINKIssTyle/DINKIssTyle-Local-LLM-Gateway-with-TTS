@@ -2005,6 +2005,11 @@ const modelController = appModels.createModelController({
         updateScrollToBottomButton
     }
 });
+const transcriptLibraryController = window.DKSTTranscriptLibrary.createTranscriptLibrary({
+    list: savedLibraryList, searchInput: savedLibrarySearchInput,
+    getCurrentUser: () => AppState.session.currentUser,
+    t, escapeHtml, escapeAttr, showToast, fallbackCopyTextToClipboard
+});
 const savedLibraryController = appSavedLibrary.createSavedLibraryController({
     refs: {
         savedLibraryView,
@@ -2018,6 +2023,7 @@ const savedLibraryController = appSavedLibrary.createSavedLibraryController({
         savedTurnModalTitleCancelBtn
     },
     deps: {
+        transcripts: transcriptLibraryController,
         buildSavedTurnTitleRequestPayload,
         broadcastSavedTurnsChange,
         clearComposerBackgroundTask,

@@ -67,9 +67,11 @@ export function parseHintJudgment(raw,context,onInvalid=()=>{}){
     if(acknowledgementOnly(anchor))return {hint:false,reason:'llm_skip',backend:'llm',continuity:'unknown'};
     if(hintTaskIssue('',task)){onInvalid('generic_task');return null;}
     if(!['internal','web','memory'].includes(data.source))return null;
+    if(data.search_query!==undefined && (typeof data.search_query!=='string' || Array.from(data.search_query).length>300)){onInvalid('invalid_search_query');return null;}
+    const searchQuery=data.source==='web'?String(data.search_query || '').trim():'';
     if(data.source==='internal' && unresolvedSpecificTask(task,anchor))return {hint:false,reason:'unresolved_hint_subject',backend:'llm',continuity:'unknown'};
     const kind=INFORMATION_HINT_KINDS.includes(data.kind)?data.kind:'key';
-    return {hint:true,category:data.source==='memory'?'recall':'background',focus:anchor,reason:'context_task',backend:'llm',plan:{taskOriented:true,anchor,topic:Array.from(task).slice(0,80).join(''),question:task,kind,source:data.source,evidence:anchor,knownFacts:[context.latest]}};
+    return {hint:true,category:data.source==='memory'?'recall':'background',focus:anchor,reason:'context_task',backend:'llm',plan:{taskOriented:true,anchor,topic:Array.from(task).slice(0,80).join(''),question:task,...(searchQuery?{searchQuery}:{}),kind,source:data.source,evidence:anchor,knownFacts:[context.latest]}};
   }
   const modern=data && Object.hasOwn(data,'span');
   if(modern){
@@ -134,7 +136,10 @@ export function hintEvidenceChoices(text){
   }
   return [...new Set(choices)].slice(0,32);
 }
-export async function requestHintJudgment({fetch,server,headers,model,job,shown='',limit=600,signal,preferWeb=true,sensitivity='balanced',targetLang='ko',timeoutMs=12000,onDiagnostic=()=>{}}){
+// Two 15s gateway attempts plus transfer time; the outer gate must outlive this.
+export const HINT_JUDGE_TIMEOUT_MS=34000;
+export const HINT_DECISION_TIMEOUT_MS=HINT_JUDGE_TIMEOUT_MS+4000;
+export async function requestHintJudgment({fetch,server,headers,model,job,shown='',limit=600,signal,preferWeb=true,sensitivity='balanced',targetLang='ko',timeoutMs=HINT_JUDGE_TIMEOUT_MS,onDiagnostic=()=>{}}){
   const context=compactJudgeContext(job,shown,[],limit);
   const controller=new AbortController(),started=Date.now();
   let timedOut=false,attempt=0,requestMs=0,readMs=0,lastRaw='',phase='request',lastDiagnostic='',invalidReason='';
@@ -160,6 +165,7 @@ export async function requestHintJudgment({fetch,server,headers,model,job,shown=
       lastRaw=await Promise.race([readHintPlanResponse(response,{signal:controller.signal,onProgress:text=>{lastRaw=text;}}),interrupted]);
       readMs=Date.now()-readStart;
       if(controller.signal.aborted)await interrupted;
+      if(!lastRaw.trim())throw Object.assign(Error('힌트 판별 모델이 최종 판정 본문을 반환하지 않았습니다'),{code:'judge_empty_response'});
       invalidReason='';
       const result=parseHintJudgment(lastRaw,context,reason=>{invalidReason=reason;});
       diagnostic(result?'judge_response':'judge_invalid_response',{response:Array.from(String(lastRaw)).slice(0,1200).join(''),...(invalidReason?{validation:invalidReason}:{}),...(result?.spanRecovered?{spanRecovered:true}:{})});

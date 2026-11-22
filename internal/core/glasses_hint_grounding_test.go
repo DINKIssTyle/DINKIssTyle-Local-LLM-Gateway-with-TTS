@@ -221,11 +221,14 @@ func TestHintSelectorReplacesConflictingWriterFormat(t *testing.T) {
 		if payload["model"] != "role-model" || payload["stream"] != true {
 			t.Fatal("model/transport routing changed")
 		}
+		if !strings.Contains(string(updated), proof.Records[0].URL) {
+			t.Fatal("source URL missing from quality review input")
+		}
 		if native {
-			if payload["max_output_tokens"] != float64(192) {
+			if payload["max_output_tokens"] != float64(1024) {
 				t.Fatal("Native selector budget missing")
 			}
-		} else if payload["max_tokens"] != float64(192) {
+		} else if payload["max_tokens"] != float64(1024) {
 			t.Fatal("standard selector budget missing")
 		}
 	}

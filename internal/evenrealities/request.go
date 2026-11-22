@@ -14,7 +14,7 @@ import (
 //go:embed prompts/templates.json
 var glassesPromptJSON []byte
 
-var PromptRevision = fmt.Sprintf("%x", sha256.Sum256(glassesPromptJSON))[:12]
+var PromptRevision = fmt.Sprintf("%x", sha256.Sum256([]byte(string(glassesPromptJSON)+trustedInformationSkill+trustedInformationPlanning+trustedInformationSelection)))[:12]
 
 var glassesTemplates = func() map[string]map[string]string {
 	var result map[string]map[string]string
@@ -35,6 +35,7 @@ type researchRequest struct {
 	Anchor           string `json:"anchor"`
 	AllowWeb         bool   `json:"allow_web"`
 	Query            string `json:"query"`
+	SearchQuery      string `json:"search_query,omitempty"`
 	Source           string `json:"source"`
 }
 
@@ -66,6 +67,7 @@ type glassesPromptRequest struct {
 		TaskOriented bool     `json:"taskOriented"`
 		Topic        string   `json:"topic"`
 		Question     string   `json:"question"`
+		SearchQuery  string   `json:"searchQuery"`
 		Source       string   `json:"source"`
 		Kind         string   `json:"kind"`
 		KnownFacts   []string `json:"knownFacts"`
@@ -99,6 +101,9 @@ func AssembleRequest(body []byte) ([]byte, bool, error) {
 	if req.Version != 1 {
 		return nil, true, fmt.Errorf("unsupported glasses request version")
 	}
+	if len([]rune(req.Plan.SearchQuery)) > 300 {
+		return nil, true, fmt.Errorf("hint search query exceeds limit")
+	}
 	for _, value := range []string{req.Text, req.Context, req.Translated, req.Observed, req.Judge.Recent, req.Judge.Latest, strings.Join(req.Plan.KnownFacts, "\n")} {
 		if len([]rune(value)) > 32000 {
 			return nil, true, fmt.Errorf("glasses task input exceeds limit")
@@ -119,7 +124,7 @@ func AssembleRequest(body []byte) ([]byte, bool, error) {
 		set("glasses_hint", true)
 		set("glasses_hint_phase", "judge")
 		set("temperature", 0.1)
-		set("max_tokens", 384)
+		set("max_tokens", 1024)
 		heading := "Reference (pronoun resolution only)"
 		if req.Judge.Collected {
 			heading = "Recent conversation"
@@ -134,7 +139,7 @@ func AssembleRequest(body []byte) ([]byte, bool, error) {
 			sensitivity = "balanced"
 		}
 		values["sensitivityPolicy"] = policies[sensitivity]
-		set("response_format", map[string]any{"type": "json_schema", "json_schema": map[string]any{"name": "context_hint_task", "strict": true, "schema": map[string]any{"type": "object", "properties": map[string]any{"task": map[string]any{"type": "string", "maxLength": 180}, "anchor": map[string]any{"type": "string", "maxLength": 160}, "source": map[string]any{"type": "string", "enum": []string{"internal", "web", "memory"}}, "kind": map[string]any{"type": "string", "enum": []string{"key", "term", "verify", "schedule"}}}, "required": []string{"task", "anchor", "source", "kind"}, "additionalProperties": false}}})
+		set("response_format", map[string]any{"type": "json_schema", "json_schema": map[string]any{"name": "context_hint_task", "strict": true, "schema": map[string]any{"type": "object", "properties": map[string]any{"task": map[string]any{"type": "string", "maxLength": 180}, "anchor": map[string]any{"type": "string", "maxLength": 160}, "search_query": map[string]any{"type": "string", "maxLength": 300}, "source": map[string]any{"type": "string", "enum": []string{"internal", "web", "memory"}}, "kind": map[string]any{"type": "string", "enum": []string{"key", "term", "verify", "schedule"}}}, "required": []string{"task", "anchor", "source", "kind", "search_query"}, "additionalProperties": false}}})
 	case "plan":
 		set("glasses_hint", true)
 		set("glasses_hint_phase", "plan")
@@ -175,7 +180,7 @@ func AssembleRequest(body []byte) ([]byte, bool, error) {
 		if req.Plan.Kind == "" {
 			values["kind"] = "key"
 		}
-		set("hint_research", researchRequest{TaskOriented: req.Plan.TaskOriented, Query: req.Plan.Question, Source: req.Plan.Source, Topic: req.Plan.Topic, Kind: values["kind"], Observed: req.Observed, Anchor: req.Anchor, AllowWeb: web, RequireGrounding: true})
+		set("hint_research", researchRequest{TaskOriented: req.Plan.TaskOriented, Query: req.Plan.Question, SearchQuery: req.Plan.SearchQuery, Source: req.Plan.Source, Topic: req.Plan.Topic, Kind: values["kind"], Observed: req.Observed, Anchor: req.Anchor, AllowWeb: web, RequireGrounding: true})
 	case "chat":
 		set("glasses_chat", true)
 		concise := req.Concise == nil || *req.Concise
@@ -213,6 +218,11 @@ func AssembleRequest(body []byte) ([]byte, bool, error) {
 	}
 	replace := strings.NewReplacer(pairs...)
 	system, user := replace.Replace(template["systemPrompt"]), replace.Replace(template["userPrompt"])
+	if req.Task == "judge" || req.Task == "plan" {
+		// Supply only the active procedure, not discovery metadata or routing
+		// instructions for references the isolated planner cannot read itself.
+		system += "\n\n" + trustedInformationPlanning
+	}
 	if req.Task == "judge" && req.Repair > 0 {
 		system += glassesTemplates["judge_repair"]["systemPrompt"]
 	}

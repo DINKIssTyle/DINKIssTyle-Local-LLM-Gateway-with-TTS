@@ -185,6 +185,7 @@ func NewDefaultRegistry() *Registry {
 		})
 	}
 	registerGoogleTools(registry)
+	registerTranscriptTools(registry)
 	return registry
 }
 
