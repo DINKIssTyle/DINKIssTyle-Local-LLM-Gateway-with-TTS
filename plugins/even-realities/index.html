@@ -6,7 +6,7 @@
     <title>
       DKST AI Gateway for Even Realities G2
     </title>
-    <link rel="stylesheet" href="style.css?v=2.24.40">
+    <link rel="stylesheet" href="style.css?v=2.24.43">
   </head>
   <body>
     <div class="plugin-container">
@@ -21,7 +21,7 @@
               DKST Gateway
             </div>
             <div style="font-size: 11px; color: var(--text-secondary);">
-              Even Realities G2 · <span id="plugin-build-version">2.24.40</span>
+              Even Realities G2 · <span id="plugin-build-version">2.24.43</span>
             </div>
           </div>
         </div>
@@ -375,7 +375,7 @@
               AI 대화·힌트
             </strong>
             <span class="settings-summary">
-              호출어 · 웹검색 · 적극성
+              호출어 · 외국어 번역 · 웹검색
             </span>
           </span>
         </summary>
@@ -388,6 +388,13 @@
             <p class="setting-help">
               쉼표로 최대 8개를 등록하세요. 호출어만 말하면 다음 질문을 기다립니다.
             </p>
+          </div>
+          <div class="form-group">
+            <label class="setting-toggle">
+              <input type="checkbox" id="ai-foreign-translation">
+              <span>AI 모드에서 외국어 번역</span>
+            </label>
+            <p class="setting-help">Whisper가 감지한 외국어 발화를 설정된 번역 언어로 표시합니다. Chrome Online과 Apple STT는 지정된 언어로 듣습니다.</p>
           </div>
           <div class="form-group">
             <label class="setting-toggle">
@@ -591,6 +598,18 @@
               <option value="2">2장 · 카드 스택</option>
             </select>
             <p class="setting-help">새 힌트가 위에 쌓입니다. 가득 차면 가장 오래된 카드를 교체합니다.</p>
+          </div>
+          <div class="form-group">
+            <label for="caption-retention">전사·번역 표시 유지 시간</label>
+            <select id="caption-retention">
+              <option value="3">3초</option>
+              <option value="5">5초</option>
+              <option value="10">10초</option>
+              <option value="15">15초</option>
+              <option value="20">20초</option>
+              <option value="0" selected>계속</option>
+            </select>
+            <p class="setting-help">AI·번역 모드에서 화면에 표시되는 시간입니다. 저장된 전사 기록은 유지됩니다.</p>
           </div>
           <div class="form-group">
             <label class="setting-toggle">
@@ -917,7 +936,7 @@
         </button>
       </div>
     </div>
-    <script src="bundle.js?v=2.24.40">
+    <script src="bundle.js?v=2.24.43">
     </script>
   </body>
 </html>
