@@ -1865,8 +1865,14 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  for(let i=0;i<6;i++)handler({audioEvent:{audioPcm:speech}});
  await tick();
  assert.equal(requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).length,manualTapStarts,'speech without a silence boundary remains buffered');
- handler({sysEvent:{eventType:0}});for(let i=0;i<15;i++)await tick();
- assert.equal(requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).length,manualTapStarts+1);
+ sttReplies=[{ok:false,status:503,text:async()=>'전사 서비스 일시 지연'}];
+ handler({sysEvent:{eventType:0}});await tick();
+ assert.match(queue.state().answer,/질문 전사 중/);
+ for(let i=0;i<100 && queue.state().title!=='탭으로 호출한 질문입니다';i++)await new Promise(resolve=>setTimeout(resolve,10));
+ const manualRequests=requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).slice(manualTapStarts).map(r=>JSON.parse(r.opts.body));
+ assert.equal(manualRequests.length,2);
+ assert.equal(manualRequests[0].segmentId,manualRequests[1].segmentId);
+ assert.equal(manualRequests[0].audio,manualRequests[1].audio);
  assert.equal(queue.state().title,'탭으로 호출한 질문입니다');
  handler({sysEvent:{eventType:0}});await tick();
  assert.equal(queue.state().answer,'','third tap closes the answer');
@@ -2135,6 +2141,11 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.doesNotMatch(element('hud-screen').innerHTML,/This is an English caption/);
  for(let i=0;i<100 && !nativePage.textObject.some(c=>c.containerID===4 && c.content.includes('외국어 발화'));i++)await new Promise(r=>setTimeout(r,10));
  assert.ok(nativePage.textObject.some(c=>c.containerID===4 && c.content.includes('외국어 발화')));
+ for(let i=0;i<100 && !Number.isFinite(queue.metrics.entries.get('foreign-caption')?.sdk_ms);i++)await new Promise(r=>setTimeout(r,10));
+ const captionMetrics=queue.metrics.entries.get('foreign-caption');
+ for(const key of ['stt_queue_ms','stt_http_ms','translation_queue_ms','translation_http_ms','sdk_ms']){
+   assert.ok(Number.isFinite(captionMetrics?.[key]),'AI caption metrics include '+key);
+ }
  assert.match(element('transcript-log').textContent,/This is an English caption/);
  const captionCalls=requests.slice(captionRequests);
  assert.equal(JSON.parse(captionCalls.find(r=>r.url.endsWith('/api/stt/transcribe')).opts.body).language,'auto');

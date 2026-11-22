@@ -2,7 +2,7 @@
   "package_id": "com.dinkisstyle.evenrealities.gateway",
   "edition": "202601",
   "name": "DKST AI Gateway",
-  "version": "2.24.43",
+  "version": "2.24.44",
   "min_app_version": "2.2.10",
   "min_sdk_version": "0.0.16",
   "entrypoint": "index.html",

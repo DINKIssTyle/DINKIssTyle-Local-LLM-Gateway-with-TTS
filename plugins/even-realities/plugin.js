@@ -648,16 +648,22 @@ import { LocalAgreement } from './local-agreement.mjs';
     }catch(error){if(signal?.aborted)throw error;return {ok:false,reason:error.message};}
   }
   const aiCaptionTranslations=new LiveTranslationQueue({
-    translate:(job,signal)=>job.engine==='llm'
-      ? llmTranslation({fetch:gatewayFetch,server:config.serverUrl,headers:getAuthHeaders({'Content-Type':'application/json'}),model:resolveRoleModel('translation',config),job,signal})
-      : translateLocal({text:job.prompt,source:job.source,target:job.target},signal,job.engine),
+    translate:async(job,signal)=>{
+      if(job.engine!=='llm')return translateLocal({text:job.prompt,source:job.source,target:job.target,traceId:job.id},signal,job.engine);
+      const started=Date.now();
+      const result=await llmTranslation({fetch:gatewayFetch,server:config.serverUrl,headers:getAuthHeaders({'Content-Type':'application/json'}),model:resolveRoleModel('translation',config),job,signal});
+      if(!signal.aborted)translationMetrics.record(job.id,{translation_http_ms:Date.now()-started});
+      return result;
+    },
     onText:(job,text)=>{
       if(headPaused || config.glassesMode!=='ai' || !config.aiForeignTranslation ||
         job.sessionId!==sessionId || job.epoch!==recognitionEpoch)return;
       aiTranslatedCaption={text,shownAt:Date.now()};
+      translationPaint={id:job.id,at:aiTranslatedCaption.shownAt,acked:false,content:''};
       renderLiveHUD();
     },
-    onFinal:()=>{}
+    onFinal:()=>{},
+    onMeasure:(job,stage,ms)=>translationMetrics.record(job.id,{[stage]:ms})
   });
 
   function translateForeignCaption(clip,data,text){
@@ -689,7 +695,7 @@ import { LocalAgreement } from './local-agreement.mjs';
   let translationPaint=null;
   const translationMetrics=new TranslationMetrics({onUpdate:entry=>{
     const el=document.getElementById('translation-latency');if(!el)return;
-    const labels={stt_first_result_ms:'STT 인식 도착',stt_http_ms:'STT 왕복',stt_server_ms:'STT 서버',stt_lock_ms:'STT 잠금 대기',stt_engine_ms:'STT 엔진',save_ms:'저장',translation_queue_ms:'번역 대기',translation_http_ms:'번역 왕복',translation_server_ms:'번역 서버',first_text_ms:'첫 번역',sdk_ms:'안경 최근 성공'};
+    const labels={stt_finalize_ms:'발화 종료',stt_queue_ms:'최종 전사 대기·재시도',stt_first_result_ms:'STT 인식 도착',stt_http_ms:'STT 왕복',stt_server_ms:'STT 서버',stt_lock_ms:'STT 잠금 대기',stt_engine_ms:'STT 엔진',save_ms:'저장',translation_queue_ms:'번역 대기',translation_http_ms:'번역 왕복',translation_server_ms:'번역 서버',first_text_ms:'첫 번역',sdk_ms:'안경 최근 성공'};
     el.textContent=Object.entries(labels).filter(([key])=>entry[key]!==undefined).map(([key,label])=>`${label} ${entry[key]}ms`).join(' · ')+(entry.upload_bytes!==undefined?` · 오디오 ${entry.upload_bytes}/${entry.audio_bytes ?? '?'}B`:'')+(entry.sdk_failed?' · 안경 전송 실패':'');
   }});
   const llmTranslationCache=new Map();
@@ -1568,6 +1574,10 @@ import { LocalAgreement } from './local-agreement.mjs';
     const nextAI=body.show?String((body.cards?.length>1?body.cards[0].visibleText:aiWindowText) || (subtitleOnly()?' ':'')).slice(0,2000):'';
     if(translateMode && translationPaint && translationPaint.content!==nextAI)translationPaint={...translationPaint,content:nextAI,acked:false};
     const nextTx=body.showTranscript?String(transcriptFullText || '').slice(0,2000):'';
+    const aiCaptionPaint=visibleAITranslation()?translationPaint:null;
+    if(aiCaptionPaint && aiCaptionPaint.content!==nextTx){
+      translationPaint={...aiCaptionPaint,content:nextTx,acked:false};
+    }
     const txBrightness=hudTextBrightness(4),txBrightnessChanged=txBrightness!==lastTranscriptBrightness;
     lastTranscriptBrightness=txBrightness;
     const txPreview=document.getElementById('hud-transcript-body');
@@ -1589,7 +1599,9 @@ import { LocalAgreement } from './local-agreement.mjs';
       if(body.show && aiChanged)pendingHUD.set(1,{containerID:1,containerName:'gateway',content:nextAI,auditHints:body.cards?.length>1?(body.cards[0].auditMeta?[body.cards[0].auditMeta]:[]):visibleHintAudits(),translationPaint:translateMode?translationPaint:null});
       if(!body.show)pendingHUD.delete(1);
       if(!body.showTranscript)pendingHUD.delete(4);
-      if(body.showTranscript && (txChanged || txBrightnessChanged))pendingHUD.set(4,{containerID:4,containerName:'transcript',content:nextTx});
+      if(body.showTranscript && (txChanged || txBrightnessChanged || aiCaptionPaint && !aiCaptionPaint.acked)){
+        pendingHUD.set(4,{containerID:4,containerName:'transcript',content:nextTx,translationPaint:aiCaptionPaint?translationPaint:null});
+      }
       if(pendingHUD.size || nativeTranslateLayout!==translateMode || nativeBodyLayoutKey!==body.key || nativeHeaderLayoutKey!==currentHeaderLayout(translateMode).key)flushHUD();
     }
   }
@@ -1636,10 +1648,12 @@ import { LocalAgreement } from './local-agreement.mjs';
         if(nativeBodyLayoutKey!==body.key || nativePickerKey || nativeMenuSource!==config.audioInputSource || nativeTranslateLayout!==translate || nativeHeaderLayoutKey!==header.key){
           const paint=translationPaint;const shownHints=visibleHintAudits();sendingHintMeta=shownHints;
           const page=hudPage(translate,header,body);
-          sendingPaint=translate && body.show && paint && page.textObject.some(c=>c.containerID===1 && c.content===paint.content)?paint:null;
+          const paintContainer=translate?1:visibleAITranslation()?4:null;
+          const paintText=page.textObject.find(c=>c.containerID===paintContainer)?.content;
+          sendingPaint=paint?.content===paintText?paint:null;
           const success=await hudTransport.call(()=>bridge.rebuildPageContainer(page));
           if(!success)throw new Error('안경 화면 배치 변경 실패');
-          if(translate && body.show)acknowledgeTranslationPaint(paint,page.textObject.find(c=>c.containerID===1)?.content);
+          acknowledgeTranslationPaint(sendingPaint,paintText);
           if(!translate && body.show)shownHints.forEach(hintDeviceDisplayed);
           const allowed=new Set([...page.textObject,...page.imageObject].map(c=>c.containerID));
           for(const id of pendingHUD.keys())if(!allowed.has(id))pendingHUD.delete(id);
@@ -1667,10 +1681,10 @@ import { LocalAgreement } from './local-agreement.mjs';
             hudImagesDisabled=true;pendingHUD.delete(5);pendingHUD.delete(6);pendingHUD.delete(11);queueHudIcons();
           }
         }else{
-          const {auditHints:shownHints=[],translationPaint:paint,...payload}=update;sendingHintMeta=shownHints;sendingPaint=id===1 && translate && paint?.content===payload.content?paint:null;
+          const {auditHints:shownHints=[],translationPaint:paint,...payload}=update;sendingHintMeta=shownHints;sendingPaint=paint?.content===payload.content?paint:null;
           const success = await hudTransport.call(()=>bridge.textContainerUpgrade({...payload,textColor:hudTextBrightness(id)}));
           if (!success) throw new Error('안경 화면 갱신 실패');
-          if(id===1 && translate)acknowledgeTranslationPaint(paint,payload.content);
+          acknowledgeTranslationPaint(sendingPaint,payload.content);
           shownHints.forEach(hintDeviceDisplayed);
         }
 
@@ -2283,6 +2297,13 @@ import { LocalAgreement } from './local-agreement.mjs';
     // Each engine has one recognizer. Wait for final inference, but allow a
     // newer preview after stt.recognized while the old result is being archived.
     if((activeFinalClip && !activeFinalClip.inferenceDone && activeFinalClip.engine===pendingPreview.engine) || pendingClips.some(clip=>!clip.inferenceDone && clip.engine===pendingPreview.engine))return;
+    if(pendingPreview.engine==='whisper' && activeUtterance?.id===pendingPreview.segmentId){
+      const delay=(activeUtterance.previewReadyAt || 0)-Date.now();
+      if(delay>0){
+        previewRetryTimer=setTimeout(()=>{previewRetryTimer=null;drainPreview();},delay);
+        return;
+      }
+    }
     const snapshot = pendingPreview; pendingPreview = null; previewBusy = true;
     const controller = new AbortController();
     previewAbortController = controller;
@@ -2313,7 +2334,12 @@ import { LocalAgreement } from './local-agreement.mjs';
       if (!isRecording || sessionId!==snapshot.sessionId || activeUtterance?.id!==snapshot.segmentId ||
           data.sessionId!==snapshot.sessionId || data.segmentId!==snapshot.segmentId || data.revision!==snapshot.revision) return;
       audioUpload.acknowledge(snapshot,data);
-      if(snapshot.mode==='translate')translationMetrics.record(snapshot.segmentId,{stt_http_ms:Date.now()-sttSentAt,stt_server_ms:data.timings?.server_ms ?? data.timings?.stt_ms,stt_lock_ms:data.timings?.lock_ms,stt_engine_ms:data.timings?.engine_ms,upload_bytes:uploadedBytes,audio_bytes:snapshot.bytes.length});
+      if(snapshot.engine==='whisper'){
+        const urgent=pendingTrigger || previewWakeId;
+        const engineMs=data.timings?.engine_ms ?? Date.now()-sttSentAt;
+        activeUtterance.previewReadyAt=Date.now()+Math.min(urgent?250:1200,Math.max(0,engineMs/2));
+      }
+      translationMetrics.record(snapshot.segmentId,{stt_http_ms:Date.now()-sttSentAt,stt_server_ms:data.timings?.server_ms ?? data.timings?.stt_ms,stt_lock_ms:data.timings?.lock_ms,stt_engine_ms:data.timings?.engine_ms,upload_bytes:uploadedBytes,audio_bytes:snapshot.bytes.length});
       if(data.rejected){reconcileHintTranscript(snapshot.segmentId,'');hintGate.withdraw(snapshot.segmentId);previewIntent.reset();if(previewWakeId===snapshot.segmentId){previewWakeId='';previewWakePrompt='';}return;}
       if (!data.text?.trim()) return;
       const agreed = (data.engine==='apple' || data.engine?.startsWith('chrome-'))
@@ -2349,13 +2375,17 @@ import { LocalAgreement } from './local-agreement.mjs';
     const sourceLang = config.translateSourceLang || 'auto';
     const targetLang = config.translateTargetLang || 'ko';
     const triggerWord = mode==='ai' ? config.triggerWord : '';
+    const queuedAt=Date.now();
     if(mode==='ai') {
-      if(lastVoiceFrameAt>=endedAt-bytes.length/32 && lastVoiceFrameAt<=endedAt)voiceLatency.mark(segmentId,'last_voice',lastVoiceFrameAt);
+      if(lastVoiceFrameAt>=endedAt-bytes.length/32 && lastVoiceFrameAt<=endedAt){
+        voiceLatency.mark(segmentId,'last_voice',lastVoiceFrameAt);
+        translationMetrics.record(segmentId,{stt_finalize_ms:endedAt-lastVoiceFrameAt});
+      }
       voiceLatency.mark(segmentId,'clip_end',endedAt);
       // Wake words are unknown until final STT. Preserve queued PCM until
       // recognition; dropping an older clip here can silently drop a wake call.
     }
-    pendingClips.push({ sequence:++nextCaptureSequence, epoch:recognitionEpoch, bytes, continuous, sessionId, segmentId, mode, sourceLang, targetLang,engine:activeSttEngine,aiForeignTranslation:config.aiForeignTranslation,
+    pendingClips.push({ sequence:++nextCaptureSequence, epoch:recognitionEpoch, bytes, continuous, sessionId, segmentId, mode, sourceLang, targetLang,engine:activeSttEngine,aiForeignTranslation:config.aiForeignTranslation,queuedAt,
       startedAt:new Date(endedAt-bytes.length/32).toISOString(),endedAt:new Date(endedAt).toISOString(),
       triggerWord, speechFilter:config.speechFilter });
     if(isRecording && (pendingClips.length>=MAX_PENDING_CLIPS || pendingClips.reduce((sum,clip)=>sum+clip.bytes.length,0)>=MAX_PENDING_AUDIO_BYTES)) {
@@ -2384,7 +2414,10 @@ import { LocalAgreement } from './local-agreement.mjs';
     if(!flush)stopChromeSegment(segmentId);
     activeUtterance=null;abortPendingPreview();
     const clip=hadCapture ? (continuousCapture?segmenter?.flush():mergePCM(audioBuffer)) : null;
-    if(pendingTrigger && (!flush || !clip || clip.length<3200)){pendingTrigger=false;tapQuestionAfterSequence=null;submittedVoiceSegment='';}
+    if(pendingTrigger && (!flush || !clip || clip.length<3200) &&
+      !(flush && submittedVoiceSegment && pendingClips.some(item=>item.segmentId===submittedVoiceSegment))){
+      pendingTrigger=false;tapQuestionAfterSequence=null;submittedVoiceSegment='';
+    }
     audioBuffer=[];
     if((!flush || !clip) && liveTranslations.hasDraft()){liveTranslationDraft=false;liveTranslations.reset();}
     setHUDNotice('마이크 정지 중');
@@ -2430,7 +2463,8 @@ import { LocalAgreement } from './local-agreement.mjs';
               await new Promise(resolve=>setTimeout(resolve,Math.min(1000,250*clip.busyAttempts)));continue;
             }
           }
-          if(clip.mode==='ai') {
+          const submittedQuestion=submittedVoiceSegment===clip.segmentId;
+          if(clip.mode==='ai' && !(submittedQuestion && err.retryable!==false)) {
             if(submittedVoiceSegment===clip.segmentId)submittedVoiceSegment='';
             hintGate.withdraw(clip.segmentId);if(previewWakeId===clip.segmentId)previewWakeId='';
             pendingClips.splice(pendingClips.indexOf(clip),1);
@@ -2581,7 +2615,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         if(pendingPreview)drainPreview();
       }});
       if(data.warning)els.sttEngineStatus.textContent=data.warning;
-      if(clip.mode==='translate')translationMetrics.record(clip.segmentId,{stt_http_ms:Date.now()-sttSentAt,stt_server_ms:data.timings?.server_ms ?? data.timings?.stt_ms,stt_lock_ms:data.timings?.lock_ms,stt_engine_ms:data.timings?.engine_ms,save_ms:data.timings?.save_ms,upload_bytes:clip.bytes.length,audio_bytes:clip.bytes.length});
+      translationMetrics.record(clip.segmentId,{stt_queue_ms:sttSentAt-clip.queuedAt,stt_http_ms:Date.now()-sttSentAt,stt_server_ms:data.timings?.server_ms ?? data.timings?.stt_ms,stt_lock_ms:data.timings?.lock_ms,stt_engine_ms:data.timings?.engine_ms,save_ms:data.timings?.save_ms,upload_bytes:clip.bytes.length,audio_bytes:clip.bytes.length});
       if (data.text?.trim() && !data.saved) {
         const err=new Error('서버에서 전사 저장을 확인하지 못했습니다. 서버를 업데이트하세요.');
         err.retryable=false;throw err;
