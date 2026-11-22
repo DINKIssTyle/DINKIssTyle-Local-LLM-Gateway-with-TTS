@@ -185,16 +185,16 @@ func TestHintEvidenceRespectsSettingsAndInjectsReferences(t *testing.T) {
 	}
 	research := hintResearchRequest{Query: "피라미드의 건립 목적", Source: "web"}
 	exec := toolruntime.ExecutionContext{UserID: "hint-evidence"}
-	if _, err := loadHintEvidence(context.Background(), registry, exec, false, research); err == nil {
+	if _, _, err := loadHintEvidence(context.Background(), registry, exec, false, research); err == nil {
 		t.Fatal("tools setting bypassed")
 	}
-	if _, err := loadHintEvidence(context.Background(), registry, toolruntime.ExecutionContext{DisabledTools: []string{"search_web"}}, true, research); err == nil {
+	if _, _, err := loadHintEvidence(context.Background(), registry, toolruntime.ExecutionContext{DisabledTools: []string{"search_web"}}, true, research); err == nil {
 		t.Fatal("disabled tool bypassed")
 	}
 	if calls != 0 {
 		t.Fatal("search executed while disabled")
 	}
-	evidence, err := loadHintEvidence(context.Background(), registry, exec, true, research)
+	evidence, _, err := loadHintEvidence(context.Background(), registry, exec, true, research)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestHintEvidenceRespectsSettingsAndInjectsReferences(t *testing.T) {
 			t.Fatal(string(enriched))
 		}
 	}
-	if _, err := loadHintEvidence(context.Background(), registry, exec, true, hintResearchRequest{Source: "memory", Query: "과거 약속"}); err == nil {
+	if _, _, err := loadHintEvidence(context.Background(), registry, exec, true, hintResearchRequest{Source: "memory", Query: "과거 약속"}); err == nil {
 		t.Fatal("memory setting bypassed")
 	}
 }
@@ -233,7 +233,7 @@ func TestHintEvidenceUsesSourceFocusedQueryOnlyForWeb(t *testing.T) {
 	exec := toolruntime.ExecutionContext{EnableMemory: true}
 	for _, source := range []string{"web", "memory"} {
 		research.Source = source
-		if _, err := loadHintEvidence(context.Background(), registry, exec, true, research); err != nil {
+		if _, _, err := loadHintEvidence(context.Background(), registry, exec, true, research); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -241,7 +241,7 @@ func TestHintEvidenceUsesSourceFocusedQueryOnlyForWeb(t *testing.T) {
 		t.Fatalf("search query replaced the task or leaked into memory: %v", queries)
 	}
 	research.Source, research.SearchQuery = "web", strings.Repeat("가", 301)
-	if _, err := loadHintEvidence(context.Background(), registry, exec, true, research); err == nil || len(queries) != 2 {
+	if _, _, err := loadHintEvidence(context.Background(), registry, exec, true, research); err == nil || len(queries) != 2 {
 		t.Fatal("oversized model query reached a tool")
 	}
 }
@@ -274,7 +274,7 @@ func TestHintLiveWebEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer mcp.CloseDB()
-	evidence, err := loadHintEvidence(context.Background(), toolruntime.Default, toolruntime.ExecutionContext{UserID: "hint-live", EnableMemory: true}, true, hintResearchRequest{Source: "web", Query: "Egyptian pyramids purpose royal tomb museum"})
+	evidence, _, err := loadHintEvidence(context.Background(), toolruntime.Default, toolruntime.ExecutionContext{UserID: "hint-live", EnableMemory: true}, true, hintResearchRequest{Source: "web", Query: "Egyptian pyramids purpose royal tomb museum"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4869,8 +4869,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	if glassesHint && hintPhase != "plan" && !hintJudge && hintResearch.Source != "" {
 		var evidence string
 		var researchErr error
+		var proof hintGrounding
 		if hintResearch.RequireGrounding {
-			var proof hintGrounding
 			proof, evidence, researchErr = prepareHintGrounding(chatCtx, toolruntime.Default, toolExecCtx, hintLookupEnabled, hintResearch)
 			if researchErr == nil {
 				proof.Model = rawModel
@@ -4878,9 +4878,19 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				verifiedHint = &proof
 			}
 		} else {
-			evidence, researchErr = loadHintEvidence(chatCtx, toolruntime.Default, toolExecCtx, enableTools, hintResearch)
+			evidence, _, researchErr = loadHintEvidence(chatCtx, toolruntime.Default, toolExecCtx, enableTools, hintResearch)
 		}
 		if researchErr != nil {
+			if proof.SearchQuery != "" {
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(http.StatusFailedDependency)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"error":                 "힌트 근거 조회 실패: " + researchErr.Error(),
+					"search_query":          proof.SearchQuery,
+					"search_query_fallback": proof.SearchQueryFallback,
+				})
+				return
+			}
 			http.Error(w, "힌트 근거 조회 실패: "+researchErr.Error(), http.StatusFailedDependency)
 			return
 		}

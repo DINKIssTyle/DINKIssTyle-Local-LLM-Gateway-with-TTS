@@ -21,19 +21,21 @@ type hintSourceRecord struct {
 	Spans []string `json:"spans,omitempty"`
 }
 type hintGrounding struct {
-	Model          string             `json:"model,omitempty"`
-	PromptRevision string             `json:"prompt_revision,omitempty"`
-	Version        int                `json:"version"`
-	AsOf           string             `json:"as_of,omitempty"`
-	TaskOriented   bool               `json:"task_oriented,omitempty"`
-	Task           string             `json:"task,omitempty"`
-	Mode           string             `json:"mode"`
-	Topic          string             `json:"topic"`
-	Source         string             `json:"source"`
-	Kind           string             `json:"kind,omitempty"`
-	Aliases        []string           `json:"aliases,omitempty"`
-	Spans          []string           `json:"spans,omitempty"`
-	Records        []hintSourceRecord `json:"records,omitempty"`
+	Model               string             `json:"model,omitempty"`
+	PromptRevision      string             `json:"prompt_revision,omitempty"`
+	Version             int                `json:"version"`
+	AsOf                string             `json:"as_of,omitempty"`
+	TaskOriented        bool               `json:"task_oriented,omitempty"`
+	SearchQuery         string             `json:"search_query,omitempty"`
+	SearchQueryFallback bool               `json:"search_query_fallback,omitempty"`
+	Task                string             `json:"task,omitempty"`
+	Mode                string             `json:"mode"`
+	Topic               string             `json:"topic"`
+	Source              string             `json:"source"`
+	Kind                string             `json:"kind,omitempty"`
+	Aliases             []string           `json:"aliases,omitempty"`
+	Spans               []string           `json:"spans,omitempty"`
+	Records             []hintSourceRecord `json:"records,omitempty"`
 }
 
 // Read only source titles/snippets, never Query/Provider/Source-ID echoes.
@@ -160,7 +162,11 @@ func prepareHintGrounding(ctx context.Context, registry *toolruntime.Registry, e
 			return result, "", fmt.Errorf("hint query too long")
 		}
 	}
-	evidence, err := loadHintEvidence(ctx, registry, exec, tools, req)
+	evidence, executedQuery, err := loadHintEvidence(ctx, registry, exec, tools, req)
+	if req.Source == "web" && executedQuery != "" {
+		result.SearchQuery = executedQuery
+		result.SearchQueryFallback = strings.TrimSpace(req.SearchQuery) == ""
+	}
 	if err != nil {
 		return result, "", err
 	}

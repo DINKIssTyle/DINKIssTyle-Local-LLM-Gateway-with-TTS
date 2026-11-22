@@ -2162,6 +2162,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       if(clip.mode==='translate' && target==='ko')return 'auto';
       return /^[a-z]{2}$/.test(source)?source:'auto';
     }
+    if(clip.mode==='ai')return target;
     return resolveTranslateSourceLang({...clip,sourceLang:source,targetLang:target});
   }
 
@@ -2628,7 +2629,20 @@ import { LocalAgreement } from './local-agreement.mjs';
     const requestChatScope=chatScope();
     const chatContext=options.chatSession?chatMemory.context(requestChatScope):'';
     let enrichmentPlan=null;let hintProof=null;
-    const recordHintProof=proof=>{hintProof=proof;if(!proof)return;const records=Array.isArray(proof.records)?proof.records:[];auditHint(options,'decision_response',{reason:'source_records',topic:proof.topic || '',text:JSON.stringify({mode:proof.mode,source:proof.source,task:String(proof.task || enrichmentPlan?.question || '').slice(0,300),model:proof.model || '',promptRevision:proof.prompt_revision || '',records:records.slice(0,4).map((record,index)=>({record:index+1,title:String(record.title || '').slice(0,100),sentences:record.spans?.length || 0}))})});};
+    const recordHintProof=proof=>{
+      hintProof=proof;
+      if(!proof)return;
+      const records=Array.isArray(proof.records)?proof.records:[];
+      auditHint(options,'decision_response',{reason:'source_records',topic:proof.topic || '',text:JSON.stringify({
+        mode:proof.mode,
+        source:proof.source,
+        task:String(proof.task || enrichmentPlan?.question || '').slice(0,300),
+        ...(proof.search_query?{searchQuery:proof.search_query,searchQueryFallback:proof.search_query_fallback===true}:{}),
+        model:proof.model || '',
+        promptRevision:proof.prompt_revision || '',
+        records:records.slice(0,4).map((record,index)=>({record:index+1,title:String(record.title || '').slice(0,100),sentences:record.spans?.length || 0}))
+      })});
+    };
     let repliesReplaced=false;
     let receivedVisibleAnswer=false;
     let chromeText=options.chromeTranslationText || '';let chromeSource=options.translationSource || resolveTranslateSourceLang({targetLang});
@@ -2734,7 +2748,18 @@ import { LocalAgreement } from './local-agreement.mjs';
         }
       }
       if(options.hint && res.status===424){hintSkipReason='source_lookup_failed';
-        const lookupDetail=(await res.text()).trim().slice(0,300);
+        const lookupBody=(await res.text()).trim();
+        let lookupDetail=lookupBody.slice(0,300);
+        if(res.headers?.get('content-type')?.includes('application/json')){
+          try{
+            const detail=JSON.parse(lookupBody);
+            if(typeof detail.search_query==='string')lookupDetail=JSON.stringify({
+              error:String(detail.error || '').slice(0,300),
+              searchQuery:detail.search_query,
+              searchQueryFallback:detail.search_query_fallback===true
+            });
+          }catch{}
+        }
         auditHint(options,'decision_response',{reason:'source_lookup_detail',topic:enrichmentPlan?.topic || '',text:lookupDetail});
         if(options.topicVersion===hintGate.topicVersion)hintGate.currentTopic='';
         els.hintStatus.textContent='명칭·출처를 확인하지 못해 힌트 생략 · 계속 듣는 중';

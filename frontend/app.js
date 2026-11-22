@@ -4723,9 +4723,11 @@ function applyCurrentChatSessionEvent(entry) {
                     const finalText = payloadFinalText || (AppState.session.replay.messageBuffers.get(AppState.chat.activeLocalAssistantId) || '');
                     if (payloadFinalText) {
                         AppState.session.replay.messageBuffers.set(AppState.chat.activeLocalAssistantId, payloadFinalText);
-                        updateSyncedMessageContent(AppState.chat.activeLocalAssistantId, payloadFinalText, { animate: false });
                     }
+                    const followLatest = !!payloadFinalText && getStreamingScrollMode() !== 'label-top';
+                    const wasNearBottom = followLatest && isChatNearBottom();
                     finalizeMessageContent(AppState.chat.activeLocalAssistantId, finalText);
+                    if (followLatest) scrollToBottom(wasNearBottom);
                     finalizeAssistantStatusCards(AppState.chat.activeLocalAssistantId, 'done');
                     setAssistantActionBarReady(AppState.chat.activeLocalAssistantId);
                     if (finalText) {
@@ -4771,9 +4773,9 @@ function applyCurrentChatSessionEvent(entry) {
                 }
                 const payloadFinalText = extractFinalAssistantContentFromPayload(payload);
                 const finalText = payloadFinalText || (AppState.session.replay.messageBuffers.get(AppState.session.replay.currentAssistantId) || '');
+                const wasNearBottom = !!payloadFinalText && getStreamingScrollMode() !== 'label-top' && isChatNearBottom();
                 if (payloadFinalText) {
                     AppState.session.replay.messageBuffers.set(AppState.session.replay.currentAssistantId, payloadFinalText);
-                    updateSyncedMessageContent(AppState.session.replay.currentAssistantId, payloadFinalText, { animate: false });
                 }
                 finalizeMessageContent(AppState.session.replay.currentAssistantId, finalText);
                 finalizeAssistantStatusCards(AppState.session.replay.currentAssistantId, 'done');
@@ -4788,7 +4790,7 @@ function applyCurrentChatSessionEvent(entry) {
                 cleanupAssistantMessagesForTurn(AppState.session.replay.currentTurnId || entryTurnId, AppState.session.replay.currentAssistantId);
                 if (getStreamingScrollMode() !== 'label-top') {
                     holdAutoScrollAtBottom(900);
-                    scrollToBottom(isChatNearBottom());
+                    scrollToBottom(wasNearBottom || isChatNearBottom());
                 } else {
                     updateScrollToBottomButton();
                 }
@@ -5211,7 +5213,6 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
         }
 
         AppState.session.replay.messageBuffers.set(assistantId, assistantText);
-        updateSyncedMessageContent(assistantId, assistantText, { animate: false });
         finalizeMessageContent(assistantId, assistantText);
         finalizeAssistantStatusCards(assistantId, 'done');
         setAssistantActionBarReady(assistantId);

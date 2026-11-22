@@ -16,6 +16,7 @@ struct RuntimeError: LocalizedError {
  let continuation:AsyncStream<AnalyzerInput>.Continuation
  var task:Task<Void,Never>?
  var converter:AVAudioConverter?
+ var convertedFrames:Int64=0
  var bytes=0, finished=false, ending=false, error=""
  var touched=Date()
  struct Span {let start:Double,end:Double,text:String,final:Bool}
@@ -59,7 +60,13 @@ struct RuntimeError: LocalizedError {
    if supplied {state.pointee = .noDataNow;return nil};supplied=true;state.pointee = .haveData;return pcm
   }
   if status == .error {throw conversionError ?? RuntimeError(message:"Apple STT PCM 변환 실패") as NSError}
-  if output.frameLength>0 {continuation.yield(AnalyzerInput(buffer:output,bufferStartTime:CMTime(value:Int64(bytes/2),timescale:16000)))}
+  if output.frameLength>0 {
+   // The converter can buffer and round samples between appends. Timestamp
+   // the analyzer input using the frames it actually receives.
+   let start=CMTime(value:convertedFrames,timescale:CMTimeScale(output.format.sampleRate))
+   continuation.yield(AnalyzerInput(buffer:output,bufferStartTime:start))
+   convertedFrames+=Int64(output.frameLength)
+  }
   bytes=data.count;touched=Date()
  }
  func finish() async {

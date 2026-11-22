@@ -1267,8 +1267,8 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.match(element('hud-notice').textContent,/^\[번역\] AUTO→KO /,'header must show the selected automatic source, not the engine fallback language');
  const modeAutoStart=requests.length;
  handler({menuItemClickEvent:{itemID:1}});await tick();await tick();
- assert.equal(requests.slice(modeAutoStart).filter(r=>r.url.endsWith('/api/stt/apple/prepare')).length,0,'native AI mode reuses the selected source locale');
- assert.match(element('stt-engine-status').textContent,/Apple STT 준비 완료.*en/);
+ assert.ok(requests.slice(modeAutoStart).some(r=>r.url.endsWith('/api/stt/apple/prepare') && JSON.parse(r.opts.body).language==='ko'),'AI mode prepares the user language');
+ assert.match(element('stt-engine-status').textContent,/Apple STT 준비 완료.*ko/);
  assert.equal(element('prepare-chrome-stt').disabled,false);assert.equal(element('prepare-chrome-translation').disabled,false);
  // AI preview and final requests must honor recognition language.
  for(const sourceLang of ['auto','en','ja','ko']) {
@@ -1276,6 +1276,13 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
      const payload=context.window.__queueTest.sttPayload({mode:'ai',engine:'whisper',sourceLang,targetLang:'ko',bytes:new Uint8Array(6400),revision});
      assert.equal(payload.language,sourceLang);
      assert.equal(payload.realtime,true);
+   }
+ }
+ for(const engine of ['apple','chrome-online']) {
+   for(const revision of [0,1]) {
+     const clip={engine,sourceLang:'en',targetLang:'ja',bytes:new Uint8Array(6400),revision};
+     assert.equal(context.window.__queueTest.sttPayload({...clip,mode:'ai'}).language,'ja');
+     assert.equal(context.window.__queueTest.sttPayload({...clip,mode:'translate'}).language,'en');
    }
  }
  // Glasses-only quiet capture and gain use one immutable PCM pass.
@@ -1418,7 +1425,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  await queue.settings({sttEngine:'whisper',translateSourceLang:'en'});
  finishOld();await tick();await tick();
  const oldBody=JSON.parse(requests.slice(oldRequests).find(r=>r.url.endsWith('/api/stt/transcribe')).opts.body);
- assert.equal(oldBody.engine,'apple');assert.equal(oldBody.language,'ko');
+ assert.equal(oldBody.engine,'apple');assert.equal(oldBody.language,'ja');
  assert.match(element('transcript-log').textContent,/이전 설정 보관 음성/);
  assert.equal(queue.state().recording,true);
  // Rapid updates during warmup coalesce; an explicit tap prevents automatic restart.

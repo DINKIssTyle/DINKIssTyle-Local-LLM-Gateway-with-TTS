@@ -109,6 +109,9 @@ func (s *chromeTranslator) speech(ctx context.Context, req chromeSpeechRequest, 
 	if err != nil {
 		return result, err
 	}
+	if result.Status == "busy" {
+		return result, errSTTBusy
+	}
 	if result.Error != "" {
 		return result, errors.New(result.Error)
 	}
@@ -234,7 +237,8 @@ const chromeSpeechScript = `
     activeStream.touched=Date.now();
     return activeStream;
    }
-   if(activeStream.owner!==p.owner && Date.now()-activeStream.touched<15000)throw Error('다른 Chrome STT 세션이 사용 중입니다');
+   const current=segments.get(activeStream.currentSegId);
+   if(activeStream.owner!==p.owner && !current?.finished && Date.now()-activeStream.touched<15000)return null;
    closeStream(activeStream);
   }
   if(!supportsTrack())throw Error('이 Chrome은 PCM 오디오 트랙 입력을 지원하지 않습니다');
@@ -311,6 +315,7 @@ const chromeSpeechScript = `
   },
   async push(p){try{
    const st=await ensureStream(p);
+   if(!st)return {status:'busy',error:'다른 Chrome STT 세션이 사용 중입니다'};
    const seg=ensureSegment(p,st);
    const work=async()=>{
     if(seg.finished)return snapshot(seg);

@@ -236,15 +236,14 @@ func TestHintSelectorReplacesConflictingWriterFormat(t *testing.T) {
 
 func TestContextualHintSearchUsesTaskNotLiteralCueName(t *testing.T) {
 	registry := toolruntime.NewRegistry()
+	var executedQuery string
 	calls := 0
 	query := "현재 한국 극장 관객 수 순위와 집계 기준일"
 	err := registry.Register(toolruntime.Definition{Name: "search_web", InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}}}`)}, func(_ context.Context, _ toolruntime.ExecutionContext, args json.RawMessage) (toolruntime.Result, error) {
-		calls++
 		var input map[string]string
 		_ = json.Unmarshal(args, &input)
-		if calls == 1 && input["query"] != query {
-			t.Errorf("self-contained task changed into keyword search: %q", input["query"])
-		}
+		executedQuery = input["query"]
+		calls++
 		return toolruntime.Result{Content: "Title: 가상 일별 관객 수 집계\nLink: https://example.com/chart\nSnippet: 가상 기준일의 국내 극장 관객 수 통계입니다. 가상 작품 A가 관객 수 집계에서 첫 번째입니다."}, nil
 	})
 	if err != nil {
@@ -254,6 +253,14 @@ func TestContextualHintSearchUsesTaskNotLiteralCueName(t *testing.T) {
 	proof, _, err := prepareHintGrounding(context.Background(), registry, toolruntime.ExecutionContext{}, true, req)
 	if err != nil || !proof.TaskOriented || proof.Mode != "quote" || len(proof.Records) != 1 {
 		t.Fatalf("task-based chart lookup failed: %+v %v", proof, err)
+	}
+	if executedQuery != query || proof.SearchQuery != executedQuery || !proof.SearchQueryFallback {
+		t.Fatalf("fallback search query not reported: executed %q, proof %+v", executedQuery, proof)
+	}
+	req.SearchQuery = "  국내 극장 일별 관객 수 순위  "
+	proof, _, err = prepareHintGrounding(context.Background(), registry, toolruntime.ExecutionContext{}, true, req)
+	if err != nil || executedQuery != strings.TrimSpace(req.SearchQuery) || proof.SearchQuery != executedQuery || proof.SearchQueryFallback || proof.Task != query {
+		t.Fatalf("focused search query not reported: executed %q, proof %+v, err %v", executedQuery, proof, err)
 	}
 	for _, native := range []bool{false, true} {
 		payload := map[string]any{"model": "role", "stream": true, "messages": []map[string]string{{"role": "user", "content": "old"}}}
@@ -269,7 +276,7 @@ func TestContextualHintSearchUsesTaskNotLiteralCueName(t *testing.T) {
 	}
 	req.Topic = "새로운 정보 과제"
 	req.Anchor = "피라미드" // Fabricated evidence cannot override actual speech.
-	if _, _, err = prepareHintGrounding(context.Background(), registry, toolruntime.ExecutionContext{}, true, req); err == nil || calls != 1 {
+	if _, _, err = prepareHintGrounding(context.Background(), registry, toolruntime.ExecutionContext{}, true, req); err == nil || calls != 2 {
 		t.Fatal("unrelated old topic bypassed conversation anchoring")
 	}
 	req.Topic = "영화"
