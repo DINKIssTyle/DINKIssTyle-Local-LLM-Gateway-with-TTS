@@ -142,6 +142,7 @@ import { LocalAgreement } from './local-agreement.mjs';
   let segmenter = null;
   let pendingClips = [];
   let draining = false;
+  let sttRetryTimer = null;
   let activeFinalClip = null;
   let activeUtterance = null;
   let pendingPreview = null;
@@ -315,6 +316,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     glassesInputSettings:document.getElementById('glasses-input-settings'),glassesSensitivity:document.getElementById('glasses-sensitivity'),glassesGain:document.getElementById('glasses-gain'),glassesInputMeter:document.getElementById('glasses-input-meter'),glassesInputLevel:document.getElementById('glasses-input-level'),
     sttFallback: document.getElementById('stt-fallback'),
     sttEngineStatus: document.getElementById('stt-engine-status'),
+    sttLastError: document.getElementById('stt-last-error'),
     btnPrepareStt: document.getElementById('prepare-chrome-stt'),
     speakerScope: document.getElementById('speaker-scope'),
     transcriptModal: document.getElementById('transcript-modal'),
@@ -892,6 +894,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     gatewayFetch(`${config.serverUrl}/api/stt/${activeSttEngine==='apple'?'apple':'chrome'}/stop`,{method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),body:JSON.stringify({sessionId,segmentId:id})}).catch(()=>{});
   }
   function resetQueuesForModeSwitch(nextMode, preserveAudio=false, preserveDisplay=false) {
+    clearTimeout(sttRetryTimer);sttRetryTimer=null;
     previewIntent.reset();previewWakeId='';previewWakePrompt='';audioUpload.reset();llmTranslationCache.clear();clearTimeout(hintDrainTimer);hintDrainTimer=null;
     hintLifetime.clear();answerAutoCloseEligible=false;voiceWakeJobs.clear();
     chatEpoch++;translationFailure='';translationDirection.reset();translationSentence.reset();if(!preserveDisplay)translationHistory.reset();stableTranslation.reset();llmStableTranslation.reset();
@@ -2299,7 +2302,7 @@ import { LocalAgreement } from './local-agreement.mjs';
 
   async function drainClips() {
     if (previewBusy) abortPendingPreview();
-    if (draining) return;
+    if (draining || sttRetryTimer) return;
     draining = true;
     try {
       while (pendingClips.length) {
@@ -2338,6 +2341,16 @@ import { LocalAgreement } from './local-agreement.mjs';
             setVoiceHint(`일시적인 전사 지연 · ${pendingClips.length}개 보관 · 자동 재시도합니다.`);
             await new Promise(resolve=>setTimeout(resolve,300 * 2**(clip.attempts-1)));
             continue;
+          }
+          if(err.retryable!==false){
+            // Retain the same segment/audio through a temporary outage. The
+            // existing bounded backlog still pauses capture if it fills.
+            showSTTFailure(clip,err);
+            clip.attempts=0;clip.busyAttempts=0;
+            setVoiceHint(`전사 재시도 대기 · ${pendingClips.length}개 음성 보관 · ${err.message}`);
+            setHUDNotice('전사 재시도 대기 · 음성 보관 중');
+            sttRetryTimer=setTimeout(()=>{sttRetryTimer=null;if(pendingClips.includes(clip))drainClips();},5000);
+            return;
           }
           throw err;
         }
@@ -2402,10 +2415,11 @@ import { LocalAgreement } from './local-agreement.mjs';
         }
       }
     } catch (err) {
+      showSTTFailure(activeFinalClip,err);
       await stopVoiceRecording(false).catch(console.warn);
       captureFailure = `전사/저장 실패: ${err.message}\n처리하지 못한 음성 ${pendingClips.length}개를 앱 안에 보관 중입니다. 다시 탭하면 재시도합니다. 앱을 닫으면 미저장 음성은 사라집니다.`;
       setHUDNotice('전사 오류 · 미저장 음성 대기'); renderLiveHUD();
-      setVoiceHint('오류로 녹음 중지 · 서버 확인 후 다시 시작');
+      setVoiceHint(`오류로 녹음 중지 · ${err.message} · 상세 오류를 확인한 뒤 다시 시작하세요`);
     } finally {
       activeFinalClip=null;
       draining = false;
@@ -2414,6 +2428,12 @@ import { LocalAgreement } from './local-agreement.mjs';
       if (!isRecording && !pendingClips.length && !micStopPromise && !pendingMicOpen && !micCloseUncertain && !pendingMicCloses.size) setVoiceHint('마이크 꺼짐 · 전사 저장 완료');
       if (pendingPreview) drainPreview();
     }
+  }
+
+  function showSTTFailure(clip,error){
+    const detail={at:new Date().toISOString(),engine:clip?.engine || activeSttEngine,segmentId:clip?.segmentId || '',status:error.status || null,message:String(error.message || error).slice(0,600)};
+    if(els.sttLastError){els.sttLastError.hidden=false;els.sttLastError.textContent=`최근 전사 오류 · ${detail.engine}${detail.status?` · HTTP ${detail.status}`:''}\n${detail.at}\n${detail.message}`;}
+    console.warn('STT request failed',detail);
   }
 
   async function processAudioTranscription(clip) {
@@ -2427,13 +2447,16 @@ import { LocalAgreement } from './local-agreement.mjs';
       if(clip.mode==='ai')voiceLatency.mark(clip.segmentId,'stt_sent');
       const sttSentAt=Date.now();
       clip.inferenceDone=false;
-      const payload = {...sttPayload(clip),stream:clip.mode==='translate'};
+      // Match the native app: one JSON response after durable save. Live
+      // translation uses /preview without a long-lived archival SSE request.
+      const payload = {...sttPayload(clip),stream:false};
       let res = await gatewayFetch(`${config.serverUrl}/api/stt/transcribe`, {
         method: 'POST', headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(payload), signal: controller.signal,
       });
       if (!res.ok) {
         const err=new Error(`HTTP ${res.status}: ${(await res.text()).slice(0,300)}`);
+        err.status=res.status;
         err.busy=res.status===429;
         err.retryable=[408,425,429].includes(res.status) || res.status>=500;
         throw err;
@@ -2457,6 +2480,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       return data;
     } catch(err) {
       if(timedOut){const timeoutError=new Error('전사 서버 응답 시간 초과 · 음성 보관 중');timeoutError.retryable=true;throw timeoutError;}
+      if(err.retryable===undefined)err.retryable=err.name==='NetworkError' || err instanceof TypeError && /load failed|failed to fetch|network|connection/i.test(err.message || '');
       throw err;
     } finally {
       clearTimeout(timeout);

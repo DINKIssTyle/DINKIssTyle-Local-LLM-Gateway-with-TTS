@@ -972,6 +972,25 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  await new Promise(resolve=>setTimeout(resolve,380));await tick();
  assert.equal(queue.state().failure,'');assert.equal(queue.state().ids.length,0);
  assert.equal(requests.slice(retryStart).filter(r=>r.url.endsWith('/api/stt/transcribe') && JSON.parse(r.opts.body).segmentId==='retry-same-id').length,2);
+ // Sustained transient failures retain audio and keep capture open, with a
+ // scheduled retry rather than a tight loop on each incoming clip.
+ queue.reset();queue.record();
+ const outageTimer=context.setTimeout;let recoverOutage;
+ context.setTimeout=(fn,ms)=>ms===5000?(recoverOutage=fn,{testRetry:true}):[300,600,1200].includes(ms)?outageTimer(fn,0):outageTimer(fn,ms);
+ const outageStart=requests.length;
+ sttReplies=Array.from({length:4},()=>({ok:false,status:503,text:async()=> 'temporary STT service outage'}));
+ queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'outage-retained');
+ for(let i=0;i<100 && !recoverOutage;i++)await new Promise(r=>setTimeout(r,2));
+ assert.equal(typeof recoverOutage,'function');assert.equal(queue.state().recording,true);
+ assert.deepEqual(Array.from(queue.state().ids),['outage-retained']);
+ assert.match(element('stt-last-error').textContent,/HTTP 503/);assert.equal(element('stt-last-error').hidden,false);
+ const failedAttempts=requests.slice(outageStart).filter(r=>r.url.endsWith('/api/stt/transcribe')).length;
+ queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'outage-next');await tick();
+ assert.equal(requests.slice(outageStart).filter(r=>r.url.endsWith('/api/stt/transcribe')).length,failedAttempts,'new audio respects the recovery backoff');
+ sttReplies=[savedResponse,savedResponse];recoverOutage();for(let i=0;i<15;i++)await tick();
+ assert.equal(queue.state().ids.length,0);assert.equal(queue.state().recording,true);
+ for(const r of requests.slice(outageStart).filter(r=>r.url.endsWith('/api/stt/transcribe')))assert.equal(JSON.parse(r.opts.body).stream,false);
+ context.setTimeout=outageTimer;
  // A final response from a cancelled mode must not dequeue or render a new mode's clip.
  sttReplies=[()=>new Promise(resolve=>{releaseFinal=()=>resolve(savedResponse);}),savedResponse];
  queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'old-mode');await tick();queue.reset();
@@ -1177,23 +1196,21 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  queue.liveTranslations.onText({id:'paint-new',draft:true},'NEW PAINT CONTENT');releaseOldPaint();for(let i=0;i<15 && !releaseNewPaint;i++)await tick();
  assert.ok(Number.isFinite(queue.metrics.entries.get('paint-old')?.sdk_ms));assert.equal(queue.metrics.entries.get('paint-new')?.sdk_ms,undefined,'old payload ACK must not acknowledge newer paint');
  releaseNewPaint();for(let i=0;i<15;i++)await tick();assert.ok(Number.isFinite(queue.metrics.entries.get('paint-new')?.sdk_ms));bridge.textContainerUpgrade=normalText;
- // Early recognition starts translation and the next preview while saving is held.
- let releaseSTTSave;const streamStart=requests.length;chromeText='저장 전에 표시된 번역';
+ // Native-app JSON contract: retain PCM until the final archive response,
+ // and do not let a preview interrupt the pending final inference.
+ let releaseSTTSave;const streamStart=requests.length;chromeText='JSON 저장 후 표시된 번역';
  element('translation-engine').value='chrome';await element('translation-engine').handlers.change();queue.record();
  sttReplies=[opts=>{
-  const request=JSON.parse(opts.body);assert.equal(request.stream,true);
-  const result={text:'Synthetic early final.',saved:false,sessionId:request.sessionId,segmentId:request.segmentId,language:'en',engine:request.engine};let read=0;
-  return{ok:true,headers:{get:()=> 'text/event-stream'},body:{getReader:()=>({cancel:async()=>{},read:async()=>{
-   if(!read++)return{value:Buffer.from('data: '+JSON.stringify({type:'stt.recognized',result})+'\n\n'),done:false};
-   return new Promise(resolve=>{releaseSTTSave=()=>resolve({value:Buffer.from('data: '+JSON.stringify({type:'stt.saved',result:{...result,saved:true}})+'\n\n'),done:false});});
-  }})}};
+  const request=JSON.parse(opts.body);assert.equal(request.stream,false);
+  return new Promise(resolve=>{releaseSTTSave=()=>resolve({ok:true,json:async()=>({text:'Synthetic JSON final.',saved:true,sessionId:request.sessionId,segmentId:request.segmentId,language:'en',engine:request.engine})});});
  }];
- queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'early-save-final');for(let i=0;i<25 && !releaseSTTSave;i++)await tick();
- assert.equal(typeof releaseSTTSave,'function');assert.ok(queue.state().ids.includes('early-save-final'),'original audio is retained while archive ACK is pending');
- assert.match(element('hud-screen').innerHTML,/저장 전에 표시된 번역/);
+ queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'json-save-final');for(let i=0;i<25 && !releaseSTTSave;i++)await tick();
+ assert.equal(typeof releaseSTTSave,'function');assert.ok(queue.state().ids.includes('json-save-final'),'original audio is retained until JSON confirms saving');
+ const waitingPreviewCount=requests.slice(streamStart).filter(r=>r.url.endsWith('/api/stt/preview')).length;
  queue.previewDuringSave('newer-preview-during-save');for(let i=0;i<20;i++)await tick();
- assert.ok(requests.slice(streamStart).some(r=>r.url.endsWith('/api/stt/preview')),'next preview need not wait for archive save');
- releaseSTTSave();for(let i=0;i<20;i++)await tick();assert.ok(!queue.state().ids.includes('early-save-final'));assert.match(element('transcript-log').textContent,/Synthetic early final/);
+ assert.equal(requests.slice(streamStart).filter(r=>r.url.endsWith('/api/stt/preview')).length,waitingPreviewCount,'JSON finalization owns the recognizer until complete');
+ releaseSTTSave();for(let i=0;i<20;i++)await tick();assert.ok(!queue.state().ids.includes('json-save-final'));assert.match(element('transcript-log').textContent,/Synthetic JSON final/);
+ assert.ok(requests.slice(streamStart).some(r=>r.url.endsWith('/api/stt/preview')),'the latest preview resumes after the JSON result');
  await queue.stopVoiceRecording(false);chromeText=null;
  element('model-select').value='new-base';await element('model-select').handlers.change();
  assert.match(element('model-ai-chat').options[0].textContent,/new-base/);assert.equal(element('model-ai-chat').value,'chat-role','base change must not reset pinned models');

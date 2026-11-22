@@ -352,6 +352,9 @@ func handleSTTAudio(app *App, preview bool) http.HandlerFunc {
 				warning = engine + " STT 오류로 Whisper 사용: " + err.Error()
 				engine = "whisper"
 				inference, err = runSTTInference(audioBytes, format, lang, metadata.SpeechFilter, metadata.Realtime)
+				if err != nil {
+					err = fmt.Errorf("%s; Whisper fallback failed: %w", warning, err)
+				}
 			}
 		} else {
 			if !getSTTModelStatus().Installed {

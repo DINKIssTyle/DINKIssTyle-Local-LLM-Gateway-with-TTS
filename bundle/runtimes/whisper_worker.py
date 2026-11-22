@@ -3,6 +3,7 @@ import argparse
 import base64
 import io
 import json
+import math
 import os
 import sys
 import wave
@@ -13,13 +14,37 @@ import zlib
 os.environ['HF_HUB_OFFLINE'] = '1'
 os.environ['TRANSFORMERS_OFFLINE'] = '1'
 
+protocol_output = None
+
+
+def isolate_protocol_output():
+    """Reserve original stdout for JSON; route Python/native library logs to stderr."""
+    global protocol_output
+    sys.stdout.flush()
+    protocol_output = os.fdopen(os.dup(sys.stdout.fileno()), 'w', encoding='utf-8', buffering=1)
+    os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
+
+
+def finite_json(value):
+    # Python otherwise emits NaN/Infinity, which Go's JSON decoder rejects.
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: finite_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [finite_json(item) for item in value]
+    return value
+
 
 def send(value):
-    print(json.dumps(value, ensure_ascii=False), flush=True)
+    print(json.dumps(finite_json(value), ensure_ascii=False, allow_nan=False),
+          file=protocol_output if protocol_output is not None else sys.stdout, flush=True)
 
 
 def transcript_rejection(text, average_logprob=None, speech_seconds=None, speech_ratio=None, no_speech_probability=None):
     """Reject decoding failures instead of saving them as something someone said."""
+    if average_logprob is not None and not math.isfinite(average_logprob):
+        return 'invalid-confidence'
     data = text.strip().encode('utf-8')
     if not data:
         return ''
@@ -209,6 +234,7 @@ def main():
 
 
 if __name__ == '__main__':
+    isolate_protocol_output()
     try:
         main()
     except Exception as exc:

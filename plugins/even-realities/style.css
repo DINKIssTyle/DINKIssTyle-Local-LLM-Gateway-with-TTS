@@ -620,3 +620,6 @@ summary:focus-visible { outline:2px solid var(--accent-blue); outline-offset:2px
 
 .hud-subtitle-status { position: relative; height: 27px; flex: 0 0 27px; }
 .hud-subtitle-status img { position: absolute; left: calc(var(--subtitle-icon-percent) - var(--subtitle-icon-offset)); top: 0; }
+
+.stt-last-error { white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; color: var(--accent-red); font: inherit; }
+.stt-last-error[hidden] { display: none; }

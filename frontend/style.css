@@ -2595,6 +2595,8 @@ body.keyboard-open .scroll-to-bottom-btn {
 }
 
 .saved-turn-modal-content {
+  user-select: text;
+  -webkit-user-select: text;
   padding: 14px 16px;
   border-radius: 14px;
   border: 1px solid var(--border-color);
