@@ -129,6 +129,10 @@ func resolveBundledSkillsDir(exePath, cwd, goos string) string {
 }
 
 func compileActiveSkills(userText string, toolLists ...[]promptkit.ToolDefinition) skillkit.Compilation {
+	return compileChatSkills(userText, false, toolLists...)
+}
+
+func compileChatSkills(userText string, compactDiscovery bool, toolLists ...[]promptkit.ToolDefinition) skillkit.Compilation {
 	var excluded []string
 	if len(toolLists) > 0 {
 		available := map[string]bool{}
@@ -147,9 +151,10 @@ func compileActiveSkills(userText string, toolLists ...[]promptkit.ToolDefinitio
 		setupDiagnostic = &skillkit.Diagnostic{Path: userDir, Message: err.Error()}
 	}
 	result := skillkit.LoadAndCompile(skillkit.Config{
-		BuiltinDir:    getBundledSkillsDir(),
-		ExcludedNames: excluded,
-		UserDir:       userDir,
+		BuiltinDir:       getBundledSkillsDir(),
+		ExcludedNames:    excluded,
+		UserDir:          userDir,
+		CompactDiscovery: compactDiscovery,
 	}, userText)
 	if setupDiagnostic != nil {
 		result.Diagnostics = append(result.Diagnostics, *setupDiagnostic)

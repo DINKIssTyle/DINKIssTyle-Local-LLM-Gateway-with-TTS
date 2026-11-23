@@ -534,6 +534,8 @@ func ExecuteCommandBudgetFamily(command string) string {
 }
 
 type ToolFollowupInput struct {
+	Gemma4Chat                 bool
+	ToolReasoning              string
 	HUDOutput                  bool
 	LLMMode                    string
 	ModelID                    string
@@ -587,7 +589,7 @@ func PrepareToolFollowupRequest(input ToolFollowupInput) (map[string]interface{}
 			if arguments == "" {
 				arguments = "{}"
 			}
-			msgs = append(msgs, map[string]interface{}{
+			call := map[string]interface{}{
 				"role":    "assistant",
 				"content": nil,
 				"tool_calls": []interface{}{map[string]interface{}{
@@ -598,11 +600,24 @@ func PrepareToolFollowupRequest(input ToolFollowupInput) (map[string]interface{}
 						"arguments": arguments,
 					},
 				}},
-			})
+			}
+			var toolContent string
+			if input.Gemma4Chat && !IsBulkToolTestRequest(input.OriginalUserText) {
+				toolContent, _ = formatToolEvidence(input.ToolName, input.ToolResult)
+				if strings.TrimSpace(toolContent) == "" {
+					toolContent = "[empty]"
+				}
+				if reasoning := compactText(input.ToolReasoning, 2400); reasoning != "" {
+					call["reasoning_content"] = reasoning
+				}
+			} else {
+				toolContent = compactToolResult(input.ToolName, input.ToolResult, input.OriginalUserText, "", input.CompletedTools, input.AvailableTools, true, input.FinalAnswerOnly, input.RequireFreshnessCrossCheck, input.HUDOutput)
+			}
+			msgs = append(msgs, call)
 			msgs = append(msgs, map[string]interface{}{
 				"role":         "tool",
 				"tool_call_id": strings.TrimSpace(input.ToolCallID),
-				"content":      compactToolResult(input.ToolName, input.ToolResult, input.OriginalUserText, "", input.CompletedTools, input.AvailableTools, true, input.FinalAnswerOnly, input.RequireFreshnessCrossCheck, input.HUDOutput),
+				"content":      toolContent,
 			})
 		} else {
 			msgs = append(msgs, map[string]interface{}{

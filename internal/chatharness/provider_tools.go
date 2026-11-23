@@ -67,6 +67,14 @@ func NewChatToolAccumulator() *ChatToolAccumulator {
 	return &ChatToolAccumulator{calls: make(map[int]*ProviderToolCall)}
 }
 
+// RecoverCall supplies a single validated text-form call when the provider
+// did not emit structured tool deltas.
+func (a *ChatToolAccumulator) RecoverCall(call ProviderToolCall) {
+	if !a.HasCalls() {
+		a.calls[0] = &call
+	}
+}
+
 func (a *ChatToolAccumulator) AddChunk(chunk map[string]interface{}) bool {
 	if a == nil || chunk == nil {
 		return false

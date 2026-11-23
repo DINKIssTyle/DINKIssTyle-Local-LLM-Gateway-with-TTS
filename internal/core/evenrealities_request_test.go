@@ -197,6 +197,100 @@ func TestGlassesChatPreservesQuestionAfterToolExecution(t *testing.T) {
 	}
 }
 
+func TestGlassesGemma4ChatUsesRoleHistoryAndNativeToolsWithoutChangingQwen(t *testing.T) {
+	for _, tc := range []struct {
+		model, path string
+		gemma       bool
+		leaked      bool
+	}{
+		{"lmstudio-community/gemma-4-E2B-it-MLX-4bit", "/v1/chat/completions", true, false},
+		{"gemma-4-e2b-it-mlx", "/v1/chat/completions", true, true},
+		{"gemma-4-e4b-it", "/v1/chat/completions", true, true},
+		{"google/gemma-4-12b-it", "/v1/chat/completions", true, false},
+		{"gemma4:26b-a4b", "/v1/chat/completions", true, false},
+		{"google/gemma-4-31b-it", "/v1/chat/completions", true, false},
+		{"qwen3.6-35b-a3b-uncensored-heretic-mlx", "/api/v1/chat", false, false},
+		{"gemma-3-4b-it", "/api/v1/chat", false, false},
+	} {
+		t.Run(tc.model, func(t *testing.T) {
+			const question = "get_current_time 도구를 사용해 아까 정한 시간대로 현재 시각을 확인해 줘."
+			const history = "질문: 기준 시간대는?\n답변: 서울입니다.<think>이전 내부 추론</think>"
+			calls := 0
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+					return
+				}
+				if r.URL.Path != tc.path {
+					t.Errorf("received %s, want %s", r.URL.Path, tc.path)
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				if !tc.gemma {
+					if input, _ := body["input"].(string); !strings.Contains(input, question) || !strings.Contains(input, "<conversation>") || body["messages"] != nil {
+						t.Errorf("native request shape changed: %#v", body)
+					}
+					fmt.Fprint(w, "data: {\"type\":\"message.delta\",\"content\":\"테스트 답변\"}\n\ndata: [DONE]\n\n")
+					return
+				}
+				messages, _ := body["messages"].([]any)
+				if len(messages) < 4 || body["input"] != nil || body["previous_response_id"] != nil || body["tools"] == nil {
+					t.Errorf("wrong compatible request: %#v", body)
+					return
+				}
+				for i, want := range []map[string]string{
+					{"role": "user", "content": "기준 시간대는?"},
+					{"role": "assistant", "content": "서울입니다."},
+					{"role": "user", "content": question},
+				} {
+					got, _ := messages[i+1].(map[string]any)
+					if got["role"] != want["role"] || got["content"] != want["content"] {
+						t.Errorf("message %d: %#v", i+1, got)
+					}
+				}
+				if calls == 1 {
+					if tc.leaked {
+						for _, part := range []string{"read_", "help{query:", `<|"|>HTTPS 인증서<|"|>}`} {
+							b, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{"content": part}}}})
+							fmt.Fprintf(w, "data: %s\n\n", b)
+						}
+						fmt.Fprint(w, "data: [DONE]\n\n")
+						return
+					}
+					fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_clock\",\"type\":\"function\",\"function\":{\"name\":\"get_current_time\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n")
+					return
+				}
+				tool, _ := messages[len(messages)-1].(map[string]any)
+				callID := "call_clock"
+				if tc.leaked {
+					callID = "call_gemma_0"
+				}
+				if body["tool_choice"] != "auto" || tool["role"] != "tool" || tool["tool_call_id"] != callID || tool["content"] == "" || strings.Contains(fmt.Sprint(tool["content"]), "Original user request") {
+					t.Errorf("tool evidence was not attached to the native call: %#v", tool)
+				}
+				fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"테스트 답변\"}}]}\n\ndata: [DONE]\n\n")
+			}))
+			defer upstream.Close()
+			body, err := json.Marshal(map[string]any{"model": tc.model, "stream": true, "glasses_request": map[string]any{
+				"version": 1, "task": "chat", "chatSession": true, "text": question, "context": history,
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := httptest.NewRecorder()
+			handleChat(w, httptest.NewRequest("POST", "/api/chat", strings.NewReader(string(body))), &App{llmEndpoint: upstream.URL, llmMode: "stateful", enableTools: true}, &AuthManager{users: map[string]*User{}})
+			wantCalls := 1
+			if tc.gemma {
+				wantCalls = 2
+			}
+			if w.Code != http.StatusOK || calls != wantCalls || !strings.Contains(w.Body.String(), "테스트 답변") || tc.leaked && strings.Contains(w.Body.String(), "read_help{") {
+				t.Fatalf("status=%d calls=%d response=%s", w.Code, calls, w.Body.String())
+			}
+		})
+	}
+}
+
 func TestGlassesChatPersistsDistinctWebTurnsWithoutClientID(t *testing.T) {
 	if err := mcp.InitDB(filepath.Join(t.TempDir(), "glasses-chat.db")); err != nil {
 		t.Fatal(err)

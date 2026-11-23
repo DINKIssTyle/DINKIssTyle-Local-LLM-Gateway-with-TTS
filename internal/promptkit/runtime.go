@@ -3,6 +3,7 @@ package promptkit
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -11,6 +12,13 @@ const (
 	toolGuidelineMarker    = "### TOOL CALL GUIDELINES ###"
 	toolGuidelineEndMarker = "### END TOOL CALL GUIDELINES ###"
 )
+
+var gemma4Model = regexp.MustCompile(`(?i)(^|[/_.-])gemma[-_. ]?4($|[-_.:/ ])`)
+
+// Gemma 4 assistant checkpoints serve as speculative decoders.
+func IsGemma4ChatModel(modelID string) bool {
+	return gemma4Model.MatchString(strings.TrimSpace(modelID)) && !strings.Contains(strings.ToLower(modelID), "-assistant")
+}
 
 type RuntimeInstructionsInput struct {
 	EnvironmentInfo   string
@@ -104,14 +112,25 @@ func BuildRuntimeInstructions(input RuntimeInstructionsInput) string {
 }
 
 func InjectPrompt(reqMap map[string]interface{}, extraInstr string) bool {
+	return injectPrompt(reqMap, extraInstr, true)
+}
+
+// InjectPromptIntoPreparedMessages preserves history already budgeted by the caller.
+func InjectPromptIntoPreparedMessages(reqMap map[string]interface{}, extraInstr string) bool {
+	return injectPrompt(reqMap, extraInstr, false)
+}
+
+func injectPrompt(reqMap map[string]interface{}, extraInstr string, truncate bool) bool {
 	if len(reqMap) == 0 || strings.TrimSpace(extraInstr) == "" {
 		return false
 	}
 
 	foundSystem := false
 	if messages, ok := reqMap["messages"].([]interface{}); ok {
-		messages = truncateMessages(messages)
-		reqMap["messages"] = messages
+		if truncate {
+			messages = truncateMessages(messages)
+			reqMap["messages"] = messages
+		}
 
 		for i, msg := range messages {
 			m, ok := msg.(map[string]interface{})
@@ -211,7 +230,6 @@ func truncateMessages(messages []interface{}) []interface{} {
 }
 
 func buildToolUsage(envInfo string, modelID string, useNativeTools bool, tools []ToolDefinition) string {
-	lowerModelID := strings.ToLower(strings.TrimSpace(modelID))
 	lines := []string{"", "", toolGuidelineMarker}
 	has := func(names ...string) bool { return toolDefinitionsContain(tools, names...) }
 
@@ -277,7 +295,7 @@ func buildToolUsage(envInfo string, modelID string, useNativeTools bool, tools [
 		}
 	}
 
-	if strings.Contains(lowerModelID, "gemma-4") {
+	if IsGemma4ChatModel(modelID) {
 		lines = append(lines,
 			"GEMMA-4 RULE: Prefer the smallest useful number of tool calls. Once a tool result already answers the user's request well enough, stop calling tools and answer immediately.",
 		)

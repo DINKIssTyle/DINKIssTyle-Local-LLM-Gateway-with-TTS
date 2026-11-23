@@ -20,12 +20,13 @@ const (
 )
 
 type Config struct {
-	ExcludedNames  []string
-	BuiltinDir     string
-	UserDir        string
-	MaxFileBytes   int64
-	MaxSelected    int // Deprecated: relevance is decided by the LLM; MaxPromptChars bounds references.
-	MaxPromptChars int
+	ExcludedNames    []string
+	BuiltinDir       string
+	UserDir          string
+	MaxFileBytes     int64
+	MaxSelected      int // Deprecated: relevance is decided by the LLM; MaxPromptChars bounds references.
+	MaxPromptChars   int
+	CompactDiscovery bool
 }
 
 type Skill struct {
@@ -88,6 +89,15 @@ func LoadAndCompile(config Config, userText string) Compilation {
 		}
 	}
 	selected := selectSkills(filtered, userText, len(filtered))
+	if config.CompactDiscovery {
+		var relevant []scoredSkill
+		for _, candidate := range selected {
+			if candidate.explicit || candidate.score > 0 || matchesCompactBuiltin(candidate.skill.Namespace, userText) {
+				relevant = append(relevant, candidate)
+			}
+		}
+		selected = relevant
+	}
 	prompt, included, issues := compilePrompt(selected, config.MaxPromptChars)
 	diagnostics = append(diagnostics, issues...)
 
@@ -98,6 +108,29 @@ func LoadAndCompile(config Config, userText string) Compilation {
 		Discovered:  len(all),
 		Diagnostics: diagnostics,
 	}
+}
+
+func matchesCompactBuiltin(namespace, userText string) bool {
+	query := strings.ToLower(userText)
+	var cues []string
+	switch namespace {
+	case "builtin:google-calendar":
+		cues = []string{"일정", "캘린더", "회의", "calendar", "schedule"}
+	case "builtin:google-gmail":
+		cues = []string{"메일", "받은 편지", "gmail", "email", "inbox"}
+	case "builtin:google-drive":
+		cues = []string{"드라이브", "구글 문서", "google drive", "google docs"}
+	case "builtin:wikipedia-search":
+		cues = []string{"위키", "wikipedia"}
+	case "builtin:python-calculator":
+		cues = []string{"계산", "며칠", "d-day", "calculate", "calculator"}
+	}
+	for _, cue := range cues {
+		if strings.Contains(query, cue) {
+			return true
+		}
+	}
+	return false
 }
 
 func withDefaults(config Config) Config {

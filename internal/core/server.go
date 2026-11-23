@@ -4687,7 +4687,18 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	if (hintJudge || translationTask) && !nativeAmbient {
 		llmMode = "standard"
 	}
-	if connectionID != "" || structuredGlassesRequest {
+	// The Gemma 4 chat template supports role messages and tool-call IDs through
+	// Chat Completions. Keep native multimodal input and ambient tasks on their
+	// existing routes, as well as every other model family.
+	_, nativeText := routedBody["input"].(string)
+	gemma4Chat := !glassesRequest && promptkit.IsGemma4ChatModel(rawModel) && (routedBody["input"] == nil || nativeText)
+	gemmaFromNative := gemma4Chat && llmMode == "stateful"
+	if gemma4Chat {
+		llmMode = "standard"
+		contextStrategy = normalizeContextStrategyForMode(llmMode, contextStrategy)
+	}
+	gemmaHasRoleHistory := false
+	if connectionID != "" || structuredGlassesRequest || gemma4Chat {
 		if err := normalizeConnectionPayload(routedBody, llmMode); err != nil {
 			http.Error(w, err.Error(), 400)
 			return
@@ -4699,6 +4710,31 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				// its supported reasoning mode instead of forcing reasoning off.
 				delete(routedBody, "reasoning")
 			}
+		}
+		if gemma4Chat {
+			delete(routedBody, "previous_response_id")
+			delete(routedBody, "reasoning")
+			if limit, ok := routedBody["max_output_tokens"]; ok {
+				if _, hasMax := routedBody["max_tokens"]; !hasMax && routedBody["max_completion_tokens"] == nil {
+					routedBody["max_tokens"] = limit
+				}
+				delete(routedBody, "max_output_tokens")
+			}
+			var fallback []chatharness.SessionTurnSnapshot
+			if glassesTurn.ChatSession {
+				fallback = chatharness.ParseGlassesChatHistory(glassesTurn.Context)
+				if len(fallback) > 0 && strings.TrimSpace(glassesTurn.Question) != "" {
+					messages, _ := routedBody["messages"].([]any)
+					if len(messages) > 0 {
+						messages[len(messages)-1] = map[string]any{"role": "user", "content": glassesTurn.Question}
+					}
+				}
+			} else if gemmaFromNative && !glassesChat && contextStrategy != "none" && statefulResetReason == "" && userID != "" {
+				if session, err := mcp.GetCurrentChatSession(userID); err == nil {
+					fallback = chatharness.ParseUISnapshot(session.UIStateJSON).Turns
+				}
+			}
+			gemmaHasRoleHistory = chatharness.PrepareGemma4History(routedBody, fallback)
 		}
 		body, _ = json.Marshal(routedBody)
 	}
@@ -4714,8 +4750,12 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		DisallowedDirectories: disallowedDirs,
 	}
 	var promptTools []promptkit.ToolDefinition
+	gemmaReadTools := map[string]bool{}
 	if enableTools {
 		for _, definition := range toolruntime.Default.List(toolExecCtx) {
+			if gemma4Chat && definition.Metadata.ReadOnly {
+				gemmaReadTools[definition.Name] = true
+			}
 			promptTools = append(promptTools, promptkit.ToolDefinition{
 				Name:        definition.Name,
 				Description: definition.Description,
@@ -4798,6 +4838,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			autoContext = autoContextDebug.Context
 		}
 		recentContext, recentContextTurns, recentContextSource = getRecentConversationContext(userID)
+		if gemmaHasRoleHistory {
+			recentContext, recentContextTurns, recentContextSource = "", 0, "role_history"
+		}
 		if hasPreviousResponseID {
 			recentContext = compactRecentTurnContent(recentContext, recentContextStatefulBudget)
 			recentContextSource += "+stateful_compact"
@@ -4854,7 +4897,10 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 	var skillCompilation skillkit.Compilation
 	if !glassesRequest {
-		skillCompilation = compileActiveSkills(initialUserInputText, promptTools)
+		if gemma4Chat {
+			promptTools = chatharness.Gemma4Tools(initialUserInputText, promptTools)
+		}
+		skillCompilation = compileChatSkills(initialUserInputText, gemma4Chat, promptTools)
 	}
 	selectedSkillNames := make([]string, 0, len(skillCompilation.Selected))
 	selectedSkillEvents := make([]map[string]string, 0, len(skillCompilation.Selected))
@@ -4920,6 +4966,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	}
 
 	preparedRequest, err := chatharness.PrepareRequest(chatharness.RequestInput{
+		Gemma4Chat:        gemma4Chat,
 		PromptProfile:     promptProfile,
 		HUDOutput:         glassesChat,
 		Body:              body,
@@ -5378,6 +5425,10 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		var lastToolCallID string
 		var lastSavedBufferForTurn string
 		chatToolCalls := chatharness.NewChatToolAccumulator()
+		var gemmaToolText string
+		gemmaToolCandidate := false
+		gemmaToolOverflow := false
+		gemmaProbePrefix := gemma4Chat && enableTools && len(promptTools) > 0
 
 		// Variables for tool execution (shared between Regex and JSON modes)
 		var toolName string
@@ -5584,6 +5635,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				if dataStr == "[DONE]" {
 					log.Println("[handleChat-DEBUG] [DONE] signal received (Standard)")
 					if enableTools && chatToolCalls.HasCalls() {
+						continue
+					}
+					if gemmaToolText != "" || gemmaToolOverflow {
 						continue
 					}
 					if enableTools && isBuffering && strings.TrimSpace(buffer) != "" {
@@ -6345,6 +6399,26 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 									})
 								}
 								if c, ok := delta["content"].(string); ok {
+									if gemmaProbePrefix {
+										if gemmaToolOverflow || len(gemmaToolText)+len(c) > 12000 && gemmaToolCandidate {
+											gemmaToolOverflow = true
+											continue
+										}
+										candidate := gemmaToolText + c
+										hold, definite := chatharness.GemmaToolTextPrefix(candidate, promptTools)
+										if hold && len(candidate) <= 12000 {
+											gemmaToolText, gemmaToolCandidate = candidate, definite
+											continue
+										}
+										gemmaProbePrefix = false
+										if gemmaToolText != "" {
+											c, gemmaToolText = candidate, ""
+											delta["content"] = c
+											if rebuilt, marshalErr := json.Marshal(chunk); marshalErr == nil {
+												line = "data: " + string(rebuilt)
+											}
+										}
+									}
 									if cleaned, changed := sanitizeLeakedModelChannelContent(c); changed {
 										if strings.TrimSpace(cleaned) == "" {
 											continue
@@ -6573,6 +6647,17 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			return
 		}
 
+		if !chatToolCalls.HasCalls() && (gemmaToolText != "" || gemmaToolOverflow) {
+			if name, args, ok := chatharness.ParseGemmaToolText(gemmaToolText); ok && !gemmaToolOverflow && gemmaReadTools[name] && isRegisteredPromptTool(name, promptTools) {
+				chatToolCalls.RecoverCall(chatharness.ProviderToolCall{ID: fmt.Sprintf("call_gemma_%d", turn), Name: name, Arguments: args})
+				AddDebugTrace("chat", "tool.recovered", "Recovered Gemma 4 text-form tool call", map[string]interface{}{"tool": name, "turn": turn})
+			} else if gemmaToolCandidate || gemmaToolOverflow {
+				needsCorrection = true
+				badContentCapture = compactText(gemmaToolText, 600)
+			} else {
+				emitCanonicalAssistantDelta(gemmaToolText)
+			}
+		}
 		if enableTools && chatToolCalls.HasCalls() {
 			calls := chatToolCalls.Calls()
 			if len(calls) > 0 {
@@ -6933,6 +7018,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			finalAnswerReference.ToolName = lastToolName
 			finalAnswerReference.ToolResult = result
 			reqMap, body, _ = chatharness.PrepareToolFollowupRequest(chatharness.ToolFollowupInput{
+				Gemma4Chat:                 gemma4Chat,
+				ToolReasoning:              reasoningResponse,
 				LLMMode:                    llmMode,
 				ModelID:                    modelID,
 				LastResponseID:             lastResponseID,

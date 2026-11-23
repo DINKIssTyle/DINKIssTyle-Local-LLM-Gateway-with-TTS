@@ -88,8 +88,9 @@ func AssembleRequest(body []byte) ([]byte, bool, error) {
 
 // ChatTurn keeps the user's question separate from reference text at the gateway.
 type ChatTurn struct {
-	Question string
-	Context  string
+	Question    string
+	Context     string
+	ChatSession bool
 }
 
 func AssembleRequestWithChatTurn(body []byte) ([]byte, bool, ChatTurn, error) {
@@ -200,7 +201,7 @@ func assembleRequest(body []byte, chat *ChatTurn) ([]byte, bool, error) {
 	case "chat":
 		set("glasses_chat", true)
 		if chat != nil {
-			*chat = ChatTurn{Question: req.Text, Context: req.Context}
+			*chat = ChatTurn{Question: req.Text, Context: req.Context, ChatSession: req.ChatSession}
 		}
 		concise := req.Concise == nil || *req.Concise
 		key = fmt.Sprintf("chat_%t", concise)
