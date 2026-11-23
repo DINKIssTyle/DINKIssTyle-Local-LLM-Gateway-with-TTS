@@ -37,17 +37,14 @@ type ManagedModelStatus struct {
 	ProgressText string  `json:"progressText,omitempty"`
 }
 
-var embeddingConfig = EmbeddingModelConfig{
-	Provider: "local",
-	ModelID:  "multilingual-e5-small",
-	Enabled:  true,
-}
+var embeddingConfig = defaultEmbeddingConfig()
 
 func defaultEmbeddingConfig() EmbeddingModelConfig {
 	return EmbeddingModelConfig{
-		Provider: "local",
-		ModelID:  "multilingual-e5-small",
-		Enabled:  true,
+		Provider:        "local",
+		ModelID:         jevModelID,
+		Enabled:         true,
+		UseJevDecisions: true,
 	}
 }
 
@@ -55,8 +52,9 @@ func normalizeEmbeddingConfig(cfg EmbeddingModelConfig) EmbeddingModelConfig {
 	if strings.TrimSpace(cfg.Provider) == "" {
 		cfg.Provider = "local"
 	}
-	if strings.TrimSpace(cfg.ModelID) == "" {
-		cfg.ModelID = "multilingual-e5-small"
+	switch strings.TrimSpace(cfg.ModelID) {
+	case "", "multilingual-e5-small":
+		cfg.ModelID = jevModelID
 	}
 	return cfg
 }
@@ -69,8 +67,6 @@ func getEmbeddingModelRequiredFiles(modelID string) []string {
 	switch strings.TrimSpace(modelID) {
 	case jevModelID:
 		return []string{jevModelFile}
-	case "multilingual-e5-small":
-		return []string{"model.onnx", "tokenizer.json", "config.json", "sentencepiece.bpe.model", "special_tokens_map.json"}
 	default:
 		return []string{"model.onnx"}
 	}
@@ -115,7 +111,7 @@ func getEmbeddingModelStatus(cfg EmbeddingModelConfig) ManagedModelStatus {
 		message = "Enabled in settings, but model files are not installed yet."
 	}
 
-	displayName, downloadURL := "Multilingual E5 Small", "https://huggingface.co/intfloat/multilingual-e5-small"
+	displayName, downloadURL := cfg.ModelID, ""
 	if cfg.ModelID == jevModelID {
 		displayName, downloadURL = "EmbeddingGemma 2 + JEV (local)", jevModelURL
 	}
@@ -136,7 +132,7 @@ func getEmbeddingModelStatus(cfg EmbeddingModelConfig) ManagedModelStatus {
 		Message:     message,
 		InstallDir:  installDir,
 		DownloadURL: downloadURL,
-		CanDownload: true,
+		CanDownload: cfg.ModelID == jevModelID,
 	}
 }
 
@@ -235,7 +231,6 @@ func (a *App) SetEmbeddingModelConfig(cfg EmbeddingModelConfig) error {
 func (a *App) GetManagedModels() []ManagedModelStatus {
 	items := []ManagedModelStatus{
 		getTTSModelStatus(),
-		getEmbeddingModelStatus(EmbeddingModelConfig{Provider: "local", ModelID: "multilingual-e5-small", Enabled: currentEmbeddingModelConfig().Enabled}),
 		getEmbeddingModelStatus(EmbeddingModelConfig{Provider: "local", ModelID: jevModelID, Enabled: currentEmbeddingModelConfig().Enabled}),
 		getSTTModelStatusFor(defaultSTTModelID),
 		getSTTModelStatusFor(mlxSTTModelID),
@@ -279,16 +274,8 @@ func (a *App) ExportEmbeddingModelManifest() (string, error) {
 	manifest := map[string]interface{}{
 		"provider":                  cfg.Provider,
 		"model_id":                  cfg.ModelID,
-		"download_url":              "https://huggingface.co/intfloat/multilingual-e5-small",
 		"required_files":            getEmbeddingModelRequiredFiles(cfg.ModelID),
 		"optional_wrapper_manifest": embeddingWrapperManifestName,
-		"download_files": map[string]string{
-			"config.json":             "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main/config.json",
-			"tokenizer.json":          "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main/tokenizer.json",
-			"sentencepiece.bpe.model": "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main/sentencepiece.bpe.model",
-			"special_tokens_map.json": "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main/special_tokens_map.json",
-			"model.onnx":              "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main/onnx/model.onnx",
-		},
 		"wrapper_example": map[string]interface{}{
 			"model_file":        embeddingWrapperModelName,
 			"input_name":        "text",

@@ -217,25 +217,8 @@ func (a *App) getManagedModelDownloadPlan(key string) (ManagedModelStatus, []Dow
 			}
 			return nil
 		}, nil
-	case "embedding:multilingual-e5-small":
-		cfg := EmbeddingModelConfig{Provider: "local", ModelID: "multilingual-e5-small", Enabled: true}
-		status := getEmbeddingModelStatus(cfg)
-		installDir := getEmbeddingModelInstallDir("multilingual-e5-small")
-		specs := []DownloadFileSpec{
-			{URL: "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main/config.json", DestPath: filepath.Join(installDir, "config.json"), Label: "config.json"},
-			{URL: "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main/tokenizer.json", DestPath: filepath.Join(installDir, "tokenizer.json"), Label: "tokenizer.json"},
-			{URL: "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main/sentencepiece.bpe.model", DestPath: filepath.Join(installDir, "sentencepiece.bpe.model"), Label: "sentencepiece.bpe.model"},
-			{URL: "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main/special_tokens_map.json", DestPath: filepath.Join(installDir, "special_tokens_map.json"), Label: "special_tokens_map.json"},
-			{URL: "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main/onnx/model.onnx", DestPath: filepath.Join(installDir, "model.onnx"), Label: "model.onnx"},
-		}
-		return status, specs, func() error {
-			if _, err := a.ExportEmbeddingModelManifest(); err != nil {
-				return err
-			}
-			return a.SetEmbeddingModelConfig(cfg)
-		}, nil
 	case "embedding:" + jevModelID:
-		cfg := EmbeddingModelConfig{Provider: "local", ModelID: jevModelID, Enabled: true}
+		cfg := defaultEmbeddingConfig()
 		status := getEmbeddingModelStatus(cfg)
 		installDir := getEmbeddingModelInstallDir(jevModelID)
 		specs := []DownloadFileSpec{{URL: jevModelURL + "/resolve/main/" + jevModelFile, DestPath: filepath.Join(installDir, jevModelFile), Label: jevModelFile}, {URL: jevModelURL + "/resolve/main/README.md", DestPath: filepath.Join(installDir, "README.md"), Label: "README.md"}}
@@ -243,6 +226,7 @@ func (a *App) getManagedModelDownloadPlan(key string) (ManagedModelStatus, []Dow
 			if err := installJevDependencies(); err != nil {
 				return err
 			}
+			cfg.UseJevDecisions = a.GetEmbeddingModelConfig().UseJevDecisions
 			if err := a.SetEmbeddingModelConfig(cfg); err != nil {
 				return err
 			}

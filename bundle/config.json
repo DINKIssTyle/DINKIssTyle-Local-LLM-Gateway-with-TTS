@@ -14,7 +14,8 @@
   },
   "embedding": {
     "provider": "local",
-    "modelId": "multilingual-e5-small",
+    "modelId": "embeddinggemma-2-440m",
+    "useJevDecisions": true,
     "enabled": true
   },
   "startOnBoot": false,

@@ -106,3 +106,19 @@ func TestJevRuntimeIntegration(t *testing.T) {
 		t.Fatal("closed worker accepted inference")
 	}
 }
+
+func TestLegacyEmbeddingConfigUsesGemma(t *testing.T) {
+	for _, model := range []string{"", "multilingual-e5-small", jevModelID} {
+		for _, enabled := range []bool{false, true} {
+			cfg := normalizeEmbeddingConfig(EmbeddingModelConfig{
+				ModelID: model, Enabled: enabled, UseJevDecisions: true,
+			})
+			if cfg.ModelID != jevModelID || cfg.Provider != "local" || cfg.Enabled != enabled || !cfg.UseJevDecisions {
+				t.Fatalf("unexpected normalized embedding config for %q: %+v", model, cfg)
+			}
+		}
+	}
+	if cfg := defaultEmbeddingConfig(); cfg.ModelID != jevModelID || !cfg.Enabled || !cfg.UseJevDecisions {
+		t.Fatalf("unexpected default embedding config: %+v", cfg)
+	}
+}

@@ -369,11 +369,7 @@ func (am *AuthManager) AddUser(id, password, role string) error {
 	enableMemory := true
 	defaultLLMMode := "stateful"
 	defaultContextStrategy := "retrieval"
-	defaultEmbeddingConfig := normalizeEmbeddingConfig(EmbeddingModelConfig{
-		Provider: "local",
-		ModelID:  "multilingual-e5-small",
-		Enabled:  true,
-	})
+	embeddingDefaults := defaultEmbeddingConfig()
 
 	am.users[id] = &User{
 		ID:           id,
@@ -385,7 +381,7 @@ func (am *AuthManager) AddUser(id, password, role string) error {
 			ContextStrategy: &defaultContextStrategy,
 			EnableTools:     &enableTools,
 			EnableMemory:    &enableMemory,
-			EmbeddingConfig: &defaultEmbeddingConfig,
+			EmbeddingConfig: &embeddingDefaults,
 			DisallowedCommands: []string{
 				"rm", "rmdir", "unlink", "dd", "mkfs", "mkfs.ext4", "mkfs.xfs", "mkfs.apfs",
 				"fsck", "fsck.ext4", "fsck.xfs", "fsck_apfs", "mount", "umount", "chmod", "chown", "chgrp",

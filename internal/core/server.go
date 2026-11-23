@@ -3167,6 +3167,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 					userEmbeddingCfg := *user.Settings.EmbeddingConfig
 					userEmbeddingCfg.ModelID = currentEmbeddingModelConfig().ModelID
 					userEmbeddingCfg.Provider = currentEmbeddingModelConfig().Provider
+					userEmbeddingCfg.UseJevDecisions = currentEmbeddingModelConfig().UseJevDecisions
 					resp["embedding_config"] = userEmbeddingCfg
 				}
 				if user.Settings.ApiToken != nil && *user.Settings.ApiToken != "" {

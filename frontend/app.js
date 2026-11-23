@@ -43,8 +43,8 @@ let config = {
     ttsThreads: 4,         // Default: 4
     enableEmbeddings: true,
     embeddingProvider: 'local',
-    embeddingModelId: 'multilingual-e5-small',
-    useJevDecisions: false,
+    embeddingModelId: 'embeddinggemma-2-440m',
+    useJevDecisions: true,
     osTtsVoiceURI: '',
     osTtsVoiceName: '',
     osTtsVoiceLang: '',
@@ -3252,7 +3252,6 @@ function loadConfig() {
     document.getElementById('cfg-tts-engine').value = config.ttsEngine || 'supertonic';
     document.getElementById('cfg-tts-lang').value = config.ttsLang;
     document.getElementById('cfg-enable-embeddings').checked = config.enableEmbeddings || false;
-    document.getElementById('cfg-embedding-model').value = config.embeddingModelId || 'multilingual-e5-small';
     const chunkSizeEl = document.getElementById('cfg-chunk-size');
     if (chunkSizeEl) chunkSizeEl.value = config.chunkSize || 300;
     document.getElementById('cfg-system-prompt').value = config.systemPrompt || 'You are a helpful AI assistant.';
@@ -3394,7 +3393,7 @@ function setupSettingsListeners() {
     });
 
     // Selects & Inputs: save on change
-    const autoSaveIds = ['cfg-api', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-os-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-context-strategy', 'cfg-show-reasoning-control', 'cfg-force-show-reasoning-control', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model', 'cfg-tts-engine', 'cfg-web-theme', 'cfg-streaming-scroll-mode', 'cfg-markdown-render-mode', 'cfg-auto-dismiss-mobile-keyboard', 'cfg-enable-haptics', 'cfg-embedding-model', 'cfg-mic-layout', 'cfg-stt-method', 'cfg-stt-continuous'];
+    const autoSaveIds = ['cfg-api', 'cfg-tts-lang', 'cfg-tts-voice', 'cfg-os-tts-voice', 'cfg-tts-format', 'cfg-chunk-size', 'cfg-system-prompt', 'cfg-llm-mode', 'cfg-context-strategy', 'cfg-show-reasoning-control', 'cfg-force-show-reasoning-control', 'cfg-stateful-turn-limit', 'cfg-stateful-char-budget', 'cfg-stateful-token-budget', 'cfg-secondary-model', 'cfg-tts-engine', 'cfg-web-theme', 'cfg-streaming-scroll-mode', 'cfg-markdown-render-mode', 'cfg-auto-dismiss-mobile-keyboard', 'cfg-enable-haptics', 'cfg-mic-layout', 'cfg-stt-method', 'cfg-stt-continuous'];
     autoSaveIds.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.onchange = () => saveConfig(false);
@@ -3553,7 +3552,6 @@ function saveConfig(closeModal = true) {
     config.ttsLang = document.getElementById('cfg-tts-lang').value;
     config.enableEmbeddings = document.getElementById('cfg-enable-embeddings').checked;
     config.embeddingProvider = 'local';
-    config.embeddingModelId = document.getElementById('cfg-embedding-model').value || 'multilingual-e5-small';
 
     // API Token handling - skip if element not present (web.html removed it)
     const apiTokenEl = document.getElementById('cfg-api-token');
@@ -5345,13 +5343,11 @@ async function syncServerConfig(options = {}) {
             if (serverCfg.embedding_config) {
                 const embeddingCfg = serverCfg.embedding_config;
                 config.embeddingProvider = embeddingCfg.provider || 'local';
-                config.embeddingModelId = embeddingCfg.modelId || 'multilingual-e5-small';
+                config.embeddingModelId = embeddingCfg.modelId || 'embeddinggemma-2-440m';
                 config.enableEmbeddings = embeddingCfg.enabled === true;
                 config.useJevDecisions = embeddingCfg.useJevDecisions === true;
                 const enabledEl = document.getElementById('cfg-enable-embeddings');
                 if (enabledEl) enabledEl.checked = config.enableEmbeddings;
-                const modelEl = document.getElementById('cfg-embedding-model');
-                if (modelEl) modelEl.value = config.embeddingModelId;
             }
             if (serverCfg.enable_tools !== undefined) {
                 config.enableTools = serverCfg.enable_tools ?? config.enableTools;

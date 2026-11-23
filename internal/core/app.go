@@ -366,7 +366,7 @@ func (a *App) loadConfig() {
 		return // Use defaults
 	}
 
-	var cfg AppConfig
+	cfg := AppConfig{Embedding: EmbeddingModelConfig{UseJevDecisions: defaultEmbeddingConfig().UseJevDecisions}}
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		fmt.Printf("Failed to parse config: %v\n", err)
 		return

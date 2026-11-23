@@ -11,7 +11,8 @@
       "enable_memory": true,
       "embedding_config": {
         "provider": "local",
-        "modelId": "multilingual-e5-small",
+        "modelId": "embeddinggemma-2-440m",
+        "useJevDecisions": true,
         "enabled": true
       }
     }

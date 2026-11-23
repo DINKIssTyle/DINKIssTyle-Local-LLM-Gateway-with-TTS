@@ -109,7 +109,7 @@ func GetModelsRootDir() string {
 func getEmbeddingModelInstallDir(modelID string) string {
 	modelID = filepath.Clean(modelID)
 	if modelID == "." || modelID == "" {
-		modelID = "multilingual-e5-small"
+		modelID = jevModelID
 	}
 	return filepath.Join(getWritableEmbeddingRootDir(), modelID)
 }
