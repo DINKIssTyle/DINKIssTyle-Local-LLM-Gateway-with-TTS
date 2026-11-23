@@ -5,8 +5,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"dinkisstyle-chat/internal/chatharness"
+	"dinkisstyle-chat/internal/mcp"
 )
 
 // Real request handler, not the JS UI fixture: exercise task assembly through
@@ -150,5 +154,108 @@ func TestInteractiveGlassesChatRoutesThroughWebRuntime(t *testing.T) {
 				t.Fatalf("calls=%d status=%d %s", calls, w.Code, w.Body.String())
 			}
 		})
+	}
+}
+
+func TestGlassesChatPreservesQuestionAfterToolExecution(t *testing.T) {
+	const question = "아까 정한 시간대로 현재 시각 알려줘"
+	const condition = "답변: 서울 시간 기준"
+	context := strings.Repeat("질문: 이전 주제\n답변: 이전 답변\n", 100) + condition
+	calls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var request struct {
+			Input              string `json:"input"`
+			PreviousResponseID string `json:"previous_response_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		if calls == 1 {
+			fmt.Fprint(w, "data: {\"type\":\"message.delta\",\"content\":\"<get_current_time>{}</get_current_time>\"}\n\ndata: [DONE]\n\n")
+			return
+		}
+		if request.PreviousResponseID != "" || !strings.Contains(request.Input, "Original user request:\n"+question+"\n\nPrior conversation") ||
+			!strings.Contains(request.Input, condition) || !strings.Contains(request.Input, "Tool: get_current_time\nResult:\n") {
+			t.Errorf("tool followup lost the question, reference, or tool result: %q", request.Input)
+		}
+		fmt.Fprint(w, "data: {\"type\":\"message.delta\",\"content\":\"서울 기준으로 답변했습니다.\"}\n\ndata: [DONE]\n\n")
+	}))
+	defer upstream.Close()
+	body, err := json.Marshal(map[string]any{"model": "test", "stream": true, "glasses_request": map[string]any{
+		"version": 1, "task": "chat", "chatSession": true, "text": question, "context": context,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	handleChat(w, httptest.NewRequest("POST", "/api/chat", strings.NewReader(string(body))), &App{llmEndpoint: upstream.URL, llmMode: "stateful", enableTools: true}, &AuthManager{users: map[string]*User{}})
+	if w.Code != http.StatusOK || calls != 2 || !strings.Contains(w.Body.String(), "서울 기준으로 답변했습니다.") {
+		t.Fatalf("status=%d calls=%d response=%s", w.Code, calls, w.Body.String())
+	}
+}
+
+func TestGlassesChatPersistsDistinctWebTurnsWithoutClientID(t *testing.T) {
+	if err := mcp.InitDB(filepath.Join(t.TempDir(), "glasses-chat.db")); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(mcp.CloseDB)
+	const userID = "glasses-chat-test"
+	const sourceContext = "이전 답변은 이번 질문에 표시하지 않아야 합니다."
+	questions := []string{"첫 번째 안경 질문", "두 번째 안경 질문"}
+	answers := []string{"첫 번째 안경 답변", "두 번째 안경 답변"}
+	calls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls >= len(answers) {
+			t.Error("unexpected model request")
+			return
+		}
+		answer := answers[calls]
+		calls++
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":%q}}]}\n\ndata: [DONE]\n\n", answer)
+	}))
+	defer upstream.Close()
+	app := &App{llmEndpoint: upstream.URL, llmMode: "standard"}
+	auth := &AuthManager{users: map[string]*User{userID: {ID: userID}}}
+	for _, question := range questions {
+		body, err := json.Marshal(map[string]any{"model": "test", "stream": true, "glasses_request": map[string]any{
+			"version": 1, "task": "chat", "chatSession": true, "text": question, "context": sourceContext,
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := httptest.NewRequest("POST", "/api/chat", strings.NewReader(string(body)))
+		r.Header.Set("X-User-ID", userID)
+		w := httptest.NewRecorder()
+		handleChat(w, r, app, auth)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status=%d response=%s", w.Code, w.Body.String())
+		}
+	}
+	session, err := mcp.GetCurrentChatSession(userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turns := chatharness.ParseUISnapshot(session.UIStateJSON).Turns
+	if len(turns) != 2 || turns[0].TurnID == turns[1].TurnID {
+		t.Fatalf("expected two separate turns: %+v", turns)
+	}
+	events, err := mcp.ListChatEvents(userID, session.ID, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := make(map[string]bool)
+	for _, event := range events {
+		if event.EventType == "request.complete" {
+			completed[event.TurnID] = true
+		}
+	}
+	for i, turn := range turns {
+		if turn.TurnID == "" || !completed[turn.TurnID] || turn.UserContent != questions[i] || turn.AssistantContent != answers[i] {
+			t.Fatalf("turn %d lost its question or answer: %+v", i, turn)
+		}
 	}
 }

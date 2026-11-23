@@ -62,11 +62,23 @@ func TestCalendarEvidencePreservesLateEventsAndCoverage(t *testing.T) {
 		})
 	}
 }
+
+func TestCalendarEvidenceShowsOnlyOccupiedAllDayDates(t *testing.T) {
+	out := CompactToolResult("google_calendar_read", `{"id":"event","summary":"세미나 (15:30)","start":{"date":"2026-11-24"},"end":{"date":"2026-11-25"}}`, "세미나는 언제?")
+	for _, want := range []string{`"all_day_start_date":"2026-11-24"`, `"all_day_last_date_inclusive":"2026-11-24"`, "세미나 (15:30)"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q: %s", want, out)
+		}
+	}
+	if strings.Contains(out, "2026-11-25") {
+		t.Fatalf("exclusive end date could be presented as an event day: %s", out)
+	}
+}
 func TestCalendarDetailAndListPreserveCompleteFields(t *testing.T) {
 	title := strings.Repeat("정확한 일정 제목", 300)
 	raw, _ := json.Marshal(map[string]any{"id": "event", "summary": title, "location": "장소", "start": map[string]string{"date": "2026-11-19"}, "end": map[string]string{"date": "2026-11-20"}})
 	out := CompactToolResult("google_calendar_read", string(raw), "일정 내용")
-	if !strings.Contains(out, title) || !strings.Contains(out, "2026-11-20") {
+	if !strings.Contains(out, title) || !strings.Contains(out, `"all_day_last_date_inclusive":"2026-11-19"`) {
 		t.Fatal("long title or all-day date truncated")
 	}
 	list, _ := json.Marshal(map[string]any{"items": []any{map[string]any{"id": "calendar", "summary": title, "timeZone": "Asia/Seoul"}}, "nextPageToken": "next"})

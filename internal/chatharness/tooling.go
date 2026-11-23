@@ -13,18 +13,15 @@ import (
 )
 
 func CompactToolResult(toolName, result, originalUserText string) string {
-	return compactToolResult(toolName, result, originalUserText, nil, nil, false, false, false)
+	return compactToolResult(toolName, result, originalUserText, "", nil, nil, false, false, false)
 }
 
-func compactToolResult(toolName, result, originalUserText string, completedTools, availableTools []string, nativeToolMode, finalAnswerOnly, requireFreshnessCrossCheck bool, hudOutput ...bool) string {
+func compactToolResult(toolName, result, originalUserText, referenceContext string, completedTools, availableTools []string, nativeToolMode, finalAnswerOnly, requireFreshnessCrossCheck bool, hudOutput ...bool) string {
 	result = strings.TrimSpace(result)
 	if result == "" {
 		result = "[empty]"
 	}
-	if isWebEvidenceToolName(toolName) {
-		result = annotateAmbiguousKoreanDayOnlyDates(result)
-	}
-	originalUserText = compactText(originalUserText, 600)
+	originalUserText = strings.TrimSpace(originalUserText)
 	if originalUserText == "" {
 		originalUserText = "[not available]"
 	}
@@ -67,14 +64,9 @@ func compactToolResult(toolName, result, originalUserText string, completedTools
 			requirements = append(requirements, "Invoke the next tool with exactly one tool-specific XML element whose body is its JSON arguments, and output no deliberation or prose.")
 		}
 	}
-	resultLimit := 1200
-	switch strings.TrimSpace(toolName) {
-	case "search_web", "search_web_multi", "naver_search":
-		resultLimit = 2400
-	}
-	formattedResult := compactText(result, resultLimit)
-	if calendar, ok := calendarEvidence(strings.TrimSpace(toolName), result); ok {
-		formattedResult = calendar
+	formattedResult, hasCalendarEvidence := formatToolEvidence(toolName, result)
+	if hasCalendarEvidence {
+		requirements = append(requirements, "For all-day events, display all_day_start_date through all_day_last_date_inclusive. Equal values mean one day. A raw end.date is an exclusive boundary. A time written in the title is not a structured start time. Report only the dates the user requested, excluding the query's time_max boundary.")
 		requirements = append(requirements, "Calendar evidence preserves all returned titles (summary), start/end times and locations. Answer from those fields directly; do not claim they were truncated. Only long descriptions may be shortened, with description_truncated:true. Report next_pages/calendars_failed as specific coverage gaps. If a requested detail is missing, read that event using its source calendar_id and id immediately rather than asking permission to finish the original request.")
 	}
 	if !finalAnswerOnly && !IsBulkToolTestRequest(originalUserText) && slices.Contains(availableTools, "google_calendar_search") {
@@ -96,7 +88,35 @@ func compactToolResult(toolName, result, originalUserText string, completedTools
 		}
 		requirements = append(requirements, promptkit.BuildHUDOutputInstructions())
 	}
-	return fmt.Sprintf("[APP TOOL RESULT — NOT A USER MESSAGE]\nOriginal user request:\n%s\n\nTool: %s\nResult:\n%s%s\n\nResponse requirements:\n- %s", originalUserText, toolName, formattedResult, progress, strings.Join(requirements, "\n- "))
+	return fmt.Sprintf("[APP TOOL RESULT — NOT A USER MESSAGE]\nOriginal user request:\n%s%s\n\nTool: %s\nResult:\n%s%s\n\nResponse requirements:\n- %s", originalUserText, followupReference(referenceContext), toolName, formattedResult, progress, strings.Join(requirements, "\n- "))
+}
+
+func formatToolEvidence(toolName, result string) (string, bool) {
+	toolName = strings.TrimSpace(toolName)
+	if calendar, ok := calendarEvidence(toolName, result); ok {
+		return calendar, true
+	}
+	if isWebEvidenceToolName(toolName) {
+		result = annotateAmbiguousKoreanDayOnlyDates(result)
+	}
+	limit := 1200
+	switch toolName {
+	case "search_web", "search_web_multi", "naver_search":
+		limit = 2400
+	}
+	return compactText(result, limit), false
+}
+
+func followupReference(context string) string {
+	context = strings.TrimSpace(context)
+	if context == "" {
+		return ""
+	}
+	const limit = 1200
+	if runes := []rune(context); len(runes) > limit {
+		context = "[Earlier text omitted]\n" + strings.TrimSpace(string(runes[len(runes)-limit:]))
+	}
+	return "\n\nPrior conversation (reference only, use only if needed to interpret the current request):\n" + context
 }
 
 var koreanDateMentionPattern = regexp.MustCompile(`(?:(\d{1,2})월\s*)?(\d{1,2})일`)
@@ -525,6 +545,7 @@ type ToolFollowupInput struct {
 	ToolCallID                 string
 	ToolArguments              string
 	OriginalUserText           string
+	ReferenceContext           string
 	CompletedTools             []string
 	AvailableTools             []string
 	FinalAnswerOnly            bool
@@ -538,7 +559,7 @@ func PrepareToolFollowupRequest(input ToolFollowupInput) (map[string]interface{}
 	if input.LLMMode == "stateful" {
 		reqMap = map[string]interface{}{
 			"model":  input.ModelID,
-			"input":  compactToolResult(input.ToolName, input.ToolResult, input.OriginalUserText, input.CompletedTools, input.AvailableTools, false, input.FinalAnswerOnly, input.RequireFreshnessCrossCheck, input.HUDOutput),
+			"input":  compactToolResult(input.ToolName, input.ToolResult, input.OriginalUserText, input.ReferenceContext, input.CompletedTools, input.AvailableTools, false, input.FinalAnswerOnly, input.RequireFreshnessCrossCheck, input.HUDOutput),
 			"stream": true,
 		}
 		if IsValidResponseID(input.LastResponseID) {
@@ -581,7 +602,7 @@ func PrepareToolFollowupRequest(input ToolFollowupInput) (map[string]interface{}
 			msgs = append(msgs, map[string]interface{}{
 				"role":         "tool",
 				"tool_call_id": strings.TrimSpace(input.ToolCallID),
-				"content":      compactToolResult(input.ToolName, input.ToolResult, input.OriginalUserText, input.CompletedTools, input.AvailableTools, true, input.FinalAnswerOnly, input.RequireFreshnessCrossCheck, input.HUDOutput),
+				"content":      compactToolResult(input.ToolName, input.ToolResult, input.OriginalUserText, "", input.CompletedTools, input.AvailableTools, true, input.FinalAnswerOnly, input.RequireFreshnessCrossCheck, input.HUDOutput),
 			})
 		} else {
 			msgs = append(msgs, map[string]interface{}{
@@ -590,7 +611,7 @@ func PrepareToolFollowupRequest(input ToolFollowupInput) (map[string]interface{}
 			})
 			msgs = append(msgs, map[string]interface{}{
 				"role":    "user",
-				"content": compactToolResult(input.ToolName, input.ToolResult, input.OriginalUserText, input.CompletedTools, input.AvailableTools, true, input.FinalAnswerOnly, input.RequireFreshnessCrossCheck, input.HUDOutput),
+				"content": compactToolResult(input.ToolName, input.ToolResult, input.OriginalUserText, "", input.CompletedTools, input.AvailableTools, true, input.FinalAnswerOnly, input.RequireFreshnessCrossCheck, input.HUDOutput),
 			})
 		}
 		reqMap["messages"] = msgs
@@ -611,11 +632,24 @@ func ReasoningContextForFinalAnswer(text string) string {
 	return string(runes[:limit/2]) + "\n[reasoning context omitted for length]\n" + string(runes[len(runes)-limit/2:])
 }
 
+type FinalAnswerReference struct {
+	Conversation string
+	ToolName     string
+	ToolResult   string
+}
+
 // PrepareReasoningOnlyFinalRequest performs one bounded recovery when a local
-// model spends the entire response budget in reasoning_content and emits no
-// user-visible answer. Reasoning and tools are disabled for the recovery turn.
-func PrepareReasoningOnlyFinalRequest(llmMode, modelID, lastResponseID, originalUserText, reasoningText string, reqMap map[string]interface{}) (map[string]interface{}, []byte, error) {
+// model spends the entire response budget in reasoning_content without answering.
+func PrepareReasoningOnlyFinalRequest(llmMode, modelID, originalUserText, reasoningText string, reqMap map[string]interface{}, reference FinalAnswerReference) (map[string]interface{}, []byte, error) {
 	summarizedEvidence := ReasoningContextForFinalAnswer(reasoningText)
+	background := ""
+	if llmMode == "stateful" {
+		background = followupReference(reference.Conversation)
+		if strings.TrimSpace(reference.ToolResult) != "" {
+			evidence, _ := formatToolEvidence(reference.ToolName, reference.ToolResult)
+			background += fmt.Sprintf("\n\nLatest tool evidence (%s):\n%s", reference.ToolName, evidence)
+		}
+	}
 	correction := fmt.Sprintf(`[APP FINAL-ANSWER RECOVERY — NOT A USER MESSAGE]
 Your previous attempt emitted hidden reasoning but was cut off before outputting the final visible answer.
 Return ONLY the clear, complete final answer to the original user request below.
@@ -623,10 +657,10 @@ Do not include hidden thinking, meta-commentary, or tool calls.
 Use the original conversation and actual tool evidence. The previous reasoning is an unfinished working note, not verified evidence. Produce your own final answer and do not copy its planning or draft labels.
 
 Original user request:
-%s
+%s%s
 
 Previous unfinished reasoning (context only):
-%s`, compactText(originalUserText, 600), summarizedEvidence)
+%s`, strings.TrimSpace(originalUserText), background, summarizedEvidence)
 
 	if strings.EqualFold(strings.TrimSpace(llmMode), "stateful") {
 		// Some LM Studio stateful models expose reasoning_content but reject a

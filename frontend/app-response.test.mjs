@@ -30,6 +30,17 @@ test('replayed SSE/poll events do not update the UI twice', () => {
     }
 });
 
+test('completion without a turn ID cannot overwrite the displayed answer', () => {
+    const source = readFileSync(new URL('./app.js', import.meta.url), 'utf8');
+    const start = source.indexOf('function applyCurrentChatSessionEvent(');
+    const end = source.indexOf('\nasync function ', start);
+    const context = { AppState: { session: { eventSeq: 42 } } };
+    runInNewContext(source.slice(start, end), context);
+    for (const EventType of ['chat.end', 'request.complete', 'generation.finished']) {
+        context.applyCurrentChatSessionEvent({ EventSeq: 43, EventType, TurnID: '', PayloadJSON: '{"final_assistant_content":"unassigned"}' });
+    }
+});
+
 test('TTS omits complete and unfinished reasoning before stripping HTML', () => {
     assert.equal(cleanTextForTTS('<think>비공개 추론입니다.</think><b>최종 답변입니다.</b>'), '최종 답변입니다.');
     assert.equal(cleanTextForTTS('<THINK>아직 추론 중입니다.'), '');

@@ -83,6 +83,22 @@ func glassesLanguage(code string) string {
 }
 
 func AssembleRequest(body []byte) ([]byte, bool, error) {
+	return assembleRequest(body, nil)
+}
+
+// ChatTurn keeps the user's question separate from reference text at the gateway.
+type ChatTurn struct {
+	Question string
+	Context  string
+}
+
+func AssembleRequestWithChatTurn(body []byte) ([]byte, bool, ChatTurn, error) {
+	var chat ChatTurn
+	assembled, handled, err := assembleRequest(body, &chat)
+	return assembled, handled, chat, err
+}
+
+func assembleRequest(body []byte, chat *ChatTurn) ([]byte, bool, error) {
 	var envelope map[string]json.RawMessage
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		return body, false, nil
@@ -183,6 +199,9 @@ func AssembleRequest(body []byte) ([]byte, bool, error) {
 		set("hint_research", researchRequest{TaskOriented: req.Plan.TaskOriented, Query: req.Plan.Question, SearchQuery: req.Plan.SearchQuery, Source: req.Plan.Source, Topic: req.Plan.Topic, Kind: values["kind"], Observed: req.Observed, Anchor: req.Anchor, AllowWeb: web, RequireGrounding: true})
 	case "chat":
 		set("glasses_chat", true)
+		if chat != nil {
+			*chat = ChatTurn{Question: req.Text, Context: req.Context}
+		}
 		concise := req.Concise == nil || *req.Concise
 		key = fmt.Sprintf("chat_%t", concise)
 		if req.ChatSession {

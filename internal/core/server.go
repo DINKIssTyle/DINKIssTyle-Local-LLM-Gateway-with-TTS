@@ -17,6 +17,7 @@ import (
 	"database/sql"
 	"dinkisstyle-chat/internal/chatharness"
 	"dinkisstyle-chat/internal/evenrealities"
+	"dinkisstyle-chat/internal/googleintegration"
 	"dinkisstyle-chat/internal/mcp"
 	"dinkisstyle-chat/internal/promptkit"
 	"dinkisstyle-chat/internal/skillkit"
@@ -4445,7 +4446,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	}
 	defer r.Body.Close()
 
-	body, structuredGlassesRequest, err := evenrealities.AssembleRequest(body)
+	body, structuredGlassesRequest, glassesTurn, err := evenrealities.AssembleRequestWithChatTurn(body)
 	if errors.Is(err, evenrealities.ErrUnresolvedTask) {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
@@ -4542,6 +4543,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	// Extract Client Location
 	locationInfo = r.Header.Get("X-User-Location")
 	clientTurnID := strings.TrimSpace(r.Header.Get("X-Client-Turn-Id"))
+	if glassesChat && clientTurnID == "" {
+		clientTurnID = "glasses-" + rand.Text()
+	}
 	requestContextStrategy := strings.TrimSpace(r.Header.Get("X-Context-Strategy"))
 	statefulTurnCount := strings.TrimSpace(r.Header.Get("X-Stateful-Turn-Count"))
 	statefulEstChars := strings.TrimSpace(r.Header.Get("X-Stateful-Est-Chars"))
@@ -4753,7 +4757,11 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	var reqMap map[string]interface{}
 	// Always unmarshal body into reqMap to prevent nil panics later in the turn loop
 	json.Unmarshal(body, &reqMap)
-	initialUserInputText := extractChatInputText(reqMap)
+	renderedUserInput := extractChatInputText(reqMap)
+	initialUserInputText := strings.TrimSpace(glassesTurn.Question)
+	if initialUserInputText == "" {
+		initialUserInputText = renderedUserInput
+	}
 	incomingPreviousResponseID := extractStringValue(reqMap, []string{"previous_response_id"})
 	if llmMode == "stateful" && incomingPreviousResponseID != "" && !chatharness.IsValidResponseID(incomingPreviousResponseID) {
 		delete(reqMap, "previous_response_id")
@@ -4915,6 +4923,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		PromptProfile:     promptProfile,
 		HUDOutput:         glassesChat,
 		Body:              body,
+		CurrentUserText:   glassesTurn.Question,
 		EndpointRaw:       endpointRaw,
 		TokenRaw:          tokenRaw,
 		LLMMode:           llmMode,
@@ -5046,8 +5055,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			sessionLastResponseID = ""
 		}
 		if llmMode == "stateful" && statefulResetReason == "" {
-			projectedChars := statefulEstimatedCharsValue + len([]rune(strings.TrimSpace(initialUserInputText)))
-			projectedTokens := statefulLastInputTokensValue + estimateStatefulTokens(initialUserInputText)
+			projectedChars := statefulEstimatedCharsValue + len([]rune(renderedUserInput))
+			projectedTokens := statefulLastInputTokensValue + estimateStatefulTokens(renderedUserInput)
 			shouldCompact := statefulTurnCountValue >= serverStatefulTurnLimitValue ||
 				projectedChars >= serverStatefulCharBudgetValue ||
 				projectedTokens >= serverStatefulTokenBudgetValue ||
@@ -5108,7 +5117,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			statefulTurnCountValue,
 			statefulEstimatedCharsValue,
 			statefulLastInputTokensValue,
-			initialUserInputText,
+			renderedUserInput,
 			serverStatefulTurnLimitValue,
 			serverStatefulCharBudgetValue,
 			serverStatefulTokenBudgetValue,
@@ -5223,7 +5232,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			"estimatedChars": parseIntHeader(statefulEstChars),
 		})
 	}
-	if messages, ok := reqMap["messages"].([]interface{}); ok {
+	if question := strings.TrimSpace(glassesTurn.Question); question != "" {
+		appendChatEvent("user", "message.created", map[string]interface{}{"content": question})
+	} else if messages, ok := reqMap["messages"].([]interface{}); ok {
 		for i := len(messages) - 1; i >= 0; i-- {
 			msg, ok := messages[i].(map[string]interface{})
 			if !ok {
@@ -5277,6 +5288,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	// Shared turn-state variables
 	fullResponse := ""
 	var messagesForMemory []map[string]interface{}
+	finalAnswerReference := chatharness.FinalAnswerReference{Conversation: glassesTurn.Context}
 	needsCorrection := false
 	var badContentCapture string
 	var lastResponseID string // Captured from chat.end for stateful chaining
@@ -5507,7 +5519,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		var bufferingThreshold = 8000 // Buffer size (increased for large JSON args)
 
 		// Extract messages for Memory Analysis (if enabled)
-		if enableMemory {
+		if enableMemory && strings.TrimSpace(glassesTurn.Question) != "" {
+			messagesForMemory = []map[string]interface{}{{"role": "user", "content": initialUserInputText}}
+		} else if enableMemory {
 			log.Printf("[handleChat-DEBUG] Request Body Snippet: %s", string(body)[:min(len(body), 500)])
 
 			var tmpBody struct {
@@ -6712,6 +6726,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			if refinedArgsJSON, refined := chatharness.RefineExactLookupToolArguments(lastToolName, lastToolArgsStr, initialUserInputText); refined {
 				lastToolArgsStr = refinedArgsJSON
 			}
+			if lastToolName == "google_calendar_search" {
+				lastToolArgsStr = googleintegration.RepairWeekdaySearch(initialUserInputText, lastToolArgsStr)
+			}
 
 			if lastToolArgsStr != rawToolArgumentsForEvent {
 				var repairedArgs interface{}
@@ -6913,6 +6930,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			finalAnswerOnly := false
 			requireFreshnessCrossCheck := false
 			singleSearchRefinement := false
+			finalAnswerReference.ToolName = lastToolName
+			finalAnswerReference.ToolResult = result
 			reqMap, body, _ = chatharness.PrepareToolFollowupRequest(chatharness.ToolFollowupInput{
 				LLMMode:                    llmMode,
 				ModelID:                    modelID,
@@ -6925,6 +6944,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				ToolCallID:                 lastToolCallID,
 				ToolArguments:              lastToolArgsStr,
 				OriginalUserText:           initialUserInputText,
+				ReferenceContext:           glassesTurn.Context,
 				CompletedTools:             completedToolNames(promptTools, toolUsageCounts),
 				AvailableTools:             availableToolNames(promptTools),
 				FinalAnswerOnly:            finalAnswerOnly,
@@ -6936,6 +6956,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				"turn":                  turn,
 				"tool":                  lastToolName,
 				"body_bytes":            len(body),
+				"question_chars":        len([]rune(initialUserInputText)),
+				"has_previous_response": chatharness.IsValidResponseID(lastResponseID),
 				"final_only":            finalAnswerOnly,
 				"freshness_cross_check": requireFreshnessCrossCheck,
 			})
@@ -6947,7 +6969,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			if llmMode == "stateful" {
 				reqMap = map[string]interface{}{
 					"model":       modelID,
-					"input":       correctionPrompt,
+					"input":       correctionPrompt + "\n\nOriginal user request:\n" + initialUserInputText,
 					"stream":      true,
 					"temperature": 0.1,
 				}
@@ -6981,7 +7003,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			reasoningOnlyFinalRecoveryUsed = true
 			var recoveryErr error
 			reqMap, body, recoveryErr = chatharness.PrepareReasoningOnlyFinalRequest(
-				llmMode, modelID, lastResponseID, initialUserInputText, reasoningResponse, reqMap,
+				llmMode, modelID, initialUserInputText, reasoningResponse, reqMap, finalAnswerReference,
 			)
 			if recoveryErr == nil {
 				if llmMode == "stateful" {
@@ -7036,10 +7058,10 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	if llmMode == "stateful" {
 		if strings.TrimSpace(fullResponse) != "" || strings.TrimSpace(sessionLastResponseID) != "" {
 			statefulTurnCountValue += 1
-			statefulEstimatedCharsValue += len([]rune(strings.TrimSpace(initialUserInputText))) + len([]rune(strings.TrimSpace(fullResponse)))
+			statefulEstimatedCharsValue += len([]rune(renderedUserInput)) + len([]rune(strings.TrimSpace(fullResponse)))
 		}
 		if statefulLastInputTokensValue <= 0 {
-			statefulLastInputTokensValue = estimateStatefulTokens(initialUserInputText) + estimateStatefulTokens(statefulSummaryText)
+			statefulLastInputTokensValue = estimateStatefulTokens(renderedUserInput) + estimateStatefulTokens(statefulSummaryText)
 		}
 		if statefulLastOutputTokensValue <= 0 {
 			statefulLastOutputTokensValue = estimateStatefulTokens(fullResponse)

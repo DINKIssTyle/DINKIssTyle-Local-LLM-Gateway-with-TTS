@@ -97,6 +97,38 @@ func TestCalendarSearchIncludesSubscriptionsAndReportsPartialResults(t *testing.
 	}
 }
 
+func TestWednesdaySearchExcludesTuesdayAllDayEvent(t *testing.T) {
+	var args Arguments
+	raw := RepairWeekdaySearch("수요일 일정 확인", `{}`)
+	if err := json.Unmarshal([]byte(raw), &args); err != nil || args.Period != "wednesday" {
+		t.Fatalf("wrong weekday arguments: %s (%v)", raw, err)
+	}
+	args.TimeZone = "Asia/Seoul"
+	min, max, err := calendarRange(args, time.Date(2026, 11, 23, 11, 52, 0, 0, time.UTC))
+	if err != nil || min != "2026-11-25T00:00:00+09:00" || max != "2026-11-26T00:00:00+09:00" {
+		t.Fatalf("wrong Wednesday range: %s to %s (%v)", min, max, err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/calendar/v3/calendars/shared/events" || r.URL.Query().Get("timeMin") != min || r.URL.Query().Get("timeMax") != max {
+			t.Errorf("wrong calendar request: %s", r.URL)
+		}
+		io.WriteString(w, `{"items":[{"id":"tuesday","start":{"date":"2026-11-24"},"end":{"date":"2026-11-25"}},{"id":"two-days","start":{"date":"2026-11-24"},"end":{"date":"2026-11-26"}},{"id":"wednesday","start":{"date":"2026-11-25"},"end":{"date":"2026-11-26"}},{"id":"thursday","start":{"date":"2026-11-26"},"end":{"date":"2026-11-27"}}],"nextPageToken":"more"}`)
+	}))
+	defer server.Close()
+	m := New(t.TempDir())
+	m.apiBase = server.URL
+	m.records = map[string]record{"alice": {Settings: Settings{Services: []string{"calendar"}}, AccessToken: "token", RefreshToken: "refresh", Expiry: time.Now().Add(time.Hour), Scopes: strings.Join(serviceScopes["calendar"], " ")}}
+	args.CalendarID, args.TimeMin, args.TimeMax = "shared", min, max
+	body, _ := json.Marshal(args)
+	out, err := m.Execute(context.Background(), "alice", "google_calendar_search", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, `"id":"tuesday"`) || strings.Contains(out, `"id":"thursday"`) || !strings.Contains(out, `"id":"wednesday"`) || !strings.Contains(out, `"id":"two-days"`) || !strings.Contains(out, `"nextPageToken":"more"`) {
+		t.Fatalf("wrong all-day events or missing continuation: %s", out)
+	}
+}
+
 func TestExplicitCalendarSearchStaysScopedAndPaginates(t *testing.T) {
 	for _, calendar := range []string{"primary", "shared"} {
 		t.Run(calendar, func(t *testing.T) {

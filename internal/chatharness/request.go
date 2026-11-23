@@ -16,6 +16,7 @@ type RequestInput struct {
 	HUDOutput         bool
 	PromptProfile     string
 	Body              []byte
+	CurrentUserText   string
 	EndpointRaw       string
 	TokenRaw          string
 	LLMMode           string
@@ -96,7 +97,10 @@ func PrepareRequest(input RequestInput) (PreparedRequest, error) {
 		return prepared, nil
 	}
 	prepared.ReqMap = reqMap
-	prepared.InitialUserInputText = extractChatInputText(reqMap)
+	prepared.InitialUserInputText = strings.TrimSpace(input.CurrentUserText)
+	if prepared.InitialUserInputText == "" {
+		prepared.InitialUserInputText = extractChatInputText(reqMap)
+	}
 	prepared.IsStatefulFollowup = isStatefulFollowup(input.LLMMode, contextStrategy, reqMap)
 	removedLegacyIntegration := removeLegacyMCPIntegration(reqMap)
 	removedProviderTools := removeProviderToolControls(reqMap)

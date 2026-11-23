@@ -28,7 +28,7 @@ func registerGoogleTools(r *Registry) {
 	calendar["time_min"] = str("Optional inclusive range start, RFC3339 with timezone offset. Omit for the selected period.")
 	calendar["time_max"] = str("Optional exclusive range end, RFC3339 with timezone offset. Defaults to 7 days after start.")
 	calendar["time_zone"] = str("Optional IANA time zone, e.g. Asia/Seoul. Defaults to the primary calendar time zone for all-calendar searches, or the selected calendar time zone.")
-	calendar["period"] = map[string]any{"type": "string", "enum": []string{"upcoming", "today", "tomorrow", "this_week", "next_week"}, "description": "Relative date range resolved by the server. Default upcoming: next 7 days. Use today/tomorrow for 오늘/내일. Weeks start Monday. Explicit timestamps override period."}
+	calendar["period"] = map[string]any{"type": "string", "enum": []string{"upcoming", "today", "tomorrow", "this_week", "next_week", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}, "description": "Relative date range resolved by the server. Default upcoming: next 7 days. Use today/tomorrow for 오늘/내일 and a weekday (e.g. wednesday for 수요일) for the next occurrence of that day, including today. Weeks start Monday. For a specific date or a weekday in a specified week, use explicit timestamps."}
 	specs := []spec{
 		{"gmail_search", "Get recent email or search this account's connected Gmail. Call with {} for the latest 10 inbox messages. Returns sender, subject, date and snippets; use gmail_read only for full body details.", nil, gmail},
 		{"gmail_read", "Read a Gmail message body by ID returned by gmail_search. Attachments are not read.", []string{"id"}, map[string]any{"id": str("Message ID from gmail_search")}},

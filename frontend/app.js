@@ -4355,7 +4355,10 @@ function applyCurrentChatSessionEvent(entry) {
     }
 
     const sessionId = entry.SessionID || 'default';
-    const entryTurnId = entry.TurnID || payload.turn_id || '';
+    const entryTurnId = String(entry.TurnID || payload.turn_id || '').trim();
+    // Older clients left some completion events unassigned. They cannot update
+    // whichever turn happens to be visible when they are replayed.
+    if (!entryTurnId && ['chat.end', 'request.complete', 'generation.finished'].includes(entry.EventType)) return;
     const isLocalActiveTurn = isActiveLocalTurn(entryTurnId);
     const isPassiveRunning = !isLocalActiveTurn && isPassiveServerSession(AppState.session.currentCache);
 
@@ -4742,7 +4745,7 @@ function applyCurrentChatSessionEvent(entry) {
                 cleanupTrailingEmptyAssistantMessages();
                 break;
             }
-            const resolvedTurnId = entryTurnId || AppState.session.replay.currentTurnId || `server-turn-${sessionId}-${entry.EventSeq}`;
+            const resolvedTurnId = entryTurnId;
             const currentAssistantTurnId = String(
                 document.getElementById(AppState.session.replay.currentAssistantId || '')?.dataset?.turnId || ''
             ).trim();

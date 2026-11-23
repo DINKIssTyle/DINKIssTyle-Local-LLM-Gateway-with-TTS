@@ -1,10 +1,45 @@
 package googleintegration
 
 import (
+	"encoding/json"
 	"fmt"
+	"regexp"
+	"strings"
 	"time"
 	_ "time/tzdata" // Calendar zones must also resolve on systems without zoneinfo.
 )
+
+var singleWeekdaySchedule = regexp.MustCompile(`^(?:(?:다가오는|오는)\s*)?([일월화수목금토])요일(?:에는|에|은|는)?(?:\s*(?:(?:내|제)\s*)?일정(?:을|은|이)?(?:\s*(?:확인(?:해\s*줘|해\s*주세요)?|알려\s*(?:줘|주세요)|뭐야|있어))?)?[\s?!.]*$`)
+
+// RepairWeekdaySearch narrows a calendar call for an unambiguous weekday-only
+// question. Explicit dates, ranges and pagination retain their own parameters.
+func RepairWeekdaySearch(question, raw string) string {
+	match := singleWeekdaySchedule.FindStringSubmatch(strings.TrimSpace(question))
+	if match == nil {
+		return raw
+	}
+	var args Arguments
+	if json.Unmarshal([]byte(raw), &args) != nil || args.PageToken != "" || args.TimeMin != "" || args.TimeMax != "" {
+		return raw
+	}
+	day := strings.Index("일월화수목금토", match[1]) / len("일")
+	period := strings.ToLower(time.Weekday(day).String())
+	if args.Period == period {
+		return raw
+	}
+	args.Period = period
+	b, _ := json.Marshal(args)
+	return string(b)
+}
+
+func weekdayPeriod(period string) (time.Weekday, bool) {
+	for weekday := time.Sunday; weekday <= time.Saturday; weekday++ {
+		if strings.EqualFold(weekday.String(), period) {
+			return weekday, true
+		}
+	}
+	return 0, false
+}
 
 func calendarRange(a Arguments, now time.Time) (string, string, error) {
 	startText, endText := a.TimeMin, a.TimeMax
@@ -33,7 +68,13 @@ func calendarRange(a Arguments, now time.Time) (string, string, error) {
 			}
 			end = start.AddDate(0, 0, 7)
 		default:
-			return "", "", fmt.Errorf("unknown calendar period")
+			weekday, ok := weekdayPeriod(a.Period)
+			if !ok {
+				return "", "", fmt.Errorf("unknown calendar period")
+			}
+			daysAhead := (int(weekday) - int(midnight.Weekday()) + 7) % 7
+			start = midnight.AddDate(0, 0, daysAhead)
+			end = start.AddDate(0, 0, 1)
 		}
 		if startText == "" {
 			startText = start.Format(time.RFC3339)

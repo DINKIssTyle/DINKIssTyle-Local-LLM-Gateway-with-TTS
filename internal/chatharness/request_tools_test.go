@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"dinkisstyle-chat/internal/evenrealities"
 	"dinkisstyle-chat/internal/promptkit"
 	"dinkisstyle-chat/internal/toolruntime"
 )
@@ -639,8 +640,56 @@ func TestFinalAnswerOnlyFollowupRemovesNativeTools(t *testing.T) {
 	}
 }
 
+func TestGlassesToolFollowupUsesCurrentQuestionWithoutPreviousResponse(t *testing.T) {
+	for _, tc := range []struct {
+		tool, question, pastTopic, evidence string
+	}{
+		{"search_web", "피클 AI 데스크톱 웹 지원 확인", "미니어처 말", "피클 웹 지원 안내"},
+		{"google_calendar_search", "아까 정한 조건으로 내일 일정 확인", "정부 인사", "모의 일정 결과"},
+		{"gmail_search", "이메일 체크", "정부 인사", "모의 메일 결과"},
+	} {
+		t.Run(tc.tool, func(t *testing.T) {
+			const condition = "질문: 앞서 정한 일정 조건\n답변: 오후 2시 이후"
+			const oldMarker = "오래된 대화 시작"
+			context := oldMarker + strings.Repeat("\n질문: "+tc.pastTopic+"\n답변: 이전 내용", 100) + "\n" + condition
+			raw, err := json.Marshal(map[string]any{"glasses_request": map[string]any{
+				"version": 1, "task": "chat", "chatSession": true, "text": tc.question, "context": context,
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, handled, turn, err := evenrealities.AssembleRequestWithChatTurn(raw)
+			if err != nil || !handled || turn.Question != tc.question || turn.Context != context {
+				t.Fatalf("assembly lost the original turn: handled=%v err=%v", handled, err)
+			}
+			prepared, err := PrepareRequest(RequestInput{Body: body, LLMMode: "stateful", HUDOutput: true, CurrentUserText: turn.Question})
+			if err != nil {
+				t.Fatal(err)
+			}
+			followup, _, err := PrepareToolFollowupRequest(ToolFollowupInput{
+				LLMMode: "stateful", ToolName: tc.tool, ToolResult: tc.evidence,
+				OriginalUserText: prepared.InitialUserInputText, ReferenceContext: turn.Context, ReqMap: prepared.ReqMap,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, exists := followup["previous_response_id"]; exists {
+				t.Fatal("test requires an unlinked tool followup")
+			}
+			payload := followup["input"].(string)
+			if !strings.Contains(payload, "Original user request:\n"+tc.question+"\n\nPrior conversation") ||
+				!strings.Contains(payload, condition) || !strings.Contains(payload, "Result:\n"+tc.evidence) || strings.Contains(payload, oldMarker) {
+				t.Fatalf("followup mixed up the question, reference, or evidence: %s", payload)
+			}
+		})
+	}
+}
+
 func TestReasoningOnlyFinalRecoveryDisablesReasoningAndTools(t *testing.T) {
-	stateful, _, err := PrepareReasoningOnlyFinalRequest("stateful", "qwen", "resp_123", "이영애 자녀", "쌍둥이 아들과 딸이라는 검색 근거", nil)
+	question := strings.Repeat("질문의 조건 ", 120) + "마지막 조건"
+	stateful, _, err := PrepareReasoningOnlyFinalRequest("stateful", "qwen", question, "답변 초안", nil, FinalAnswerReference{
+		Conversation: "앞서 합의한 선호 시간", ToolName: "google_calendar_search", ToolResult: "모의 일정 결과",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -649,13 +698,13 @@ func TestReasoningOnlyFinalRecoveryDisablesReasoningAndTools(t *testing.T) {
 	}
 	messages := stateful["messages"].([]interface{})
 	content := messages[len(messages)-1].(map[string]interface{})["content"].(string)
-	if !strings.Contains(content, "이영애 자녀") || !strings.Contains(content, "쌍둥이 아들과 딸") {
+	if !strings.Contains(content, question) || !strings.Contains(content, "앞서 합의한 선호 시간") || !strings.Contains(content, "모의 일정 결과") {
 		t.Fatalf("stateful recovery lost the original request: %#v", stateful)
 	}
 
-	standard, _, err := PrepareReasoningOnlyFinalRequest("standard", "qwen", "", "이영애 자녀", "검색 근거", map[string]interface{}{
+	standard, _, err := PrepareReasoningOnlyFinalRequest("standard", "qwen", "이영애 자녀", "검색 근거", map[string]interface{}{
 		"model": "qwen", "messages": []interface{}{}, "tools": []interface{}{map[string]interface{}{"type": "function"}},
-	})
+	}, FinalAnswerReference{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,6 +3,7 @@ package chatharness
 import (
 	"encoding/json"
 	"strings"
+	"time"
 )
 
 // Calendar results are structured evidence. Cutting the serialized JSON at a
@@ -62,6 +63,19 @@ func calendarFields(input map[string]json.RawMessage, keys []string) map[string]
 }
 func calendarEventEvidence(event map[string]json.RawMessage) map[string]json.RawMessage {
 	out := calendarFields(event, []string{"id", "summary", "start", "end", "location", "htmlLink", "status", "calendar_id", "calendar_name", "description", "organizer", "recurringEventId", "originalStartTime", "eventType", "transparency", "visibility"})
+	var start, end struct {
+		Date string `json:"date"`
+	}
+	if json.Unmarshal(out["start"], &start) == nil && json.Unmarshal(out["end"], &end) == nil && start.Date != "" && end.Date != "" {
+		first, firstErr := time.Parse(time.DateOnly, start.Date)
+		until, untilErr := time.Parse(time.DateOnly, end.Date)
+		if firstErr == nil && untilErr == nil && until.After(first) {
+			out["all_day_start_date"], _ = json.Marshal(start.Date)
+			out["all_day_last_date_inclusive"], _ = json.Marshal(until.AddDate(0, 0, -1).Format(time.DateOnly))
+			delete(out, "start")
+			delete(out, "end")
+		}
+	}
 	if raw, ok := out["description"]; ok {
 		var description string
 		if json.Unmarshal(raw, &description) == nil {

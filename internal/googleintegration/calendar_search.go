@@ -165,3 +165,38 @@ func eventStart(event map[string]any, loc *time.Location) time.Time {
 	}
 	return time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC)
 }
+
+// Date-only events should overlap the requested local interval on their civil
+// dates, even if Google matched them using another calendar's time zone.
+func filterAllDayEvents(result map[string]any, a Arguments) {
+	items, ok := result["items"].([]any)
+	if !ok {
+		return
+	}
+	min, minErr := time.Parse(time.RFC3339, a.TimeMin)
+	max, maxErr := time.Parse(time.RFC3339, a.TimeMax)
+	if minErr != nil || maxErr != nil {
+		return
+	}
+	loc := min.Location()
+	if a.TimeZone != "" {
+		if zone, err := time.LoadLocation(a.TimeZone); err == nil {
+			loc = zone
+		}
+	}
+	kept := items[:0]
+	for _, item := range items {
+		event, _ := item.(map[string]any)
+		start, _ := event["start"].(map[string]any)
+		end, _ := event["end"].(map[string]any)
+		startDate, _ := start["date"].(string)
+		endDate, _ := end["date"].(string)
+		from, fromErr := time.ParseInLocation(time.DateOnly, startDate, loc)
+		until, untilErr := time.ParseInLocation(time.DateOnly, endDate, loc)
+		if fromErr == nil && untilErr == nil && until.After(from) && (!until.After(min) || !from.Before(max)) {
+			continue
+		}
+		kept = append(kept, item)
+	}
+	result["items"] = kept
+}

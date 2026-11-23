@@ -220,8 +220,8 @@ func (m *Manager) Execute(ctx context.Context, user, name string, args json.RawM
 			}
 			path += "/" + url.PathEscape(a.ID)
 		} else {
-			if a.Period != "" && a.Period != "upcoming" && a.Period != "today" && a.Period != "tomorrow" && a.Period != "this_week" && a.Period != "next_week" {
-				return "", fmt.Errorf("unknown calendar period; use upcoming, today, tomorrow, this_week or next_week")
+			if _, weekday := weekdayPeriod(a.Period); !weekday && a.Period != "" && a.Period != "upcoming" && a.Period != "today" && a.Period != "tomorrow" && a.Period != "this_week" && a.Period != "next_week" {
+				return "", fmt.Errorf("unknown calendar period; use upcoming, today, tomorrow, this_week, next_week or a weekday")
 			}
 			if a.TimeMin == "" || a.TimeMax == "" {
 				if a.TimeZone == "" {
@@ -267,6 +267,7 @@ func (m *Manager) Execute(ctx context.Context, user, name string, args json.RawM
 			if err = json.Unmarshal(b, &result); err != nil {
 				return "", err
 			}
+			filterAllDayEvents(result, a)
 			result["effective_range"] = map[string]string{"time_min": a.TimeMin, "time_max": a.TimeMax, "time_zone": a.TimeZone, "calendar_id": id}
 			return resultJSON(result)
 		}
