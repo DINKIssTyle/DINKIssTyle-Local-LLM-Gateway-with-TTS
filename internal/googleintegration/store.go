@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 var serviceScopes = map[string][]string{
@@ -28,6 +29,7 @@ type Settings struct {
 type Status struct {
 	ClientID           string   `json:"client_id"`
 	HasClientSecret    bool     `json:"has_client_secret"`
+	ClientSecretLength int      `json:"client_secret_length,omitempty"`
 	Services           []string `json:"services"`
 	AuthorizedServices []string `json:"authorized_services"`
 	Connected          bool     `json:"connected"`
@@ -190,7 +192,7 @@ func (m *Manager) Status(user string) (Status, error) {
 		return Status{}, err
 	}
 	r := m.records[user]
-	s := Status{ClientID: r.Settings.ClientID, HasClientSecret: r.Settings.ClientSecret != "", Services: append([]string{}, r.Settings.Services...), AuthorizedServices: []string{}, Connected: r.RefreshToken != "", Email: r.Email, Pending: m.pending[user] != nil, Message: m.messages[user]}
+	s := Status{ClientID: r.Settings.ClientID, HasClientSecret: r.Settings.ClientSecret != "", ClientSecretLength: utf8.RuneCountInString(r.Settings.ClientSecret), Services: append([]string{}, r.Settings.Services...), AuthorizedServices: []string{}, Connected: r.RefreshToken != "", Email: r.Email, Pending: m.pending[user] != nil, Message: m.messages[user]}
 	for _, service := range []string{"gmail", "drive", "calendar"} {
 		if authorized(r, service) {
 			s.AuthorizedServices = append(s.AuthorizedServices, service)

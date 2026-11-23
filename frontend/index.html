@@ -345,6 +345,21 @@
             font-size: 14px;
         }
 
+        .form-group input[data-configured-secret="true"]:placeholder-shown {
+            /* Match WebKit's password dots while keeping the input value empty. */
+            --password-dot-start: 12px;
+            --password-dot-spacing: 9px;
+            --password-dot-end: calc(var(--password-dot-start) + var(--password-dot-count, 12) * var(--password-dot-spacing));
+            background:
+                linear-gradient(to right, var(--bg-color) var(--password-dot-start), transparent var(--password-dot-start) var(--password-dot-end), var(--bg-color) var(--password-dot-end)),
+                radial-gradient(circle, var(--text-color) 2.85px, transparent 3.3px) var(--password-dot-start) center / var(--password-dot-spacing) 8px repeat-x,
+                var(--bg-color);
+        }
+
+        .form-group input[data-configured-secret="true"]::placeholder {
+            color: transparent;
+        }
+
         .form-group input:focus {
             outline: none;
             border-color: var(--accent-color);
@@ -1272,8 +1287,8 @@
             }
         }
     </style>
-    <script src="llm-connection-ui.js?v=2.23.0"></script>
-    <script src="google-integration-ui.js?v=1"></script>
+    <script src="llm-connection-ui.js?v=2.23.2"></script>
+    <script src="google-integration-ui.js?v=3"></script>
 </head>
 
 <body>

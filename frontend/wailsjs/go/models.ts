@@ -94,6 +94,7 @@ export namespace core {
 	    manage_models: boolean;
 	    api_key?: string;
 	    has_api_key?: boolean;
+	    api_key_length?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new LLMConnection(source);
@@ -108,6 +109,7 @@ export namespace core {
 	        this.manage_models = source["manage_models"];
 	        this.api_key = source["api_key"];
 	        this.has_api_key = source["has_api_key"];
+	        this.api_key_length = source["api_key_length"];
 	    }
 	}
 	export class LLMConnectionUpdate {
@@ -296,6 +298,7 @@ export namespace googleintegration {
 	export class Status {
 	    client_id: string;
 	    has_client_secret: boolean;
+	    client_secret_length?: number;
 	    services: string[];
 	    authorized_services: string[];
 	    connected: boolean;
@@ -311,6 +314,7 @@ export namespace googleintegration {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.client_id = source["client_id"];
 	        this.has_client_secret = source["has_client_secret"];
+	        this.client_secret_length = source["client_secret_length"];
 	        this.services = source["services"];
 	        this.authorized_services = source["authorized_services"];
 	        this.connected = source["connected"];

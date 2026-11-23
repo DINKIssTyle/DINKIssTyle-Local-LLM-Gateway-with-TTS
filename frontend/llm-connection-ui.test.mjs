@@ -3,7 +3,7 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
 class Element {
- constructor(tag){this.tag=tag;this.children=[];this.style={};this.dataset={};this.value='';this.checked=false;}
+ constructor(tag){this.tag=tag;this.children=[];this.style={setProperty(name,value){this[name]=value;}};this.dataset={};this.value='';this.checked=false;}
  appendChild(child){this.children.push(child);return child;}
  append(...children){this.children.push(...children);}
  replaceChildren(...children){this.children=[...children];}
@@ -14,11 +14,11 @@ class Element {
 const elements=(root,tag)=>root.children.flatMap(child=>child && typeof child==='object'?[...(child.tag===tag?[child]:[]),...elements(child,tag)]:[]);
 function setup(lang='ko'){const created=[],window={},document={documentElement:{lang},createElement:tag=>{const e=new Element(tag);created.push(e);return e;},createTextNode:text=>({textContent:text,children:[]}),querySelectorAll:selector=>created.filter(e=>({ '[data-llm-i18n]':e.dataset.llmI18n,'[data-llm-placeholder]':e.dataset.llmPlaceholder,'[data-llm-title]':e.dataset.llmTitle })[selector])};vm.runInNewContext(readFileSync(new URL('./llm-connection-ui.js',import.meta.url),'utf8'),{window,document,crypto:{randomUUID:()=> 'new-connection'}});return {document,ui:window.DKSTConnectionUI,root:new Element('div'),editor:Object.assign(new Element('div'),{ids:{'#llm-connection-editor':new Element('div'),'#llm-connection-edit-title':new Element('div'),'#llm-connection-editor-save':new Element('button')}})};}
 test('compact list opens one editor; preserves keys when omitted and persists multiple connections',async()=>{
- const {ui,root,editor}=setup();let rows=[{id:'first',name:'First',endpoint:'https://one.example/v1',mode:'standard',has_api_key:true},{id:'second',name:'Second',endpoint:'https://two.example/v1',mode:'standard'}],saved=[];
+ const {ui,root,editor}=setup();let rows=[{id:'first',name:'First',endpoint:'https://one.example/v1',mode:'standard',has_api_key:true,api_key_length:35},{id:'second',name:'Second',endpoint:'https://two.example/v1',mode:'standard'}],saved=[];
  await ui.mountConnections(root,{editor,load:async()=>rows,save:async next=>{saved.push(next);rows=next;}});
  assert.equal(elements(root,'input').length,0,'list must not expand every connection form');assert.equal(root.children[0].children.length,2);
  root.children[0].children[0].children[0].onclick();assert.equal(editor.style.display,'flex');
- let inputs=elements(editor.ids['#llm-connection-editor'],'input');assert.equal(inputs.find(i=>i.type==='password').value,'');assert.match(inputs.find(i=>i.type==='password').placeholder,/등록됨/);
+ let inputs=elements(editor.ids['#llm-connection-editor'],'input');assert.equal(inputs.find(i=>i.type==='password').value,'');assert.match(inputs.find(i=>i.type==='password').placeholder,/^•+$/);assert.equal(inputs.find(i=>i.type==='password').style['--password-dot-count'],35);
  inputs[0].value='Renamed';await root.saveConnectionEditor();assert.equal(saved[0][0].name,'Renamed');assert.equal(Object.hasOwn(saved[0][0],'api_key'),false,'blank edit never clears a stored key');assert.equal(saved[0].length,2);assert.equal(editor.style.display,'none');
  root.addConnection();inputs=elements(editor.ids['#llm-connection-editor'],'input');inputs[0].value='Third';inputs[1].value='https://three.example/v1';inputs.find(i=>i.type==='password').value='new-secret';await root.saveConnectionEditor();assert.equal(rows.length,3);assert.equal(rows[2].api_key,'new-secret');assert.equal(rows[2].name,'Third');
 });

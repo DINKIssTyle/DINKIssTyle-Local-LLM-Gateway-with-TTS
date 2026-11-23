@@ -77,7 +77,7 @@ func TestLLMConnectionCatalogIsolation(t *testing.T) {
 
 	}
 	public := app.GetLLMConnections()
-	if public[0].APIKey != "" || !public[0].HasAPIKey {
+	if public[0].APIKey != "" || !public[0].HasAPIKey || public[0].APIKeyLength != len("server-default-secret") {
 		t.Fatal("desktop read disclosed key or lost status")
 	}
 }

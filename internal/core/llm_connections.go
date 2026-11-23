@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 type LLMConnection struct {
@@ -23,6 +24,7 @@ type LLMConnection struct {
 	ManageModels bool   `json:"manage_models"`
 	APIKey       string `json:"api_key,omitempty"`
 	HasAPIKey    bool   `json:"has_api_key,omitempty"`
+	APIKeyLength int    `json:"api_key_length,omitempty"`
 }
 type LLMConnectionUpdate struct {
 	ID           string  `json:"id"`
@@ -60,6 +62,7 @@ func (a *App) GetLLMConnections() []LLMConnection {
 	result := append([]LLMConnection{}, a.llmConnections...)
 	for i := range result {
 		result[i].HasAPIKey = result[i].APIKey != ""
+		result[i].APIKeyLength = utf8.RuneCountInString(result[i].APIKey)
 		result[i].APIKey = ""
 	}
 	return result
@@ -139,7 +142,9 @@ func (a *App) GetUserLLMConnections(userID string) ([]LLMConnection, error) {
 	}
 	for i := range rows {
 		rows[i].Endpoint = ""
-		rows[i].HasAPIKey = user.Settings.LLMAPIKeys[rows[i].ID] != ""
+		key := user.Settings.LLMAPIKeys[rows[i].ID]
+		rows[i].HasAPIKey = key != ""
+		rows[i].APIKeyLength = utf8.RuneCountInString(key)
 	}
 	return rows, nil
 }

@@ -41,7 +41,12 @@
    disconnect.disabled = busy || (!status.connected && !status.pending);
   }
   function setBusy(value) { busy=value; [...Object.values(checks),clientID,secret,...buttons].forEach(e=>e.disabled=value); if(status)showStatus(); buttons.forEach(b=>b.style.opacity=b.disabled?'0.5':'1'); }
-  async function refresh() { const next=await api.GetUserGoogleStatus(userId); if(!active)return; status=next; showStatus(); }
+  async function refresh() { const next=await api.GetUserGoogleStatus(userId); if(!active)return; status=next;
+   const length=status.client_secret_length;
+   secret.style.setProperty('--password-dot-count',Number.isSafeInteger(length) && length>0?length:12);
+   secret.placeholder=status.has_client_secret?'••••••••••••':'';
+   secret.setAttribute('data-configured-secret',String(!!status.has_client_secret));
+   showStatus(); }
   async function save() {
    if (!active || !status) throw new Error(tr('Google 설정을 먼저 불러와야 합니다.','Google settings must finish loading first.'));
    await api.SetUserGoogleSettings(userId,{client_id:clientID.value.trim(),client_secret:secret.value.trim(),services:services()});
@@ -60,7 +65,7 @@
   try {
    await refresh();if(!active)return;
    clientID.value=status.client_id || '';Object.entries(checks).forEach(([k,input])=>input.checked=status.services.includes(k));
-   details.open=!status.client_id;secret.placeholder=status.has_client_secret?tr('등록됨 · 비워 두면 유지','Configured · leave blank to keep'):'';
+   details.open=!status.client_id;
    root.saveGoogleSettings=async()=>{if(busy)throw new Error(tr('Google 작업이 진행 중입니다. 잠시 후 저장하세요.','A Google operation is in progress. Save again when it finishes.'));await runSave();};
    async function runSave(){setBusy(true);try{await save();}finally{if(active)setBusy(false);}}
    setBusy(false);schedule();
