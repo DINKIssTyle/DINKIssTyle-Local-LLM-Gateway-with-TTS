@@ -105,7 +105,7 @@ func (c *Controller) Call(ctx context.Context, owner, action string, req Request
 	}
 	if action != "launch_app" && action != "switch_app" {
 		last := c.last
-		if last.id == "" || last.id != req.ObservationID || last.owner != owner || time.Since(last.at) > time.Minute {
+		if last.id == "" || last.id != req.ObservationID || last.owner != owner || time.Since(last.at) > 5*time.Minute {
 			return Output{}, fmt.Errorf("missing, expired or consumed observation_id; call computer_observe before input")
 		}
 		if action == "click" {

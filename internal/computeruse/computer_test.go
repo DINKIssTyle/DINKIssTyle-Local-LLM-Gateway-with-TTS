@@ -80,7 +80,7 @@ func TestObservationExpiryAndReplacement(t *testing.T) {
 	if _, err := c.Call(context.Background(), "chat", "type", Request{ObservationID: old, Text: "한글"}); err == nil {
 		t.Fatal("old capture accepted")
 	}
-	c.last.at = time.Now().Add(-2 * time.Minute)
+	c.last.at = time.Now().Add(-6 * time.Minute)
 	if _, err := c.Call(context.Background(), "chat", "type", Request{ObservationID: id, Text: "한글"}); err == nil {
 		t.Fatal("expired capture accepted")
 	}

@@ -186,14 +186,82 @@ func IsFreshnessSensitiveWebRequest(text string) bool {
 	return false
 }
 
-// IsUnfulfilledWeatherLookup identifies a search promise that ended the turn.
-func IsUnfulfilledWeatherLookup(question, answer string) bool {
-	question, answer = strings.ToLower(question), strings.ToLower(answer)
-	if !strings.Contains(question, "날씨") || strings.ContainsAny(answer, "?？") {
+var lookupPromiseCues = []string{
+	"잠시만 기다려", "검색하겠", "검색해 보겠", "검색해보겠", "검색을 진행", "검색해 드리", "검색해드리", "검색하여 답변", "검색해서 답변",
+	"확인하겠", "확인해 보겠", "확인해보겠", "확인해 드리", "확인해드리", "알아보겠", "알아봐 드리", "알아봐드리",
+	"찾아보겠", "찾아 보겠", "찾아드리", "찾아 드리", "조회하겠", "조회해 드리", "조회해드리",
+	"i'll check", "i will check", "let me check", "i'll search", "i will search", "let me search", "i'll look", "let me look",
+}
+
+func hasLookupPromise(answer string) bool {
+	for _, cue := range lookupPromiseCues {
+		if strings.Contains(answer, cue) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsUnfulfilledLookupPromise identifies a short reply that only announces a
+// lookup ("검색하겠습니다") and ends the turn without calling any tool.
+func IsUnfulfilledLookupPromise(answer string) bool {
+	answer = strings.ToLower(strings.TrimSpace(answer))
+	if answer == "" || strings.ContainsAny(answer, "?？") || len([]rune(answer)) > 240 {
 		return false
 	}
-	return strings.Contains(answer, "잠시만 기다려") &&
-		(strings.Contains(answer, "확인해 드리겠습니다") || strings.Contains(answer, "확인해드리겠습니다") || strings.Contains(answer, "검색하겠습니다"))
+	return hasLookupPromise(answer)
+}
+
+// IsUnsearchedRefusal identifies a reply where the model gave up or pushed
+// clarification back to the user ("명확하지 않아 확인하기 어렵습니다. 알려주시면
+// 검색하여 답변드리겠습니다") without ever running a web search first.
+func IsUnsearchedRefusal(question, answer string) bool {
+	q := strings.ToLower(strings.TrimSpace(question))
+	a := strings.ToLower(strings.TrimSpace(answer))
+	if len([]rune(q)) < 4 || a == "" || len([]rune(a)) > 450 {
+		return false
+	}
+	// Preserve genuine location clarifications for bare weather questions.
+	if (strings.Contains(q, "날씨") || strings.Contains(q, "weather")) && strings.ContainsAny(a, "?？") {
+		for _, loc := range []string{"지역", "어디", "위치", "도시", "which city", "where", "location"} {
+			if strings.Contains(a, loc) {
+				return false
+			}
+		}
+	}
+	for _, cue := range []string{
+		"확인되지 않", "확인하기 어렵", "확인할 수 없", "파악하기 어렵", "파악할 수 없",
+		"정확한 정보를 알 수 없", "알 수 없습니다", "정보가 없", "정보를 찾을 수 없",
+		"명확하지 않", "알려주시면 검색", "알려주시면 찾아", "알려주시면 확인",
+		"구체적인 작품명", "어떤 작품",
+		"cannot verify", "cannot confirm", "don't have information", "do not have information",
+		"unable to verify", "not clear which", "please specify which",
+	} {
+		if strings.Contains(a, cue) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsUnfulfilledWeatherLookup identifies a weather reply produced without any
+// lookup: a promise, or an answer from stale memory/offer to search. Weather is
+// always time-sensitive, so only a genuine location clarification is kept.
+func IsUnfulfilledWeatherLookup(question, answer string) bool {
+	question, answer = strings.ToLower(question), strings.ToLower(answer)
+	if !strings.Contains(question, "날씨") && !strings.Contains(question, "weather") {
+		return false
+	}
+	if hasLookupPromise(answer) && !strings.ContainsAny(answer, "?？") {
+		return true
+	}
+	// Answers built from remembered/stale data or merely offering to search.
+	for _, cue := range []string{"이전에 저장된", "저장된 정보", "기억에 따르면", "이전 정보", "검색하여 다시", "검색해 드릴 수", "검색해드릴 수", "직접 검색", "previously saved", "i can search"} {
+		if strings.Contains(answer, cue) {
+			return true
+		}
+	}
+	return false
 }
 
 func asksForNews(text string) bool {

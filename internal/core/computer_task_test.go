@@ -226,7 +226,7 @@ func TestIndependentVerificationRejectsGenericCompletion(t *testing.T) {
 			last = payload["task"].(chatharness.DesktopTask)
 		}
 	})
-	if verifies != 2 || last.Status == "completed" || last.Steps[0].Status == "completed" || !strings.Contains(answer, "중단") {
+	if verifies != 4 || last.Status == "completed" || last.Steps[0].Status == "completed" || !strings.Contains(answer, "중단") {
 		t.Fatalf("generic claim completed task: verifies=%d state=%+v answer=%s", verifies, last, answer)
 	}
 }

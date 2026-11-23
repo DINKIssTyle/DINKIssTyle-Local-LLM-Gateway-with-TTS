@@ -6825,12 +6825,19 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				emitCanonicalAssistantDelta(gemmaToolText)
 			}
 		}
-		// Recover a weather lookup when the model only promised to search.
-		// Preserve genuine clarification questions and any actual tool call.
+		if promised := chatharness.IsUnfulfilledLookupPromise(fullResponse) || chatharness.IsUnfulfilledWeatherLookup(initialUserInputText, fullResponse) || chatharness.IsUnsearchedRefusal(initialUserInputText, fullResponse); promised || gemmaToolText != "" {
+			log.Printf("[lookup-recovery] turn=%d promised=%v mode=%s tools=%v glasses=%v executed=%v calls=%v needsCorrection=%v usage=%d search_web=%v gemmaText=%q resp=%q",
+				turn, promised, llmMode, enableTools, glassesRequest, toolExecutedThisTurn, chatToolCalls.HasCalls(), needsCorrection, len(toolUsageCounts),
+				isRegisteredPromptTool("search_web", promptTools), compactText(gemmaToolText, 200), compactText(fullResponse, 200))
+		}
+		// Recover a web lookup when the model only promised to search or gave up
+		// without searching first. Preserve genuine location clarifications.
 		if llmMode != "stateful" && enableTools && !glassesRequest && !toolExecutedThisTurn &&
 			!chatToolCalls.HasCalls() && !needsCorrection && len(toolUsageCounts) == 0 &&
 			isRegisteredPromptTool("search_web", promptTools) &&
 			(chatharness.IsUnfulfilledWeatherLookup(initialUserInputText, fullResponse) ||
+				chatharness.IsUnfulfilledLookupPromise(fullResponse) ||
+				chatharness.IsUnsearchedRefusal(initialUserInputText, fullResponse) ||
 				(weatherCoordinates != "" && isBareForecastRequest(weatherQuestion) && strings.Contains(weatherQuestion, "내일") && strings.Contains(fullResponse, "지역"))) {
 			query := initialUserInputText
 			if weatherCoordinates != "" && isBareForecastRequest(weatherQuestion) {
@@ -6841,7 +6848,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				ID: fmt.Sprintf("call_weather_%d", turn), Name: "search_web", Arguments: string(args),
 			})
 			fullResponse = ""
-			AddDebugTrace("chat", "weather.lookup_recovered", "Ran search after an unfulfilled weather lookup promise", nil)
+			AddDebugTrace("chat", "weather.lookup_recovered", "Ran search after an unfulfilled lookup promise", map[string]interface{}{"query": query})
 		}
 		if enableTools && chatToolCalls.HasCalls() {
 			calls := chatToolCalls.Calls()

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"slices"
 	"sort"
@@ -60,7 +61,7 @@ func (m desktopTaskModel) structured(ctx context.Context, phase, prompt string, 
 		payload["chat_template_kwargs"] = map[string]any{"enable_thinking": false}
 	}
 	if phase == "route" {
-		payload["max_tokens"] = 256
+		payload["max_tokens"] = 600
 	}
 	body, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(m.endpoint, "/")+"/v1/chat/completions", bytes.NewReader(body))
@@ -72,7 +73,17 @@ func (m desktopTaskModel) structured(ctx context.Context, phase, prompt string, 
 	if m.token != "" {
 		req.Header.Set("Authorization", "Bearer "+m.token)
 	}
-	resp, err := (&http.Client{Timeout: 60 * time.Second}).Do(req)
+	// Local vision models routinely need well over a minute to prefill a
+	// full-screen screenshot plus the task state; 60s aborted most reviews.
+	timeout := 60 * time.Second
+	if len(images) > 0 || phase == "review" || phase == "verify" {
+		timeout = 240 * time.Second
+	}
+	started := time.Now()
+	resp, err := (&http.Client{Timeout: timeout}).Do(req)
+	defer func() {
+		log.Printf("[desktop-task] phase=%s images=%d elapsed=%s err=%v", phase, len(images), time.Since(started).Round(time.Millisecond), err)
+	}()
 	if err != nil {
 		return err
 	}
@@ -110,7 +121,59 @@ func (m desktopTaskModel) structured(ctx context.Context, phase, prompt string, 
 			controlJSON = candidate
 		}
 	}
-	return json.Unmarshal([]byte(controlJSON), out)
+	controlJSON = stripJSONFence(controlJSON)
+	if err = json.Unmarshal([]byte(controlJSON), out); err != nil {
+		err = fmt.Errorf("task %s returned invalid JSON (%v): %s", phase, err, compactText(controlJSON, 400))
+	}
+	return err
+}
+
+// Some servers ignore response_format and wrap the object in a code fence.
+func stripJSONFence(s string) string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "```") {
+		s = strings.TrimPrefix(s, "```json")
+		s = strings.TrimPrefix(s, "```")
+		s = strings.TrimSuffix(strings.TrimSpace(s), "```")
+	}
+	return strings.TrimSpace(s)
+}
+
+// Logs every desktop task event to the terminal as well as the (optional,
+// in-memory) debug trace so failures can be diagnosed after the fact.
+func desktopTrace(stage, message string, details map[string]any) {
+	raw, _ := json.Marshal(details)
+	log.Printf("[desktop-task] %s: %s %s", stage, message, compactText(string(raw), 1500))
+	AddDebugTrace("chat", stage, message, details)
+}
+
+func normalizeEvidence(s string) string {
+	return strings.Join(strings.Fields(strings.Trim(strings.TrimSpace(s), "\"'“”‘’「」.?!")), " ")
+}
+
+func evidenceInQuestion(question, evidence string) bool {
+	e := normalizeEvidence(evidence)
+	return e != "" && strings.Contains(strings.Join(strings.Fields(question), " "), e)
+}
+
+// Returns the observation_id of the latest successful observe if no input
+// has consumed it since.
+func latestObservationID(receipts []chatharness.DesktopReceipt) string {
+	for i := len(receipts) - 1; i >= 0; i-- {
+		r := receipts[i]
+		if r.Tool != "computer_observe" {
+			return ""
+		}
+		if !r.Success {
+			continue
+		}
+		var obs struct {
+			ObservationID string `json:"observation_id"`
+		}
+		_ = json.Unmarshal([]byte(r.Result), &obs)
+		return obs.ObservationID
+	}
+	return ""
 }
 
 func taskObject(properties map[string]any) map[string]any {
@@ -149,14 +212,20 @@ func (m desktopTaskModel) routeIntent(ctx context.Context, question, history str
 Examples: "내일 아침 날씨" -> chat; "컴퓨터 유즈 설명해줘" -> chat; "사파리 사용법 알려줘" -> chat; "사파리 열어줘" -> desktop; "LM Studio에서 다운로드 중인 작업이 얼마나 진행됐는지 확인해봐" -> desktop; "현재 화면 내용이 뭐야" -> desktop.` + "\nCurrent request:\n" + question + "\nRecent conversation (reference only):\n" + history
 	prompt += "\nFor desktop, target_application is the canonical running app name explicitly requested (e.g. Google Chrome), or empty for the current screen. text_input_evidence is empty for any status/content inspection. Only when the user explicitly asks to enter, fill, search within, or write text in a desktop field, quote the exact current instruction authorizing that input; do not infer typing permission from plans, navigation, viewing tabs or checking progress. Never type narration, thoughts or instructions to yourself."
 	if err := m.structured(ctx, "route", prompt, schema, nil, &route); err != nil {
-		AddDebugTrace("chat", "task.route_error", "Desktop routing unavailable; keeping ordinary chat", map[string]any{"error": err.Error()})
+		desktopTrace("task.route_error", "Desktop routing unavailable; keeping ordinary chat", map[string]any{"error": err.Error()})
 		return desktopIntent{}
 	}
-	AddDebugTrace("chat", "task.routed", "Classified current request independently of desktop planning", map[string]any{"mode": route.Mode, "evidence": route.RequestEvidence})
-	if route.Mode != "desktop" || strings.TrimSpace(route.RequestEvidence) == "" || !strings.Contains(question, strings.TrimSpace(route.RequestEvidence)) {
+	desktopTrace("task.routed", "Classified current request independently of desktop planning", map[string]any{"mode": route.Mode, "evidence": route.RequestEvidence})
+	if route.Mode != "desktop" {
 		return desktopIntent{}
 	}
-	if strings.TrimSpace(route.TextInputEvidence) == "" || !strings.Contains(question, strings.TrimSpace(route.TextInputEvidence)) {
+	// Models often paraphrase or trim the quote slightly; an explicit desktop
+	// cue in the request is enough evidence that the classification is grounded.
+	if !evidenceInQuestion(question, route.RequestEvidence) && !desktopInputCandidate(question) {
+		desktopTrace("task.route_rejected", "Desktop route evidence not found in request", map[string]any{"evidence": route.RequestEvidence})
+		return desktopIntent{}
+	}
+	if !evidenceInQuestion(question, route.TextInputEvidence) {
 		route.TextInputEvidence = ""
 	}
 	return route
@@ -260,6 +329,14 @@ func desktopReviewSchema(tools []promptkit.ToolDefinition, task chatharness.Desk
 				properties, _ := args["properties"].(map[string]any)
 				if pid, ok := properties["pid"].(map[string]any); ok {
 					pid["enum"] = desktopObservedPIDs(receipts)
+				}
+			}
+			// Pin the one-use token so the model cannot hallucinate or mistype it.
+			if properties, ok := args["properties"].(map[string]any); ok {
+				if obs, ok := properties["observation_id"].(map[string]any); ok {
+					if id := latestObservationID(receipts); id != "" {
+						obs["enum"] = []string{id}
+					}
 				}
 			}
 			variants = append(variants, variant("continue", stepFields, tool.Name, args))
@@ -422,7 +499,7 @@ func runDesktopTask(ctx context.Context, m desktopTaskModel, question, history s
 ` + goalContext
 	var task chatharness.DesktopTask
 	if err := m.structured(ctx, "plan", planPrompt, desktopPlanSchema(), nil, &task); err != nil {
-		AddDebugTrace("chat", "task.plan_error", "Could not establish a desktop task plan", map[string]any{"error": err.Error()})
+		desktopTrace("task.plan_error", "Could not establish a desktop task plan", map[string]any{"error": err.Error()})
 		return true, "작업 계획을 만들지 못해 실행을 시작하지 못했습니다. 모델의 구조화 응답 설정을 확인해 주세요."
 	}
 	if !task.DesktopRequired {
@@ -439,6 +516,7 @@ func runDesktopTask(ctx context.Context, m desktopTaskModel, question, history s
 	var images []string
 	catalogJSON, _ := json.Marshal(catalog)
 	validation := ""
+	rejections := 0
 	failures := map[int]int{}
 	for action := 0; action <= 32; {
 		if ctx.Err() != nil {
@@ -483,6 +561,9 @@ func runDesktopTask(ctx context.Context, m desktopTaskModel, question, history s
 				}
 			}
 		}
+		if err == nil && decision.Outcome == "completed" {
+			decision.Answer = mergeFindingsIntoAnswer(decision.Answer, decision.Findings)
+		}
 		if err == nil {
 			candidate := task
 			err = candidate.Apply(decision, receipts, legal)
@@ -494,18 +575,20 @@ func runDesktopTask(ctx context.Context, m desktopTaskModel, question, history s
 			}
 		}
 		if err != nil {
-			AddDebugTrace("chat", "task.review_rejected", "Rejected a task state proposal", map[string]any{"error": err.Error(), "proposal": decision})
-			if validation != "" {
+			desktopTrace("task.review_rejected", "Rejected a task state proposal", map[string]any{"error": err.Error(), "proposal": decision})
+			rejections++
+			if rejections >= 4 {
 				task.Status = "blocked"
 				task.Reason = "작업 상태를 검증하지 못해 중단했습니다. 완료로 처리하지 않았습니다."
 				progress()
-				AddDebugTrace("chat", "task.review_error", "Task review failed validation twice", map[string]any{"error": err.Error()})
+				desktopTrace("task.review_error", "Task review failed validation repeatedly", map[string]any{"error": err.Error()})
 				return true, task.Reason
 			}
 			validation = err.Error()
 			continue
 		}
 		validation = ""
+		rejections = 0
 		progress()
 		if decision.Outcome != "continue" {
 			return true, decision.Answer
@@ -517,6 +600,16 @@ func runDesktopTask(ctx context.Context, m desktopTaskModel, question, history s
 			return true, task.Reason
 		}
 		args := decision.Arguments
+		if id := latestObservationID(receipts); id != "" && decision.NextTool != "computer_observe" && decision.NextTool != "computer_list_apps" && decision.NextTool != "computer_launch_app" && decision.NextTool != "computer_switch_app" {
+			var fields map[string]any
+			if json.Unmarshal(args, &fields) == nil && fields != nil {
+				fields["observation_id"] = id
+				if fixed, mErr := json.Marshal(fields); mErr == nil {
+					args = fixed
+				}
+			}
+		}
+		desktopTrace("task.action", "Executing desktop tool", map[string]any{"tool": decision.NextTool, "step": decision.NextStep, "arguments": json.RawMessage(args)})
 		emit("tool_call.start", map[string]any{"tool": decision.NextTool})
 		var argObject map[string]any
 		_ = json.Unmarshal(args, &argObject)
@@ -535,6 +628,7 @@ func runDesktopTask(ctx context.Context, m desktopTaskModel, question, history s
 		action++
 		receipts = append(receipts, chatharness.DesktopReceipt{ID: action, Tool: decision.NextTool, Arguments: args, Result: desktopReceiptText(decision.NextTool, text), Success: success, HasImage: success && len(result.ImageURLs) > 0})
 		if !success {
+			desktopTrace("task.tool_failed", "Desktop tool failed", map[string]any{"tool": decision.NextTool, "error": compactText(text, 800)})
 			failures[decision.NextStep]++
 			if failures[decision.NextStep] >= 2 {
 				task.Status = "blocked"
@@ -548,4 +642,24 @@ func runDesktopTask(ctx context.Context, m desktopTaskModel, question, history s
 		}
 	}
 	return true, "작업을 완료하지 못했습니다."
+}
+
+// Small models paraphrase findings in the answer; rather than rejecting a
+// correct observation, append any finding the answer does not quote.
+func mergeFindingsIntoAnswer(answer string, findings []string) string {
+	answer = strings.TrimSpace(answer)
+	missing := []string{}
+	for _, f := range findings {
+		f = strings.TrimSpace(f)
+		if len([]rune(f)) >= 2 && !strings.Contains(answer, f) {
+			missing = append(missing, "- "+f)
+		}
+	}
+	if len(missing) == 0 {
+		return answer
+	}
+	if answer != "" {
+		answer += "\n\n"
+	}
+	return answer + strings.Join(missing, "\n")
 }
