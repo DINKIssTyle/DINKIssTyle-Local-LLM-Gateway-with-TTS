@@ -284,6 +284,21 @@ func (a *App) getManagedModelDownloadPlan(key string) (ManagedModelStatus, []Dow
 		specs = append(specs, DownloadFileSpec{URL: "https://raw.githubusercontent.com/snakers4/silero-vad/066409f3d9db45a30d21dfcbf9147826ffdd7052/src/silero_vad/data/silero_vad.onnx", DestPath: filepath.Join(dir, "silero_vad.onnx"), Label: "Silero VAD speech filter"})
 		return getSTTModelStatusFor(mlxSTTModelID), specs, func() error { return installMLXSTTDependencies() }, nil
 
+	case "stt:" + qwenSTTModelID:
+		if !qwenSTTSupported() {
+			return ManagedModelStatus{}, nil, nil, fmt.Errorf("Qwen3-ASR MLX requires Apple Silicon macOS")
+		}
+		dir := getWritableSTTAssetsDir(qwenSTTModelID)
+		specs := []DownloadFileSpec{}
+		for _, name := range qwenSTTFiles() {
+			url := qwenSTTModelURL + "/resolve/" + qwenSTTModelRevision + "/" + name
+			if name == "silero_vad.onnx" {
+				url = "https://raw.githubusercontent.com/snakers4/silero-vad/066409f3d9db45a30d21dfcbf9147826ffdd7052/src/silero_vad/data/silero_vad.onnx"
+			}
+			specs = append(specs, DownloadFileSpec{URL: url, DestPath: filepath.Join(dir, name), Label: name})
+		}
+		return getSTTModelStatusFor(qwenSTTModelID), specs, installQwenSTTDependencies, nil
+
 	default:
 		return ManagedModelStatus{}, nil, nil, fmt.Errorf("unknown managed model key: %s", key)
 	}

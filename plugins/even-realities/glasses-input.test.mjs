@@ -6,7 +6,7 @@ const samples=bytes=>{const v=new DataView(bytes.buffer,bytes.byteOffset,bytes.b
 assert.deepEqual(normalizeGlassesInput(),{sensitivity:'high',gain:1});
 assert.deepEqual(normalizeGlassesInput({sensitivity:'invalid',gain:Infinity}),{sensitivity:'high',gain:1});
 assert.deepEqual(normalizeGlassesInput({sensitivity:'very_high',gain:'4'}),{sensitivity:'very_high',gain:4});
-for(const engine of ['whisper','apple','chrome-online'])for(const mode of ['ai','translate']){
+for(const engine of ['whisper','qwen3-asr','apple','chrome-online'])for(const mode of ['ai','translate']){
  assert.equal(inputSegmentOptions(engine,mode,'glasses',{sensitivity:'high'}).threshold,0.004);
  assert.equal(inputSegmentOptions(engine,mode,'glasses',{sensitivity:'standard'}).threshold,0.008);
  assert.equal(inputSegmentOptions(engine,mode,'phone',{sensitivity:'very_high'}).threshold,0.008);

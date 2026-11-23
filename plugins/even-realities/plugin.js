@@ -583,6 +583,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     return compareHintDuplicate({fetch:gatewayFetch,server:config.serverUrl,headers:getAuthHeaders({'Content-Type':'application/json'}),text,kind,signal,history:hintGate.duplicateHistory(kind)});
   }
 
+  function localSTTEngine(engine){return engine==='whisper' || engine==='qwen3-asr';}
   function localEngine(){return config.translationEngine || (config.chromeTranslation===false?'llm':'chrome');}
   function localLabel(){return ({apple:'Apple',chrome:'Chrome',llm:'LLM'})[localEngine()] || '번역';}
   function engineSpec(kind,overrides={}){
@@ -592,16 +593,17 @@ import { LocalAgreement } from './local-agreement.mjs';
       source:resolveTranslateSourceLang({sourceLang:config.translateSourceLang,targetLang:config.translateTargetLang}),target:config.translateTargetLang || 'ko',...overrides};
   }
   function canonicalSpec(spec){
-    if(spec.kind==='stt'){const {kind,server,headers,engine,language}=spec;return {kind,server,headers,engine,language:engine==='whisper'?'ko':language};}
+    if(spec.kind==='stt'){const {kind,server,headers,engine,language}=spec;return {kind,server,headers,engine,language:localSTTEngine(engine)?'ko':language};}
     const {kind,server,headers,engine,source,target}=spec;return {kind,server,headers,engine,source,target};
   }
   async function runEnginePreparation(spec,signal){
     const {kind,server,headers,engine}=spec;
-    if(kind==='stt' && engine==='whisper'){
-      const response=await gatewayFetch(`${server}/api/stt/status`,{headers,signal});
+    if(kind==='stt' && localSTTEngine(engine)){
+      const response=await gatewayFetch(`${server}/api/stt/status${engine==='qwen3-asr'?'?engine=qwen3-asr':''}`,{headers,signal});
       const status=await response.json();
+      if(engine==='qwen3-asr' && status.modelId!=='qwen3-asr-0.6b-mlx')throw Error('Qwen3-ASR을 지원하는 게이트웨이로 업데이트하세요.');
       if(!response.ok || !status.active)throw Error(status.message || '서버에서 STT 모델과 런타임을 설치하세요.');
-      const warmup=await gatewayFetch(`${server}/api/stt/warmup`,{method:'POST',headers,signal});
+      const warmup=await gatewayFetch(`${server}/api/stt/warmup${engine==='qwen3-asr'?'?engine=qwen3-asr':''}`,{method:'POST',headers,signal});
       if(!warmup.ok)throw Error(`음성 엔진 준비 실패: HTTP ${warmup.status}`);
       return;
     }
@@ -613,7 +615,7 @@ import { LocalAgreement } from './local-agreement.mjs';
   }
   function preparationStatus(kind,state,spec,error){
     const stt=kind==='stt',el=stt?els.sttEngineStatus:els.chromeTranslationStatus;
-    const label=spec.engine==='apple'?'Apple':spec.engine==='whisper'?'Whisper':'Chrome';
+    const label=spec.engine==='qwen3-asr'?'Qwen3-ASR':spec.engine==='apple'?'Apple':spec.engine==='whisper'?'Whisper':'Chrome';
     const detail=stt?spec.language:`${spec.source} → ${spec.target}`;
     el.textContent=state==='preparing'?`${label} ${stt?'STT':'번역'} 자동 준비 중 · ${detail}${spec.engine==='apple'?' · 처음 사용할 때 서버 컴퓨터에서 언어팩 설치를 확인하세요':''}`:
       state==='ready'?`${label} ${stt?'STT':'로컬 번역'} 준비 완료 · ${detail}`:
@@ -670,7 +672,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     aiTranslatedCaption=null;
     if(!config.aiForeignTranslation)return;
     const source=String(data.language || '').trim().toLowerCase();
-    if(!clip.aiForeignTranslation || clip.engine!=='whisper' || !/^[a-z]{2}$/.test(source) || source===clip.targetLang){
+    if(!clip.aiForeignTranslation || !localSTTEngine(clip.engine) || !/^[a-z]{2}$/.test(source) || source===clip.targetLang){
       aiCaptionTranslations.reset();
       return;
     }
@@ -938,7 +940,7 @@ import { LocalAgreement } from './local-agreement.mjs';
   }
 
   function stopChromeSegment(id){
-    if(activeSttEngine==='whisper' || !id)return;
+    if(localSTTEngine(activeSttEngine) || !id)return;
     gatewayFetch(`${config.serverUrl}/api/stt/${activeSttEngine==='apple'?'apple':'chrome'}/stop`,{method:'POST',headers:getAuthHeaders({'Content-Type':'application/json'}),body:JSON.stringify({sessionId,segmentId:id})}).catch(()=>{});
   }
   function resetQueuesForModeSwitch(nextMode, preserveAudio=false, preserveDisplay=false) {
@@ -1074,7 +1076,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     config.speechFilter = els.speechFilter.value === 'standard' ? 'standard' : 'strict';
     config.audioInputSource=els.audioInputSource.value==='phone'?'phone':'glasses';
     config.glassesInput=readGlassesInputControls();
-    config.sttEngine=['chrome-online','apple'].includes(els.sttEngine.value)?els.sttEngine.value:'whisper';config.sttFallback=els.sttFallback.checked!==false;
+    config.sttEngine=['qwen3-asr','chrome-online','apple'].includes(els.sttEngine.value)?els.sttEngine.value:'whisper';config.sttFallback=els.sttFallback.checked!==false;
     config.speakerScope = els.speakerScope.value === 'self' ? 'self' : 'conversation';
     config.translateExcludeSelf=els.translateExcludeSelf?.checked!==false;
     config.chromeTranslation=els.chromeTranslation?.checked!==false;
@@ -2128,7 +2130,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     config.speechFilter = els.speechFilter.value === 'standard' ? 'standard' : 'strict';
     config.audioInputSource=els.audioInputSource.value==='phone'?'phone':'glasses';
     config.glassesInput=readGlassesInputControls();
-    config.sttEngine=['chrome-online','apple'].includes(els.sttEngine.value)?els.sttEngine.value:'whisper';config.sttFallback=els.sttFallback.checked!==false;
+    config.sttEngine=['qwen3-asr','chrome-online','apple'].includes(els.sttEngine.value)?els.sttEngine.value:'whisper';config.sttFallback=els.sttFallback.checked!==false;
     config.speakerScope = els.speakerScope.value === 'self' ? 'self' : 'conversation';
     config.translateExcludeSelf=els.translateExcludeSelf?.checked!==false;
     config.chromeTranslation=els.chromeTranslation?.checked!==false;
@@ -2143,12 +2145,12 @@ import { LocalAgreement } from './local-agreement.mjs';
     const captureAudioSource=activeAudioInputSource;els.audioInputSource.disabled=false;syncGlassesInputUI();
     if(activeSttEngine!=='whisper'){
       try{await prepareSelectedStt(signal,true);}
-      catch(error){if(signal.aborted)throw error;if(!config.sttFallback)throw error;const failedEngine=activeSttEngine;activeSttEngine='whisper';els.sttEngineStatus.textContent=`${failedEngine==='apple'?'Apple':'Chrome'} 준비 실패 · Whisper 사용 (${error.message})`;}
+      catch(error){if(signal.aborted)throw error;if(!config.sttFallback)throw error;const failedEngine=activeSttEngine;activeSttEngine='whisper';els.sttEngineStatus.textContent=`${failedEngine==='qwen3-asr'?'Qwen3-ASR':failedEngine==='apple'?'Apple':'Chrome'} 준비 실패 · Whisper 사용 (${error.message})`;}
     }
     if(activeSttEngine==='whisper'){
     setHUDNotice('음성 엔진 준비 중');
     await prepareSelectedStt(signal,true,'whisper');
-    }else els.sttEngineStatus.textContent=activeSttEngine==='chrome-online'?'Chrome 온라인 STT · 음성은 Google로 전송됩니다':'Apple 로컬 STT · 서버에서 음성 처리 중';
+    }else els.sttEngineStatus.textContent=activeSttEngine==='qwen3-asr'?'Qwen3-ASR 로컬 STT · 서버에서 음성 처리 중':activeSttEngine==='chrome-online'?'Chrome 온라인 STT · 음성은 Google로 전송됩니다':'Apple 로컬 STT · 서버에서 음성 처리 중';
     if(generation!==captureGeneration || signal.aborted)return;
     captureFailure = '';
     for(const clip of pendingClips)clip.attempts=0;
@@ -2233,7 +2235,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     setVoiceHint(`${continuousCapture ? '연속 감지 중' : '녹음 중'} · ${(recordedBytes/32000).toFixed(1)}초 · 음량 ${Math.round(level*1000)} · 대기 ${pendingClips.length}`);
     if (!continuousCapture) {
       audioBuffer.push(bytes);
-      if(activeSttEngine!=='whisper'){
+      if(!localSTTEngine(activeSttEngine)){
         if(!activeUtterance)activeUtterance={id:newID(),revision:0,lastPreviewBytes:0,agreement:new LocalAgreement()};
         if(recordedBytes-activeUtterance.lastPreviewBytes>=8000){
           activeUtterance.lastPreviewBytes=recordedBytes;
@@ -2255,7 +2257,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     }
     if (!segmenter.parts.length) { activeUtterance = null; pendingPreview = null; return; }
     if (!activeUtterance) activeUtterance = {id:newID(),revision:0,lastPreviewBytes:0,agreement:new LocalAgreement()};
-    if (recordedBytes-activeUtterance.lastPreviewBytes < (activeSttEngine==='whisper'?32000:8000)) return;
+    if (recordedBytes-activeUtterance.lastPreviewBytes < (localSTTEngine(activeSttEngine)?32000:8000)) return;
     const snapshot = segmenter.snapshot();
     if (!snapshot) return;
     activeUtterance.lastPreviewBytes = recordedBytes;
@@ -2284,8 +2286,8 @@ import { LocalAgreement } from './local-agreement.mjs';
     const engine=clip.engine || activeSttEngine;
     const source=String(clip.sourceLang || config.translateSourceLang || 'auto').trim().toLowerCase();
     const target=clip.targetLang || config.translateTargetLang || 'ko';
-    // Native recognizers require a locale; Whisper supports automatic detection.
-    if(engine==='whisper') {
+    // Native recognizers require a locale; local models support automatic detection.
+    if(localSTTEngine(engine)) {
       if(clip.mode==='ai' && (clip.aiForeignTranslation ?? config.aiForeignTranslation))return 'auto';
       if(clip.mode==='translate' && target==='ko')return 'auto';
       return /^[a-z]{2}$/.test(source)?source:'auto';
@@ -2306,7 +2308,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     // Each engine has one recognizer. Wait for final inference, but allow a
     // newer preview after stt.recognized while the old result is being archived.
     if((activeFinalClip && !activeFinalClip.inferenceDone && activeFinalClip.engine===pendingPreview.engine) || pendingClips.some(clip=>!clip.inferenceDone && clip.engine===pendingPreview.engine))return;
-    if(pendingPreview.engine==='whisper' && activeUtterance?.id===pendingPreview.segmentId){
+    if(localSTTEngine(pendingPreview.engine) && activeUtterance?.id===pendingPreview.segmentId){
       const delay=(activeUtterance.previewReadyAt || 0)-Date.now();
       if(delay>0){
         previewRetryTimer=setTimeout(()=>{previewRetryTimer=null;drainPreview();},delay);
@@ -2343,7 +2345,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       if (!isRecording || sessionId!==snapshot.sessionId || activeUtterance?.id!==snapshot.segmentId ||
           data.sessionId!==snapshot.sessionId || data.segmentId!==snapshot.segmentId || data.revision!==snapshot.revision) return;
       audioUpload.acknowledge(snapshot,data);
-      if(snapshot.engine==='whisper'){
+      if(localSTTEngine(snapshot.engine)){
         const urgent=pendingTrigger || previewWakeId;
         const engineMs=data.timings?.engine_ms ?? Date.now()-sttSentAt;
         activeUtterance.previewReadyAt=Date.now()+Math.min(urgent?250:1200,Math.max(0,engineMs/2));
@@ -2665,7 +2667,7 @@ import { LocalAgreement } from './local-agreement.mjs';
 
   function enqueueTranslation(id,prompt,context,source,target,options={}){
     if(options.sessionId && options.sessionId!==sessionId)return;
-    if(options.sttEngine!=='whisper')source=resolveTranslateSourceLang({sourceLang:source,targetLang:target});
+    if(!localSTTEngine(options.sttEngine))source=resolveTranslateSourceLang({sourceLang:source,targetLang:target});
     const direction=translationDirection.route({source,target,detected:options.detectedLanguage,engine:options.sttEngine,text:prompt,startedAt:options.startedAt});
     if(!direction){els.chromeTranslationStatus.textContent='상대 언어를 먼저 인식하거나 출발 언어를 선택하세요';return;}
     if(direction.changed){
@@ -3382,7 +3384,15 @@ import { LocalAgreement } from './local-agreement.mjs';
     } catch (_) {}
   }
 
+  async function fetchQwenCapabilities(){
+    try{
+      const response=await gatewayFetch(`${config.serverUrl}/api/stt/status?engine=qwen3-asr`,{headers:getAuthHeaders()});
+      const status=await response.json();
+      document.getElementById('stt-option-qwen').disabled=!response.ok || status.modelId!=='qwen3-asr-0.6b-mlx' || status.canDownload===false;
+    }catch{document.getElementById('stt-option-qwen').disabled=true;}
+  }
   async function fetchAppleCapabilities(){
+    fetchQwenCapabilities().catch(()=>{});
     try{
       const response=await gatewayFetch(`${config.serverUrl}/api/apple/status`,{headers:getAuthHeaders()});
       const status=await response.json();

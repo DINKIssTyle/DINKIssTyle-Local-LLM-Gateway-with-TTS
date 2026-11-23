@@ -17,7 +17,7 @@ export function mergePCM(parts) {
 
 // Segment by audio sample count, so delayed Bluetooth batches do not change VAD.
 export function speechSegmentOptions(engine,mode){
-  if(engine==='whisper')return {};
+  if(engine==='whisper' || engine==='qwen3-asr')return {};
   if(engine==='apple'){
     return {snapshotMinMs:250,snapshotVoicedMs:150,...(mode==='translate'?{silenceMs:900,maxMs:8000}:{})};
   }

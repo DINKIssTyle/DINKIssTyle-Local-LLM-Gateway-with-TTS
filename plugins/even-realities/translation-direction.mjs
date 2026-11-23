@@ -6,7 +6,7 @@ export class TranslationDirection {
     const at=Date.parse(startedAt);
     if(Number.isFinite(at) && at<this.latest)return null;
     let actual=detected.toLowerCase().split('-')[0];
-    if(target==='ko' && engine==='whisper'){
+    if(target==='ko' && (engine==='whisper' || engine==='qwen3-asr')){
       if(!/^[a-z]{2}$/.test(actual))actual=/[가-힣]/u.test(text)?'ko':source!=='auto'?source:this.partner;
       if(actual && actual!=='ko')this.partner=actual;
       const partner=source!=='auto' && source!=='ko'?source:this.partner;

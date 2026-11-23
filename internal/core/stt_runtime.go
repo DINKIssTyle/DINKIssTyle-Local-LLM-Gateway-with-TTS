@@ -77,6 +77,7 @@ func installMLXSTTDependencies() error {
 }
 
 type sttWorker struct {
+	label  string
 	cmd    *exec.Cmd
 	input  io.WriteCloser
 	output *bufio.Reader
@@ -99,6 +100,13 @@ type sttWorkerReply struct {
 var activeSTTWorker *sttWorker // protected by sttLock
 var activeSTTModelID string
 
+func (w *sttWorker) name() string {
+	if w.label != "" {
+		return w.label
+	}
+	return "Whisper"
+}
+
 func (w *sttWorker) read(timeout time.Duration) (sttWorkerReply, error) {
 	type response struct {
 		reply sttWorkerReply
@@ -116,14 +124,14 @@ func (w *sttWorker) read(timeout time.Duration) (sttWorkerReply, error) {
 	select {
 	case result := <-ch:
 		if result.err != nil {
-			return result.reply, fmt.Errorf("Whisper worker: %w: %s", result.err, w.log.String())
+			return result.reply, fmt.Errorf("%s worker: %w: %s", w.name(), result.err, w.log.String())
 		}
 		if result.reply.Error != "" {
-			return result.reply, fmt.Errorf("Whisper: %s", result.reply.Error)
+			return result.reply, fmt.Errorf("%s: %s", w.name(), result.reply.Error)
 		}
 		return result.reply, nil
 	case <-time.After(timeout):
-		return sttWorkerReply{}, fmt.Errorf("Whisper inference timed out")
+		return sttWorkerReply{}, fmt.Errorf("%s inference timed out", w.name())
 	}
 }
 func (w *sttWorker) close() {
@@ -132,6 +140,7 @@ func (w *sttWorker) close() {
 	_ = w.cmd.Wait()
 }
 func closeSTTRuntime() {
+	defer closeQwenSTTRuntime()
 	sttLock.Lock()
 	defer sttLock.Unlock()
 	if activeSTTWorker != nil {
@@ -144,11 +153,15 @@ func startSTTWorker(python, model, root string) (*sttWorker, error) {
 	if err := bundledata.MaterializeWhisperWorker(path); err != nil {
 		return nil, err
 	}
-	worker := &sttWorker{}
 	args := []string{"-u", path, "--model", model}
 	if filepath.Base(model) == mlxSTTModelID {
 		args = append(args, "--backend", "mlx")
 	}
+	return launchSTTWorker(python, "Whisper", args)
+}
+
+func launchSTTWorker(python, label string, args []string) (*sttWorker, error) {
+	worker := &sttWorker{label: label}
 	worker.cmd = exec.Command(python, args...)
 	worker.cmd.Env = append(os.Environ(), "HF_HUB_OFFLINE=1", "TRANSFORMERS_OFFLINE=1", "TOKENIZERS_PARALLELISM=false")
 	worker.cmd.Stderr = &worker.log
@@ -170,7 +183,7 @@ func startSTTWorker(python, model, root string) (*sttWorker, error) {
 	reply, err := worker.read(120 * time.Second)
 	if err != nil || !reply.Ready {
 		worker.close()
-		return nil, fmt.Errorf("Whisper startup failed: %v", err)
+		return nil, fmt.Errorf("%s startup failed: %v", label, err)
 	}
 	return worker, nil
 }

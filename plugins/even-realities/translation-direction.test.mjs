@@ -17,3 +17,10 @@ assert.deepEqual(anyTarget.route({source:'auto',target:'en',detected:'ko-KR',eng
 assert.deepEqual(anyTarget.route({source:'auto',target:'en',detected:'ja',engine:'whisper'}),{source:'ja',target:'en',changed:true});
 assert.deepEqual(anyTarget.route({source:'auto',target:'ja',detected:'en',engine:'apple'}),{source:'en',target:'ja',changed:true});
 assert.deepEqual(anyTarget.route({source:'ko',target:'en',detected:'en',engine:'apple'}),{source:'ko',target:'en',changed:true});
+
+const qwen=new TranslationDirection();
+assert.equal(qwen.route({source:'auto',target:'ko',detected:'ko',engine:'qwen3-asr'}),null,'never guess a partner');
+assert.deepEqual(qwen.route({source:'auto',target:'ko',detected:'ja',engine:'qwen3-asr'}),{source:'ja',target:'ko',changed:false});
+assert.deepEqual(qwen.route({source:'auto',target:'ko',detected:'ko',engine:'qwen3-asr'}),{source:'ko',target:'ja',changed:true});
+assert.deepEqual(qwen.route({source:'auto',target:'en',detected:'ko',engine:'qwen3-asr'}),{source:'ko',target:'en',changed:true});
+console.log('PASS: Qwen detected language and bidirectional translation routing');

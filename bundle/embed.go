@@ -18,6 +18,16 @@ var jevWorker []byte
 //go:embed runtimes/whisper_worker.py
 var whisperWorker []byte
 
+//go:embed runtimes/qwen_asr_worker.py
+var qwenSTTWorker []byte
+
+func MaterializeQwenSTTWorker(path string) error {
+	if err := MaterializeWhisperWorker(filepath.Join(filepath.Dir(path), "whisper_worker.py")); err != nil {
+		return err
+	}
+	return os.WriteFile(path, qwenSTTWorker, 0644)
+}
+
 //go:embed runtimes/Silero-VAD-LICENSE.txt
 var sileroLicense []byte
 

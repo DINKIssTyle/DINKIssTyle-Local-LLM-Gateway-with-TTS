@@ -73,3 +73,5 @@ all_funcs.txt
 !internal/mcp/transcript_library_test.go
 !internal/core/stt_transcript_library_test.go
 !internal/toolruntime/transcripts_test.go
+
+!internal/core/qwen_stt_test.go

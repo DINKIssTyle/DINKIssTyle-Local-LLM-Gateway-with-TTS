@@ -22,6 +22,7 @@ let holdPreview = false;
 let releasePreview = null;
 let holdChat = false;
 let releaseChat = null;
+let qwenWarmupFailure=false;
 let holdWarmup=false, releaseWarmup=null;
 let hintClock=0,hintJobs=[];
 let rejectAutoLang=false;
@@ -61,6 +62,8 @@ const context={DKST_DEFAULT_SERVER_URL:'https://192.168.1.4:2806',waitForEvenApp
  if(url.endsWith('/api/models') && modelFailure)return{ok:false,status:503};
  if(url.endsWith('/api/models'))return{ok:true,json:async()=>({models:modelCatalog})};
  if(url.includes('/api/stt/transcripts?'))return{ok:true,json:async()=>({entries:[{startedAt:'2026-11-12T05:00:00Z',endedAt:'2026-11-12T05:00:01Z',text:'긴 전사 기록 '.repeat(10000)}]})};
+ if(url.endsWith('/api/stt/status?engine=qwen3-asr'))return{ok:true,json:async()=>({active:true,canDownload:true,modelId:'qwen3-asr-0.6b-mlx'})};
+ if(url.endsWith('/api/stt/warmup?engine=qwen3-asr'))return{ok:!qwenWarmupFailure,status:qwenWarmupFailure?503:200,json:async()=>({ready:!qwenWarmupFailure,preview:true})};
  if(url.endsWith('/api/stt/warmup')){const response={ok:true,json:async()=>({ready:true,preview:true})};if(holdWarmup){holdWarmup=false;return await new Promise(resolve=>{releaseWarmup=()=>resolve(response);});}return response;}
  if(url.endsWith('/api/stt/preview')){
   const request=JSON.parse(opts.body), text=nextPreviewText ?? nextTranscript;
@@ -1374,7 +1377,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
    element(option).disabled=true;
    handler({menuItemClickEvent:{itemID:id}});
    for(let i=0;i<150 && rebuilds.at(-1)?.textObject?.[0]?.content!==(id===6?'번역 엔진':'음성 인식 엔진');i++)await new Promise(resolve=>setTimeout(resolve,20));
-   assert.equal(rebuilds.at(-1).listObject[0].itemContainer.itemCount,3);
+   assert.equal(rebuilds.at(-1).listObject[0].itemContainer.itemCount,id===7?4:3);
    assert.ok(rebuilds.at(-1).listObject[0].itemContainer.itemName.some(label=>label.includes('Apple 로컬')));
    handler({menuItemClickEvent:{itemID:90}});await tick();element(option).disabled=false;
  }
@@ -2166,6 +2169,24 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  element('trigger-transcript-only').checked=originalCaptionSettings.triggerTranscriptOnly;await element('trigger-transcript-only').handlers.change();
  const {sttEngine,translationEngine,translateSourceLang,translateTargetLang}=originalCaptionSettings;
  await queue.settings({sttEngine,translationEngine,translateSourceLang,translateTargetLang});
+
+ // Qwen follows local-model preparation and detection, never Chrome's locale API.
+ await queue.stopVoiceRecording(false);
+ const qwenStart=requests.length;
+ await queue.settings({sttEngine:'qwen3-asr',glassesMode:'translate',translateSourceLang:'auto',translateTargetLang:'ko'});
+ for(let i=0;i<6;i++)await tick();
+ assert.equal(element('stt-engine').value,'qwen3-asr');
+ assert.ok(requests.slice(qwenStart).some(r=>r.url.endsWith('/api/stt/warmup?engine=qwen3-asr')));
+ assert.ok(!requests.slice(qwenStart).some(r=>r.url.endsWith('/api/stt/chrome/prepare') || r.url.endsWith('/api/stt/chrome/stop')));
+ assert.equal(queue.sttPayload({engine:'qwen3-asr',mode:'translate',sourceLang:'ja',targetLang:'ko',bytes:new Uint8Array(3200)}).language,'auto');
+ assert.equal(queue.sttPayload({engine:'qwen3-asr',mode:'translate',sourceLang:'ko',targetLang:'en',bytes:new Uint8Array(3200)}).language,'ko');
+ assert.equal(queue.sttPayload({engine:'qwen3-asr',mode:'ai',aiForeignTranslation:true,targetLang:'ko',bytes:new Uint8Array(3200)}).language,'auto');
+ qwenWarmupFailure=true;
+ await queue.microphone();for(let i=0;i<8;i++)await tick();
+ assert.equal(queue.state().engine,'whisper','explicit fallback uses Whisper when Qwen preparation fails');
+ await queue.stopVoiceRecording(false);qwenWarmupFailure=false;
+ await queue.settings({sttEngine,translationEngine,translateSourceLang,translateTargetLang});
+ console.log('PASS: Qwen local warmup, language payloads, no Chrome requests and preparation fallback');
  const restoredPrepareStart=requests.length;
  nativeSaved=JSON.stringify({...JSON.parse(nativeSaved),aiHeaderLayout:'status-icon',aiIconPosition:276,translationLayout:'subtitles',subtitleLines:3});
  elements.clear();

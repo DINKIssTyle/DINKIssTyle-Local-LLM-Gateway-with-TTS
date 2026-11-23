@@ -39,6 +39,9 @@ var defaultSTTConfig = STTModelConfig{
 var sttLock sync.Mutex
 
 func getRequiredSTTFiles(modelID string) []string {
+	if modelID == qwenSTTModelID {
+		return qwenSTTFiles()
+	}
 	if modelID == mlxSTTModelID {
 		return []string{"config.json", "weights.safetensors", "silero_vad.onnx"}
 	}
@@ -86,15 +89,27 @@ func getSTTModelStatusFor(modelID string) ManagedModelStatus {
 		provider = "mlx"
 	}
 
+	python := sttPythonPath()
+	if modelID == qwenSTTModelID {
+		marker = "installed"
+		displayName = "Qwen3-ASR 0.6B (MLX 8-bit / Apple Silicon)"
+		downloadURL = qwenSTTModelURL
+		provider = "mlx"
+		python = qwenSTTPythonPath()
+	}
 	installDir := getWritableSTTAssetsDir(modelID)
 	installed := isSTTModelInstalled(modelID)
 
 	status := "missing"
 	message := "STT model files are not installed yet."
 	active := false
-	supported := modelID != mlxSTTModelID || (runtime.GOOS == "darwin" && runtime.GOARCH == "arm64")
+	supported := (modelID != mlxSTTModelID && modelID != qwenSTTModelID) || qwenSTTSupported()
+	runtimeDir := sttRuntimeDir()
+	if modelID == qwenSTTModelID {
+		runtimeDir = qwenSTTRuntimeDir()
+	}
 
-	if supported && installed && fileExists(sttPythonPath()) && fileExists(filepath.Join(sttRuntimeDir(), marker)) {
+	if supported && installed && fileExists(python) && fileExists(filepath.Join(runtimeDir, marker)) {
 		status = "ready"
 		message = "STT model is installed and ready to transcribe."
 		active = true
@@ -102,11 +117,11 @@ func getSTTModelStatusFor(modelID string) ManagedModelStatus {
 
 	if installed && !active {
 		status = "runtime-missing"
-		message = "Whisper runtime is missing. Download STT again to install runtime dependencies."
+		message = "STT runtime is missing. Download this model again to install runtime dependencies."
 	}
 	if !supported {
 		status = "unsupported"
-		message = "MLX Whisper requires Apple Silicon macOS."
+		message = "This MLX STT model requires Apple Silicon macOS."
 	}
 	return ManagedModelStatus{
 		Key:         "stt:" + modelID,
@@ -127,6 +142,14 @@ func getSTTModelStatusFor(modelID string) ManagedModelStatus {
 func handleSTTStatus(app *App) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		status := getSTTModelStatus()
+		switch r.URL.Query().Get("engine") {
+		case "", "whisper":
+		case "qwen3-asr":
+			status = getSTTModelStatusFor(qwenSTTModelID)
+		default:
+			http.Error(w, "unknown local STT engine", http.StatusBadRequest)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(status)
 	}
@@ -332,7 +355,7 @@ func handleSTTAudio(app *App, preview bool) http.HandlerFunc {
 		if engine == "" {
 			engine = "whisper"
 		}
-		if engine != "whisper" && engine != "apple" && !chromeSTTEngine(engine) {
+		if engine != "whisper" && engine != "qwen3-asr" && engine != "apple" && !chromeSTTEngine(engine) {
 			http.Error(w, "unknown STT engine", 400)
 			return
 		}
@@ -340,10 +363,12 @@ func handleSTTAudio(app *App, preview bool) http.HandlerFunc {
 		inferenceStarted := time.Now()
 		var inference sttWorkerReply
 		warning := ""
-		if chromeSTTEngine(engine) || engine == "apple" {
+		if chromeSTTEngine(engine) || engine == "apple" || engine == "qwen3-asr" {
 			metadata.Language = lang
 			metadata.Format = format
-			if engine == "apple" {
+			if engine == "qwen3-asr" {
+				inference, err = runQwenSTTInference(audioBytes, format, lang, metadata.SpeechFilter, preview || metadata.Realtime)
+			} else if engine == "apple" {
 				inference, err = runAppleSpeech(r.Context(), metadata, audioBytes, preview, r.Header.Get("X-User-ID"))
 			} else {
 				inference, err = runChromeSpeech(r.Context(), metadata, audioBytes, preview, r.Header.Get("X-User-ID"))
