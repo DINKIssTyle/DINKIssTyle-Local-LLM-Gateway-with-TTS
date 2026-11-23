@@ -623,3 +623,31 @@ summary:focus-visible { outline:2px solid var(--accent-blue); outline-offset:2px
 
 .stt-last-error { white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; color: var(--accent-red); font: inherit; }
 .stt-last-error[hidden] { display: none; }
+
+
+/* Translation basics sit directly below the compact phone preview. */
+.translation-quick-controls { padding: 12px 14px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius); }
+.translation-quick-controls[hidden] { display: none; }
+.translation-quick-controls .translate-lang-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px 10px;
+}
+.translation-quick-controls .form-group { min-width: 0; margin: 0; gap: 5px; }
+.translation-quick-controls label { font-size: 12px; color: var(--text-secondary); }
+.translation-quick-controls select { width: 100%; min-width: 0; min-height: 44px; padding: 9px 28px 9px 10px; font-size: 13px; }
+.translation-quick-controls .translation-target-field { grid-area: 1 / 2; }
+.translation-quick-controls .translation-source-field { grid-area: 1 / 1; }
+.translation-quick-controls .translation-engine-field { grid-area: 2 / 1; }
+.translation-quick-controls .engine-actions { display: contents; }
+.translation-quick-controls #prepare-chrome-translation { grid-area: 2 / 2; align-self: end; width: 100%; min-height: 44px; padding: 9px 8px; font-size: 12px; }
+.translation-quick-controls #chrome-translation-status { grid-column: 1 / -1; margin: 0; }
+.translation-quick-controls .translation-speaker-field { grid-column: 1 / -1; }
+.translation-quick-controls .translation-speaker-field label { color: var(--text-primary); font-size: 13px; align-items: center; }
+.translation-quick-controls .setting-help { display: none; }
+.translation-mode .hud-card { padding: 12px; }
+.translation-mode .hud-screen { min-height: 0; }
+.translation-mode .hud-screen.hud-subtitles { height: 140px; min-height: 140px; }
+.translation-mode .hud-subtitle-text { font-size: 15px; line-height: 22px; }
+.translation-mode .hud-ai-body { min-height: 0; max-height: 112px; }
+.translation-mode .hud-translation-replies .hud-transcript-body { min-height: 0; max-height: 72px; }

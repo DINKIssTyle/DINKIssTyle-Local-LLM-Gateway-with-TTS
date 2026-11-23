@@ -127,3 +127,20 @@ func TestEveryInteractiveChatUsesCommonPipelineWithHUDOutput(t *testing.T) {
 		}
 	}
 }
+
+func TestTranslationReplyLanguageOrder(t *testing.T) {
+	for _, task := range []string{"translation", "translation_replies"} {
+		for _, pair := range [][2]string{{"ko", "en"}, {"en", "ko"}, {"ja", "ko"}, {"en", "ja"}, {"ko", "ja"}, {"zh", "en"}} {
+			result := assemble(t, map[string]any{"task": task, "source": pair[0], "target": pair[1], "text": "원본 발화", "translated": "Completed translation"})
+			sys, user := prompt(result, 0), prompt(result, 1)
+			for _, expected := range []string{"Source language: " + pair[0], "then the same reply's meaning in the target language " + glassesLanguage(pair[1]), "ONLY its readable Latin-letter romanized pronunciation", "INCLUDING KOREAN", "English is the ONLY exception", "do not romanize Japanese on either line"} {
+				if !strings.Contains(sys, expected) {
+					t.Fatalf("%s %v missing %q", task, pair, expected)
+				}
+			}
+			if !strings.Contains(user, "Source language: "+pair[0]) || !strings.Contains(user, "Target language: "+glassesLanguage(pair[1])) {
+				t.Fatal("reply request lost language pair")
+			}
+		}
+	}
+}

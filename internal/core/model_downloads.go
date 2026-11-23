@@ -2,10 +2,13 @@ package core
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+
+	"dinkisstyle-chat/internal/mediapipeworker"
 
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -136,6 +139,7 @@ func (a *App) StartManagedModelDownload(key string) error {
 		state.FilesCompleted = len(specs)
 		state.FilesTotal = len(specs)
 		state.ProgressPct = 100
+		state.CurrentFile = ""
 		state.Status = "finalizing"
 		state.Message = "Finalizing model setup..."
 		putManagedDownloadState(state)
@@ -152,7 +156,7 @@ func (a *App) StartManagedModelDownload(key string) error {
 
 		state.Success = true
 		state.Status = "ready"
-		state.Message = "Download complete."
+		state.Message = "Installation complete."
 		finishManagedDownloadState(state)
 	}()
 
@@ -222,8 +226,18 @@ func (a *App) getManagedModelDownloadPlan(key string) (ManagedModelStatus, []Dow
 		status := getEmbeddingModelStatus(cfg)
 		installDir := getEmbeddingModelInstallDir(jevModelID)
 		specs := []DownloadFileSpec{{URL: jevModelURL + "/resolve/main/" + jevModelFile, DestPath: filepath.Join(installDir, jevModelFile), Label: jevModelFile}, {URL: jevModelURL + "/resolve/main/README.md", DestPath: filepath.Join(installDir, "README.md"), Label: "README.md"}}
+		var wheel string
+		if mediapipeworker.Supported {
+			wheel = filepath.Join(filepath.Dir(mediaPipeLibraryPath()), "mediapipe-1.1.0.whl")
+			specs = append(specs, DownloadFileSpec{URL: mediaPipeWheelURL, DestPath: wheel, Label: "MediaPipe native runtime"})
+		}
 		return status, specs, func() error {
-			if err := installJevDependencies(); err != nil {
+			if wheel != "" {
+				if err := installMediaPipeLibrary(wheel, mediaPipeLibraryPath()); err != nil {
+					return fmt.Errorf("MediaPipe native installation: %w", err)
+				}
+				_ = os.Remove(wheel)
+			} else if err := installJevDependencies(); err != nil {
 				return err
 			}
 			cfg.UseJevDecisions = a.GetEmbeddingModelConfig().UseJevDecisions

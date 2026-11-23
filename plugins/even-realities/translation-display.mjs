@@ -8,7 +8,7 @@ export function parseTranslationDisplay(raw) {
   if(json.startsWith('{')){
     try{
       const data=JSON.parse(json);
-      for(const key of [...Object.keys(result),'pronunciation'])if(typeof data[key]==='string')result[key]=data[key].trim();
+      for(const key of Object.keys(result))if(typeof data[key]==='string')result[key]=data[key].trim();
     }catch{
       // Decode each string independently while a JSON object is streaming.
       // An incomplete escape stays private until the next chunk arrives.
@@ -41,7 +41,7 @@ export function translationReplyText(result,maxWidth=null) {
     return lines.map(line=>maxWidth===null?line:pxTruncate(line,maxWidth)).join('\n');
   }).join('\n');
 }
-export function translationPhoneText(result){return [result.translation,result.pronunciation?'발음: '+result.pronunciation:'',translationReplyText(result)].filter(Boolean).join('\n');}
+export function translationPhoneText(result){return [result.translation,translationReplyText(result)].filter(Boolean).join('\n');}
 
 
 export function hasCompleteTranslationReplies(value){
@@ -53,4 +53,22 @@ export function mergeTranslationDisplay(previous,next,{commitReplies=false}={}){
     result.positive=next.positive;result.negative=next.negative;
   }
   return result;
+}
+
+
+// Reject malformed rows and native-script source text before displaying replies.
+// Script checks deliberately avoid guessing between languages that share Latin script.
+export function translationRepliesMatchLanguages(value,source='auto',target='ko') {
+  const script={ko:/[가-힣]/u,ja:/[ぁ-ゖァ-ヺ一-龯]/u,zh:/[一-龯]/u,th:/[ก-๛]/u};
+  const native=lang=>script[lang];
+  return ['positive','negative'].every(key=>{
+    const lines=String(value[key] || '').split(/\r?\n|[ \t]+—[ \t]+/u).map(line=>line.trim()).filter(Boolean);
+    if(lines.length!==2)return false;
+    const [spoken,meaning]=lines;
+    // Every first line uses Latin letters: English itself or source romanization.
+    if(!/\p{Script=Latin}/u.test(spoken) || Array.from(spoken).some(char=>/\p{L}/u.test(char) && !/\p{Script=Latin}/u.test(char)))return false;
+    if(native(target) && !native(target).test(meaning))return false;
+    if(target==='en' && (!/[A-Za-z]/u.test(meaning) || /[가-힣ぁ-ゖァ-ヺ一-龯ก-๛]/u.test(meaning)))return false;
+    return true;
+  });
 }

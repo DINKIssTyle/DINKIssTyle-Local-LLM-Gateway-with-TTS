@@ -994,6 +994,8 @@
             background: rgba(181, 106, 0, 0.08);
         }
 
+        .managed-model-chip.queued,
+        .managed-model-chip.finalizing,
         .managed-model-chip.downloading {
             color: #1756d6;
             border-color: rgba(23, 86, 214, 0.35);
@@ -1058,6 +1060,10 @@
             border-radius: inherit;
             background: linear-gradient(90deg, #3f85ff, #4dc7ff);
             transition: width 0.12s ease;
+        }
+
+        .managed-model-progress.installing .managed-model-progress-bar {
+            display: none;
         }
 
         .managed-model-progress-meta {
@@ -2041,6 +2047,7 @@
         const docHelpMarkdownCache = new Map();
         let openDocHelpPath = '';
         let managedModelsRefreshTimer = null;
+        let managedModelsRefresh = null;
         let statusRefreshTimer = null;
         let welcomeState = null;
         let llmActivityBusy = false;
@@ -2070,6 +2077,8 @@
                 'status.disabled': '비활성화',
                 'status.loading': '불러오는 중...',
                 'status.downloading': '다운로드 중',
+                'status.queued': '다운로드 준비 중',
+                'status.finalizing': '설치 및 설정 중',
                 'status.missing': '없음',
                 'status.ready': '준비됨',
                 'status.failed': '실패',
@@ -2089,7 +2098,8 @@
 				'action.updateBrowser': '전용 Chromium 업데이트',
 				'message.browserReady': '준비됨',
 				'message.browserMissing': '설치 필요',
-				'message.browserDownloading': '설치 중...',
+				'message.browserDownloading': '다운로드 중...',
+				'message.browserInstalling': '설치 중...',
 				'message.browserInstalled': '앱 웹 도구는 시스템 Chrome 대신 이 전용 브라우저를 사용합니다.',
 				'browser.meta.provider': '제공자',
 				'browser.meta.version': '버전',
@@ -2227,7 +2237,7 @@
                 'models.meta.state': '상태',
                 'models.progress.default': '다운로드 중...',
                 'models.message.preparing': '다운로드 준비 중...',
-                'models.downloadCompleted': '모델 다운로드가 완료되었습니다.',
+                'models.installCompleted': '설치가 완료되었습니다.',
                 'models.downloadFailed': '모델 다운로드 실패: {error}',
                 'trace.count': '{count}개 항목',
                 'about.version': '버전 {version}',
@@ -2247,6 +2257,8 @@
                 'status.disabled': 'Disabled',
                 'status.loading': 'Loading...',
                 'status.downloading': 'Downloading',
+                'status.queued': 'Preparing download',
+                'status.finalizing': 'Installing and configuring',
                 'status.missing': 'Missing',
                 'status.ready': 'Ready',
                 'status.failed': 'Failed',
@@ -2266,7 +2278,8 @@
 				'action.updateBrowser': 'Update Dedicated Chromium',
 				'message.browserReady': 'Ready',
 				'message.browserMissing': 'Installation required',
-				'message.browserDownloading': 'Installing...',
+				'message.browserDownloading': 'Downloading...',
+				'message.browserInstalling': 'Installing...',
 				'message.browserInstalled': 'App web tools use this dedicated browser instead of system Chrome.',
 				'browser.meta.provider': 'Provider',
 				'browser.meta.version': 'Version',
@@ -2404,7 +2417,7 @@
                 'models.meta.state': 'State',
                 'models.progress.default': 'Downloading...',
                 'models.message.preparing': 'Preparing download...',
-                'models.downloadCompleted': 'Model download completed.',
+                'models.installCompleted': 'Installation complete.',
                 'models.downloadFailed': 'Model download failed: {error}',
                 'trace.count': '{count} entries',
                 'about.version': 'Version {version}',
@@ -2623,15 +2636,17 @@
                         renderDebugTrace();
                     });
 
+                    window.runtime.EventsOn("browser-asset-progress", () => {
+                        refreshManagedModels();
+                        checkBrowserAssetStatus();
+                    });
+
                     window.runtime.EventsOn("managed-model-download", (state) => {
                         applyManagedModelDownloadState(state);
                     });
 
                     window.runtime.EventsOn("managed-model-download-finished", (state) => {
-                        const ok = !!state?.success;
-                        if (ok) {
-                            showAlert(t('models.downloadCompleted'));
-                        } else {
+                        if (!state?.success) {
                             showAlert(t('models.downloadFailed', { error: state?.message || 'Unknown error' }));
                         }
                         refreshManagedModels();
@@ -3319,7 +3334,7 @@
 				const status = await window.go.core.App.GetBrowserAssetStatus();
 				if (status.downloading) {
 					dot.className = 'status-dot';
-					text.textContent = t('message.browserDownloading');
+					text.textContent = t(status.installing ? 'message.browserInstalling' : 'message.browserDownloading');
 					text.style.color = 'var(--text-secondary)';
 					return status;
 				}
@@ -3364,7 +3379,7 @@
 			const downloading = !!status?.downloading;
 			const supported = status?.supported !== false;
 			const chipLabel = downloading
-				? t('message.browserDownloading')
+				? t(status.installing ? 'message.browserInstalling' : 'message.browserDownloading')
 				: (installed ? t('message.browserReady') : t('message.browserMissing'));
 			const buttonLabel = installed ? t('action.updateBrowser') : t('action.prepareBrowser');
 			const version = escapeHtml(String(status?.version || '—'));
@@ -3391,7 +3406,7 @@
 						<button class="btn btn-primary btn-compact" id="browser-asset-download-btn"
 							onclick="downloadBrowserAsset()" ${!supported || downloading ? 'disabled' : ''}>
 							<span class="material-icons-round">${downloading ? 'downloading' : 'download'}</span>
-							<span>${escapeHtml(buttonLabel)}</span>
+							<span>${escapeHtml(downloading ? chipLabel : buttonLabel)}</span>
 						</button>
 					</div>
 				</div>
@@ -3434,9 +3449,12 @@
             const scope = String(options.scope || 'manager');
             const rawStatus = String(item.status || 'unknown');
             const status = escapeHtml(rawStatus);
-            const displayName = escapeHtml(String(item.displayName || item.modelId || item.key || 'Model'));
+            const displayName = escapeHtml(item.modelId === 'embeddinggemma-2-440m' && currentServerLanguage === 'ko'
+                ? 'EmbeddingGemma 2 (로컬)'
+                : String(item.displayName || item.modelId || item.key || 'Model'));
             const installDir = escapeHtml(String(item.installDir || ''));
-            const message = escapeHtml(String(item.message || ''));
+            const preparingOrInstalling = rawStatus === 'queued' || rawStatus === 'finalizing';
+            const message = escapeHtml(preparingOrInstalling ? t(`status.${rawStatus}`) : String(item.message || ''));
             const provider = escapeHtml(String(item.provider || ''));
             const modelId = escapeHtml(String(item.modelId || ''));
             const backend = escapeHtml(String(item.backend || ''));
@@ -3461,7 +3479,7 @@
                 ? `
                     <div class="welcome-model-summary">
                         <div class="welcome-model-copy">${escapeHtml(getManagedModelIntro(item))}</div>
-                        <div class="welcome-model-state" id="${scope}-managed-model-message-${domKey}">${message}</div>
+                        <div class="welcome-model-state" aria-live="polite" id="${scope}-managed-model-message-${domKey}">${message}</div>
                     </div>
                 `
                 : `
@@ -3470,7 +3488,7 @@
                         <div><strong>${escapeHtml(t('models.meta.modelId'))}:</strong> ${modelId}</div>
                         ${backend ? `<div><strong>${escapeHtml(t('models.meta.backend'))}:</strong> ${backend}</div>` : ''}
                         <div><strong>${escapeHtml(t('models.meta.installDir'))}:</strong> ${installDir}</div>
-                        <div><strong>${escapeHtml(t('models.meta.state'))}:</strong> <span id="${scope}-managed-model-message-${domKey}">${message}</span></div>
+                        <div><strong>${escapeHtml(t('models.meta.state'))}:</strong> <span aria-live="polite" id="${scope}-managed-model-message-${domKey}">${message}</span></div>
                     </div>
                 `;
 
@@ -3481,13 +3499,13 @@
 						${scope === 'manager' ? managerStatusHtml : welcomeStatusHtml}
                     </div>
                     ${metaHtml}
-                    <div class="managed-model-progress" id="${scope}-managed-model-progress-${domKey}" style="${downloading || progressPct > 0 ? '' : 'display:none;'}">
+                    <div class="managed-model-progress${preparingOrInstalling ? ' installing' : ''}" id="${scope}-managed-model-progress-${domKey}" style="${downloading ? '' : 'display:none;'}">
                         <div class="managed-model-progress-bar">
                             <div class="managed-model-progress-fill" id="${scope}-managed-model-progress-fill-${domKey}" style="width: ${Math.max(0, Math.min(progressPct, 100))}%;"></div>
                         </div>
                         <div class="managed-model-progress-meta">
-                            <span id="${scope}-managed-model-progress-text-${domKey}">${progressText || escapeHtml(t('models.progress.default'))}</span>
-                            <span id="${scope}-managed-model-progress-pct-${domKey}">${Math.round(progressPct)}%</span>
+                            <span id="${scope}-managed-model-progress-text-${domKey}">${preparingOrInstalling ? message : progressText || escapeHtml(t('models.progress.default'))}</span>
+                            <span id="${scope}-managed-model-progress-pct-${domKey}">${preparingOrInstalling ? '' : `${Math.round(progressPct)}%`}</span>
                         </div>
                         <div class="managed-model-progress-file" id="${scope}-managed-model-progress-file-${domKey}" style="${currentFile ? '' : 'display:none;'}">${currentFile}</div>
                     </div>
@@ -3554,7 +3572,10 @@
 
             const progressPct = Number(state?.progressPct || 0);
             const active = !!state?.active;
-            const status = active ? 'downloading' : (state?.success ? 'ready' : 'failed');
+            const status = active ? state.status : (state?.success ? 'ready' : 'failed');
+            const preparingOrInstalling = status === 'queued' || status === 'finalizing';
+            const message = preparingOrInstalling ? t(`status.${status}`)
+                : state?.success ? t('models.installCompleted') : String(state?.message || '');
 
             if (chipEl) {
 				const statusLabel = t(`status.${status}`);
@@ -3569,20 +3590,21 @@
 					chipEl.textContent = statusLabel;
 				}
             }
-            if (messageEl) {
-                messageEl.textContent = String(state?.message || '');
+            if (messageEl && messageEl.textContent !== message) {
+                messageEl.textContent = message;
             }
             if (progressEl) {
-                progressEl.style.display = active || progressPct > 0 ? '' : 'none';
+                progressEl.style.display = active ? '' : 'none';
+                progressEl.classList.toggle('installing', preparingOrInstalling);
             }
             if (fillEl) {
                 fillEl.style.width = `${Math.max(0, Math.min(progressPct, 100))}%`;
             }
             if (textEl) {
-                textEl.textContent = String(state?.message || t('models.progress.default'));
+                textEl.textContent = message || t('models.progress.default');
             }
             if (pctEl) {
-                pctEl.textContent = `${Math.round(progressPct)}%`;
+                pctEl.textContent = preparingOrInstalling ? '' : `${Math.round(progressPct)}%`;
             }
             if (fileEl) {
                 fileEl.textContent = String(state?.currentFile || '');
@@ -3597,6 +3619,7 @@
         }
 
         function applyManagedModelDownloadState(state) {
+            if (state?.key) managedModelsRefresh?.set(state.key, state);
             applyManagedModelDownloadStateToScope('manager', state);
             applyManagedModelDownloadStateToScope('welcome', state);
         }
@@ -3604,10 +3627,13 @@
         async function refreshManagedModels() {
             const listEl = document.getElementById('managed-models-list');
             const rootEl = document.getElementById('models-root-dir');
-            if (listEl) {
+            if (!listEl.hasChildNodes()) {
                 listEl.innerHTML = `<div style="color: var(--text-secondary); font-size: 13px;">${escapeHtml(t('status.loading'))}</div>`;
             }
 
+            // Keep events that arrive while the status snapshot is in flight.
+            const updates = new Map();
+            managedModelsRefresh = updates;
             try {
                 const [modelsRoot, managedModels, browserStatus] = await Promise.all([
                     window.go?.core?.App?.GetModelsRootDir?.() ?? '',
@@ -3615,18 +3641,26 @@
 					window.go?.core?.App?.GetBrowserAssetStatus?.() ?? null
                 ]);
 
+                if (managedModelsRefresh !== updates) return;
                 if (rootEl) {
                     rootEl.textContent = modelsRoot || 'Not available';
                 }
 
-                if (!listEl) return;
+                const modalBody = listEl.closest('.modal-body');
+                const scrollTop = modalBody.scrollTop;
                 const items = Array.isArray(managedModels) ? managedModels : [];
 				const modelCards = items.map((item) => renderManagedModelCard(item, { scope: 'manager' })).join('');
 				listEl.innerHTML = modelCards + renderBrowserAssetCard(browserStatus);
+                for (const state of updates.values()) {
+                    applyManagedModelDownloadStateToScope('manager', state);
+                }
+                modalBody.scrollTop = scrollTop;
             } catch (e) {
-                if (listEl) {
+                if (managedModelsRefresh === updates) {
                     listEl.innerHTML = `<div style="color: var(--danger-color); font-size: 13px;">${escapeHtml(currentServerLanguage === 'ko' ? '모델 상태를 불러오지 못했습니다.' : 'Failed to load model status.')}</div>`;
                 }
+            } finally {
+                if (managedModelsRefresh === updates) managedModelsRefresh = null;
             }
         }
 

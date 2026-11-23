@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"dinkisstyle-chat/internal/mcp"
+	"dinkisstyle-chat/internal/mediapipeworker"
 )
 
 type EmbeddingModelConfig struct {
@@ -113,7 +114,7 @@ func getEmbeddingModelStatus(cfg EmbeddingModelConfig) ManagedModelStatus {
 
 	displayName, downloadURL := cfg.ModelID, ""
 	if cfg.ModelID == jevModelID {
-		displayName, downloadURL = "EmbeddingGemma 2 + JEV (local)", jevModelURL
+		displayName, downloadURL = "EmbeddingGemma 2 (Local)", jevModelURL
 	}
 	backend := ""
 	if selected {
@@ -238,11 +239,11 @@ func (a *App) GetManagedModels() []ManagedModelStatus {
 	for i := range items {
 		if state, ok := getManagedDownloadState(items[i].Key); ok {
 			items[i].Downloading = state.Active
-			items[i].CurrentFile = state.CurrentFile
-			items[i].ProgressPct = state.ProgressPct
-			items[i].ProgressText = state.Message
 			if state.Active {
-				items[i].Status = "downloading"
+				items[i].CurrentFile = state.CurrentFile
+				items[i].ProgressPct = state.ProgressPct
+				items[i].ProgressText = state.Message
+				items[i].Status = state.Status
 				items[i].Message = state.Message
 			} else if state.Finished && !state.Success {
 				items[i].Status = "failed"
@@ -285,7 +286,11 @@ func (a *App) ExportEmbeddingModelManifest() (string, error) {
 		},
 	}
 	if cfg.ModelID == jevModelID {
-		manifest = map[string]interface{}{"provider": "local", "model_id": jevModelID, "download_url": jevModelURL, "required_files": getEmbeddingModelRequiredFiles(jevModelID), "download_files": map[string]string{jevModelFile: jevModelURL + "/resolve/main/" + jevModelFile}, "runtime": "mediapipe==1.1.0, Python 3.12", "dimension": 256, "api_key_required": false}
+		runtimeDescription := "MediaPipe 1.1.0 (Python 3.12)"
+		if mediapipeworker.Supported {
+			runtimeDescription = "MediaPipe Tasks C API 1.1.0"
+		}
+		manifest = map[string]interface{}{"provider": "local", "model_id": jevModelID, "download_url": jevModelURL, "required_files": getEmbeddingModelRequiredFiles(jevModelID), "download_files": map[string]string{jevModelFile: jevModelURL + "/resolve/main/" + jevModelFile}, "runtime": runtimeDescription, "dimension": 256, "api_key_required": false}
 	}
 	raw, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {

@@ -1,5 +1,5 @@
 import {StartupSTT} from './startup-stt.mjs';
-import {TranslationDirection,pronunciationText} from './translation-direction.mjs';
+import {TranslationDirection} from './translation-direction.mjs';
 import {isInformationHintPlan} from './hint-policy.mjs';
 import {localizeVerifiedHint,hintNeedsLocalization} from './hint-localization.mjs';
 import {limitHUDResponse} from './ai-response-limit.mjs';
@@ -33,7 +33,7 @@ import {TranslationHistory} from './translation-history.mjs';
 import {ChatMemory,routeAIUtterance} from './ai-conversation.mjs';
 import {localTranslate} from './chrome-translation.mjs';
 import {filterSpeakerPCM} from './speaker-filter.mjs';
-import { mergeTranslationDisplay, hasCompleteTranslationReplies, parseTranslationDisplay, translationReplyText, translationPhoneText } from './translation-display.mjs';
+import { mergeTranslationDisplay, hasCompleteTranslationReplies, translationRepliesMatchLanguages,parseTranslationDisplay, translationReplyText, translationPhoneText } from './translation-display.mjs';
 import { directQuestionIntent } from './direct-question.mjs';
 import { parseCueResponse, parseHintPlan, hintResultKind, extractHintFact, readHintPlanResponse } from './hint-enrichment.mjs';
 import { HintGate,hintActivityTiming } from './hint-gate.mjs';
@@ -719,7 +719,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       if(normalizeGlassesMode(config.glassesMode)!=='translate')return;
       translationPaint={id:job.id,at:Date.now(),acked:false,content:''};
       liveTranslationDraft=job.draft;
-      translationFailure='';translationDisplay={...translationDisplay,translation:text,pronunciation:''};answerText=text;
+      translationFailure='';translationDisplay={...translationDisplay,translation:text};answerText=text;
       translationHistory.update(job.historyId || job.id,text,{final:!job.draft,revision:job.id});
       els.chatOutput.textContent=translationPhoneText(translationDisplay);
       els.chromeTranslationStatus.textContent=job.draft?`${localLabel()} 실시간 번역 · 인식에 따라 수정됩니다`:`${localLabel()} 확정 번역${subtitleOnly()?'':' · 답변 예시 생성 중'}`;renderLiveHUD();
@@ -998,6 +998,15 @@ import { LocalAgreement } from './local-agreement.mjs';
     if (els.translateSourceLang && els.translateSourceLang.value !== sourceLang) els.translateSourceLang.value = sourceLang;
     if (els.translateTargetLang && els.translateTargetLang.value !== targetLang) els.translateTargetLang.value = targetLang;
     if (els.translateLangRow) els.translateLangRow.hidden = false;
+    const translating = mode === 'translate';
+    document.querySelector?.('.plugin-container')?.classList.toggle('translation-mode', translating);
+    const quickControls = document.getElementById('translation-quick-controls');
+    const settingsHome = document.getElementById('translation-settings-home');
+    if (quickControls && settingsHome && els.translateLangRow) {
+      quickControls.hidden = !translating;
+      const parent = translating ? quickControls : settingsHome;
+      if (els.translateLangRow.parentElement !== parent) parent.appendChild(els.translateLangRow);
+    }
     for (const [btn, key] of [
       [els.modeBtnAi, 'ai'],
       [els.modeBtnTranslate, 'translate'],
@@ -1489,7 +1498,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     if(oldestTranslation && oldestTranslation.shownAt+duration<=now){
       translationHistory.expireBefore(now-duration);
       if(!translationHistory.entries.length && normalizeGlassesMode(config.glassesMode)==='translate'){
-        translationDisplay={...translationDisplay,translation:'',pronunciation:''};
+        translationDisplay={...translationDisplay,translation:''};
         answerText='';
         translationPaint=null;
         els.chatOutput.textContent=translationPhoneText(translationDisplay);
@@ -2920,10 +2929,8 @@ import { LocalAgreement } from './local-agreement.mjs';
           const previousTranslation=translationDisplay.translation;
           const parsedTranslation=parseTranslationDisplay(raw);
           if(options.replyOnly)parsedTranslation.translation='';
-          if(commitReplies && options.replyOnly && translationDisplay.translation && targetLang!=='ko' && targetLang!=='en' && parsedTranslation.pronunciation){
-            translationDisplay.pronunciation=parsedTranslation.pronunciation;
-            const spoken=pronunciationText(translationDisplay.translation,parsedTranslation.pronunciation,targetLang);
-            translationHistory.update(options.translationHistoryId,spoken,{final:true,revision:options.translationRevisionId || options.translationHistoryId,refresh:false});
+          if(commitReplies && !translationRepliesMatchLanguages(parsedTranslation,chromeSource,targetLang)){
+            parsedTranslation.positive='';parsedTranslation.negative='';
           }
           if(separateLLMReplies && !subtitleOnly()){parsedTranslation.positive='';parsedTranslation.negative='';}
           if(commitReplies && !chromeText && (!parsedTranslation.translation || ['…','...'].includes(parsedTranslation.translation)))throw Error('LLM에서 번역문을 받지 못했습니다.');
@@ -3389,7 +3396,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       if(!select)continue;
       select.innerHTML='';
       const options=roleModelOptions(availableModels,config.model,selected).filter(option=>role!=='hintDecision' || option.id!==JEV_ONLY);
-      if(role==='hintDecision' && !options.some(option=>option.id===JEV_ONLY))options.splice(1,0,{id:JEV_ONLY,label:'사전·JEV만 사용 (판별 LLM 끔)'});
+      if(role==='hintDecision' && !options.some(option=>option.id===JEV_ONLY))options.splice(1,0,{id:JEV_ONLY,label:'로컬 후보 판별'});
       for(const model of options){
         const option=document.createElement('option');option.value=model.id;option.textContent=model.label;select.appendChild(option);
       }

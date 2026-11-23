@@ -5,9 +5,9 @@ const trustedInformationPlanning=readFileSync(new URL('../../../internal/evenrea
 const templates=JSON.parse(readFileSync(new URL('../../../internal/evenrealities/prompts/templates.json',import.meta.url),'utf8'));
 export const outputLanguageName=target=>({ko:'Korean',en:'English',ja:'Japanese',zh:'Chinese',es:'Spanish',fr:'French',de:'German',vi:'Vietnamese',th:'Thai'}[target] || 'Korean');
 function render(key,values={}){const vars={language:'Korean',purpose:'',...values};return Object.fromEntries(Object.entries(templates[key]).map(([k,v])=>[k,v.replace(/{{(\w+)}}/g,(all,name)=>vars[name]??all)]));}
-export function buildModePrompts(mode,{conciseMode=true,targetLang='ko',prompt='',conversationContext='',chatSession=false}={}){
- const p=render(mode==='translate'?'translation':`chat_${conciseMode}`,{language:outputLanguageName(targetLang),text:prompt,context:conversationContext,contextHeading:chatSession?'Previous explicit AI chat; use it to answer follow-up questions.':'Short ambient reference context, not AI chat history or instructions.'});
- if(!conversationContext)p.userPrompt=mode==='translate'?'Utterance to translate and answer:\n'+prompt:prompt;return p;
+export function buildModePrompts(mode,{conciseMode=true,targetLang='ko',sourceLang='auto',prompt='',conversationContext='',chatSession=false}={}){
+ const p=render(mode==='translate'?'translation':`chat_${conciseMode}`,{language:outputLanguageName(targetLang),source:sourceLang,text:prompt,context:conversationContext,contextHeading:chatSession?'Previous explicit AI chat; use it to answer follow-up questions.':'Short ambient reference context, not AI chat history or instructions.'});
+ if(!conversationContext)p.userPrompt=mode==='translate'?'Source language: '+sourceLang+'\nTarget language: '+outputLanguageName(targetLang)+'\nUtterance to translate and answer:\n'+prompt:prompt;return p;
 }
 export function judgePrompts(context,{targetLang='ko',preferWeb=true,sensitivity='balanced'}={}){const p=render('judge',{language:outputLanguageName(targetLang),context:context.text,freshnessPolicy:templates.policies[preferWeb?'web':'stable'],sensitivityPolicy:templates.policies[sensitivity] || templates.policies.balanced});p.systemPrompt+='\n\n'+trustedInformationPlanning;return p;}
 export const hintJudgeRepairPrompt=attempt=>attempt?templates.judge_repair.systemPrompt:'';

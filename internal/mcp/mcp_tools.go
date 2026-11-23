@@ -169,18 +169,18 @@ func GetToolList() []Tool {
 	tools := []Tool{
 		{
 			Name:        "search_web",
-			Description: "Search the internet for current information using the app's available search providers.",
+			Description: "Run one focused web search and return source titles, links and snippets. Use for a single lookup, including a short request for a stock quote, weather, exchange rate or date. If the subject is clear, look it up before asking for more detail.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
-					"query": map[string]interface{}{"type": "string", "description": "Search query"},
+					"query": map[string]interface{}{"type": "string", "description": "Compact search terms with the subject and fact to find, such as 'NAVER 주가'. Add a date, location or identifier only when useful."},
 				},
 				"required": []string{"query"},
 			},
 		},
 		{
 			Name:        "search_web_multi",
-			Description: "Run exactly two independent web searches concurrently and return both result sets in deterministic query order. Use this for freshness-sensitive requests such as latest news, current events, recent changes, comparisons, or multi-angle research; use search_web for a stable single lookup.",
+			Description: "Run exactly two complementary web searches concurrently, returning both result sets in query order. Use for comparisons, cross-checking independent sources or researching two distinct aspects. Use search_web for a single lookup, including current facts.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{

@@ -234,7 +234,7 @@ func AssembleRequest(body []byte) ([]byte, bool, error) {
 		case "chat":
 			user = req.Text
 		case "translation":
-			user = "Utterance to translate and answer:\n" + req.Text
+			user = "Source language: " + req.Source + "\nTarget language: " + glassesLanguage(req.Target) + "\nUtterance to translate and answer:\n" + req.Text
 		case "translation_only":
 			values["context"] = "(none)"
 			user = strings.Replace(user, "Short reference context:\n\n", "Short reference context:\n(none)\n", 1)

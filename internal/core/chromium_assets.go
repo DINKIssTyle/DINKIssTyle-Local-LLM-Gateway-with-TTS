@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"dinkisstyle-chat/internal/mcp"
+
+	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 const chromeForTestingManifestURL = "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json"
@@ -22,6 +24,7 @@ type BrowserAssetStatus struct {
 	Supported      bool   `json:"supported"`
 	Installed      bool   `json:"installed"`
 	Downloading    bool   `json:"downloading"`
+	Installing     bool   `json:"installing"`
 	Version        string `json:"version"`
 	ExecutablePath string `json:"executablePath"`
 	InstallDir     string `json:"installDir"`
@@ -38,6 +41,7 @@ type chromeForTestingMetadata struct {
 var browserAssetState struct {
 	sync.Mutex
 	downloading bool
+	installing  bool
 }
 
 func chromeForTestingExecutablePath() string {
@@ -83,12 +87,14 @@ func (a *App) GetBrowserAssetStatus() BrowserAssetStatus {
 
 	browserAssetState.Lock()
 	downloading := browserAssetState.downloading
+	installing := browserAssetState.installing
 	browserAssetState.Unlock()
 
 	status := BrowserAssetStatus{
 		Supported:      platformErr == nil,
 		Installed:      executable != "",
 		Downloading:    downloading,
+		Installing:     installing,
 		Version:        metadata.Version,
 		ExecutablePath: executable,
 		InstallDir:     getChromeForTestingInstallDir(),
@@ -96,8 +102,10 @@ func (a *App) GetBrowserAssetStatus() BrowserAssetStatus {
 	}
 	if platformErr != nil {
 		status.Message = platformErr.Error()
+	} else if installing {
+		status.Message = "Installing Chrome for Testing..."
 	} else if downloading {
-		status.Message = "Downloading and installing Chrome for Testing..."
+		status.Message = "Downloading Chrome for Testing..."
 	} else if status.Installed {
 		status.Message = "Dedicated Chromium is ready for app tool web access."
 	}
@@ -182,7 +190,7 @@ func downloadChromeArchive(url, destination string) error {
 	return nil
 }
 
-func installChromeForTesting(metadata chromeForTestingMetadata) error {
+func installChromeForTesting(metadata chromeForTestingMetadata, onDownloaded func()) error {
 	installDir := getChromeForTestingInstallDir()
 	parentDir := filepath.Dir(installDir)
 	if err := os.MkdirAll(parentDir, 0755); err != nil {
@@ -198,6 +206,7 @@ func installChromeForTesting(metadata chromeForTestingMetadata) error {
 	if err := downloadChromeArchive(metadata.DownloadURL, archivePath); err != nil {
 		return err
 	}
+	onDownloaded()
 	extractDir := filepath.Join(workDir, "extract")
 	if err := os.MkdirAll(extractDir, 0755); err != nil {
 		return err
@@ -260,14 +269,26 @@ func (a *App) DownloadBrowserAsset() error {
 	defer func() {
 		browserAssetState.Lock()
 		browserAssetState.downloading = false
+		browserAssetState.installing = false
 		browserAssetState.Unlock()
 	}()
 
+	notifyProgress := func() {
+		if a.ctx != nil {
+			wruntime.EventsEmit(a.ctx, "browser-asset-progress")
+		}
+	}
+	notifyProgress()
 	metadata, err := fetchChromeForTestingDownload()
 	if err != nil {
 		return err
 	}
-	if err := installChromeForTesting(metadata); err != nil {
+	if err := installChromeForTesting(metadata, func() {
+		browserAssetState.Lock()
+		browserAssetState.installing = true
+		browserAssetState.Unlock()
+		notifyProgress()
+	}); err != nil {
 		return err
 	}
 	executable := findChromeForTestingExecutable()

@@ -14,12 +14,11 @@ export class TranslationDirection {
       if(actual==='ko' && !partner)return null;
       source=actual || source;target=actual==='ko'?partner:'ko';
     }
+    // Preserve STT's detected source for reply generation in every target language.
+    if(source==='auto' && /^[a-z]{2}$/.test(actual))source=actual;
     if(Number.isFinite(at))this.latest=at;
     const pair=source+'>'+target,changed=!!this.pair && pair!==this.pair;
     this.pair=pair;
     return {source,target,changed};
   }
-}
-export function pronunciationText(text,pronunciation,target){
-  return target!=='ko' && target!=='en' && pronunciation?.trim()?text+'\n발음: '+pronunciation.trim():text;
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 
 	bundledata "dinkisstyle-chat/bundle"
 	"dinkisstyle-chat/internal/mcp"
+	"dinkisstyle-chat/internal/mediapipeworker"
 )
 
 const jevModelID = "embeddinggemma-2-440m"
@@ -34,7 +36,7 @@ func installJevChoiceProvider(rt *embeddingRuntime, enabled bool) {
 		defer rt.mu.Unlock()
 		encoder, ok := rt.encoder.(*jevEncoder)
 		if !ok {
-			return "", fmt.Errorf("JEV runtime unavailable")
+			return "", fmt.Errorf("MediaPipe decision runtime unavailable")
 		}
 		return encoder.Choose(query, criteria)
 	})
@@ -115,7 +117,22 @@ type jevReply struct {
 
 func loadJevRuntime(cfg EmbeddingModelConfig) (*embeddingRuntime, embeddingRuntimeInfo, error) {
 	info := embeddingRuntimeInfo{Backend: jevEmbeddingBackend}
-	worker, err := startJevEncoder(jevPythonPath(), filepath.Join(getEmbeddingModelInstallDir(cfg.ModelID), jevModelFile), jevRuntimeDir())
+	model := filepath.Join(getEmbeddingModelInstallDir(cfg.ModelID), jevModelFile)
+	var worker *jevEncoder
+	var err error
+	if library := availableMediaPipeLibrary(); library != "" {
+		var executable string
+		executable, err = os.Executable()
+		if err == nil {
+			worker, err = startMediaPipeWorker(exec.Command(executable, mediapipeworker.Argument, library, model))
+		}
+		if err != nil && fileExists(jevPythonPath()) {
+			log.Printf("[MediaPipe] Native worker unavailable, using installed Python runtime: %v", err)
+		}
+	}
+	if worker == nil && (err == nil || fileExists(jevPythonPath())) {
+		worker, err = startJevEncoder(jevPythonPath(), model, jevRuntimeDir())
+	}
 	if err != nil {
 		info.Message = err.Error()
 		return nil, info, err
@@ -133,9 +150,13 @@ func startJevEncoder(python, model, root string) (*jevEncoder, error) {
 	if !fileExists(python) {
 		return nil, fmt.Errorf("MediaPipe runtime is missing; download EmbeddingGemma 2 in model manager")
 	}
-	worker := &jevEncoder{done: make(chan error, 1)}
-	worker.cmd = exec.Command(python, "-u", path, "--model", model)
-	worker.cmd.Env = append(os.Environ(), "MPLCONFIGDIR="+filepath.Join(root, "mpl"), "PYTHONUNBUFFERED=1")
+	cmd := exec.Command(python, "-u", path, "--model", model)
+	cmd.Env = append(os.Environ(), "MPLCONFIGDIR="+filepath.Join(root, "mpl"), "PYTHONUNBUFFERED=1")
+	return startMediaPipeWorker(cmd)
+}
+
+func startMediaPipeWorker(cmd *exec.Cmd) (*jevEncoder, error) {
+	worker := &jevEncoder{done: make(chan error, 1), cmd: cmd}
 	worker.cmd.Stderr = &worker.log
 	input, err := worker.cmd.StdinPipe()
 	if err != nil {

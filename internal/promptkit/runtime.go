@@ -215,6 +215,12 @@ func buildToolUsage(envInfo string, modelID string, useNativeTools bool, tools [
 	lines := []string{"", "", toolGuidelineMarker}
 	has := func(names ...string) bool { return toolDefinitionsContain(tools, names...) }
 
+	if has("search_web") {
+		lines = append(lines,
+			"WEB LOOKUP: A short request with a clear subject and a time-sensitive fact (e.g. '네이버 주가', '서울 날씨', 'USD/KRW 환율') calls for one search_web lookup before asking a follow-up. If no date is given, look for the latest available value. Use a compact query with the subject and requested fact. Ask for clarification only if materially different interpretations remain after the lookup.",
+			"MARKET DATA: For a quote, verify the instrument, currency, and quote or session time from the source. Distinguish live, delayed, and closing prices. Do not treat search retrieval time as the quote time or combine conflicting prices into a current price.",
+		)
+	}
 	if useNativeTools {
 		lines = append(lines, nativeToolGuidelines(tools)...)
 	} else {
@@ -316,9 +322,14 @@ func nativeToolGuidelines(tools []ToolDefinition) []string {
 		"5. After a sufficient tool result, answer directly. Do not repeat equivalent calls.",
 		"6. If the user explicitly requests a safe bulk tool test, continue one remaining tool at a time and finish with a pass/fail/skipped summary.",
 	}
+	if has("search_web", "search_web_multi", "naver_search", "namu_wiki") {
+		lines = append(lines,
+			"SEARCH PREAMBLE: When the user explicitly asks you to look something up and you are about to make the first web search for this request, write one short user-visible sentence naming what you will look up, in the user's language. End it with a blank line and immediately emit the native tool call in the same response. Do this only once per request. Keep reasoning private and brief. If the provider requires a tool-only response, call the tool directly.",
+		)
+	}
 	if has("search_web", "search_web_multi", "naver_search", "read_web_page", "read_buffered_source", "namu_wiki") {
 		lines = append(lines,
-			"WEB: Unless a relevant skill prescribes its own source and tool order, for fresh news, current events, or genuine comparison, use available search tools with complementary queries: broad discovery plus official/primary or established-news verification, using CURRENT_TIME's year.",
+			"WEB: Follow a relevant skill's source and tool order. Use complementary queries for comparisons or research that requires independent perspectives; a single current fact usually needs one focused query.",
 			"WEB: Usually use one search call and at most three evidence calls. Cite returned links, answer when evidence is sufficient, and read a page/buffer only for missing high-value detail.",
 			"WEB: Use relevant retrieved evidence and cite it. Resolve material conflicts or missing details with available tools. Qualify only the affected claim; do not invent dates or facts.",
 			"WEB: For relatives, verify and distinguish biological, adopted, and step relationships; never infer birth from wording such as 'children with'.",

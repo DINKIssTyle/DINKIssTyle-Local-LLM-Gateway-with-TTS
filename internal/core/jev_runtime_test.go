@@ -3,22 +3,37 @@ package core
 import (
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"dinkisstyle-chat/internal/mcp"
+	"dinkisstyle-chat/internal/mediapipeworker"
 )
 
-// Run with DKST_JEV_TEST_PYTHON and DKST_JEV_TEST_MODEL to exercise the actual
-// installed runtime. Normal tests never download models or access user data.
+// Use DKST_JEV_TEST_MODEL with DKST_JEV_TEST_PYTHON, or with
+// DKST_MEDIAPIPE_TEST_EXECUTABLE and DKST_MEDIAPIPE_TEST_LIBRARY.
 func TestJevRuntimeIntegration(t *testing.T) {
 	python, model := os.Getenv("DKST_JEV_TEST_PYTHON"), os.Getenv("DKST_JEV_TEST_MODEL")
-	if python == "" || model == "" {
+	executable, library := os.Getenv("DKST_MEDIAPIPE_TEST_EXECUTABLE"), os.Getenv("DKST_MEDIAPIPE_TEST_LIBRARY")
+	if wheel := os.Getenv("DKST_MEDIAPIPE_TEST_WHEEL"); wheel != "" {
+		library = filepath.Join(t.TempDir(), "libmediapipe.dylib")
+		if err := installMediaPipeLibrary(wheel, library); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if model == "" || (python == "" && (executable == "" || library == "")) {
 		t.Skip("local MediaPipe integration assets not specified")
 	}
-	worker, err := startJevEncoder(python, model, t.TempDir())
+	var worker *jevEncoder
+	var err error
+	if executable != "" && library != "" {
+		worker, err = startMediaPipeWorker(exec.Command(executable, mediapipeworker.Argument, library, model))
+	} else {
+		worker, err = startJevEncoder(python, model, t.TempDir())
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

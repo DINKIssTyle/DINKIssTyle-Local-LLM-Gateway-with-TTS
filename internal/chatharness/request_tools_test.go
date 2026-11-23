@@ -31,6 +31,39 @@ func allAppToolDefinitions() []promptkit.ToolDefinition {
 	return tools
 }
 
+func TestPrepareRequestGuidesShortCurrentLookups(t *testing.T) {
+	for _, tc := range []struct {
+		mode string
+		body string
+	}{
+		{"standard", `{"model":"test","messages":[{"role":"user","content":"네이버 주가"}]}`},
+		{"stateful", `{"model":"test","input":"네이버 주가"}`},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			tools := []promptkit.ToolDefinition{{Name: "search_web", InputSchema: json.RawMessage(`{"type":"object"}`)}}
+			input := RequestInput{Body: []byte(tc.body), LLMMode: tc.mode, EnableTools: true, Tools: tools}
+			prepared, err := PrepareRequest(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := string(prepared.Body)
+			for _, want := range []string{"WEB LOOKUP:", "one search_web lookup before asking a follow-up", "quote or session time"} {
+				if !strings.Contains(body, want) {
+					t.Fatalf("missing guidance %q", want)
+				}
+			}
+			input.Tools = testToolDefinitions()
+			prepared, err = PrepareRequest(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(prepared.Body), "WEB LOOKUP:") {
+				t.Fatal("web lookup guidance included without the search tool")
+			}
+		})
+	}
+}
+
 func TestPrepareRequestAddsNativeToolsForOpenAICompatibleMode(t *testing.T) {
 	prepared, err := PrepareRequest(RequestInput{
 		Body:        []byte(`{"model":"test","messages":[{"role":"user","content":"time?"}],"tools":[{"type":"function","function":{"name":"unsafe"}}],"stream":true}`),

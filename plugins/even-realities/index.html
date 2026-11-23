@@ -6,7 +6,7 @@
     <title>
       DKST AI Gateway for Even Realities G2
     </title>
-    <link rel="stylesheet" href="style.css?v=2.24.44">
+    <link rel="stylesheet" href="style.css?v=2.24.47">
   </head>
   <body>
     <div class="plugin-container">
@@ -21,7 +21,7 @@
               DKST Gateway
             </div>
             <div style="font-size: 11px; color: var(--text-secondary);">
-              Even Realities G2 · <span id="plugin-build-version">2.24.44</span>
+              Even Realities G2 · <span id="plugin-build-version">2.24.47</span>
             </div>
           </div>
         </div>
@@ -33,6 +33,22 @@
           </span>
         </div>
       </header>
+      <div class="mode-switcher-card">
+        <div class="mode-switcher" role="tablist" aria-label="안경 동작 모드">
+          <button id="mode-btn-ai" type="button" class="mode-btn active" data-mode="ai" role="tab" aria-selected="true">
+            AI 모드
+          </button>
+          <button id="mode-btn-translate" type="button" class="mode-btn" data-mode="translate" role="tab" aria-selected="false">
+            번역 모드
+          </button>
+        </div>
+        <div id="mode-description" class="mode-description">
+          대화 중 필요한 정보와 AI 답변을 표시합니다.
+        </div>
+        <p id="hint-status" class="setting-status" role="status">
+          대기 중
+        </p>
+      </div>
       <!-- HUD Live Preview -->
       <div class="hud-card">
         <div class="hud-label">
@@ -91,22 +107,7 @@
           </div>
         </div>
       </div>
-      <div class="mode-switcher-card">
-        <div class="mode-switcher" role="tablist" aria-label="안경 동작 모드">
-          <button id="mode-btn-ai" type="button" class="mode-btn active" data-mode="ai" role="tab" aria-selected="true">
-            AI 모드
-          </button>
-          <button id="mode-btn-translate" type="button" class="mode-btn" data-mode="translate" role="tab" aria-selected="false">
-            번역 모드
-          </button>
-        </div>
-        <div id="mode-description" class="mode-description">
-          대화 중 필요한 정보와 AI 답변을 표시합니다.
-        </div>
-        <p id="hint-status" class="setting-status" role="status">
-          대기 중
-        </p>
-      </div>
+      <div id="translation-quick-controls" class="translation-quick-controls" hidden aria-label="번역 기본 설정"></div>
       <div class="voice-action-box">
         <button id="voice-btn" class="mic-btn" title="음성 입력 시작">
           <span class="material-icons-round">
@@ -154,7 +155,7 @@
           번역 모드 · 실시간 번역 + 긍정/부정 답변 표시
         </option>
       </select>
-      <details id="settings-connection" class="settings-section" open>
+      <details id="settings-connection" class="settings-section">
         <summary>
           <span>
             <strong>
@@ -436,12 +437,12 @@
             </span>
           </span>
         </summary>
-        <div class="settings-section-body">
+        <div id="translation-settings-home" class="settings-section-body">
           <p class="setting-help">Whisper · 도착 언어가 한국어이면 양방향 번역합니다. 한국어로 먼저 말하려면 상대 언어를 지정하세요. 내 말도 번역하려면 ‘번역 중 내 목소리 제외’를 끄세요.</p>
           <div id="translate-lang-row" class="translate-lang-row">
-            <div class="form-group">
+            <div class="form-group translation-source-field">
               <label for="translate-source-lang">
-                인식 언어
+                출발 언어
               </label>
               <select id="translate-source-lang">
                 <option value="auto" selected>
@@ -476,9 +477,9 @@
                 </option>
               </select>
             </div>
-            <div class="form-group">
+            <div class="form-group translation-target-field">
               <label for="translate-target-lang">
-                번역 언어
+                도착 언어
               </label>
               <select id="translate-target-lang">
                 <option value="ko" selected>
@@ -511,7 +512,7 @@
               </select>
               <p class="setting-help">AI 모드에서는 Chrome·Apple STT도 이 언어로 듣습니다. AI 힌트와 채팅 답변도 이 언어로 표시합니다.</p>
             </div>
-            <div class="form-group">
+            <div class="form-group translation-engine-field">
               <label for="translation-engine">
                 번역 엔진
               </label>
@@ -536,7 +537,7 @@
                 언어와 엔진을 바꾸면 자동으로 준비됩니다.
               </p>
             </div>
-            <div class="form-group">
+            <div class="form-group translation-speaker-field">
               <label class="setting-toggle">
                 <input type="checkbox" id="translate-exclude-self" checked>
                 <span>
@@ -738,7 +739,7 @@
             </label>
             <select id="model-hint-decision">
               <option value="__jev__">
-                사전·JEV만 사용 (판별 LLM 끔)
+                로컬 후보 판별
               </option>
             </select>
           </div>
@@ -936,7 +937,7 @@
         </button>
       </div>
     </div>
-    <script src="bundle.js?v=2.24.44">
+    <script src="bundle.js?v=2.24.47">
     </script>
   </body>
 </html>

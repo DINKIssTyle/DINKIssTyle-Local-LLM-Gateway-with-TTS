@@ -4,6 +4,7 @@ export namespace core {
 	    supported: boolean;
 	    installed: boolean;
 	    downloading: boolean;
+	    installing: boolean;
 	    version: string;
 	    executablePath: string;
 	    installDir: string;
@@ -18,6 +19,7 @@ export namespace core {
 	        this.supported = source["supported"];
 	        this.installed = source["installed"];
 	        this.downloading = source["downloading"];
+	        this.installing = source["installing"];
 	        this.version = source["version"];
 	        this.executablePath = source["executablePath"];
 	        this.installDir = source["installDir"];

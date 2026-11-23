@@ -6,6 +6,27 @@ import (
 	"testing"
 )
 
+func TestSearchPreambleRequiresNativeSearchTools(t *testing.T) {
+	for _, tc := range []struct {
+		native bool
+		tool   string
+		want   bool
+	}{
+		{true, "search_web", true},
+		{false, "search_web", false},
+		{true, "read_web_page", false},
+		{true, "get_current_time", false},
+	} {
+		prompt := BuildRuntimeInstructions(RuntimeInstructionsInput{
+			UseNativeTools: tc.native,
+			Tools:          []ToolDefinition{{Name: tc.tool, InputSchema: json.RawMessage(`{"type":"object"}`)}},
+		})
+		if got := strings.Contains(prompt, "SEARCH PREAMBLE"); got != tc.want {
+			t.Errorf("native=%t tool=%s: search preamble present=%t, want %t", tc.native, tc.tool, got, tc.want)
+		}
+	}
+}
+
 func TestStatefulFallbackUsesToolSpecificXML(t *testing.T) {
 	prompt := BuildRuntimeInstructions(RuntimeInstructionsInput{
 		Tools: []ToolDefinition{

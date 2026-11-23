@@ -737,17 +737,17 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.equal(translationBox.textColor,4);assert.equal(translationBox.borderColor,4,'decoration is dimmer than translation text');
  assert.equal(translatedLayout.menuObject.menuItems.length,10);
  assert.match(element('hud-screen').innerHTML,/번역 · 추천 답변/);
- chatReply=sseReply('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify({translation:"커피 드시겠어요?",positive:"네, 주세요.\nYes, please.",negative:"괜찮습니다.\nNo, thank you."})}}]})+'\n\ndata: [DONE]\n\n');
+ chatReply=sseReply('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify({translation:"커피 드시겠어요?",positive:"Yes, please.\n네, 주세요.",negative:"No, thank you.\n괜찮습니다."})}}]})+'\n\ndata: [DONE]\n\n');
  nextTranscript='Would you like some coffee?';
  utterance();await tick();await tick();await tick();
  const lastSttBody = JSON.parse(requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).at(-1).opts.body);
  assert.equal(lastSttBody.language,'auto','Whisper translation into Korean must detect both conversation languages');
  const lastTranslateChat = JSON.parse(requests.filter(r=>r.url.endsWith('/api/chat')).at(-1).opts.body);
  assert.match(lastTranslateChat.messages[0].content,/positive[\s\S]*negative/);
- assert.match(element('chat-output').textContent,/긍정: 네, 주세요\./);
+ assert.match(element('chat-output').textContent,/긍정: Yes, please\./);
  assert.match(element('hud-screen').innerHTML,/hud-ai-body">커피 드시겠어요\?/);
  const preview=element('hud-screen').innerHTML;
- assert.match(preview,/예상 답변/);assert.match(preview,/긍정: 네, 주세요/);assert.match(preview,/부정: 괜찮습니다/);
+ assert.match(preview,/예상 답변/);assert.match(preview,/긍정: Yes, please/);assert.match(preview,/부정: No, thank you/);
  assert.doesNotMatch(preview,/\[중립\]|Maybe later|Would you like some coffee/);
  assert.doesNotMatch(preview.split('hud-transcript-box')[0],/Yes, please|No, thank you|네, 주세요|괜찮습니다|\[번역\]/,'box must contain only translation, not reply choices');
 
@@ -763,7 +763,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  }})}};
  nextTranscript='Next sentence';utterance('other');await tick();await tick();await tick();
  assert.match(element('hud-screen').innerHTML,/hud-ai-body">커피 드시겠어요\?/,'LLM startup and reply-only chunks must keep the previous translation');
- assert.match(element('hud-screen').innerHTML,/긍정: 네, 주세요/);
+ assert.match(element('hud-screen').innerHTML,/긍정: Yes, please/);
  finishLLMTranslation();await tick();await tick();await tick();
  assert.match(element('hud-screen').innerHTML,/hud-ai-body">[\s\S]*다음 번역문입니다/);
  chatReply={ok:false,status:500,text:async()=>'LLM unavailable'};
@@ -785,10 +785,10 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  llmLive.submit({id:'llm-stable',engine:'llm',source:'en',target:'ko',prompt:'A complete stable sentence.',draft:true});for(let i=0;i<10;i++)await tick();
  assert.match(element('hud-screen').innerHTML,/확정 전 문장 단위 번역/);
  assert.ok(!requests.slice(llmPreviewStart).some(r=>r.url.endsWith('/api/stt/transcribe')));
- chatReply=sseReply('data: '+JSON.stringify({type:'request.complete',final_assistant_content:JSON.stringify({positive:'네 좋아요\nYes',negative:'아니요 괜찮아요\nNo'})})+'\n\n');
+ chatReply=sseReply('data: '+JSON.stringify({type:'request.complete',final_assistant_content:JSON.stringify({positive:'Yes\n네 좋아요',negative:'No\n아니요 괜찮아요'})})+'\n\n');
  llmLive.submit({id:'llm-stable',engine:'llm',source:'en',target:'ko',prompt:'A complete stable sentence.',draft:false});for(let i=0;i<15;i++)await tick();
  assert.deepEqual(requests.slice(llmPreviewStart).filter(r=>r.url.endsWith('/api/chat')).map(r=>JSON.parse(r.opts.body).glasses_task),['translation_preview','translation_replies']);
- assert.match(element('hud-screen').innerHTML,/확정 전 문장 단위 번역/);assert.match(element('hud-screen').innerHTML,/긍정: 네 좋아요/);
+ assert.match(element('hud-screen').innerHTML,/확정 전 문장 단위 번역/);assert.match(element('hud-screen').innerHTML,/긍정: Yes/);
  llmLive.reset();
  element('chrome-translation').checked=true;await element('chrome-translation').handlers.change();
 
@@ -800,15 +800,17 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.equal(jaSttBody.language,'auto','Whisper must detect both Japanese and Korean with selected Japanese partner');
  assert.doesNotMatch(element('hud-notice').textContent,/전사 오류/);
  // Korean wearer speech reverses the selected Japanese pair; the prior box
- // is cleared and a final pronunciation is added without replacing translation.
+ // is cleared; reply romanization must not add pronunciation to the translation.
  chromeText='ありがとうございます。';
- chatReply=sseReply('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify({positive:'どういたしまして。\n천만에요.',negative:'いいえ。\n아니요.',pronunciation:'아리가토 고자이마스'})}}]})+'\n\ndata: [DONE]\n\n');
+ chatReply=sseReply('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify({positive:'Cheonmaneyo.\nどういたしまして。',negative:'Aniyo.\nいいえ。',pronunciation:'아리가토 고자이마스'})}}]})+'\n\ndata: [DONE]\n\n');
  nextTranscript='감사합니다';utterance('other');await tick();await tick();await tick();await tick();
  const reverseRequest=JSON.parse(requests.filter(r=>r.url.endsWith('/api/translate/chrome')).at(-1).opts.body);
  assert.equal(reverseRequest.source,'ko');assert.equal(reverseRequest.target,'ja');
  assert.equal(context.window.__queueTest.translationHistory.entries.length,1,'a language turn starts a fresh translation box');
  assert.match(context.window.__queueTest.translationHistory.text(),/ありがとうございます/);
- assert.match(context.window.__queueTest.translationHistory.text(),/발음: 아리가토 고자이마스/);
+ assert.doesNotMatch(context.window.__queueTest.translationHistory.text(),/발음:|아리가토/);
+ assert.match(element('hud-screen').innerHTML,/긍정: Cheonmaneyo/);
+ assert.match(element('hud-screen').innerHTML,/どういたしまして/);
  assert.doesNotMatch(context.window.__queueTest.translationHistory.text(),/커피|안녕하세요/);
  // Local translation is visible before a slow reply LLM and the next utterance
  // can replace it without waiting for the previous LLM result.
@@ -821,7 +823,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.match(replyOnly.messages[0].content,/do not generate or change translation/);
  assert.equal(replyOnly.glasses_hint,true);assert.equal(replyOnly.hint_research.source,'internal');
  chromeText='Chrome의 최신 번역';
- chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({translation:'LLM이 덮어쓰면 안 되는 문장',positive:'네.\nはい。',negative:'아니요.\nいいえ。'})})+'\n\n');
+ chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({translation:'LLM이 덮어쓰면 안 되는 문장',positive:'Hai.\n네.',negative:'Iie.\n아니요.'})})+'\n\n');
  nextTranscript='次の文です';utterance('other');await tick();await tick();await tick();await tick();
  assert.match(element('hud-screen').innerHTML,/Chrome의 최신 번역/);
  assert.doesNotMatch(element('hud-screen').innerHTML,/LLM이 덮어쓰면/);
@@ -835,7 +837,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  let progressRead=0,releaseProgress;
  chatReply={ok:true,body:{getReader:()=>({read:async()=>{
    if(progressRead++===0)return{done:false,value:Buffer.from('data: '+JSON.stringify({type:'prompt_processing.progress',progress:.32})+'\n\n')};
-   if(progressRead===2)return await new Promise(resolve=>{releaseProgress=()=>resolve({done:false,value:Buffer.from('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({positive:'네.\nはい。',negative:'아니요.\nいいえ。'})})+'\n\n')});});
+   if(progressRead===2)return await new Promise(resolve=>{releaseProgress=()=>resolve({done:false,value:Buffer.from('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({positive:'Hai.\n네.',negative:'Iie.\n아니요.'})})+'\n\n')});});
    return{done:true};
  }})}};
  nextTranscript='進行状況を確認します';utterance('other');await tick();await tick();await tick();
@@ -862,7 +864,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  for(let i=0;i<3;i++)handler({audioEvent:{audioPcm:speech,speakerRole:'other'}});
  await tick();await tick();await tick();assert.match(element('hud-screen').innerHTML,/다시 교정된 임시 번역/);
  nextTranscript='authoritative final phrase';chromeText='최종 확정 번역';
- chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({positive:'네.\nはい。',negative:'아니요.\nいいえ。'})})+'\n\n');
+ chatReply=sseReply('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({positive:'Hai.\n네.',negative:'Iie.\n아니요.'})})+'\n\n');
  for(let i=0;i<16;i++)handler({audioEvent:{audioPcm:Buffer.alloc(3200),speakerRole:'other'}});
  await tick();await tick();await tick();await tick();
  assert.match(element('hud-screen').innerHTML,/최종 확정 번역/);assert.doesNotMatch(element('hud-screen').innerHTML,/다시 교정된 임시 번역/);
@@ -879,7 +881,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  chromeText='답변을 만드는 이전 문장 번역';
  chatReply={ok:true,body:{getReader:()=>({read:async()=>{
    if(independentReads++)return{done:true};
-   return await new Promise(resolve=>{finishIndependentReply=()=>resolve({done:false,value:Buffer.from('data: '+JSON.stringify({type:'request.complete',final_assistant_content:JSON.stringify({translation:'이전 번역으로 덮어쓰지 말 것',positive:'독립 예시 긍정\nYes',negative:'독립 예시 부정\nNo'})})+'\n\n')});});
+   return await new Promise(resolve=>{finishIndependentReply=()=>resolve({done:false,value:Buffer.from('data: '+JSON.stringify({type:'request.complete',final_assistant_content:JSON.stringify({translation:'이전 번역으로 덮어쓰지 말 것',positive:'Hai.\n독립 예시 긍정',negative:'Iie.\n독립 예시 부정'})})+'\n\n')});});
  }})}};
  liveQueue.submit({id:'reply-independent-old',engine:'chrome',source:'ja',target:'ko',prompt:'old sentence',draft:false});for(let i=0;i<8;i++)await tick();
  assert.equal(typeof finishIndependentReply,'function');
@@ -1150,7 +1152,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  element('translation-engine').value='llm';await element('translation-engine').handlers.change();
  let replyReads=0,releaseRoleReply;
  const heldRoleReply={ok:true,body:{getReader:()=>({read:async()=>{
-   if(replyReads++===0)return await new Promise(resolve=>{releaseRoleReply=()=>resolve({done:false,value:Buffer.from('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({positive:'답변 모델의 긍정',negative:'답변 모델의 부정'})})+'\n\n')});});
+   if(replyReads++===0)return await new Promise(resolve=>{releaseRoleReply=()=>resolve({done:false,value:Buffer.from('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({positive:'Yes.\n답변 모델의 긍정',negative:'No.\n답변 모델의 부정'})})+'\n\n')});});
    return{done:true};
  }})}};
  chatReply=[sseReply('data: '+JSON.stringify({type:'message.delta',content:JSON.stringify({translation:'번역 전용 모델의 문장',positive:'번역 모델이 만들면 안 되는 답변',negative:'잘못된 예시'})})+'\n\n'),heldRoleReply];
