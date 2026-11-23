@@ -75,3 +75,5 @@ all_funcs.txt
 !internal/toolruntime/transcripts_test.go
 
 !internal/core/qwen_stt_test.go
+
+!internal/core/model_memory_test.go

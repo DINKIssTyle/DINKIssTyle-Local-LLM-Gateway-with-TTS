@@ -72,6 +72,8 @@ export function GetManagedModels():Promise<Array<core.ManagedModelStatus>>;
 
 export function GetMinimizeToTray():Promise<boolean>;
 
+export function GetModelIdleMinutes():Promise<number>;
+
 export function GetModelsRootDir():Promise<string>;
 
 export function GetServerStatus():Promise<Record<string, any>>;
@@ -157,6 +159,8 @@ export function SetLLMEndpoint(arg1:string):Promise<void>;
 export function SetLLMMode(arg1:string):Promise<void>;
 
 export function SetMinimizeToTray(arg1:boolean):Promise<void>;
+
+export function SetModelIdleMinutes(arg1:number):Promise<void>;
 
 export function SetPort(arg1:string):Promise<void>;
 

@@ -7159,6 +7159,16 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 	defer releaseSlot()
 	queueWait := time.Since(queueStarted)
 
+	releaseMemory := ttsModelMemory.use()
+	defer releaseMemory()
+	globalTTSMutex.RLock()
+	ttsMissing := globalTTS == nil
+	globalTTSMutex.RUnlock()
+	if ttsMissing && ttsConfig.Engine == "supertonic" && (globalApp == nil || globalApp.enableTTS) {
+		if err := InitTTS(getTTSAssetsDir(), ttsConfig.Threads); err != nil {
+			log.Printf("[TTS] Reload after idle release failed: %v", err)
+		}
+	}
 	globalTTSMutex.RLock()
 	ttsInstance := globalTTS
 	globalTTSMutex.RUnlock()
@@ -7441,6 +7451,8 @@ func handleOnDeviceTTSAsset() http.HandlerFunc {
 
 // InitTTS initializes the TTS engine
 func InitTTS(assetsDir string, threads int) error {
+	releaseMemory := ttsModelMemory.use()
+	defer releaseMemory()
 	threads = normalizeTTSThreads(threads)
 	onnxDir := assetsDir + "/onnx"
 

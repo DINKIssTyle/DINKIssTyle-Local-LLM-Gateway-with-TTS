@@ -79,6 +79,8 @@ func startQwenSTTWorker(python, model, root string) (*sttWorker, error) {
 }
 
 func runQwenSTTInference(audio []byte, format, lang, speechFilter string, preview bool) (sttWorkerReply, error) {
+	releaseMemory := qwenModelMemory.use()
+	defer releaseMemory()
 	started := time.Now()
 	if preview {
 		if !qwenSTTLock.TryLock() {

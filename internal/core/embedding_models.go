@@ -167,6 +167,8 @@ func currentEmbeddingModelConfig() EmbeddingModelConfig {
 }
 
 func applyEmbeddingRuntimeConfig() error {
+	releaseMemory := embeddingModelMemory.use()
+	defer releaseMemory()
 	cfg := currentEmbeddingModelConfig()
 	status := getEmbeddingModelStatus(cfg)
 	assetsEnabled := globalApp == nil || globalApp.enableTTS

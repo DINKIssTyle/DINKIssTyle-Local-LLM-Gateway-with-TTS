@@ -32,8 +32,13 @@ func installJevChoiceProvider(rt *embeddingRuntime, enabled bool) {
 		return
 	}
 	mcp.SetMemoryChoiceProvider(func(query string, criteria map[string]string) (string, error) {
+		releaseMemory := embeddingModelMemory.use()
+		defer releaseMemory()
 		rt.mu.Lock()
 		defer rt.mu.Unlock()
+		if err := rt.ensureLoadedLocked(); err != nil {
+			return "", err
+		}
 		encoder, ok := rt.encoder.(*jevEncoder)
 		if !ok {
 			return "", fmt.Errorf("MediaPipe decision runtime unavailable")

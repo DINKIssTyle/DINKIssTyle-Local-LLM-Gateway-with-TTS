@@ -119,6 +119,8 @@ func (w *appleRuntimeWorker) startLocked() error {
 	return nil
 }
 func (w *appleRuntimeWorker) request(ctx context.Context, p map[string]any) (map[string]any, error) {
+	releaseMemory := appleModelMemory.begin(p["op"] != "status")
+	defer releaseMemory()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -177,6 +179,12 @@ func (w *appleRuntimeWorker) Close() {
 	if w.cmd != nil {
 		_ = w.input.Close()
 		_ = w.cmd.Process.Kill()
+		w.cmd = nil
+		w.input = nil
+		for id, ch := range w.pending {
+			delete(w.pending, id)
+			close(ch)
+		}
 	}
 }
 func appleSpeechIdentity(user, session, segment string) (string, string) {

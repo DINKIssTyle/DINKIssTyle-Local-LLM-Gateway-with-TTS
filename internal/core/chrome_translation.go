@@ -247,6 +247,8 @@ func retryChromeTranslation(message string, attempt int, prepared bool) bool {
 }
 
 func (s *chromeTranslator) run(ctx context.Context, req chromeTranslationRequest, prepare bool) (chromeTranslationResult, error) {
+	releaseMemory := chromeModelMemory.use()
+	defer releaseMemory()
 	result := chromeTranslationResult{Source: req.Source, Target: req.Target, Backend: "chrome-translator"}
 	if err := validateChromeTranslation(&req, prepare); err != nil {
 		return result, err

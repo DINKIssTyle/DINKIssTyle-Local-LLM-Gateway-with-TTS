@@ -140,7 +140,10 @@ func (w *sttWorker) close() {
 	_ = w.cmd.Wait()
 }
 func closeSTTRuntime() {
-	defer closeQwenSTTRuntime()
+	closeWhisperSTTRuntime()
+	closeQwenSTTRuntime()
+}
+func closeWhisperSTTRuntime() {
 	sttLock.Lock()
 	defer sttLock.Unlock()
 	if activeSTTWorker != nil {
@@ -191,6 +194,8 @@ func launchSTTWorker(python, label string, args []string) (*sttWorker, error) {
 var errSTTBusy = errors.New("STT engine busy")
 
 func runSTTInference(audio []byte, format, lang, speechFilter string, preview ...bool) (sttWorkerReply, error) {
+	releaseMemory := whisperModelMemory.use()
+	defer releaseMemory()
 	waitStarted := time.Now()
 	if len(preview) > 0 && preview[0] {
 		if !sttLock.TryLock() {

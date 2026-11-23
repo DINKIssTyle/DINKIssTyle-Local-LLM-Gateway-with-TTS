@@ -70,6 +70,7 @@ type App struct {
 
 // AppConfig holds the persistent application configuration
 type AppConfig struct {
+	ModelIdleMinutes  *int                 `json:"modelIdleMinutes,omitempty"`
 	Port              string               `json:"port"`
 	LLMEndpoint       string               `json:"llmEndpoint"`
 	LLMConnections    []LLMConnection      `json:"llmConnections,omitempty"`
@@ -342,6 +343,7 @@ func (a *App) reloadUsersFromCurrentStorage() error {
 
 func (a *App) loadConfig() {
 	// Set defaults
+	_ = setModelIdleMinutes(defaultModelIdleMinutes)
 	a.port = "8080"
 	a.llmEndpoint = "http://127.0.0.1:1234"
 	a.enableTTS = true
@@ -382,6 +384,9 @@ func (a *App) loadConfig() {
 	a.llmMode = "stateful"
 	if cfg.LLMMode != "" {
 		a.llmMode = cfg.LLMMode
+	}
+	if cfg.ModelIdleMinutes != nil {
+		_ = setModelIdleMinutes(*cfg.ModelIdleMinutes)
 	}
 	a.llmApiToken = cfg.LLMApiToken
 	a.llmConnections = cfg.LLMConnections
@@ -455,6 +460,8 @@ func (a *App) saveConfig() {
 	cfg.WelcomeDismissed = a.welcomeDismissed
 	cfg.AlwaysShowWelcome = a.alwaysShowWelcome
 	cfg.ServerUILanguage = a.GetServerUILanguage()
+	idleMinutes := a.GetModelIdleMinutes()
+	cfg.ModelIdleMinutes = &idleMinutes
 	cfg.TTS = ttsConfig
 	cfg.Embedding = currentEmbeddingModelConfig()
 
@@ -542,7 +549,11 @@ func (a *App) startRetentionMaintenanceLoop() {
 func (a *App) Shutdown(ctx context.Context) {
 	fmt.Println("Shutting down application...")
 	a.StopServer()
+	stopModelIdleTimers()
 	closeSTTRuntime()
+	unloadIdleTTS()
+	appleNative.Close()
+	chromeTranslation.Close()
 	installEmbeddingProvider(nil)
 	mcp.SetMemoryChoiceProvider(nil)
 	clearEmbeddingRuntime()
@@ -586,6 +597,7 @@ func (a *App) GetServerStatus() map[string]interface{} {
 		"enableTTS":        enableTTS,
 		"enableTools":      enableTools,
 		"enableDebugTrace": enableDebugTrace,
+		"modelIdleMinutes": a.GetModelIdleMinutes(),
 	}
 }
 

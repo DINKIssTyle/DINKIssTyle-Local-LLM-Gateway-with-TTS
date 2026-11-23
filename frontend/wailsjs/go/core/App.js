@@ -134,6 +134,10 @@ export function GetMinimizeToTray() {
   return window['go']['core']['App']['GetMinimizeToTray']();
 }
 
+export function GetModelIdleMinutes() {
+  return window['go']['core']['App']['GetModelIdleMinutes']();
+}
+
 export function GetModelsRootDir() {
   return window['go']['core']['App']['GetModelsRootDir']();
 }
@@ -304,6 +308,10 @@ export function SetLLMMode(arg1) {
 
 export function SetMinimizeToTray(arg1) {
   return window['go']['core']['App']['SetMinimizeToTray'](arg1);
+}
+
+export function SetModelIdleMinutes(arg1) {
+  return window['go']['core']['App']['SetModelIdleMinutes'](arg1);
 }
 
 export function SetPort(arg1) {

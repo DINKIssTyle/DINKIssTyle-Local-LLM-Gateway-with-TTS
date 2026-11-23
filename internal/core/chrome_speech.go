@@ -38,6 +38,8 @@ func chromeSTTEngine(engine string) bool {
 	return engine == "chrome-online"
 }
 func (s *chromeTranslator) speech(ctx context.Context, req chromeSpeechRequest, op string) (chromeSpeechResult, error) {
+	releaseMemory := chromeModelMemory.use()
+	defer releaseMemory()
 	var result chromeSpeechResult
 	lockStarted := time.Now()
 	if !chromeSTTEngine(req.Engine) {

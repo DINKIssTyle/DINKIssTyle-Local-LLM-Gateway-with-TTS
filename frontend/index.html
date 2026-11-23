@@ -721,6 +721,17 @@
             justify-content: center;
         }
 
+        .model-memory-settings { margin: 0 0 16px; border: 1px solid var(--border-color); border-radius: 8px; }
+        .model-memory-settings > summary { padding: 10px 12px; color: var(--text-secondary); font-size: 12px; font-weight: 500; cursor: pointer; }
+        .model-memory-settings__body { padding: 0 12px 12px; }
+        .model-memory-settings__row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+        .model-memory-settings__row label { margin: 0; font-size: 13px; font-weight: 400; }
+        .model-memory-settings__input { display: flex; align-items: center; gap: 6px; flex: none; color: var(--text-secondary); font-size: 12px; }
+        .model-memory-settings__input input { width: 72px; padding: 6px 8px; font-size: 13px; background: var(--bg-color); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 6px; color-scheme: dark; }
+        .model-memory-settings__help { margin: 8px 0 0; font-size: 11px; line-height: 1.6; font-weight: 400; color: var(--text-secondary); }
+        .model-memory-settings__status { margin: 6px 0 0; font-size: 11px; font-weight: 400; color: var(--text-secondary); }
+        .model-memory-settings__status:empty { display: none; }
+
         #model-manager-modal {
             z-index: 120;
         }
@@ -1785,6 +1796,20 @@
                     <div id="models-root-dir"
                         style="font-size: 12px; color: var(--text-secondary); word-break: break-all;">...</div>
                 </div>
+                <details class="model-memory-settings">
+                    <summary data-i18n="label.modelMemorySettings">메모리 관리</summary>
+                    <div class="model-memory-settings__body">
+                        <div class="model-memory-settings__row">
+                            <label for="model-idle-minutes" data-i18n="label.modelIdleMinutes">미사용 모델 자동 해제</label>
+                            <div class="model-memory-settings__input">
+                                <input id="model-idle-minutes" type="number" min="0" max="120" step="1" required value="5" onchange="saveModelIdleMinutes()" aria-describedby="model-idle-help">
+                                <span data-i18n="unit.minutes">분</span>
+                            </div>
+                        </div>
+                        <p id="model-idle-help" class="model-memory-settings__help" data-i18n="help.modelIdleMinutes">다시 사용하면 자동으로 로드합니다. 0분은 계속 유지하며 LLM은 제외합니다.</p>
+                        <p id="model-idle-status" class="model-memory-settings__status" role="status"></p>
+                    </div>
+                </details>
                 <div id="managed-models-list" class="managed-models-list"></div>
             </div>
             <div class="modal-footer" style="display: flex; gap: 8px; justify-content: flex-end;">
@@ -2110,6 +2135,11 @@
                 'label.startOnBoot': '부팅 시 시작',
                 'label.minimizeToTray': '트레이로 최소화',
                 'label.autoStartServer': '서버 자동 시작',
+ 'label.modelMemorySettings': '메모리 관리',
+ 'unit.minutes': '분',
+ 'label.modelIdleMinutes': '미사용 모델 자동 해제',
+ 'help.modelIdleMinutes': '다시 사용하면 자동으로 로드합니다. 0분은 계속 유지하며 LLM은 제외합니다.',
+ 'modelIdle.saved': '저장됨 · 즉시 적용됩니다.',
                 'modal.modelManager.title': '자산 관리자',
                 'action.openSkillsFolder': '스킬 폴더 열기',
                 'help.additionalAssets.title': '추가 자산 도움말',
@@ -2290,6 +2320,11 @@
                 'label.startOnBoot': 'Start on Boot',
                 'label.minimizeToTray': 'Minimize to Tray',
                 'label.autoStartServer': 'Auto Start Server',
+ 'label.modelMemorySettings': 'Memory management',
+ 'unit.minutes': 'min',
+ 'label.modelIdleMinutes': 'Release unused models after',
+ 'help.modelIdleMinutes': 'Models reload when needed. 0 keeps models loaded. LLMs are excluded.',
+ 'modelIdle.saved': 'Saved and applied immediately.',
                 'modal.modelManager.title': 'Asset Manager',
                 'action.openSkillsFolder': 'Open Skills Folder',
                 'help.additionalAssets.title': 'Additional Assets Help',
@@ -3730,6 +3765,18 @@
 
 
 
+        async function saveModelIdleMinutes() {
+            const input = document.getElementById('model-idle-minutes');
+            if (!input.reportValidity()) return;
+            const status = document.getElementById('model-idle-status');
+            try {
+                await window.go.core.App.SetModelIdleMinutes(Number(input.value));
+                status.textContent = t('modelIdle.saved');
+            } catch (error) {
+                status.textContent = String(error.message || error);
+            }
+        }
+
         async function loadStartupSettings() {
             try {
                 const startOnBoot = await window.go.core.App.GetStartOnBoot();
@@ -3739,6 +3786,7 @@
                 document.getElementById('start-on-boot').checked = startOnBoot;
                 document.getElementById('minimize-to-tray').checked = minimizeToTray;
                 document.getElementById('auto-start-server').checked = autoStartServer;
+ document.getElementById('model-idle-minutes').value = await window.go.core.App.GetModelIdleMinutes();
 
 
             } catch (e) {

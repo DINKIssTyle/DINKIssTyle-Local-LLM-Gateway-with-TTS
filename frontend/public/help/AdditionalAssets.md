@@ -23,6 +23,16 @@
 
 설정 변경 후 서버가 실행 중이면 일부 기능은 다음 요청 또는 서버 재시작 이후 완전히 반영될 수 있습니다.
 
+### 메모리 관리
+
+자산 관리자 안의 **메모리 관리**를 펼치면 미사용 모델의 자동 해제 시간을 바꿀 수 있습니다.
+
+- 기본값은 마지막 요청이 끝난 뒤 **5분**입니다. **0분**은 자동 해제를 끕니다.
+- Whisper·Qwen3-ASR·Supertonic TTS·임베딩과 Apple·Chrome 보조 엔진에 적용합니다. **LLM은 외부 런타임이 관리하므로 제외합니다.**
+- 처리 중인 모델은 유지하며 다음 요청이 들어오면 자동으로 다시 로드합니다. 첫 응답에는 로드 시간이 추가될 수 있습니다.
+- 모델 파일·언어팩·대화 기록·임베딩 데이터는 삭제하지 않습니다.
+- 설정은 즉시 적용되고 앱을 다시 실행해도 유지됩니다.
+
 ### 자산 저장 폴더
 
 모달에 표시되는 **자산 저장 폴더**는 모델과 런타임 파일이 실제로 저장되는 위치입니다. 운영체제와 설치 방식에 따라 위치가 달라지므로 화면에 표시된 경로를 기준으로 확인하세요.
@@ -106,6 +116,16 @@ This is the shared enable switch for the local TTS and embedding runtimes.
 - Disabling the switch does not delete downloaded model files or stored data.
 
 If the server is already running, some changes may take full effect on the next request or after a server restart.
+
+### Memory management
+
+Expand **Memory management** in Asset Manager to set the idle timeout.
+
+- The default is **5 minutes** after the last request completes. **0** disables automatic release.
+- Applies to Whisper, Qwen3-ASR, Supertonic TTS, embeddings, and the Apple/Chrome helpers. **LLMs remain managed by their external runtime.**
+- Active requests keep their runtime loaded. The next request reloads an idle runtime automatically; its first response may take longer.
+- Model files, language packs, conversations, and embedding data are preserved.
+- Changes apply immediately and persist across restarts.
 
 ### Asset Storage Folder
 

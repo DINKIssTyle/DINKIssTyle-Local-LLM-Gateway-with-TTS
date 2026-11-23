@@ -49,10 +49,13 @@ var embeddingRuntimeState = struct {
 }
 
 type embeddingRuntime struct {
-	mu      sync.Mutex
-	modelID string
-	backend string
-	encoder embeddingEncoder
+	idle          bool
+	reloadEncoder func() (embeddingEncoder, error)
+	closed        bool
+	mu            sync.Mutex
+	modelID       string
+	backend       string
+	encoder       embeddingEncoder
 }
 
 type embeddingEncoder interface {
@@ -304,6 +307,8 @@ func (r *embeddingRuntime) Close() error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.closed = true
+	r.idle = false
 	if r.encoder == nil {
 		return nil
 	}
@@ -318,6 +323,12 @@ func (r *embeddingRuntime) IsUsable() bool {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.closed {
+		return false
+	}
+	if r.encoder == nil {
+		return r.idle
+	}
 	if worker, ok := r.encoder.(*jevEncoder); ok {
 		worker.mu.Lock()
 		defer worker.mu.Unlock()
@@ -330,16 +341,52 @@ func (r *embeddingRuntime) Build(text string, usage embeddingUsage) ([]float64, 
 	if r == nil {
 		return nil, "", fmt.Errorf("embedding runtime is not loaded")
 	}
+	releaseMemory := embeddingModelMemory.use()
+	defer releaseMemory()
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.encoder == nil {
-		return nil, "", fmt.Errorf("embedding runtime is not loaded")
+	if err := r.ensureLoadedLocked(); err != nil {
+		return nil, "", err
 	}
 	vector, err := r.encoder.Encode(text, usage)
 	if err != nil {
 		return nil, "", err
 	}
 	return vector, fmt.Sprintf("%s:%s", r.modelID, r.backend), nil
+}
+
+// Called with r.mu held; idle release must not invalidate the provider or
+// rebuild stored vectors. Reload the same model/backend only when requested.
+func (r *embeddingRuntime) ensureLoadedLocked() error {
+	if r.closed {
+		return fmt.Errorf("embedding runtime is closed")
+	}
+	if r.encoder != nil {
+		return nil
+	}
+	if r.reloadEncoder != nil {
+		encoder, err := r.reloadEncoder()
+		if err != nil {
+			return err
+		}
+		if encoder == nil {
+			return fmt.Errorf("embedding loader returned no encoder")
+		}
+		r.encoder = encoder
+		r.idle = false
+		return nil
+	}
+	cfg := currentEmbeddingModelConfig()
+	cfg.ModelID = r.modelID
+	loaded, _, err := loadEmbeddingRuntime(cfg)
+	if err != nil {
+		return err
+	}
+	r.encoder = loaded.encoder
+	r.idle = false
+	r.backend = loaded.backend
+	loaded.encoder = nil
+	return nil
 }
 
 func (e *embeddingWrapperEncoder) Close() error {
@@ -690,5 +737,15 @@ func embeddingProviderForRuntime(rt *embeddingRuntime) mcp.BufferedEmbeddingProv
 			vector, modelName, err := rt.Build(text, embeddingUsage(usage))
 			return vector, modelName, err
 		},
+	}
+}
+
+func (r *embeddingRuntime) unloadForIdle() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.encoder != nil {
+		_ = r.encoder.Close()
+		r.encoder = nil
+		r.idle = true
 	}
 }
