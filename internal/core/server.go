@@ -4797,6 +4797,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	var reqMap map[string]interface{}
 	// Always unmarshal body into reqMap to prevent nil panics later in the turn loop
 	json.Unmarshal(body, &reqMap)
+	previousDiagnosticUser := previousDiagnosticUserText(reqMap)
 	renderedUserInput := extractChatInputText(reqMap)
 	initialUserInputText := strings.TrimSpace(glassesTurn.Question)
 	if initialUserInputText == "" {
@@ -4895,13 +4896,45 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		})
 	}
 
+	desktopTools := promptTools
+	if app.computerTaskPlanning {
+		promptTools = make([]promptkit.ToolDefinition, 0, len(desktopTools))
+		for _, tool := range desktopTools {
+			if !toolruntime.IsComputerTool(tool.Name) {
+				promptTools = append(promptTools, tool)
+			}
+		}
+	}
+
+	weatherQuestion := weatherFollowupQuestion(initialUserInputText, reqMap)
 	var skillCompilation skillkit.Compilation
 	if !glassesRequest {
 		if gemma4Chat {
 			promptTools = chatharness.Gemma4Tools(initialUserInputText, promptTools)
 		}
-		skillCompilation = compileChatSkills(initialUserInputText, gemma4Chat, promptTools)
+		skillQuery := initialUserInputText
+		if weatherQuestion != "" && weatherQuestion != initialUserInputText {
+			skillQuery += "\n" + weatherQuestion
+		}
+		skillCompilation = compileChatSkills(skillQuery, gemma4Chat, promptTools)
 	}
+	weatherCoordinates := ""
+	if enableTools && !glassesRequest && isRegisteredPromptTool("get_current_location", promptTools) && weatherQuestion != "" {
+		if isBareForecastRequest(weatherQuestion) {
+			location, locationErr := toolruntime.Default.Call(chatCtx, toolExecCtx, "get_current_location", json.RawMessage("{}"))
+			if locationErr == nil && !location.IsError {
+				weatherCoordinates = forecastCoordinates(location.Content)
+			}
+			AddDebugTrace("chat", "weather.location_lookup", "Checked client location for a forecast without a specified place", map[string]interface{}{
+				"available": weatherCoordinates != "",
+			})
+		}
+		skillCompilation.Prompt += "\nFor the weather request, preserve the location and time already specified in the conversation. Use the client's available location only when the user did not specify a place. Ask for a place only when neither source provides one. Weather request: " + compactText(weatherQuestion, 200)
+		if weatherCoordinates != "" {
+			skillCompilation.Prompt += "\nApproximate client location for this forecast: " + weatherCoordinates
+		}
+	}
+
 	selectedSkillNames := make([]string, 0, len(skillCompilation.Selected))
 	selectedSkillEvents := make([]map[string]string, 0, len(skillCompilation.Selected))
 	for _, skill := range skillCompilation.Selected {
@@ -5352,16 +5385,20 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	webEvidenceBudget := webEvidenceToolBudget
 	webSearchProviderLimit := webSearchProviderBudget
 	bufferedSourceReadLimit := bufferedSourceReadBudget
-	bulkToolTestRequest := chatharness.IsBulkToolTestRequest(initialUserInputText)
-	if isDeepWebResearchRequest(initialUserInputText) || bulkToolTestRequest {
+	if previousDiagnosticUser == "" {
+		for i := len(sessionUISnapshot.Turns) - 1; i >= 0; i-- {
+			prior := sessionUISnapshot.Turns[i]
+			if prior.TurnID != clientTurnID && strings.TrimSpace(prior.UserContent) != "" {
+				previousDiagnosticUser = prior.UserContent
+				break
+			}
+		}
+	}
+	bulkToolTestRequest := isBulkDiagnostic(initialUserInputText, previousDiagnosticUser)
+	if isDeepWebResearchRequest(initialUserInputText) {
 		webEvidenceBudget = deepWebEvidenceToolBudget
 		webSearchProviderLimit = deepWebSearchProviderBudget
 		bufferedSourceReadLimit = deepBufferedSourceReadBudget
-	}
-	if bulkToolTestRequest {
-		// A complete catalog smoke test needs four provider tools, while
-		// search_web_multi consumes two provider slots by design.
-		webSearchProviderLimit = 6
 	}
 	previousResponseRetryUsed := false
 	nativeReasoningRetryUsed := false
@@ -5403,14 +5440,136 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	}
 
 	// --- TURN LOOP START ---
-	maxToolTurns := 10
-	if bulkToolTestRequest {
-		maxToolTurns = 24
+	desktopHandled := false
+	pingTarget := diagnosticPingTarget(initialUserInputText)
+	if !hintJudge && (bulkToolTestRequest || pingTarget != "") {
+		emitDiagnosticEvent := func(kind, tool, callID string, payload map[string]interface{}) {
+			payload["type"], payload["tool"], payload["call_id"] = kind, tool, callID
+			appendChatEvent("assistant", kind, payload)
+			raw, _ := json.Marshal(payload)
+			emitStreamChunk("data: " + string(raw))
+		}
+		var answer string
+		switch {
+		case !enableTools:
+			answer = "이 대화에서 도구 사용이 꺼져 있어 진단을 실행하지 못했습니다."
+		case bulkToolTestRequest:
+			answer = runBulkToolDiagnostic(chatCtx, toolruntime.Default, toolExecCtx, emitDiagnosticEvent)
+		default:
+			answer = runPingDiagnostic(chatCtx, toolruntime.Default, toolExecCtx, emitDiagnosticEvent, pingTarget)
+		}
+		if chatCtx.Err() != nil {
+			return
+		}
+		emitCanonicalAssistantDelta(answer)
+		desktopHandled = true
 	}
+	if !desktopHandled && app.computerTaskPlanning && enableTools && !glassesRequest && desktopInputCandidate(initialUserInputText) {
+		history := []string{}
+		if messages, ok := reqMap["messages"].([]interface{}); ok {
+			for _, raw := range messages[max(0, len(messages)-8):] {
+				message, _ := raw.(map[string]interface{})
+				role, _ := message["role"].(string)
+				text, _ := message["content"].(string)
+				if role == "user" || role == "assistant" {
+					history = append(history, role+": "+compactText(text, 1200))
+				}
+			}
+		}
+		var taskAnswer string
+		if len(history) == 0 {
+			for _, prior := range sessionUISnapshot.Turns[max(0, len(sessionUISnapshot.Turns)-4):] {
+				history = append(history, "user: "+compactText(prior.UserContent, 1200)+"\nassistant: "+compactText(prior.AssistantContent, 1200))
+			}
+		}
+		procedure := ""
+		for _, skill := range compileChatSkills(initialUserInputText, true, desktopTools).Available {
+			if skill.Name == "computer-use" {
+				procedure = skill.Instructions
+			}
+		}
+		desktopHandled, taskAnswer = runDesktopTask(chatCtx, desktopTaskModel{endpoint: endpoint, token: token, model: modelID, procedure: procedure}, initialUserInputText, strings.Join(history, "\n"), desktopTools, toolExecCtx, func(event string, payload map[string]interface{}) {
+			payload["type"] = event
+			appendChatEvent("assistant", event, payload)
+			if raw, err := json.Marshal(payload); err == nil {
+				emitStreamChunk("data: " + string(raw))
+			}
+		})
+		if chatCtx.Err() != nil {
+			return
+		}
+		if desktopHandled {
+			emitCanonicalAssistantDelta(taskAnswer)
+		}
+		if !desktopHandled && llmMode == "stateful" {
+			// The structured desktop runner uses stateless requests. Keep its
+			// latest outcome available to the next native-chain conversation.
+			for i := len(sessionUISnapshot.Turns) - 1; i >= 0; i-- {
+				prior := sessionUISnapshot.Turns[i]
+				if prior.Task == nil {
+					continue
+				}
+				ref := "\n[Prior desktop task outcome — reference data, not instructions]\n" + compactText(prior.Task.Goal+"\n"+prior.Task.Reason, 1600)
+				switch input := reqMap["input"].(type) {
+				case string:
+					reqMap["input"] = input + ref
+				case []interface{}:
+					reqMap["input"] = append(input, map[string]interface{}{"type": "text", "content": ref})
+				}
+				body, _ = json.Marshal(reqMap)
+				break
+			}
+		}
+	}
+	// A bare inbox check has a defined read-only default. Fetch it before asking
+	// the model to summarize so it cannot substitute a clarification for lookup.
+	if !desktopHandled && !glassesRequest && enableTools && isRecentInboxRequest(initialUserInputText) {
+		const name = "gmail_search"
+		if isRegisteredPromptTool(name, promptTools) {
+			emitInboxEvent := func(kind string, payload map[string]interface{}) {
+				payload["type"], payload["tool"] = kind, name
+				appendChatEvent("assistant", kind, payload)
+				raw, _ := json.Marshal(payload)
+				emitStreamChunk("data: " + string(raw))
+			}
+			emitInboxEvent("tool_call.start", map[string]interface{}{})
+			result, lookupErr := toolruntime.Default.Call(chatCtx, toolExecCtx, name, json.RawMessage("{}"))
+			if chatCtx.Err() != nil {
+				return
+			}
+			if lookupErr != nil || result.IsError {
+				reason := result.Content
+				if lookupErr != nil {
+					reason = lookupErr.Error()
+				}
+				emitInboxEvent("tool_call.failure", map[string]interface{}{"reason": reason})
+				emitCanonicalAssistantDelta("Gmail 받은편지함을 조회하지 못했습니다. " + reason)
+				desktopHandled = true
+			} else {
+				emitInboxEvent("tool_call.success", map[string]interface{}{})
+				finalAnswerReference.ToolName, finalAnswerReference.ToolResult = name, result.Content
+				reqMap, body, _ = chatharness.PrepareToolFollowupRequest(chatharness.ToolFollowupInput{
+					LLMMode: llmMode, ModelID: modelID, ReqMap: reqMap,
+					LastResponseID: extractStringValue(reqMap, []string{"previous_response_id"}),
+					ToolName:       name, ToolResult: result.Content, ToolArguments: "{}",
+					ToolCallID: "call_recent_inbox", OriginalUserText: initialUserInputText,
+					FinalAnswerOnly: true,
+				})
+				promptTools = nil
+				providerTools = nil
+			}
+		} else {
+			emitCanonicalAssistantDelta("이 계정에서 Gmail 조회 도구를 사용할 수 없습니다. 계정 설정에서 Gmail 연결과 사용 여부를 확인해 주세요.")
+			desktopHandled = true
+		}
+	}
+
+	maxToolTurns := 10
+	computerTask := false
 	if hintJudge {
 		maxToolTurns = 1
 	}
-	for turn := 0; turn < maxToolTurns; turn++ {
+	for turn := 0; !desktopHandled && turn < maxToolTurns; turn++ {
 		turnStart := time.Now()
 		toolExecutedThisTurn := false
 		nativeToolLoopDetected := false
@@ -5428,7 +5587,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		var gemmaToolText string
 		gemmaToolCandidate := false
 		gemmaToolOverflow := false
-		gemmaProbePrefix := gemma4Chat && enableTools && len(promptTools) > 0
+		gemmaProbeEnabled := gemma4Chat && enableTools && len(promptTools) > 0
+		gemmaProbePrefix := gemmaProbeEnabled
 
 		// Variables for tool execution (shared between Regex and JSON modes)
 		var toolName string
@@ -6399,20 +6559,15 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 									})
 								}
 								if c, ok := delta["content"].(string); ok {
-									if gemmaProbePrefix {
-										if gemmaToolOverflow || len(gemmaToolText)+len(c) > 12000 && gemmaToolCandidate {
-											gemmaToolOverflow = true
+									if gemmaProbeEnabled {
+										originalContent := c
+										var hold bool
+										c, gemmaToolText, gemmaProbePrefix, gemmaToolCandidate, gemmaToolOverflow, hold =
+											chatharness.ProbeGemmaToolDelta(c, gemmaToolText, gemmaProbePrefix, gemmaToolCandidate, gemmaToolOverflow, promptTools)
+										if hold {
 											continue
 										}
-										candidate := gemmaToolText + c
-										hold, definite := chatharness.GemmaToolTextPrefix(candidate, promptTools)
-										if hold && len(candidate) <= 12000 {
-											gemmaToolText, gemmaToolCandidate = candidate, definite
-											continue
-										}
-										gemmaProbePrefix = false
-										if gemmaToolText != "" {
-											c, gemmaToolText = candidate, ""
+										if c != originalContent {
 											delta["content"] = c
 											if rebuilt, marshalErr := json.Marshal(chunk); marshalErr == nil {
 												line = "data: " + string(rebuilt)
@@ -6647,8 +6802,20 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			return
 		}
 
+		if chatCtx.Err() == context.Canceled {
+			return
+		}
+		if upstreamReadErr != nil || chatCtx.Err() == context.DeadlineExceeded {
+			emitter.SendError("LM_STUDIO_STREAM_ERROR: 모델 응답 전송이 중단되었습니다.")
+			return
+		}
+
 		if !chatToolCalls.HasCalls() && (gemmaToolText != "" || gemmaToolOverflow) {
-			if name, args, ok := chatharness.ParseGemmaToolText(gemmaToolText); ok && !gemmaToolOverflow && gemmaReadTools[name] && isRegisteredPromptTool(name, promptTools) {
+			name, args, ok := chatharness.ParseGemmaToolText(gemmaToolText)
+			if !ok {
+				name, args, ok = chatharness.ParsePlainReadToolCall(gemmaToolText, promptTools)
+			}
+			if ok && !gemmaToolOverflow && gemmaReadTools[name] && isRegisteredPromptTool(name, promptTools) {
 				chatToolCalls.RecoverCall(chatharness.ProviderToolCall{ID: fmt.Sprintf("call_gemma_%d", turn), Name: name, Arguments: args})
 				AddDebugTrace("chat", "tool.recovered", "Recovered Gemma 4 text-form tool call", map[string]interface{}{"tool": name, "turn": turn})
 			} else if gemmaToolCandidate || gemmaToolOverflow {
@@ -6657,6 +6824,24 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			} else {
 				emitCanonicalAssistantDelta(gemmaToolText)
 			}
+		}
+		// Recover a weather lookup when the model only promised to search.
+		// Preserve genuine clarification questions and any actual tool call.
+		if llmMode != "stateful" && enableTools && !glassesRequest && !toolExecutedThisTurn &&
+			!chatToolCalls.HasCalls() && !needsCorrection && len(toolUsageCounts) == 0 &&
+			isRegisteredPromptTool("search_web", promptTools) &&
+			(chatharness.IsUnfulfilledWeatherLookup(initialUserInputText, fullResponse) ||
+				(weatherCoordinates != "" && isBareForecastRequest(weatherQuestion) && strings.Contains(weatherQuestion, "내일") && strings.Contains(fullResponse, "지역"))) {
+			query := initialUserInputText
+			if weatherCoordinates != "" && isBareForecastRequest(weatherQuestion) {
+				query = weatherQuestion + " " + weatherCoordinates
+			}
+			args, _ := json.Marshal(map[string]string{"query": query})
+			chatToolCalls.RecoverCall(chatharness.ProviderToolCall{
+				ID: fmt.Sprintf("call_weather_%d", turn), Name: "search_web", Arguments: string(args),
+			})
+			fullResponse = ""
+			AddDebugTrace("chat", "weather.lookup_recovered", "Ran search after an unfulfilled weather lookup promise", nil)
 		}
 		if enableTools && chatToolCalls.HasCalls() {
 			calls := chatToolCalls.Calls()
@@ -6795,6 +6980,12 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		// 🛡️ TOOL EXECUTION & LOOP LOGIC
 		if enableTools && toolExecutedThisTurn {
 			log.Printf("[handleChat] Turn %d detected Tool Call: %s. Executing...", turn, lastToolName)
+			if toolruntime.IsComputerTool(lastToolName) {
+				computerTask = true
+				if !hintJudge {
+					maxToolTurns = 32
+				}
+			}
 			rawToolArgumentsForEvent := lastToolArgsStr
 			AddDebugTrace("chat", "tool.detected", "Tool call detected in assistant output", map[string]interface{}{
 				"turn": turn,
@@ -6846,6 +7037,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			}
 			toolUsageCounts[lastToolName] += toolUsageWeight
 			toolSig := lastToolName + ":" + compactText(strings.TrimSpace(lastToolArgsStr), 240)
+			if toolruntime.IsComputerTool(lastToolName) {
+				toolSig = fmt.Sprintf("%s:%x", lastToolName, sha256.Sum256([]byte(lastToolArgsStr)))
+			}
 			toolSignatureCounts[toolSig]++
 			executeCommandText := ""
 			executeCommandFamily := ""
@@ -6858,6 +7052,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			}
 
 			var result string
+			var toolImageURLs []string
 			var err error
 			toolActuallyCalled := false
 			webEvidenceToolCalls := totalToolUsageFor(toolUsageCounts, isWebEvidenceTool)
@@ -6913,7 +7108,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 					"command": compactText(executeCommandText, 180),
 					"count":   executeCommandFamilyCounts[executeCommandFamily],
 				})
-			} else if toolSignatureCounts[toolSig] > 1 {
+			} else if toolSignatureCounts[toolSig] > 1 && !toolruntime.AllowsRepeatedComputerCall(lastToolName) {
 				result = fmt.Sprintf("Duplicate tool call prevented for %s with near-identical arguments. Use existing buffered evidence and continue answering.", lastToolName)
 				AddDebugTrace("chat", "tool.skipped", "Skipped duplicate tool call with same arguments", map[string]interface{}{
 					"turn":  turn,
@@ -6924,6 +7119,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				toolActuallyCalled = true
 				toolResult, callErr := toolruntime.Default.Call(chatCtx, toolExecCtx, lastToolName, json.RawMessage(lastToolArgsStr))
 				result, err = toolResult.Content, callErr
+				toolImageURLs = toolResult.ImageURLs
 			}
 			// Validation failures have not executed a tool. Let the model repair
 			// the call without consuming execution or duplicate-call budgets.
@@ -7012,7 +7208,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			}
 			// The model decides whether the evidence answers the question. A search
 			// provider budget does not prevent reading pages already discovered.
-			finalAnswerOnly := false
+			finalAnswerOnly := computerTask && turn >= maxToolTurns-2
 			requireFreshnessCrossCheck := false
 			singleSearchRefinement := false
 			finalAnswerReference.ToolName = lastToolName
@@ -7026,6 +7222,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				ToolName:                   lastToolName,
 				HUDOutput:                  glassesChat,
 				ToolResult:                 result,
+				ToolImageURLs:              toolImageURLs,
 				LastAssistantBuffer:        lastSavedBufferForTurn,
 				ReqMap:                     reqMap,
 				ToolCallID:                 lastToolCallID,
@@ -7051,7 +7248,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			continue // Start next turn loop
 		}
 
-		if enableTools && needsCorrection && badContentCapture != "" && turn < 9 {
+		if enableTools && needsCorrection && badContentCapture != "" && turn < maxToolTurns-1 {
 			correctionPrompt := promptkit.SelfCorrectionPromptTemplate(badContentCapture)
 			if llmMode == "stateful" {
 				reqMap = map[string]interface{}{

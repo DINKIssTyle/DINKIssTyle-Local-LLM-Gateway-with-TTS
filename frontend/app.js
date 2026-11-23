@@ -989,6 +989,9 @@ async function handleStreamEvent(json, ctx) {
     else if (eventType === 'skill.applied') {
         renderAppliedSkills(elementId, json.skills);
     }
+    else if (eventType === 'task.progress') {
+        renderDesktopTask(elementId, json.task);
+    }
     else if (eventType.startsWith('tool_call.')) {
         ctx.hadToolActivity = true;
         ctx.toolEvents.push({
@@ -1231,6 +1234,7 @@ function normalizeSessionTurnSnapshot(turn = {}) {
         status: String(raw.status || '').trim(),
         user_content: String(raw.user_content || '').trim(),
         assistant_content: String(raw.assistant_content || ''),
+        task: raw.task && typeof raw.task === 'object' ? raw.task : null,
         reasoning: {
             state: String(reasoningRaw.state || '').trim(),
             content: String(reasoningRaw.content || raw.reasoning_content || ''),
@@ -3954,7 +3958,7 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
     if (snapshotTurns.length === 0) return false;
     const passiveRunningSession = isPassiveServerSession(sessionSnapshot);
     const lastItem = snapshotTurns[snapshotTurns.length - 1];
-    const pendingTurnId = (passiveRunningSession && lastItem && lastItem.skills.length === 0 && !hasAssistantSnapshotContent(lastItem.assistant_content, lastItem.reasoning.content, lastItem.tool))
+    const pendingTurnId = (passiveRunningSession && lastItem && !lastItem.task && lastItem.skills.length === 0 && !hasAssistantSnapshotContent(lastItem.assistant_content, lastItem.reasoning.content, lastItem.tool))
         ? String(lastItem.turn_id).trim()
         : '';
 
@@ -3969,7 +3973,7 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
         const assistantId = buildServerAssistantMessageId(turnId, `snapshot-turn-${index + 1}`);
         const snapshotToolState = item.tool || sessionUISnapshot.tool_cards?.[turnId] || null;
         const waitingForRemoteReply = passiveRunningSession && turnId === pendingTurnId;
-        const hasAssistantContent = waitingForRemoteReply || item.skills.length > 0 || hasAssistantSnapshotContent(item?.assistant_content, item?.reasoning?.content, snapshotToolState);
+        const hasAssistantContent = waitingForRemoteReply || !!item.task || item.skills.length > 0 || hasAssistantSnapshotContent(item?.assistant_content, item?.reasoning?.content, snapshotToolState);
         lastTurnId = turnId;
         if (hasAssistantContent) {
             lastAssistantId = assistantId;
@@ -4031,7 +4035,7 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
             }
         }
 
-        if (!waitingForRemoteReply && item.skills.length === 0 && !hasAssistantSnapshotContent(assistantText, reasoningText, snapshotToolState)) {
+        if (!waitingForRemoteReply && !item.task && item.skills.length === 0 && !hasAssistantSnapshotContent(assistantText, reasoningText, snapshotToolState)) {
             return;
         }
 
@@ -4040,6 +4044,7 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
             ensurePassiveSyncPlaceholder(turnId, sessionSnapshot?.ID || 'default', sessionUISnapshot.last_event_seq || 0);
         }
         renderAppliedSkills(assistantId, item.skills);
+        renderDesktopTask(assistantId, item.task);
         if (reasoningText && !config.hideThink) {
             AppState.session.replay.reasoningBuffers.set(assistantId, reasoningText);
             const card = ensureReasoningCard(assistantId);
@@ -4382,6 +4387,7 @@ function applyCurrentChatSessionEvent(entry) {
             case 'reasoning.delta':
             case 'reasoning.end':
             case 'skill.applied':
+            case 'task.progress':
             case 'tool_call.start':
             case 'tool_call.arguments':
             case 'tool_call.success':
@@ -4402,6 +4408,7 @@ function applyCurrentChatSessionEvent(entry) {
         'reasoning.delta',
         'reasoning.end',
         'skill.applied',
+        'task.progress',
         'tool_call.start',
         'tool_call.arguments',
         'tool_call.success',
@@ -4415,6 +4422,11 @@ function applyCurrentChatSessionEvent(entry) {
     }
 
     switch (entry.EventType) {
+        case 'task.progress': {
+            const id = isLocalActiveTurn ? AppState.chat.activeLocalAssistantId : AppState.session.replay.currentAssistantId;
+            if (id) renderDesktopTask(id, payload.task);
+            break;
+        }
         case 'generation.started':
             if (isPassiveRunning) {
                 syncPassiveGenerationUI(AppState.session.currentCache, payload.phase || 'queued');
@@ -6918,7 +6930,7 @@ function isAssistantMessageVisiblyEmpty(msgEl) {
     const streamStateCommitted = String(msgEl._streamRenderState?.committedText || '').trim();
     const streamStatePending = String(msgEl._streamRenderState?.pendingText || '').trim();
     const reasoningText = String(msgEl.querySelector('.assistant-reasoning')?.textContent || '').trim();
-    const hasToolCards = msgEl.querySelectorAll('.assistant-tools .tool-status-card').length > 0;
+    const hasToolCards = msgEl.querySelectorAll('.assistant-tools .tool-status-card, .assistant-tools .desktop-task-card').length > 0;
     const hasImage = !!msgEl.querySelector('.message-image');
     const responseCard = msgEl.querySelector('.assistant-response-card');
     const hasVisibleResponse = (!responseCard?.hidden && (!!markdownSource || !!markdownText || !!committedSource || !!pendingSource || !!streamStateCommitted || !!streamStatePending)) || hasImage;
@@ -7261,6 +7273,32 @@ function renderAppliedSkills(elementId, skills) {
     checkAndTriggerLabelPin();
 }
 
+function desktopTaskMarkup(task, language = 'ko') {
+    const ko = language === 'ko';
+    const labels = ko
+        ? { pending: '대기', in_progress: '진행 중', completed: '완료', running: '진행 중', blocked: '중단', cancelled: '취소' }
+        : { pending: 'Pending', in_progress: 'In progress', completed: 'Complete', running: 'In progress', blocked: 'Blocked', cancelled: 'Cancelled' };
+    const steps = Array.isArray(task?.steps) ? task.steps : [];
+    const done = steps.filter(step => step.status === 'completed').length;
+    return `<div class="desktop-task-heading"><strong>${escapeHtml(task?.goal || (ko ? '작업 계획' : 'Task plan'))}</strong><span>${done}/${steps.length} · ${escapeHtml(labels[task?.status] || labels.running)}</span></div>
+        <ol>${steps.map(step => `<li><span class="desktop-task-step">${step.status === 'completed' ? '✓' : step.status === 'in_progress' ? '◉' : '○'} ${escapeHtml(step.title || '')}<small>${escapeHtml(labels[step.status] || labels.pending)}</small></span><div class="desktop-task-criterion">${escapeHtml(step.done_when || '')}</div></li>`).join('')}</ol>${task?.status === 'blocked' || task?.status === 'cancelled' ? `<p>${escapeHtml(task.reason || '')}</p>` : ''}`;
+}
+
+function renderDesktopTask(elementId, task) {
+    if (!task || !Array.isArray(task.steps)) return;
+    const message = document.getElementById(elementId) || ensureAssistantMessageElement(elementId);
+    const host = message?.querySelector('.assistant-tools');
+    if (!host) return;
+    let card = host.querySelector('.desktop-task-card');
+    if (!card) {
+        card = document.createElement('section');
+        card.className = 'desktop-task-card';
+        host.prepend(card);
+    }
+    card.innerHTML = desktopTaskMarkup(task, config.language || 'ko');
+    syncAssistantMessageShellState(message);
+}
+
 function getActiveToolCard(elementId) {
     const { msgEl } = getAssistantMessageParts(elementId);
     if (!msgEl || !msgEl.dataset.activeToolCard) return null;
@@ -7478,6 +7516,14 @@ function formatToolDisplayName(toolName = '') {
         get_current_time: 'Get Current Time',
         get_current_location: 'Get Current Location',
         execute_command: 'Execute Command',
+        computer_observe: 'Observe Screen',
+        computer_list_apps: 'List Applications',
+        computer_launch_app: 'Launch Application',
+        computer_switch_app: 'Switch Application',
+        computer_click: 'Click',
+        computer_type: 'Type Text',
+        computer_key: 'Press Key',
+        computer_scroll: 'Scroll',
         search_web: 'Search Web',
         search_web_multi: 'Search Web',
         web_source: 'Web Source',

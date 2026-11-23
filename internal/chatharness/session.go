@@ -47,6 +47,7 @@ type SessionSkillSnapshot struct {
 }
 
 type SessionTurnSnapshot struct {
+	Task             *DesktopTask             `json:"task,omitempty"`
 	TurnID           string                   `json:"turn_id"`
 	Status           string                   `json:"status,omitempty"`
 	UserContent      string                   `json:"user_content,omitempty"`
@@ -192,6 +193,9 @@ func shouldUpdateSessionMessageSnapshot(eventType string) bool {
 }
 
 func shouldPersistChatEvent(eventType string) bool {
+	if eventType == "task.progress" {
+		return true
+	}
 	switch strings.TrimSpace(eventType) {
 	case "skill.applied", "chat.end", "request.complete", "request.cancelled", "session.cleared", "generation.finished":
 		return true
@@ -206,6 +210,9 @@ func shouldUpdateSessionToolSnapshot(eventType string) bool {
 }
 
 func shouldPersistSessionUISnapshot(eventType string) bool {
+	if eventType == "task.progress" {
+		return true
+	}
 	switch strings.TrimSpace(eventType) {
 	case "message.created", "skill.applied", "chat.end", "request.complete", "request.cancelled", "session.cleared":
 		return true
@@ -215,6 +222,9 @@ func shouldPersistSessionUISnapshot(eventType string) bool {
 }
 
 func shouldUpdateSessionTurnSnapshot(eventType string) bool {
+	if eventType == "task.progress" {
+		return true
+	}
 	switch strings.TrimSpace(eventType) {
 	case "message.created", "message.delta", "reasoning.start", "reasoning.delta", "reasoning.end", "skill.applied", "tool_call.start", "tool_call.arguments", "tool_call.success", "tool_call.failure", "chat.end", "request.complete", "request.cancelled", "session.cleared":
 		return true
@@ -811,6 +821,15 @@ func updateTurnSnapshot(snapshot *SessionUISnapshot, turnID, role, eventType str
 	}
 
 	switch strings.TrimSpace(eventType) {
+	case "task.progress":
+		payloadMap, _ := payload.(map[string]interface{})
+		if raw, err := json.Marshal(payloadMap["task"]); err == nil {
+			var task DesktopTask
+			if json.Unmarshal(raw, &task) == nil {
+				turn.Task = &task
+			}
+		}
+		turn.Status = "running"
 	case "reasoning.start", "reasoning.delta":
 		turn.Status = "running"
 		turn.Reasoning.State = "running"

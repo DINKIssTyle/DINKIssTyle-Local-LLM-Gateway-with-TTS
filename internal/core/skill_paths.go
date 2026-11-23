@@ -139,7 +139,7 @@ func compileChatSkills(userText string, compactDiscovery bool, toolLists ...[]pr
 		for _, tool := range toolLists[0] {
 			available[tool.Name] = true
 		}
-		for skill, tool := range map[string]string{"google-gmail": "gmail_search", "google-drive": "google_drive_search", "google-calendar": "google_calendar_search", "msn-weather-current": "read_web_page"} {
+		for skill, tool := range map[string]string{"google-gmail": "gmail_search", "google-drive": "google_drive_search", "google-calendar": "google_calendar_search", "msn-weather-current": "read_web_page", "computer-use": "computer_observe"} {
 			if !available[tool] {
 				excluded = append(excluded, skill)
 			}

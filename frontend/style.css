@@ -4147,3 +4147,10 @@ html[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
 .transcript-open { text-align: start; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; padding: 0; }
 .transcript-day-content { white-space: pre-wrap; overflow-wrap: anywhere; }
 .transcript-more { align-self: center; margin: 8px 0 16px; }
+/* Public task state is separate from private model reasoning and tool events. */
+.desktop-task-card { padding: 16px 20px; margin-bottom: 12px; border-radius: 18px; background: var(--card-bg, rgba(128,128,128,.06)); border: 1px solid var(--border-color, rgba(128,128,128,.15)); }
+.desktop-task-heading, .desktop-task-step { display: flex; justify-content: space-between; gap: 14px; }
+.desktop-task-heading span, .desktop-task-step small, .desktop-task-criterion { color: var(--text-secondary, #777); font-size: 12px; }
+.desktop-task-card ol { margin: 12px 0 0; padding-left: 20px; }
+.desktop-task-card li { margin-top: 9px; }
+.desktop-task-criterion { margin-top: 3px; }

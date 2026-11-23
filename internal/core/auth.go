@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"dinkisstyle-chat/internal/mcp"
+	"dinkisstyle-chat/internal/toolruntime"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -71,6 +72,7 @@ type AuthManager struct {
 }
 
 var disabledToolAliasGroups = map[string][]string{
+	"computer_use": toolruntime.ComputerToolNames,
 	"personal_memory": {
 		"search_memory",
 		"read_memory",

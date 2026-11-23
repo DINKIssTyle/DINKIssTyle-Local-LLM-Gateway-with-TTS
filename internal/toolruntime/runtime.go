@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"dinkisstyle-chat/internal/computeruse"
 	"dinkisstyle-chat/internal/mcp"
 )
 
@@ -44,9 +45,10 @@ type ExecutionContext struct {
 }
 
 type Result struct {
-	Content string                 `json:"content"`
-	IsError bool                   `json:"isError,omitempty"`
-	Meta    map[string]interface{} `json:"meta,omitempty"`
+	Content   string                 `json:"content"`
+	ImageURLs []string               `json:"image_urls,omitempty"`
+	IsError   bool                   `json:"isError,omitempty"`
+	Meta      map[string]interface{} `json:"meta,omitempty"`
 }
 
 // ArgumentError means validation rejected the call before its handler ran.
@@ -186,6 +188,7 @@ func NewDefaultRegistry() *Registry {
 	}
 	registerGoogleTools(registry)
 	registerTranscriptTools(registry)
+	registerComputerTools(registry, computeruse.Default)
 	return registry
 }
 

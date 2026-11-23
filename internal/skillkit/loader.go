@@ -16,7 +16,7 @@ import (
 const (
 	defaultMaxFileBytes   = 64 * 1024
 	defaultMaxSelected    = 3
-	defaultMaxPromptChars = 12000
+	defaultMaxPromptChars = 13000
 )
 
 type Config struct {
@@ -124,6 +124,10 @@ func matchesCompactBuiltin(namespace, userText string) bool {
 		cues = []string{"위키", "wikipedia"}
 	case "builtin:python-calculator":
 		cues = []string{"계산", "며칠", "d-day", "calculate", "calculator"}
+	case "builtin:computer-use":
+		// The task planner decides desktop intent semantically. Offer the common
+		// procedure independent of app names/keywords; core filters disabled tools.
+		return true
 	}
 	for _, cue := range cues {
 		if strings.Contains(query, cue) {

@@ -14,6 +14,7 @@ all_funcs.txt
 !internal/chatharness/provider_tools_test.go
 !internal/chatharness/request_tools_test.go
 !internal/core/tool_parser_test.go
+!internal/core/tool_diagnostics_test.go
 !internal/core/auth_tools_test.go
 !internal/core/evenhub_cors_test.go
 !internal/core/stt_runtime_test.go
@@ -32,6 +33,12 @@ all_funcs.txt
 !internal/promptkit/runtime_tools_test.go
 !internal/toolruntime/runtime_test.go
 !internal/toolruntime/tool_contract_test.go
+!internal/toolruntime/computer_test.go
+!internal/computeruse/*_test.go
+!internal/chatharness/computer_test.go
+!internal/core/computer_loop_test.go
+!internal/chatharness/desktop_task_test.go
+!internal/core/computer_task_test.go
 !internal/evalharness/harness_test.go
 .env.eval.local
 .eval-results/

@@ -59,6 +59,8 @@
           {{end}}
         </array>
         {{end}}
+        <key>NSScreenCaptureUsageDescription</key>
+        <string>Computer Use captures the screen to carry out your requested desktop tasks.</string>
         <key>NSAppTransportSecurity</key>
         <dict>
             <key>NSAllowsLocalNetworking</key>

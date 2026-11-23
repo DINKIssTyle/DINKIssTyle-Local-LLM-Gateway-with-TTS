@@ -235,9 +235,16 @@ func buildToolUsage(envInfo string, modelID string, useNativeTools bool, tools [
 
 	if has("search_web") {
 		lines = append(lines,
-			"WEB LOOKUP: A short request with a clear subject and a time-sensitive fact (e.g. '네이버 주가', '서울 날씨', 'USD/KRW 환율') calls for one search_web lookup before asking a follow-up. If no date is given, look for the latest available value. Use a compact query with the subject and requested fact. Ask for clarification only if materially different interpretations remain after the lookup.",
+			"WEB LOOKUP: For clear time-sensitive questions, make one search_web lookup before asking a follow-up. Use the latest data if no date is given. Use a compact query naming the subject and requested fact.",
 			"MARKET DATA: For a quote, verify the instrument, currency, and quote or session time from the source. Distinguish live, delayed, and closing prices. Do not treat search retrieval time as the quote time or combine conflicting prices into a current price.",
 		)
+	}
+	if has("search_web") {
+		lines = append(lines, "WEATHER: A question about current rain or a forecast already requests a lookup. Use the location from this request or recent conversation. If absent and get_current_location is available, check it first, then search. Ask for the location only if it remains unknown. Do not ask for permission to search.")
+	}
+	if has("execute_command") {
+		lines = append(lines, "HOST METRICS: For available RAM, CPU usage or free disk space on the gateway host, use read-only OS diagnostics through execute_command and report the measured values. On macOS, use vm_stat with its reported page size; distinguish free pages from available memory estimates and memory pressure.")
+		lines = append(lines, "PING: Use execute_command for an actual ping request. Resolve the target from recent turns; Google means google.com unless a different host was specified. Run a bounded ping (macOS/Linux: ping -c 3, Windows: ping -n 3) once the target is clear.")
 	}
 	if useNativeTools {
 		lines = append(lines, nativeToolGuidelines(tools)...)

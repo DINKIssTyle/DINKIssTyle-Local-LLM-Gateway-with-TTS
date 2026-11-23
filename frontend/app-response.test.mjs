@@ -11,6 +11,24 @@ await import('./supertonic3.js');
 const { appendStreamDelta } = globalThis.DKSTChatStreaming.createChatStreamingController();
 const { cleanTextForTTS } = globalThis.DKSTTTS.createTTSController();
 
+test('task cards show actual step states and escape model-generated text', () => {
+    const source = readFileSync(new URL('./app.js', import.meta.url), 'utf8');
+    const start = source.indexOf('function desktopTaskMarkup(');
+    const end = source.indexOf('\nfunction renderDesktopTask(', start);
+    const context = { escapeHtml: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;') };
+    runInNewContext(source.slice(start, end), context);
+    const html = context.desktopTaskMarkup({ goal: '<script>unsafe</script>', status: 'running', steps: [
+        { title: '앱 찾기', done_when: 'PID 확인', status: 'completed' },
+        { title: '상태 확인', done_when: '진행률이 보임', status: 'in_progress' }
+    ] });
+    assert.ok(html.includes('1/2'));
+    assert.ok(html.includes('✓ 앱 찾기'));
+    assert.ok(html.includes('◉ 상태 확인'));
+    assert.ok(html.includes('진행률이 보임'));
+    assert.ok(!html.includes('<script>'));
+    assert.ok(html.includes('&lt;script&gt;'));
+});
+
 test('delta assembly preserves repeated characters, spaces and overlapping phrases', () => {
     for (const parts of [['하', '하', '하'], ['10', '0'], ['a ', ' ', 'b'], ['반복되는 문장입니다.', '반복되는 문장입니다.']]) {
         assert.equal(parts.reduce(appendStreamDelta, ''), parts.join(''));

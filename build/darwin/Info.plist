@@ -61,5 +61,7 @@
         {{end}}
         <key>NSDocumentsFolderUsageDescription</key>
         <string>This app requires access to your Documents folder to save and load configuration, chat history, and user settings.</string>
+        <key>NSScreenCaptureUsageDescription</key>
+        <string>Computer Use captures the screen to carry out your requested desktop tasks.</string>
     </dict>
 </plist>

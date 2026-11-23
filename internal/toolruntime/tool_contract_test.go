@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"dinkisstyle-chat/internal/computeruse"
 	"dinkisstyle-chat/internal/mcp"
 )
 
@@ -120,6 +121,11 @@ func TestDefaultRegistryExposesExpectedAppTools(t *testing.T) {
 		"naver_search": true, "namu_wiki": true, "get_current_location": true,
 		"execute_command":    true,
 		"search_transcripts": true, "read_transcripts": true,
+	}
+	if computeruse.Default.Available() {
+		for _, name := range ComputerToolNames {
+			expected[name] = true
+		}
 	}
 	for _, definition := range Default.List(ExecutionContext{EnableMemory: true}) {
 		if !expected[definition.Name] {

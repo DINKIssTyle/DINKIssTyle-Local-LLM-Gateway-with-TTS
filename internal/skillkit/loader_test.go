@@ -21,6 +21,25 @@ func writeTestSkill(t *testing.T, root, dir, frontmatter, body string) string {
 	return path
 }
 
+func TestComputerSkillFitsBundledBudgetAndCompactDiscovery(t *testing.T) {
+	builtin := filepath.Join("..", "..", "bundle", "skills", "builtin")
+	for _, query := range []string{"$computer-use 앱 전환", "사파리 앱 실행해줘", "LM Studio 에서 다운로드 중인 작업이 얼마나 진행되었는지 확인해봐", "편집기의 작업 진행 상태를 확인해줘", "Check the app status"} {
+		result := LoadAndCompile(Config{BuiltinDir: builtin, CompactDiscovery: true}, query)
+		if len(result.Diagnostics) > 0 {
+			t.Fatalf("invalid computer skill: %#v", result.Diagnostics)
+		}
+		found := false
+		for _, skill := range result.Available {
+			if skill.Name == "computer-use" {
+				found = true
+			}
+		}
+		if !found || !strings.Contains(result.Prompt, "observation_id") {
+			t.Fatalf("computer workflow missing for %q", query)
+		}
+	}
+}
+
 func TestLoadAndCompileSelectsRelevantKoreanWeatherSkill(t *testing.T) {
 	builtin := t.TempDir()
 	writeTestSkill(t, builtin, "msn-weather-current",

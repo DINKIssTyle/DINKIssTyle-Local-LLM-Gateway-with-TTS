@@ -4170,6 +4170,11 @@
                         id: 'execute_command',
                         name: currentServerLanguage === 'ko' ? '터미널 / 명령어' : 'Terminal / Command',
                         desc: currentServerLanguage === 'ko' ? '시스템 명령 실행' : 'Execute system commands'
+                    },
+                    {
+                        id: 'computer_use',
+                        name: currentServerLanguage === 'ko' ? '컴퓨터 제어 (macOS)' : 'Computer Use (macOS)',
+                        desc: currentServerLanguage === 'ko' ? '서버 Mac의 화면 보기, 앱 실행·전환, 마우스·키보드 조작. 화면 기록 및 손쉬운 사용 권한 필요' : 'View the server Mac, launch/switch apps, and use mouse/keyboard. Requires Screen Recording and Accessibility permissions'
                     }
                 ];
 
@@ -4203,7 +4208,8 @@
 
         function expandDisabledToolAliases(tools) {
             const aliasGroups = {
-                personal_memory: ['search_memory', 'read_memory', 'read_memory_context', 'delete_memory']
+                personal_memory: ['search_memory', 'read_memory', 'read_memory_context', 'delete_memory'],
+                computer_use: ['computer_observe', 'computer_list_apps', 'computer_launch_app', 'computer_switch_app', 'computer_click', 'computer_type', 'computer_key', 'computer_scroll']
             };
             const expanded = [];
             const seen = new Set();

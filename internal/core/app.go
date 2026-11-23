@@ -59,6 +59,8 @@ type App struct {
 	serverUILanguageMux sync.RWMutex
 	serverUILanguage    string
 
+	computerTaskPlanning bool
+
 	// Server-side Model Cache
 	modelCache     []byte
 	modelCacheMux  sync.RWMutex
@@ -313,8 +315,9 @@ func copyRecursive(src, dst string) error {
 // NewApp creates a new App instance
 func NewApp(assets embed.FS) *App {
 	a := &App{
-		authMgr: NewAuthManager(GetResourcePath("users.json")),
-		assets:  assets,
+		authMgr:              NewAuthManager(GetResourcePath("users.json")),
+		assets:               assets,
+		computerTaskPlanning: true,
 	}
 	globalApp = a
 	mcp.SetHelpDocsFS(assets, "frontend/public/help")

@@ -155,6 +155,9 @@ func GemmaToolTextPrefix(text string, tools []promptkit.ToolDefinition) (hold, d
 	}
 	for _, tool := range tools {
 		prefix := tool.Name + "{"
+		if strings.HasPrefix(text, tool.Name+"\n") || strings.HasPrefix(text, tool.Name+"\r\n") {
+			return true, true
+		}
 		if strings.HasPrefix(text, prefix) {
 			return true, true
 		}
@@ -165,7 +168,83 @@ func GemmaToolTextPrefix(text string, tools []promptkit.ToolDefinition) (hold, d
 	return false, false
 }
 
+// ProbeGemmaToolDelta holds a prospective call at the start of a line.
+func ProbeGemmaToolDelta(delta, pending string, atLineStart, definite, overflow bool, tools []promptkit.ToolDefinition) (visible, held string, probe, candidate, tooLong, suppress bool) {
+	const limit = 12000
+	if overflow || definite && len(pending)+len(delta) > limit {
+		return "", pending, true, true, true, true
+	}
+	text := pending + delta
+	var prose strings.Builder
+	for {
+		if atLineStart {
+			if hold, confirmed := GemmaToolTextPrefix(text, tools); hold && len(text) <= limit {
+				return prose.String(), text, true, confirmed, false, prose.Len() == 0
+			}
+		}
+		newline := strings.IndexByte(text, '\n')
+		if newline < 0 {
+			prose.WriteString(text)
+			return prose.String(), "", false, false, false, false
+		}
+		prose.WriteString(text[:newline+1])
+		text = text[newline+1:]
+		atLineStart = true
+	}
+}
+
 var gemmaArgumentKey = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z_0-9]*$`)
+
+// Recover a tool-only name followed by scalar key: value lines. Callers must
+// restrict this fallback to registered read-only tools, never desktop inputs.
+func ParsePlainReadToolCall(text string, tools []promptkit.ToolDefinition) (string, string, bool) {
+	text = strings.TrimSpace(strings.ReplaceAll(text, "\r\n", "\n"))
+	if name, rest, found := strings.Cut(text, "{"); found && gemmaArgumentKey.MatchString(name) && strings.HasSuffix(rest, "}") && !strings.Contains(rest, "\n") {
+		// Accept the single-string shorthand used by local models.
+		text = name + "\n" + strings.TrimSuffix(rest, "}")
+	}
+	lines := strings.Split(text, "\n")
+	if len(lines) < 2 {
+		return "", "", false
+	}
+	name := strings.TrimSpace(lines[0])
+	var schema struct {
+		Properties map[string]struct {
+			Type string `json:"type"`
+		} `json:"properties"`
+		Required []string `json:"required"`
+	}
+	found := false
+	for _, tool := range tools {
+		if tool.Name == name && json.Unmarshal(tool.InputSchema, &schema) == nil {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return "", "", false
+	}
+	args := map[string]any{}
+	for _, line := range lines[1:] {
+		key, value, ok := strings.Cut(strings.TrimSpace(line), ":")
+		key, value = strings.TrimSpace(key), strings.TrimSpace(value)
+		property, exists := schema.Properties[key]
+		if !ok || !exists || property.Type != "string" || value == "" {
+			return "", "", false
+		}
+		if _, exists := args[key]; exists {
+			return "", "", false
+		}
+		args[key] = value
+	}
+	for _, key := range schema.Required {
+		if _, ok := args[key]; !ok {
+			return "", "", false
+		}
+	}
+	encoded, _ := json.Marshal(args)
+	return name, string(encoded), true
+}
 
 // ParseGemmaToolText accepts a single complete call in Gemma's wire syntax.
 // Unwrapped text requires Gemma's special string delimiter to distinguish it
