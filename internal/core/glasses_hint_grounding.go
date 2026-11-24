@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -38,6 +40,15 @@ type hintGrounding struct {
 	Records             []hintSourceRecord `json:"records,omitempty"`
 }
 
+var hintTranslationCatalog = regexp.MustCompile(`(?i)\btranslations?\s+in\s+context\b|\btranslation\s+into\s+[\p{L} -]+\s*[-–—]|\bcontextual\s+translation\s+of\b`)
+var hintLanguageTask = regexp.MustCompile(`(?i)\b(translat(e|ion|ions|ing)|pronunciation|romanization|grammar|wording|idiom|usage examples?)\b|번역|발음|문법|용례|영어로|한국어로|일본어로|중국어로`)
+
+// Translation catalogs illustrate wording; their example claims are not
+// evidence about the subject discussed. Match content, not a site blacklist.
+func hintIrrelevantTranslationRecord(record hintSourceRecord, task string) bool {
+	return !hintLanguageTask.MatchString(task) && hintTranslationCatalog.MatchString(record.Title+"\n"+record.Text)
+}
+
 // Read only source titles/snippets, never Query/Provider/Source-ID echoes.
 func hintSourceRecords(evidence string) []hintSourceRecord {
 	var records []hintSourceRecord
@@ -59,6 +70,40 @@ func hintSourceRecords(evidence string) []hintSourceRecord {
 			current.URL = strings.TrimSpace(strings.TrimPrefix(line, "Link: "))
 		case strings.HasPrefix(line, "Snippet: "):
 			current.Text = strings.TrimSpace(strings.TrimPrefix(line, "Snippet: "))
+		}
+	}
+	flush()
+	return records
+}
+
+// Search-memory output contains retrieval metadata as well as saved text.
+// Keep each candidate separate and expose only its snippet for selection.
+func hintMemoryRecords(evidence string) []hintSourceRecord {
+	var records []hintSourceRecord
+	var snippet []string
+	flush := func() {
+		if text := strings.TrimSpace(strings.Join(snippet, "\n")); text != "" && !evenrealities.IsHintChatArtifact(text) && len(records) < 4 {
+			records = append(records, hintSourceRecord{Title: "저장된 기억", Text: text})
+		}
+		snippet = nil
+	}
+	for _, line := range strings.Split(evidence, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "</hint_evidence>" {
+			break
+		}
+		if index, _, found := strings.Cut(line, ". MEMORY ID: "); found {
+			if _, err := strconv.Atoi(index); err == nil {
+				flush()
+				continue
+			}
+		}
+		if snippet != nil {
+			snippet = append(snippet, line)
+			continue
+		}
+		if strings.HasPrefix(line, "SNIPPET: ") {
+			snippet = []string{strings.TrimPrefix(line, "SNIPPET: ")}
 		}
 	}
 	flush()
@@ -175,13 +220,16 @@ func prepareHintGrounding(ctx context.Context, registry *toolruntime.Registry, e
 	result.Records = hintSourceRecords(evidence)
 	if req.Source == "memory" {
 		// Memory lookup permission has already been checked by loadHintEvidence.
-		start := strings.Index(evidence, "<hint_evidence")
-		end := strings.LastIndex(evidence, "</hint_evidence>")
-		if start >= 0 && end > start {
-			if tag := strings.Index(evidence[start:], ">"); tag >= 0 {
-				result.Records = []hintSourceRecord{{Title: "저장된 기억", Text: evidence[start+tag+1 : end]}}
+		result.Records = hintMemoryRecords(evidence)
+	}
+	if req.Source == "web" {
+		var records []hintSourceRecord
+		for _, record := range result.Records {
+			if !hintIrrelevantTranslationRecord(record, req.Query) {
+				records = append(records, record)
 			}
 		}
+		result.Records = records
 	}
 	if len(result.Records) == 0 {
 		return result, "", fmt.Errorf("제목과 본문이 있는 실제 출처를 확인하지 못해 생략합니다")

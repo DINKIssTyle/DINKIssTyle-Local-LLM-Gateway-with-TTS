@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode"
 
+	"dinkisstyle-chat/internal/evenrealities"
 	"dinkisstyle-chat/internal/toolruntime"
 )
 
@@ -425,6 +426,9 @@ func loadHintEvidence(ctx context.Context, registry *toolruntime.Registry, execC
 	}
 	if research.Source == "memory" && !execCtx.EnableMemory {
 		return "", "", fmt.Errorf("사용자 기억 조회가 비활성화되어 있습니다")
+	}
+	if research.Source == "memory" && (!strings.Contains(research.Observed, research.Anchor) || !evenrealities.AllowsHintMemory(research.Query, research.Anchor)) {
+		return "", "", fmt.Errorf("memory_not_requested: 현재 발화에 명시적인 개인 기록 조회 근거가 없습니다")
 	}
 	tool := "search_web"
 	if research.Source == "memory" {

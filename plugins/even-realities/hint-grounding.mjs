@@ -1,4 +1,4 @@
-import {usefulHintText,completeHintQuote,hintContentIssue} from './hint-quality.mjs';
+import {completeHintQuote,hintContentIssue,hintChatArtifact} from './hint-quality.mjs';
 import {unwrapHintObject,HINT_LABELS} from './hint-judge.mjs';
 
 const textKey=text=>String(text || '').normalize('NFC').replace(/\s+/gu,' ').trim();
@@ -55,6 +55,7 @@ export function validateHintGrounding(raw,proof){
   if(Array.from(quote).length<12 || Array.from(quote).length>800 || topic.length<2 || topic.length>80)return {ok:false,reason:'invalid_quote'};
   for(const record of Array.isArray(proof.records)?proof.records.slice(0,4):[]){
     if(typeof record.text!=='string')continue;
+    if(proof.source==='memory' && hintChatArtifact(record.text))return {ok:false,reason:'chat_history_artifact'};
     // Recover punctuation-only copy edits by showing the original record,
     // never the model's modified sentence. Changed words/numbers still fail.
     const exact=textKey(record.text).includes(textKey(quote));
@@ -64,7 +65,9 @@ export function validateHintGrounding(raw,proof){
     if(!nameKey(quote).includes(nameKey(topic)) && !nameKey(record.title).includes(nameKey(topic)))continue;
     // Display the verified extract itself, never an unsupported paraphrase.
     const fact=completeHintQuote(punctuationOnly?record.text.trim():quote);
-    if(Array.from(fact).length<12 || !usefulHintText(fact,topic))return {ok:false,reason:'incomplete_or_empty_source'};
+    if(Array.from(fact).length<12)return {ok:false,reason:'incomplete_or_empty_source'};
+    const issue=hintContentIssue(fact,{topic:record.title || topic,task:proof.task});
+    if(issue)return {ok:false,reason:issue};
     return {ok:true,fact,topic,kind,source:proof.source,reference:{title:record.title || '',url:record.url || ''}};
   }
   return {ok:false,reason:'unsupported_quote_or_name'};
@@ -135,6 +138,7 @@ function validateContextHintSelection(data,proof){
     if(Array.isArray(data) || keys[0]!=='selections')normalized=Array.isArray(data)?'flat_array':keys[0];
   }
   const record=selected[0].record;
+  if(proof.source==='memory' && hintChatArtifact(record.text))return {ok:false,reason:'chat_history_artifact'};
   if(proof.source!=='memory' && !/^https?:\/\//i.test(record.url || ''))return {ok:false,reason:'unsupported_quote_or_name'};
   const texts=[];
   for(const choice of selected){

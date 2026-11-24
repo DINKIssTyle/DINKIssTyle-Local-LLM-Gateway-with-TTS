@@ -8,6 +8,18 @@ import (
 
 var ErrUnresolvedTask = errors.New("hint_task_not_actionable")
 
+// Automatic memory access needs explicit personal recall in BOTH the speech
+// and the proposed task. A model's source label alone is not authorization.
+var personalHintRecall = regexp.MustCompile(`(?i)(?:^|[\s"“‘])(?:내|나의|제|제가|우리|저의|저희)(?:\s|(?:가|는|의)\s).{0,35}(?:일정|약속|예약|메모|기록|선호|취향)|(?:저장해\s*둔|저장한|적어\s*둔|기록해\s*둔|지난번에?\s*(?:내가|우리가|제가)).{0,60}(?:내용|메모|기록|약속|일정|말|정했|결정)|\b(?:my|our)\b.{0,50}\b(?:appointments?|schedule|notes?|preferences?|reservations?|saved|previous conversation)\b|\b(?:what|when|where)\b.{0,30}\b(?:did|have)\s+(?:I|we)\b.{0,40}\b(?:say|save|agree|decide|book)\b`)
+
+func AllowsHintMemory(task, speech string) bool {
+	return personalHintRecall.MatchString(task) && personalHintRecall.MatchString(speech)
+}
+
+var hintChatArtifact = regexp.MustCompile(`(?i)(?:^|\s)(?:user|assistant|system|developer)\s*[:：]|\[APP TOOL RESULT|다음은\s*직전까지의\s*연속\s*AI\s*대화\s*기록|previous\s+(?:AI\s+)?chat\s+history|Memory candidates:|MEMORY ID:`)
+
+func IsHintChatArtifact(text string) bool { return hintChatArtifact.MatchString(text) }
+
 // Structural requests for missing context cannot be fulfilled by an autonomous
 // information card. Do not blacklist names or require explicit user questions.
 var unresolvedTask = regexp.MustCompile(`(?i)((?:어떤|누구|무엇|어디|정체|특정|식별|명확).{0,90}(?:추가|더\s*많은)\s*(?:정보|문맥).{0,25}(?:필요|요청)|추가\s*문맥.{0,25}(?:필요|요청)|(?:more|additional)\s+(?:information|details).{0,35}(?:needed|required).{0,50}(?:identify|specify|clarify)|(?:identify|specify|clarify).{0,80}(?:more|additional)\s+(?:information|details).{0,25}(?:needed|required)|(?:more|additional)\s+context.{0,25}(?:needed|required)|(?:ask|request).{0,16}(?:clarification|more context))`)

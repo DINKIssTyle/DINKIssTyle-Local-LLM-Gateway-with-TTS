@@ -39,7 +39,7 @@ function setup(settings = {}) {
         } } },
         async fetch(url, options) {
             requests.push({ url, options });
-            return { ok: true, json: async () => url.endsWith('/status') ? { status: 'ready' } : { text: '안녕하세요' } };
+            return { ok: true, json: async () => url.includes('/status') ? { status: 'ready', ...(url.includes('qwen3-asr') ? { modelId: 'qwen3-asr-0.6b-mlx' } : {}) } : { text: '안녕하세요' } };
         },
         alert: text => alerts.push(text),
         setTimeout(fn) { timers.set(++timerID, fn); return timerID; },
@@ -189,4 +189,56 @@ test('continuous Whisper ignores playback audio and reuses capture for the next 
     h.controller.stop({ suppressAutoSend: true });
     assert.equal(h.tracks[0].stopped, true);
     assert.equal(h.contexts[0].state, 'closed');
+});
+
+test('Qwen3-ASR uses its own status and PCM endpoint in single and continuous modes', async () => {
+    for (const continuous of [false, true]) {
+        const h = setup({ sttMethod: 'qwen3-asr', sttContinuous: continuous });
+        h.controller.start(); await flush();
+        assert.equal(h.requests[0].url, '/api/stt/status?engine=qwen3-asr');
+        assert.equal(h.recognitions.length, 0);
+        const process = h.contexts[0].processor.onaudioprocess;
+        const frame = value => ({ inputBuffer: { getChannelData: () => new Float32Array(4096).fill(value) } });
+        const utterance = () => { process(frame(0.1)); for (let i=0;i<4;i++) process(frame(0)); };
+        utterance(); await flush();
+        const payload = JSON.parse(h.requests.find(r=>r.url.endsWith('/transcribe')).options.body);
+        assert.equal(payload.engine, 'qwen3-asr');
+        assert.equal(payload.fallback, false);
+        assert.equal(payload.sampleRate, 16000);
+        assert.equal(payload.format, 'pcm');
+        assert.equal(payload.language, 'ko');
+        assert.equal(Buffer.from(payload.audio,'base64').readInt16LE(0),3276);
+        assert.equal(h.sent[0].text, '안녕하세요');
+        assert.equal(h.tracks[0].stopped, !continuous);
+        if (continuous) {
+            let resolveTranscript;
+            h.window.fetch = (url,options) => {
+                h.requests.push({url,options});
+                return new Promise(resolve=>{resolveTranscript=resolve;});
+            };
+            utterance(); await flush();
+            const request=h.requests.at(-1);
+            h.controller.stop({suppressAutoSend:true,forceAbort:true});
+            assert.equal(request.options.signal.aborted,true);
+            resolveTranscript({ok:true,json:async()=>({text:'늦은 결과'})});
+            await flush();
+            assert.equal(h.sent.length,1);
+            assert.equal(h.tracks[0].stopped,true);
+        }
+    }
+});
+
+for (const [name,status,errorKey] of [
+    ['missing assets',{status:'missing',modelId:'qwen3-asr-0.6b-mlx'},'sttModelMissing'],
+    ['unsupported host',{status:'unsupported',modelId:'qwen3-asr-0.6b-mlx'},'qwenSTTUnsupported'],
+    ['old server returning Whisper',{status:'ready',modelId:'whisper-base'},'qwenSTTUnsupported'],
+]) test(`Qwen3-ASR ${name} stops without opening the microphone or falling back`,async()=>{
+    const h=setup({sttMethod:'qwen3-asr'});
+    h.window.fetch=async()=>({ok:true,json:async()=>status});
+    h.controller.start();await flush();
+    assert.equal(h.state.input.isSTTActive,false);
+    assert.equal(h.tracks.length,0);
+    assert.equal(h.contexts[0].state,'closed');
+    assert.match(h.alerts[0],new RegExp(errorKey));
+    assert.equal(h.recognitions.length,0);
 });

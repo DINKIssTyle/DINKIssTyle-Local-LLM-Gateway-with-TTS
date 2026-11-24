@@ -133,3 +133,27 @@ assert.ok(validateHintGrounding(JSON.stringify({fact:limitation,adds_information
 console.log('PASS: canonical per-record references, safe flat aliases, source isolation, no prose recovery, insufficient-context/title/navigation rejection and useful uncertainty');
 
 assert.equal(validateHintGrounding(JSON.stringify({fact:'지역 교육의 목표에 대한 논의와 시작 방향',adds_information:true}),{...known,task_oriented:true,topic:'지역 교육의 목표에 대한 논의를 시작해야 하는 이유와 실제 실행 방향',task:'지역 교육의 목표에 대한 논의를 시작할 구체적인 방법'}).reason,'heading_only','shortened task headings are not a substantive answer');
+
+// A copied translation catalog excerpt is authentic text but not subject evidence.
+const translationTitle='갖기 위해서는 - Translation into English - Reverso Context';
+const translationText='Translations in context of "갖기 위해서는" in Korean-English from Reverso Context: 그래서 일년 내내 무성한 덤불을 갖기 위해서는 상록수 등반가를 선택하는 것이 가장 좋다고 생각합니다.';
+const translationProof={...contextual,task:'일년 내내 무성한 덤불을 유지하는 식물의 조건',records:[{title:translationTitle,url:'https://example.com/translation',text:translationText,spans:[translationText]}]};
+for(const payload of ['{"record":1,"sentences":[1]}','{"selection":1}'])assert.equal(validateHintGrounding(payload,translationProof).reason,'translation_example_only');
+const exampleSentence='일년 내내 무성한 덤불을 유지하려면 상록수를 선택하는 것이 좋다고 생각합니다.';
+assert.equal(validateHintGrounding('{"record":1,"sentences":[1]}',{...translationProof,records:[{...translationProof.records[0],text:exampleSentence,spans:[exampleSentence]}]}).reason,'translation_example_only','the catalog title identifies a language example even without boilerplate in the sentence');
+assert.ok(validateHintGrounding('{"record":1,"sentences":[1]}',{...translationProof,task:'갖기 위해서는의 영어 번역과 용례'}).ok,'explicit language research may use translation examples');
+assert.ok(validateHintGrounding('{"record":1,"sentences":[1]}',{...translationProof,records:[{title:'상록 식물의 잎 유지 원리',url:'https://example.com/botany',text:exampleSentence,spans:[exampleSentence]}]}).ok,'ordinary subject explanations remain eligible');
+const legacyTranslation={...translationProof,task_oriented:false,topic:'갖기 위해서는'};
+assert.equal(validateHintGrounding(JSON.stringify({fact:translationText,support_quote:translationText,topic:'갖기 위해서는',adds_information:true}),legacyTranslation).reason,'translation_example_only');
+console.log('PASS: translation catalog excerpts rejected for subject research, preserved for explicit language tasks');
+
+for(const artifact of ['User: 다음은 직전까지의 연속 AI 대화 기록입니다.','User: 지동설이란 Assistant: 지구가 우주의 중심입니다.','[APP TOOL RESULT — NOT A USER MESSAGE] Tool: search_memory']){
+ const proof={...contextual,source:'memory',task:'내 메모의 치과 예약 날짜 확인',records:[{title:'저장된 기억',text:artifact,spans:[artifact]}]};
+ assert.equal(validateHintGrounding('{"record":1,"sentences":[1]}',proof).reason,'chat_history_artifact');
+ const mixed='치과 예약은 금요일 오후 세 시입니다.\n'+artifact;
+ assert.equal(validateHintGrounding('{"record":1,"sentences":[1]}',{...proof,records:[{...proof.records[0],text:mixed,spans:['치과 예약은 금요일 오후 세 시입니다.',artifact]}]}).reason,'chat_history_artifact','an unselected wrapper still identifies contaminated memory');
+ assert.equal(validateHintGrounding(JSON.stringify({fact:artifact,adds_information:true}),{...known,task_oriented:true}).reason,'chat_history_artifact');
+}
+const note='치과 예약은 금요일 오후 세 시로 저장되어 있습니다.';
+assert.ok(validateHintGrounding('{"record":1,"sentences":[1]}',{...contextual,source:'memory',task:'내 메모의 치과 예약 날짜 확인',records:[{title:'저장된 기억',text:note,spans:[note]}]}).ok);
+console.log('PASS: saved chat and tool wrappers rejected; plain personal notes remain eligible');

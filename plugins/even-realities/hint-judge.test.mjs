@@ -206,7 +206,7 @@ const sourcePlan=parseHintJudgment(JSON.stringify(sourceTask),context).plan;
 assert.equal(sourcePlan.question,sourceTask.task);
 assert.equal(sourcePlan.searchQuery,sourceTask.search_query);
 for(const search_query of [123,'가'.repeat(301)])assert.equal(parseHintJudgment(JSON.stringify({...sourceTask,search_query}),context),null);
-assert.equal(parseHintJudgment(JSON.stringify({...sourceTask,source:'memory'}),context).plan.searchQuery,undefined);
+assert.equal(parseHintJudgment(JSON.stringify({...sourceTask,source:'memory'}),context).reason,'memory_not_requested');
 
 // A server deadline/stream error must not become a grounding failure or start a schema retry.
 for(const code of ['judge_timeout','judge_stream_error']){
@@ -217,3 +217,22 @@ for(const code of ['judge_timeout','judge_stream_error']){
 let emptyCalls=0;
 await assert.rejects(()=>requestHintJudgment({job:{text:'손잡이 원리'},fetch:async()=>{emptyCalls++;return {ok:true,json:async()=>({response:''})};}}),error=>error.code==='judge_empty_response');
 assert.equal(emptyCalls,1,'a missing final answer is not insufficient transcript evidence');
+
+// Reproduce both 2.24.49 misroutes without allowing a memory tool call.
+for(const [speech,task] of [
+ ['1층입니다. 고생이 이어집니다.','What is the context of "1층입니다. 고생이 이어집니다."?'],
+ ['천문학에서는 원자라는 개념이 등장되고 있습니다','What astronomical concept involves the concept of atoms?'],
+ ['전보거든요','1859년 당시 가장 많이 쓰인 통신 수단은?'],
+ ['내일 날씨가 궁금해요','내 일정 확인'],
+]){
+ const decision=parseHintJudgment(JSON.stringify({task,anchor:speech,source:'memory',kind:'verify'}),compactJudgeContext({text:speech,context:''}));
+ assert.equal(decision.hint,false);assert.equal(decision.reason,'memory_not_requested');
+}
+const personalSpeech='내 메모에 저장한 치과 예약 날짜를 찾아줘';
+const personalTask={task:'내 메모의 치과 예약 날짜 확인',anchor:personalSpeech,source:'memory',kind:'schedule',search_query:'unused web query'};
+const personalDecision=parseHintJudgment(JSON.stringify(personalTask),compactJudgeContext({text:personalSpeech,context:''}));
+assert.equal(personalDecision.hint,true);assert.equal(personalDecision.plan.source,'memory');assert.equal(personalDecision.plan.searchQuery,undefined);
+console.log('PASS: memory requires explicit personal recall in speech and task; public facts and vague context lookups skip');
+for(const speech of ['국내 일정은 어떻게 되죠','우리나라 일정에 대해 알려줘','내일 예약이 필요합니다']){
+ assert.equal(parseHintJudgment(JSON.stringify({task:speech,anchor:speech,source:'memory',kind:'schedule'}),compactJudgeContext({text:speech})).reason,'memory_not_requested','partial words do not establish personal memory intent');
+}

@@ -1,4 +1,4 @@
-import {acknowledgementOnly,unresolvedTermTopic,unresolvedSpecificTask,hintTaskIssue} from './hint-quality.mjs';
+import {acknowledgementOnly,unresolvedTermTopic,unresolvedSpecificTask,hintTaskIssue,allowsHintMemory} from './hint-quality.mjs';
 import {HINT_LABELS,INFORMATION_HINT_KINDS,isInformationHintPlan} from './hint-policy.mjs';
 export {HINT_LABELS} from './hint-policy.mjs';
 import {readHintPlanResponse} from './hint-enrichment.mjs';
@@ -67,6 +67,7 @@ export function parseHintJudgment(raw,context,onInvalid=()=>{}){
     if(acknowledgementOnly(anchor))return {hint:false,reason:'llm_skip',backend:'llm',continuity:'unknown'};
     if(hintTaskIssue('',task)){onInvalid('generic_task');return null;}
     if(!['internal','web','memory'].includes(data.source))return null;
+    if(data.source==='memory' && !allowsHintMemory(task,anchor))return {hint:false,reason:'memory_not_requested',backend:'llm',continuity:'unknown'};
     if(data.search_query!==undefined && (typeof data.search_query!=='string' || Array.from(data.search_query).length>300)){onInvalid('invalid_search_query');return null;}
     const searchQuery=data.source==='web'?String(data.search_query || '').trim():'';
     if(data.source==='internal' && unresolvedSpecificTask(task,anchor))return {hint:false,reason:'unresolved_hint_subject',backend:'llm',continuity:'unknown'};
@@ -106,6 +107,7 @@ export function parseHintJudgment(raw,context,onInvalid=()=>{}){
   if(context.latest && evidence.includes(context.latest))evidence=context.latest;
   // The model must ground its selection in text it actually saw, from the current window.
   if(!context.latest.includes(evidence))return null;
+  if(data.source==='memory' && !allowsHintMemory(data.question,evidence))return {hint:false,reason:'memory_not_requested',backend:'llm',continuity};
   const key=value=>String(value).normalize('NFC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
   // A source number cannot ground an unrelated topic or an empty sentence ending.
   if(!key(evidence).includes(key(data.topic)) || key(data.topic).length<2)return null;

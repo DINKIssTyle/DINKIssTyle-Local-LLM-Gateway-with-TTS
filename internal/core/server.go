@@ -4570,9 +4570,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		}
 	}
 	if hintJudge {
-		// Includes prompt evaluation, private deliberation and selection JSON.
-		// The client allows two attempts within 34s; its gate allows 38s.
-		chatTimeout = 15 * time.Second
+		// Includes prompt evaluation and selection JSON; stays within the
+		// glasses client's 34s overall judge timeout while tolerating local queue latency.
+		chatTimeout = 28 * time.Second
 	}
 	chatCtx, chatCancel := context.WithTimeout(baseChatCtx, chatTimeout)
 	defer chatCancel()
@@ -4705,9 +4705,11 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		}
 		if nativeAmbient {
 			prepareNativeAmbientPayload(routedBody)
-			if glassesHint && !translationTask {
+			if glassesHint && !translationTask && !promptkit.IsGemma4ChatModel(rawModel) {
 				// Hint planning/selection needs deliberation. Let the model choose
-				// its supported reasoning mode instead of forcing reasoning off.
+				// its supported reasoning mode instead of forcing reasoning off,
+				// except Gemma 4 hints which otherwise burn the 28-30s ambient
+				// budget thinking before emitting the JSON decision or fact.
 				delete(routedBody, "reasoning")
 			}
 		}
@@ -6797,6 +6799,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			} else if chatCtx.Err() == context.Canceled {
 				return
 			}
+			log.Printf("[hint-judge] code=%s model=%s mode=%s elapsed_ms=%d reasoning_chars=%d response_chars=%d ctx_err=%v read_err=%v",
+				code, modelID, llmMode, requestElapsedMs(), len(reasoningResponse), len(fullResponse), chatCtx.Err(), upstreamReadErr)
 			payload, _ := json.Marshal(map[string]any{"error": map[string]string{"code": code, "message": message}})
 			emitStreamChunk("data: " + string(payload))
 			return

@@ -1,9 +1,15 @@
 const key=text=>String(text || '').normalize('NFC').toLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
+const personalHintRecall=/(?:^|[\s"“‘])(?:내|나의|제|제가|우리|저의|저희)(?:\s|(?:가|는|의)\s).{0,35}(?:일정|약속|예약|메모|기록|선호|취향)|(?:저장해\s*둔|저장한|적어\s*둔|기록해\s*둔|지난번에?\s*(?:내가|우리가|제가)).{0,60}(?:내용|메모|기록|약속|일정|말|정했|결정)|\b(?:my|our)\b.{0,50}\b(?:appointments?|schedule|notes?|preferences?|reservations?|saved|previous conversation)\b|\b(?:what|when|where)\b.{0,30}\b(?:did|have)\s+(?:I|we)\b.{0,40}\b(?:say|save|agree|decide|book)\b/iu;
+export function allowsHintMemory(task,speech){return personalHintRecall.test(String(task || '')) && personalHintRecall.test(String(speech || ''));}
+export function hintChatArtifact(text){return /(?:^|\s)(?:user|assistant|system|developer)\s*[:：]|\[APP TOOL RESULT|다음은\s*직전까지의\s*연속\s*AI\s*대화\s*기록|previous\s+(?:AI\s+)?chat\s+history|Memory candidates:|MEMORY ID:/iu.test(String(text || ''));}
 // Reject empty existence/importance claims, not concrete explanatory statements.
 // Reject whole non-answers, preserving useful factual uncertainty/limitations.
 // This is a final content guard, not a dictionary of accepted topic names.
 export function hintContentIssue(text,{topic='',task=''}={}){
  text=String(text || '').trim();if(!text)return 'no_information_value';
+ if(hintChatArtifact(text))return 'chat_history_artifact';
+ const languageTask=/\b(?:translat(?:e|ion|ions|ing)|pronunciation|romanization|grammar|wording|idiom|usage examples?)\b|번역|발음|문법|용례|영어로|한국어로|일본어로|중국어로/iu.test(task);
+ if(!languageTask && /\btranslations?\s+in\s+context\b|\btranslation\s+into\s+[\p{L} -]+\s*[-–—]|\bcontextual\s+translation\s+of\b/iu.test(topic+'\n'+text))return 'translation_example_only';
  if([topic,task].some(title=>key(title) && key(title)===key(text)))return 'heading_only';
  const compact=key(text);
  if(text.length<140 && /(?:이유|방향|원리|목표|방법|의미|개념|비교|정리|정보|설명)$/u.test(text) && compact.length>=8 && [topic,task].some(title=>key(title).includes(compact.slice(0,Math.min(12,compact.length)))))return 'heading_only';

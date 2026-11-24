@@ -392,8 +392,9 @@
                         <select id="cfg-stt-method">
                             <option value="browser" data-i18n="setting.sttMethod.browser">브라우저 음성 인식</option>
                             <option value="local" data-i18n="setting.sttMethod.local">서버 Whisper (로컬 STT)</option>
+                            <option value="qwen3-asr" data-i18n="setting.sttMethod.qwen">서버 Qwen3-ASR (Apple Silicon)</option>
                         </select>
-                        <p class="setting-desc" data-i18n="setting.sttMethod.desc">Whisper는 서버 Asset Manager에서 STT 모델을 설치해야 합니다. 음성 입력 언어는 TTS 언어 설정을 따릅니다.</p>
+                        <p class="setting-desc" data-i18n="setting.sttMethod.desc">Whisper·Qwen3-ASR은 서버 Asset Manager에서 해당 STT 모델을 설치해야 합니다. Qwen3-ASR은 Apple Silicon Mac에서 사용할 수 있습니다. 음성 입력 언어는 TTS 언어 설정을 따릅니다.</p>
                     </div>
                     <div class="setting-item">
                         <div class="setting-toggle" onclick="toggleSwitch('cfg-stt-continuous')">
@@ -939,7 +940,7 @@
             });
     </script>
     <script src="app-utils.js?v=3"></script>
-    <script src="app-i18n.js?v=13"></script>
+    <script src="app-i18n.js?v=14"></script>
     <script src="app-transcript-library.js?v=1"></script>
     <script src="app-saved-library.js?v=2"></script>
     <script src="app-models.js?v=2"></script>
@@ -950,8 +951,8 @@
     <script src="app-chat-streaming.js?v=1"></script>
     <script src="app-chat-ui.js?v=1"></script>
     <script src="app-progress-ui.js?v=1"></script>
-    <script src="app-mic.js?v=3"></script>
-    <script src="app.js?v=41"></script>
+    <script src="app-mic.js?v=4"></script>
+    <script src="app.js?v=42"></script>
 
 </body>
 

@@ -90,3 +90,24 @@ func TestHintResearchSeparatesTaskAndSearchQuery(t *testing.T) {
 		t.Fatal("planner cannot return a source-focused search query")
 	}
 }
+
+func TestHintMemoryRequiresPersonalEvidenceRatherThanModelIntent(t *testing.T) {
+	for _, tc := range []struct {
+		task, speech string
+		want         bool
+	}{
+		{"내 메모의 치과 예약 확인", "내 메모에서 치과 예약을 찾아줘", true},
+		{"제 일정 확인", "제 일정에 다음 약속이 언제죠", true},
+		{"Find my saved appointment", "When is my appointment", true},
+		{"What did we decide last time", "What did we agree last time", true},
+		{"국내 일정 확인", "국내 일정은 어떻게 되죠", false},
+		{"우리나라 일정", "우리나라 일정에 대해 알려줘", false},
+		{"내일 예약 확인", "내일 예약이 필요합니다", false},
+		{"내 메모 확인", "What is the context of this utterance?", false},
+		{"원자의 기원", "내 메모를 확인해줘", false},
+	} {
+		if got := AllowsHintMemory(tc.task, tc.speech); got != tc.want {
+			t.Errorf("task=%q speech=%q: got %v want %v", tc.task, tc.speech, got, tc.want)
+		}
+	}
+}

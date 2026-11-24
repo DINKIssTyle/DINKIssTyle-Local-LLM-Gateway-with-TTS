@@ -3208,7 +3208,7 @@ function loadConfig() {
     config.osTtsPitch = Number(config.osTtsPitch) >= 0 ? Number(config.osTtsPitch) : 1.0;
     config.ttsSteps = Math.max(1, Math.min(20, parseInt(config.ttsSteps, 10) || 5));
     config.ttsThreads = Math.max(1, Math.min(4, parseInt(config.ttsThreads, 10) || 4));
-    config.sttMethod = config.sttMethod === 'local' ? 'local' : 'browser';
+    config.sttMethod = ['local', 'qwen3-asr'].includes(config.sttMethod) ? config.sttMethod : 'browser';
     config.sttContinuous = config.sttContinuous === true;
     config.voiceInputAutoTTS = config.voiceInputAutoTTS !== false;
     config.contextStrategy = normalizeContextStrategyForMode(config.llmMode, config.contextStrategy);
@@ -3545,7 +3545,8 @@ function saveConfig(closeModal = true) {
     config.autoTTS = document.getElementById('cfg-auto-tts').checked;
     const voiceInputAutoTTSEl = document.getElementById('cfg-voice-input-auto-tts');
     config.voiceInputAutoTTS = voiceInputAutoTTSEl ? voiceInputAutoTTSEl.checked : true;
-    const nextSTTMethod = document.getElementById('cfg-stt-method')?.value === 'local' ? 'local' : 'browser';
+    const selectedSTTMethod = document.getElementById('cfg-stt-method')?.value;
+    const nextSTTMethod = ['local', 'qwen3-asr'].includes(selectedSTTMethod) ? selectedSTTMethod : 'browser';
     const nextSTTContinuous = document.getElementById('cfg-stt-continuous')?.checked === true;
     if (nextSTTMethod !== config.sttMethod || nextSTTContinuous !== config.sttContinuous) {
         stopSTT({ suppressAutoSend: true, forceAbort: true });

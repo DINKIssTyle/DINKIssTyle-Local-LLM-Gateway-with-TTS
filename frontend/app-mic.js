@@ -94,6 +94,8 @@
         let processing = false;
         let browserHasText = false;
 
+        const usesServerSTT = () => ['local', 'qwen3-asr'].includes(config.sttMethod);
+
         function isBusy() {
             return !!(AppState.chat?.isGenerating || AppState.audio?.isPlayingQueue
                 || AppState.audio?.currentAudio || AppState.audio?.streamingTTSActive
@@ -118,7 +120,7 @@
             resumeTimer = global.setTimeout(() => {
                 if (!isCurrent(id)) return;
                 if (isBusy() || processing) return scheduleListen(id);
-                if (config.sttMethod === 'local') {
+                if (usesServerSTT()) {
                     if (!localCapture) startLocal(id).catch(error => {
                         if (isCurrent(id)) reportError(error);
                     });
@@ -144,7 +146,7 @@
 
         function start() {
             if (AppState.input.isSTTActive) return;
-            if (config.sttMethod !== 'local' && !webkitSpeechRecognition) {
+            if (!usesServerSTT() && !webkitSpeechRecognition) {
                 global.alert(t('error.sttNotSupported'));
                 return;
             }
@@ -153,7 +155,7 @@
             AppState.input.isSTTActive = true;
             const id = ++session;
             updateUIState();
-            if (config.sttMethod === 'local') {
+            if (usesServerSTT()) {
                 startLocal(id).catch(error => { if (isCurrent(id)) reportError(error); });
             } else startBrowser(id);
         }
@@ -266,13 +268,17 @@
             // Resume audio in the microphone button's user gesture, before awaiting permission/status.
             const AudioContext = global.AudioContext || global.webkitAudioContext;
             const context = new AudioContext({ sampleRate: 16000 });
+            const engine = config.sttMethod === 'qwen3-asr' ? 'qwen3-asr' : 'whisper';
             let stream;
             try {
                 await context.resume();
-                const statusResponse = await global.fetch('/api/stt/status', { credentials: 'same-origin' });
+                const statusResponse = await global.fetch('/api/stt/status' + (engine === 'qwen3-asr' ? '?engine=qwen3-asr' : ''), { credentials: 'same-origin' });
                 if (!statusResponse.ok) throw new Error(await statusResponse.text());
                 const status = await statusResponse.json();
-                if (status.status !== 'ready') throw new Error(t('error.sttModelMissing'));
+                if (engine === 'qwen3-asr' && (status.modelId !== 'qwen3-asr-0.6b-mlx' || status.status === 'unsupported')) {
+                    throw new Error(t('error.qwenSTTUnsupported'));
+                }
+                if (status.status !== 'ready') throw new Error(`${engine === 'qwen3-asr' ? 'Qwen3-ASR' : 'Whisper'}: ${t('error.sttModelMissing')}`);
                 if (!isCurrent(id)) { await context.close(); return; }
                 stream = await global.navigator.mediaDevices.getUserMedia({
                     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
@@ -316,7 +322,7 @@
                         let offset = 0;
                         for (const chunk of chunks) { audio.set(chunk, offset); offset += chunk.length; }
                         reset();
-                        transcribe(audio, id).catch(error => { if (isCurrent(id)) reportError(error); });
+                        transcribe(audio, id, engine).catch(error => { if (isCurrent(id)) reportError(error); });
                     }
                 };
                 source.connect(processor);
@@ -328,13 +334,13 @@
             }
         }
 
-        async function transcribe(audio, id) {
+        async function transcribe(audio, id, engine) {
             processing = true;
             if (!config.sttContinuous) releaseCapture();
             const controller = new AbortController();
             requestController = controller;
             try {
-                // Encode explicitly as little-endian PCM16, as expected by Whisper.
+                // Encode explicitly as little-endian PCM16, as expected by the server STT engines.
                 const bytes = new Uint8Array(audio.length * 2);
                 const view = new DataView(bytes.buffer);
                 audio.forEach((sample, i) => view.setInt16(i * 2, sample, true));
@@ -343,7 +349,7 @@
                 const response = await global.fetch('/api/stt/transcribe', {
                     method: 'POST', credentials: 'same-origin', signal: controller.signal,
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ audio: global.btoa(binary), format: 'pcm', sampleRate: 16000,
+                    body: JSON.stringify({ engine, fallback: false, audio: global.btoa(binary), format: 'pcm', sampleRate: 16000,
                         language: config.ttsLang || 'ko', speechFilter: 'strict' })
                 });
                 if (!response.ok) throw new Error(await response.text());

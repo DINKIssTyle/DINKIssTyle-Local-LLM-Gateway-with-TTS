@@ -229,7 +229,7 @@ func TestHintEvidenceUsesSourceFocusedQueryOnlyForWeb(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	research := hintResearchRequest{Source: "web", Query: "장치의 최대 입력 전력", SearchQuery: "장치 제조사 사용 설명서 입력 전력"}
+	research := hintResearchRequest{Source: "web", Query: "내 메모에 저장한 장치의 최대 입력 전력", Anchor: "내 메모에서 장치 전력을 찾아줘", Observed: "내 메모에서 장치 전력을 찾아줘", SearchQuery: "장치 제조사 사용 설명서 입력 전력"}
 	exec := toolruntime.ExecutionContext{EnableMemory: true}
 	for _, source := range []string{"web", "memory"} {
 		research.Source = source
