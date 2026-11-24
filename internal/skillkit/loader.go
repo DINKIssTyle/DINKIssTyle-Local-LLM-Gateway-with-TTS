@@ -58,7 +58,8 @@ type scoredSkill struct {
 	explicit bool
 }
 
-func LoadAndCompile(config Config, userText string) Compilation {
+// Discover loads valid skills without applying a request's prompt budget.
+func Discover(config Config) ([]Skill, []Diagnostic) {
 	config = withDefaults(config)
 	var all []Skill
 	var diagnostics []Diagnostic
@@ -74,6 +75,12 @@ func LoadAndCompile(config Config, userText string) Compilation {
 		all = append(all, skills...)
 		diagnostics = append(diagnostics, issues...)
 	}
+	return all, diagnostics
+}
+
+func LoadAndCompile(config Config, userText string) Compilation {
+	config = withDefaults(config)
+	all, diagnostics := Discover(config)
 
 	filtered := all[:0]
 	for _, skill := range all {

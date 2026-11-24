@@ -1,3 +1,4 @@
+import {CHAT_IMAGE_HEIGHT,chatImageContainers,fetchChatImage,splitChatImages} from './chat-images.mjs';
 import {StartupSTT} from './startup-stt.mjs';
 import {TranslationDirection} from './translation-direction.mjs';
 import {isInformationHintPlan} from './hint-policy.mjs';
@@ -156,6 +157,9 @@ import { LocalAgreement } from './local-agreement.mjs';
   let captionFinalAt=0,captionDraftAt=0,captionExpiryTimer=null;
   let aiTranslatedCaption=null;
   let answerText = '';
+  let answerImages = [];
+  let answerImageRevision = 0;
+  let answerImageScope = '';
   let answerTitle = '';
   let answerIsWakeInput=false;
   let answerVoicePrompt='';
@@ -235,7 +239,11 @@ import { LocalAgreement } from './local-agreement.mjs';
     config.translationLayout=config.translationLayout==='subtitles'?'subtitles':'standard';config.subtitleLines=subtitleLineCount();
     els.translationLayout.value=config.translationLayout;els.subtitleLines.value=String(config.subtitleLines);els.subtitleLines.disabled=config.translationLayout!=='subtitles';
   }
-  function currentBodyLayout(){if(subtitleOnly())return {key:`subtitles-${subtitleLineCount()}`,show:true,showTranscript:false,hint:false,height:subtitleLineCount()*27,bodyHeight:subtitleLineCount()*27,titleHeight:0,contentLines:subtitleLineCount(),transcriptLines:0};if(hintStackActive())return stackedHintPresentation(hintStack,bottomCaptionHidden());return adaptiveHUD({mode:normalizeGlassesMode(config.glassesMode),title:answerTitle,hideTitle:answerIsWakeInput,text:aiPresentationText(),hideTranscript:bottomCaptionHidden()});}
+  function currentBodyLayout(){
+    if(answerImages.length && answerImageScope===chatScope() && answerText && !answerIsHint && !answerIsWakeInput && !hudImagesDisabled && normalizeGlassesMode(config.glassesMode)==='ai' && !subtitleOnly()){
+      return {key:`answer-images-${answerImageRevision}`,show:true,showTranscript:false,titleHeight:CHAT_IMAGE_HEIGHT,bodyHeight:288-27-CHAT_IMAGE_HEIGHT,contentLines:4,images:answerImages};
+    }
+    if(subtitleOnly())return {key:`subtitles-${subtitleLineCount()}`,show:true,showTranscript:false,hint:false,height:subtitleLineCount()*27,bodyHeight:subtitleLineCount()*27,titleHeight:0,contentLines:subtitleLineCount(),transcriptLines:0};if(hintStackActive())return stackedHintPresentation(hintStack,bottomCaptionHidden());return adaptiveHUD({mode:normalizeGlassesMode(config.glassesMode),title:answerTitle,hideTitle:answerIsWakeInput,text:aiPresentationText(),hideTranscript:bottomCaptionHidden()});}
   function aiVisibleLines(){return currentBodyLayout().contentLines || 6;}
   let nativeTranslateLayout=false,nativeHeaderLayoutKey='',nativeBodyLayoutKey='';
   const AI_SCROLL_START_MS = 5000;
@@ -975,6 +983,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     answerHoldUntil = 0;
     stopAIAutoScroll();
     stopThinkingAnimation();
+    answerImages=[];
     if(!preserveDisplay){clearHintStack();answerText = '';answerTitle='';answerVoicePrompt='';aiScrollOffset = 0;}
     aiPhaseTitle = '';
     aiPhaseDetail = '';
@@ -1218,7 +1227,7 @@ import { LocalAgreement } from './local-agreement.mjs';
 
   // --- Even Realities SDK Bridge ---
   function nativeAITitles(translate,body){
-    if(translate || !body.show || (!body.cards && !body.titleHeight))return [];
+    if(translate || !body.show || body.images || (!body.cards && !body.titleHeight))return [];
     if(body.cards)return body.cards.map((card,i)=>({containerID:i?10:9,containerName:i?'hint-title-older':'ai-title',xPosition:0,yPosition:card.titleY,width:576,height:card.titleHeight,borderWidth:1,borderColor:4,borderRadius:0,paddingLength:body.cards.length>1?0:2,content:body.titles[i],isEventCapture:0}));
     return [{containerID:9,containerName:'ai-title',xPosition:0,yPosition:27,width:576,height:body.titleHeight,borderWidth:1,borderColor:4,borderRadius:0,paddingLength:2,content:lastAITitleContent || aiTitleLine(body.title,hintLifetime.remaining),isEventCapture:0}];
   }
@@ -1277,6 +1286,9 @@ import { LocalAgreement } from './local-agreement.mjs';
         const titles=page.textObject.filter(c=>c.containerID===9 || c.containerID===10);
         page.textObject=[...page.textObject.filter(c=>c.containerID!==9 && c.containerID!==10),...titles];
 
+      }
+      if(body.images){
+        page.imageObject=[...page.imageObject.filter(c=>c.containerID===11),...chatImageContainers(body.images.length)];
       }
       page.containerTotalNum=page.textObject.length+page.imageObject.length;
       for(const container of page.textObject){
@@ -1601,8 +1613,8 @@ import { LocalAgreement } from './local-agreement.mjs';
     const aiChanged=nextAI!==lastAIHUDContent,txChanged=nextTx!==lastTranscriptHUDContent;
     lastAIHUDContent=nextAI;lastTranscriptHUDContent=nextTx;
     if(displayReady){
-      if(!translateMode && body.show && (body.cards || body.titleHeight) && titleChanged)pendingHUD.set(9,{containerID:9,containerName:'ai-title',content:nextTitle});
-      if(translateMode || !body.show || (!body.cards && !body.titleHeight))pendingHUD.delete(9);
+      if(!translateMode && body.show && !body.images && (body.cards || body.titleHeight) && titleChanged)pendingHUD.set(9,{containerID:9,containerName:'ai-title',content:nextTitle});
+      if(translateMode || !body.show || body.images || (!body.cards && !body.titleHeight))pendingHUD.delete(9);
       if(body.cards?.length>1 && secondTitleChanged)pendingHUD.set(10,{containerID:10,containerName:'hint-title-older',content:nextSecondTitle});
       if(!(body.cards?.length>1)){pendingHUD.delete(10);pendingHUD.delete(12);}
       if(body.cards?.length>1 && olderBodyChanged)pendingHUD.set(12,{containerID:12,containerName:'hint-body-older',content:nextOlderBody,auditHints:body.cards[1].auditMeta?[body.cards[1].auditMeta]:[]});
@@ -1670,18 +1682,35 @@ import { LocalAgreement } from './local-agreement.mjs';
           for(const id of pendingHUD.keys())if(!allowed.has(id))pendingHUD.delete(id);
           nativePickerKey='';nativeMenuSource=config.audioInputSource;nativeTranslateLayout=translate;nativeHeaderLayoutKey=header.key;nativeBodyLayoutKey=body.key;
           if(!body.show)pendingHUD.delete(1);
-          if(translate || !body.show || (!body.cards && !body.titleHeight))pendingHUD.delete(9);
+          if(translate || !body.show || body.images || (!body.cards && !body.titleHeight))pendingHUD.delete(9);
           if(!(body.cards?.length>1)){pendingHUD.delete(10);pendingHUD.delete(12);}
           if(!body.showTranscript)pendingHUD.delete(4);
           lastHudIconKeys.clear();pendingHUD.delete(5);pendingHUD.delete(6);pendingHUD.delete(11);queueHudIcons(true);
+          if(body.images){
+            pendingHUD.delete(5);pendingHUD.delete(6);
+            chatImageContainers(body.images.length).forEach((container,index)=>{
+              pendingHUD.set(container.containerID,{containerID:container.containerID,containerName:container.containerName,imageData:body.images[index]});
+            });
+          }
           continue;
         }
+        if(body.images){pendingHUD.delete(5);pendingHUD.delete(6);}
         if(body.cards?.length>1 && !header.iconOnly)pendingHUD.delete(7);
         if(subtitleOnly())for(const id of [...pendingHUD.keys()])if(![1,11,...(hudImagesDisabled?[3]:[])].includes(id))pendingHUD.delete(id);
         if(!pendingHUD.size)break;
         const [id, update] = pendingHUD.has(1)?[1,pendingHUD.get(1)]:pendingHUD.entries().next().value;
         pendingHUD.delete(id);
-        if(update.icon){
+        if(update.imageData){
+          try{
+            const result=await hudTransport.call(()=>bridge.updateImageRawData(update));
+            if(result!=='success')throw Error(`이미지 전송 실패: ${result}`);
+          }catch(error){
+            if(!hudTransport.ready)throw error;
+            console.warn('Chat screenshot unavailable; showing text:',error);
+            answerImages=[];
+            renderLiveHUD();
+          }
+        }else if(update.icon){
           try{
             const imageData=await hudIcons.load(update.icon,hudLuminance(hudTextBrightness(update.containerID)));
             const result=await hudTransport.call(()=>bridge.updateImageRawData({containerID:update.containerID,containerName:update.containerName,imageData}));
@@ -2732,6 +2761,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         if(job.hint && !hintGate.relevant(job,job.hintPlan?.topic)){auditHint(job,'skipped',{reason:hintGate.rejectionReason(job)});hintGate.complete(job);continue;}
         if(job.hint && !hintGate.beginGeneration(job)){auditHint(job,'skipped',{reason:hintGate.rejectionReason(job)});hintGate.complete(job);continue;}
         activeAIJob=job;
+        answerImages=[];
         if(job.traceId)voiceLatency.mark(job.traceId,'chat_start');
         if(translationStale(job) || job.chatEpoch && job.chatEpoch!==chatEpoch){finishWakeJob(job.wakeToken);continue;}
         if(job.mode==='translate')translationFailure='';
@@ -2945,7 +2975,7 @@ import { LocalAgreement } from './local-agreement.mjs';
           if(!options.replyOnly && (chromeText || parsedTranslation.translation))translationHistory.update(options.translationHistoryId,answerText,{final:commitReplies || !!chromeText,revision:options.translationRevisionId || options.translationHistoryId});
           els.chatOutput.textContent=translationPhoneText(translationDisplay);
         } else {
-          const visible=limitHUDResponse(stripSourcesForGlasses(raw));
+          const visible=limitHUDResponse(stripSourcesForGlasses(splitChatImages(raw).text));
           if(visible){receivedVisibleAnswer=true;if(options.traceId)voiceLatency.mark(options.traceId,'first_text');}
           if(visible || commitReplies){clearHintStack();hintLifetime.clear();answerAutoCloseEligible=false;answerText=visible;answerTitle=prompt.replace(/\s+/gu,' ').trim() || 'AI 답변';answerVoicePrompt=options.wakeToken!==undefined?prompt:'';}
           els.chatOutput.textContent=answerText;
@@ -3159,6 +3189,20 @@ import { LocalAgreement } from './local-agreement.mjs';
         const visibleHintTexts=answerIsHint?(hintStackActive()?hintStack.cards.map(card=>card.text):[answerText]):[];
         if(hintGate.identicalCue(hintText,visibleHintTexts)){hintSkipReason='already_visible';els.hintStatus.textContent='동일한 힌트가 이미 표시됨 · 현재 카드 유지';return;}
         if(controller.signal.aborted)return;
+      }
+      if(activeMode==='ai' && !options.hint){
+        const {text, paths}=splitChatImages(extractVisibleAndReasoning(rawAnswer).visibleText);
+        if(paths.length){
+          if(controller.signal.aborted || requestChatScope!==chatScope())return;
+          deadline.touch();
+          const imageServer=config.serverUrl,imageHeaders=getAuthHeaders();
+          const settled=await Promise.allSettled(paths.map(path=>fetchChatImage(gatewayFetch,imageServer,path,imageHeaders,controller.signal)));
+          if(controller.signal.aborted || requestChatScope!==chatScope() || options.chatEpoch && options.chatEpoch!==chatEpoch)return;
+          answerImages=settled.filter(result=>result.status==='fulfilled').map(result=>result.value);
+          answerImageScope=requestChatScope;
+          answerImageRevision++;
+          rawAnswer=answerImages.length ? (text || '화면 캡처') : [text,'화면 캡처를 불러오지 못했습니다.'].filter(Boolean).join('\n');
+        }
       }
       if(options.hint){const note={...enrichmentPlan,kind:hintResultKind(rawAnswer,enrichmentPlan.kind),evidence:enrichmentPlan.evidence || options.focusText,auditMeta:{...options,hintPlan:enrichmentPlan}};rememberHint(note);displayHintCard(note,hintText);cueDisplayed=true;cueTopic=enrichmentPlan.topic;auditHint(options,'phone_display',{reason:'card_rendered',topic:enrichmentPlan.topic,kind:enrichmentPlan.kind,text:hintText,source:enrichmentPlan.source});els.chatQuestion.textContent=cueTopic?`💡 자동 힌트 · ${cueTopic}`:'💡 자동 힌트';}else setVisibleAnswer(rawAnswer,true);
       if(options.hint)els.hintStatus.textContent=enrichmentPlan.source==='web'?'웹검색 근거로 보충한 정보':enrichmentPlan.source==='memory'?'저장된 기억으로 보충한 정보':enrichmentPlan.source==='conversation'?'최근 대화에서 요점·일정 정리':'내부 지식으로 보충한 정보';

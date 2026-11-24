@@ -73,7 +73,11 @@ func (nativeBackend) Execute(ctx context.Context, action string, r Request) (jso
 	if action == "launch_app" {
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		resolved, err := nativeCall("resolve_app", r)
+		launchRequest := r
+		if bundleID := ApplicationBundleAlias(r.Application); bundleID != "" {
+			launchRequest.Application = bundleID
+		}
+		resolved, err := nativeCall("resolve_app", launchRequest)
 		if err != nil {
 			return nil, err
 		}
@@ -90,11 +94,30 @@ func (nativeBackend) Execute(ctx context.Context, action string, r Request) (jso
 		}
 		return json.Marshal(map[string]any{"status": "launch_requested", "application": r.Application, "next": "Call computer_observe to verify the app opened and became frontmost."})
 	}
-	return nativeCall(action, r)
+	result, err := nativeCall(action, r)
+	if err != nil || action != "switch_app" {
+		return result, err
+	}
+	var activation struct {
+		BundlePath string `json:"bundle_path"`
+	}
+	if err := json.Unmarshal(result, &activation); err != nil {
+		return nil, err
+	}
+	if activation.BundlePath == "" {
+		return result, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "/usr/bin/open", "-a", activation.BundlePath).CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("activation rejected and opening the existing app bundle failed: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return json.Marshal(map[string]any{"status": "activation_requested", "pid": r.PID, "next": "Call computer_observe to verify focus before input."})
 }
 
-func (nativeBackend) Observe(ctx context.Context) (Screen, []byte, error) {
-	raw, err := nativeCall("observe", Request{})
+func (nativeBackend) Observe(ctx context.Context, displayID uint32) (Screen, []byte, error) {
+	raw, err := nativeCall("observe", Request{DisplayID: displayID})
 	if err != nil {
 		return Screen{}, nil, err
 	}
@@ -110,8 +133,20 @@ func (nativeBackend) Observe(ctx context.Context) (Screen, []byte, error) {
 	}
 	defer os.RemoveAll(dir)
 	path := dir + "/screen.png"
-	if out, err := exec.CommandContext(ctx, "/usr/sbin/screencapture", "-x", "-D", "1", "-t", "png", path).CombinedOutput(); err != nil {
-		return Screen{}, nil, fmt.Errorf("screen capture failed: %w: %s. Enable Screen Recording for the gateway app in System Settings > Privacy & Security, then restart the app", err, strings.TrimSpace(string(out)))
+	capture, err := nativeCall("capture_display", Request{DisplayID: screen.Display.ID, Application: path})
+	if err != nil {
+		return Screen{}, nil, fmt.Errorf("screen capture failed: %w", err)
+	}
+	var options struct {
+		LegacyPrimary bool `json:"legacy_primary"`
+	}
+	if err := json.Unmarshal(capture, &options); err != nil {
+		return Screen{}, nil, err
+	}
+	if options.LegacyPrimary {
+		if out, err := exec.CommandContext(ctx, "/usr/sbin/screencapture", "-x", "-D", "1", "-t", "png", path).CombinedOutput(); err != nil {
+			return Screen{}, nil, fmt.Errorf("screen capture failed: %w: %s", err, strings.TrimSpace(string(out)))
+		}
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -129,7 +164,7 @@ func (nativeBackend) Observe(ctx context.Context) (Screen, []byte, error) {
 		return Screen{}, nil, err
 	}
 	// Refuse to associate a capture with the wrong foreground app or geometry.
-	after, err := nativeCall("observe", Request{})
+	after, err := nativeCall("observe", Request{DisplayID: displayID})
 	if err != nil {
 		return Screen{}, nil, err
 	}
@@ -137,7 +172,7 @@ func (nativeBackend) Observe(ctx context.Context) (Screen, []byte, error) {
 	if err := json.Unmarshal(after, &current); err != nil {
 		return Screen{}, nil, err
 	}
-	if current.FrontmostPID != screen.FrontmostPID || current.DesktopWidth != screen.DesktopWidth || current.DesktopHeight != screen.DesktopHeight {
+	if current.FrontmostPID != screen.FrontmostPID || current.Display != screen.Display {
 		return Screen{}, nil, fmt.Errorf("desktop changed during capture; call computer_observe again")
 	}
 	if err := ctx.Err(); err != nil {

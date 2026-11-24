@@ -218,7 +218,7 @@ func IsUnfulfilledLookupPromise(answer string) bool {
 func IsUnsearchedRefusal(question, answer string) bool {
 	q := strings.ToLower(strings.TrimSpace(question))
 	a := strings.ToLower(strings.TrimSpace(answer))
-	if len([]rune(q)) < 4 || a == "" || len([]rune(a)) > 450 {
+	if len([]rune(q)) < 4 || a == "" || len([]rune(a)) > 900 {
 		return false
 	}
 	// Preserve genuine location clarifications for bare weather questions.
@@ -239,6 +239,29 @@ func IsUnsearchedRefusal(question, answer string) bool {
 	} {
 		if strings.Contains(a, cue) {
 			return true
+		}
+	}
+	// Catch conditional deferrals where the model asks for criteria first and
+	// offers to search/find later ("알려주시면 관련 정보를 검색해 드리겠습니다").
+	asksCriteria := false
+	for _, cue := range []string{
+		"알려주시면", "알려 주시면", "말씀해 주시면", "말씀해주시면", "지정해 주시면",
+		"정보가 필요합니다", "기준을 알려", "구체적인 기준", "let me know which", "if you specify",
+	} {
+		if strings.Contains(a, cue) {
+			asksCriteria = true
+			break
+		}
+	}
+	if asksCriteria {
+		for _, cue := range []string{
+			"검색해 드리", "검색해드리", "검색할 수 있", "검색하여", "검색해서",
+			"찾아드릴", "찾아 드릴", "찾아드리", "찾아 드리", "확인해 드리", "확인해드리",
+			"i can search", "i'll search", "i can look up", "i can find",
+		} {
+			if strings.Contains(a, cue) {
+				return true
+			}
 		}
 	}
 	return false

@@ -2364,7 +2364,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Register Service Worker for PWA
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-            navigator.serviceWorker.register('/sw.js?v=8')
+            navigator.serviceWorker.register('/sw.js?v=9')
                 .then(reg => console.log('[PWA] Service Worker registered:', reg.scope))
                 .catch(err => console.warn('[PWA] Service Worker failed:', err));
         });
@@ -5523,6 +5523,222 @@ function initTouchUXInteractions() {
     }, { passive: true });
 }
 
+const composerSkills = new Map();
+const skillDisplayNames = new Map();
+let pendingSkillCatalog;
+let skillCatalogLoaded = false;
+
+function loadSkillCatalog() {
+    if (!pendingSkillCatalog) {
+        pendingSkillCatalog = fetch('/api/skills', { cache: 'no-store' })
+            .then(response => {
+                if (!response.ok) throw new Error('Skill catalog request failed');
+                return response.json();
+            })
+            .then(skills => {
+                for (const skill of skills) {
+                    skillDisplayNames.set(skill.namespace, skill.display_name || skill.name);
+                }
+                skillCatalogLoaded = true;
+                return skills;
+            })
+            .finally(() => { pendingSkillCatalog = null; });
+    }
+    return pendingSkillCatalog;
+}
+
+function composerRequestText() {
+    const invocations = Array.from(composerSkills.keys(), namespace => '$' + namespace);
+    const draft = messageInput?.value.trim();
+    if (draft) invocations.push(draft);
+    return invocations.join(' ');
+}
+
+function renderComposerSkills() {
+    const container = document.getElementById('composer-skills');
+    if (!container) return;
+    container.hidden = composerSkills.size === 0;
+    container.replaceChildren(...Array.from(composerSkills, ([namespace, title]) => {
+        const chip = document.createElement('span');
+        chip.className = 'composer-skill-chip';
+        const label = document.createElement('span');
+        label.textContent = title;
+        label.title = title;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.textContent = '×';
+        remove.setAttribute('aria-label', t('skills.remove').replace('{title}', () => title));
+        remove.addEventListener('click', () => {
+            composerSkills.delete(namespace);
+            renderComposerSkills();
+            updateInlineComposerActionVisibility();
+            focusMessageInput({ preserveChatScroll: true });
+        });
+        chip.append(label, remove);
+        return chip;
+    }));
+    updateViewportMetrics();
+}
+
+function setupSkillPicker() {
+    const picker = document.getElementById('skill-picker');
+    const options = document.getElementById('skill-options');
+    const status = document.getElementById('skill-picker-status');
+    const dialog = document.getElementById('skill-dialog');
+    const dialogOptions = document.getElementById('skill-dialog-options');
+    const dialogStatus = document.getElementById('skill-dialog-status');
+    const button = document.getElementById('open-skill-picker');
+    if (!picker || !dialog || !button) return () => false;
+
+    let catalog;
+    let slashActive = false;
+    let slashGeneration = 0;
+    let dialogGeneration = 0;
+    let matchingSkills = [];
+    let selectedIndex = 0;
+
+    function slashQuery() {
+        const match = /^\/([\p{L}\p{N}:_-]*)$/u.exec(messageInput.value);
+        return match ? match[1].toLowerCase() : null;
+    }
+
+    function closeSlash() {
+        slashActive = false;
+        slashGeneration++;
+        picker.hidden = true;
+        messageInput.removeAttribute('aria-activedescendant');
+        messageInput.setAttribute('aria-autocomplete', 'none');
+        document.removeEventListener('pointerdown', dismissOutside);
+    }
+
+    function dismissOutside(event) {
+        if (event.target !== messageInput && !picker.contains(event.target)) closeSlash();
+    }
+
+    function insertSkill(skill, fromSlash) {
+        if (fromSlash || slashQuery() !== null) messageInput.value = '';
+        composerSkills.set(skill.namespace, skill.display_name || skill.name);
+        renderComposerSkills();
+        closeSlash();
+        if (dialog.open) dialog.close();
+        focusMessageInput({ preserveChatScroll: true });
+        messageInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    function renderOptions(container, items, fromSlash) {
+        container.replaceChildren(...items.map((skill, index) => {
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = 'skill-option';
+            const name = document.createElement('strong');
+            name.textContent = skill.display_name || skill.name;
+            const invocation = document.createElement('code');
+            invocation.textContent = '$' + skill.namespace;
+            const description = document.createElement('span');
+            description.textContent = skill.description;
+            row.append(name, invocation, description);
+            if (fromSlash) {
+                row.id = 'skill-option-' + index;
+                row.setAttribute('role', 'option');
+                row.tabIndex = -1;
+                row.addEventListener('pointerdown', event => event.preventDefault());
+            }
+            row.addEventListener('click', () => insertSkill(skill, fromSlash));
+            return row;
+        }));
+    }
+
+    function highlight(scroll = false) {
+        [...options.children].forEach((row, index) => {
+            row.setAttribute('aria-selected', String(index === selectedIndex));
+        });
+        const active = options.children[selectedIndex];
+        if (active) {
+            messageInput.setAttribute('aria-activedescendant', active.id);
+            if (scroll) active.scrollIntoView({ block: 'nearest' });
+        } else {
+            messageInput.removeAttribute('aria-activedescendant');
+        }
+    }
+
+    function renderSlash() {
+        const query = slashQuery();
+        if (!slashActive || query === null) return;
+        matchingSkills = catalog.filter(skill =>
+            [skill.namespace, skill.display_name, skill.description].some(value => value?.toLowerCase().includes(query)));
+        selectedIndex = 0;
+        status.textContent = matchingSkills.length ? '' : t('skills.empty');
+        renderOptions(options, matchingSkills, true);
+        highlight();
+    }
+
+    messageInput.addEventListener('input', () => {
+        if (slashQuery() === null) {
+            closeSlash();
+            return;
+        }
+        if (slashActive) {
+            if (catalog) renderSlash();
+            return;
+        }
+        slashActive = true;
+        const generation = ++slashGeneration;
+        catalog = null;
+        matchingSkills = [];
+        options.replaceChildren();
+        status.textContent = t('skills.loading');
+        options.setAttribute('aria-label', t('skills.menu'));
+        messageInput.setAttribute('aria-autocomplete', 'list');
+        picker.hidden = false;
+        document.addEventListener('pointerdown', dismissOutside);
+        loadSkillCatalog().then(items => {
+            if (generation !== slashGeneration) return;
+            catalog = items;
+            renderSlash();
+        }).catch(() => {
+            if (generation === slashGeneration) status.textContent = t('skills.failed');
+        });
+    });
+    messageInput.addEventListener('blur', closeSlash);
+
+    button.addEventListener('click', () => {
+        closeSlash();
+        const generation = ++dialogGeneration;
+        document.getElementById('skill-dialog-title').textContent = t('skills.menu');
+        document.getElementById('close-skill-dialog').setAttribute('aria-label', t('skills.close'));
+        dialogOptions.replaceChildren();
+        dialogStatus.textContent = t('skills.loading');
+        dialog.showModal();
+        loadSkillCatalog().then(items => {
+            if (generation !== dialogGeneration || !dialog.open) return;
+            dialogStatus.textContent = items.length ? '' : t('skills.empty');
+            renderOptions(dialogOptions, items, false);
+        }).catch(() => {
+            if (generation === dialogGeneration && dialog.open) dialogStatus.textContent = t('skills.failed');
+        });
+    });
+    button.setAttribute('aria-label', t('skills.menu'));
+    button.title = t('skills.menu');
+
+    return event => {
+        if (!slashActive || event.isComposing) return false;
+        if (event.key === 'Escape') {
+            closeSlash();
+        } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            if (!matchingSkills.length) return false;
+            const direction = event.key === 'ArrowDown' ? 1 : -1;
+            selectedIndex = (selectedIndex + direction + matchingSkills.length) % matchingSkills.length;
+            highlight(true);
+        } else if (event.key === 'Enter' && !event.shiftKey) {
+            if (matchingSkills[selectedIndex]) insertSkill(matchingSkills[selectedIndex], true);
+        } else {
+            return false;
+        }
+        event.preventDefault();
+        return true;
+    };
+}
+
 function setupEventListeners() {
     initTouchUXInteractions();
     document.getElementById('save-cfg-btn').addEventListener('click', saveConfig);
@@ -5578,7 +5794,9 @@ function setupEventListeners() {
         }, 120);
     });
 
+    const handleSkillPickerKey = setupSkillPicker();
     messageInput.addEventListener('keydown', (e) => {
+        if (handleSkillPickerKey(e)) return;
         if (e.key === 'Enter' && !e.shiftKey) {
             // Fix Korean IME duplicate submission / residual character issue
             if (e.isComposing) return;
@@ -6239,7 +6457,7 @@ async function sendMessage(options = {}) {
     // Unlock audio context on user interaction
     unlockAudioContext();
 
-    let text = messageInput.value.trim();
+    const text = composerRequestText();
     const currentImage = AppState.input.pendingImage; // Capture early
 
     if (!text && !currentImage) return;
@@ -6282,6 +6500,8 @@ async function sendMessage(options = {}) {
 
     // Reset Input
     messageInput.value = '';
+    composerSkills.clear();
+    renderComposerSkills();
     removeImage();
     autoResizeInput();
     dismissMobileKeyboardAfterSend();
@@ -6570,8 +6790,7 @@ function updateSendButtonStateCore() {
 }
 
 function hasComposableUserInput() {
-    const text = messageInput?.value?.trim() || '';
-    return !!text || !!AppState.input.pendingImage;
+    return !!composerRequestText() || !!AppState.input.pendingImage;
 }
 
 function setComposerPrimaryButtons({ showSend, showInlineMic }) {
@@ -6588,8 +6807,7 @@ function setComposerPrimaryButtons({ showSend, showInlineMic }) {
 function updateInlineComposerActionVisibility() {
     if (!sendBtn || !inlineMicBtn) return;
 
-    const nextUserText = messageInput?.value?.trim() || '';
-    updateStatefulBudgetIndicator(nextUserText);
+    updateStatefulBudgetIndicator(composerRequestText());
 
     const inlineMicAvailable = inlineMicBtn.classList.contains('is-visible');
     if (!inlineMicAvailable) {
@@ -6715,6 +6933,21 @@ async function processStream(response, elementId, turnId = '', streamOptions = {
     return finalizedContent;
 }
 
+function renderUserMessageText(text) {
+    const prefix = /^(?:\$(?:builtin|user):[a-z0-9-]+(?:\s+|$))+/i.exec(text);
+    if (!prefix) return escapeHtml(text);
+
+    const chips = prefix[0].trim().split(/\s+/).map(invocation => {
+        const namespace = invocation.slice(1).toLowerCase();
+        const fallback = namespace.split(':')[1].split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+        const title = skillDisplayNames.get(namespace) || fallback;
+        return `<span class="message-skill-chip" data-skill-namespace="${escapeAttr(namespace)}">${escapeHtml(title)}</span>`;
+    });
+    const body = text.slice(prefix[0].length);
+    return `<div class="message-skill-list">${chips.join('')}</div>` +
+        (body ? `<div class="message-skill-body">${escapeHtml(body)}</div>` : '');
+}
+
 function createMessageElement(msg) {
     const div = document.createElement('div');
     div.className = `message ${msg.role}`;
@@ -6727,8 +6960,17 @@ function createMessageElement(msg) {
             <div class="message-inner">
                 <div class="message-label">You</div>
                 ${msg.image ? `<img src="${escapeAttr(msg.image)}" class="message-image">` : ''}
-                ${textContent ? `<div class="message-bubble">${escapeHtml(textContent)}</div>` : ''}
+                ${textContent ? `<div class="message-bubble">${renderUserMessageText(textContent)}</div>` : ''}
             </div>`;
+        const skillChips = div.querySelectorAll('[data-skill-namespace]');
+        if (!skillCatalogLoaded && skillChips.length > 0) {
+            loadSkillCatalog().then(() => {
+                for (const chip of skillChips) {
+                    const title = skillDisplayNames.get(chip.dataset.skillNamespace);
+                    if (title) chip.textContent = title;
+                }
+            }).catch(() => {});
+        }
     } else if (msg.role === 'system') {
         div.innerHTML = `
             <div class="message-inner">
@@ -7258,7 +7500,9 @@ function renderAppliedSkills(elementId, skills) {
         card.dataset.skillNamespace = namespace;
         card.innerHTML = `
             <div class="reasoning-header tool-strip-header skill-strip-header">
-                <span class="reasoning-chevron skill-status-icon material-icons-round" aria-hidden="true">check_circle</span>
+                <svg class="reasoning-chevron skill-status-icon" width="16" height="16" viewBox="0 0 24 24"
+                    fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+                    aria-hidden="true" focusable="false"><use href="#skill-puzzle-icon"></use></svg>
                 <span class="tool-header-group">
                     <span class="reasoning-title">${escapeHtml(t('skill.label'))}</span>
                     <span class="tool-header-separator" aria-hidden="true">•</span>

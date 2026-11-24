@@ -9,13 +9,21 @@ import (
 )
 
 type fakeBackend struct {
-	calls int
-	last  Request
-	fail  bool
+	calls   int
+	last    Request
+	fail    bool
+	screens map[uint32]Screen
 }
 
 func (*fakeBackend) Available() bool { return true }
-func (*fakeBackend) Observe(context.Context) (Screen, []byte, error) {
+func (b *fakeBackend) Observe(_ context.Context, displayID uint32) (Screen, []byte, error) {
+	if b.screens != nil {
+		screen, ok := b.screens[displayID]
+		if !ok {
+			return Screen{}, nil, errors.New("display not found")
+		}
+		return screen, []byte("png"), nil
+	}
 	return Screen{Width: 1000, Height: 500, DesktopWidth: 2000, DesktopHeight: 1000, FrontmostPID: 42}, []byte("png"), nil
 }
 func (b *fakeBackend) Execute(_ context.Context, _ string, r Request) (json.RawMessage, error) {
@@ -154,5 +162,39 @@ func TestSwitchingBackToAnEarlierApplication(t *testing.T) {
 	}
 	if b.calls != 3 || b.last.PID != 42 {
 		t.Fatal("switching back to an earlier app was lost")
+	}
+}
+
+func TestMixedScaleDisplayCoordinates(t *testing.T) {
+	primary := Display{ID: 2, Width: 2560, Height: 1440, Primary: true}
+	left := Display{ID: 1, X: -1920, Y: 199, Width: 1920, Height: 1080}
+	above := Display{ID: 3, X: 800, Y: -900, Width: 1440, Height: 900}
+	for _, tc := range []struct {
+		display                           Display
+		width, height, x, y, wantX, wantY int
+	}{
+		{primary, 1440, 810, 720, 405, 1280, 720},
+		{left, 1440, 810, 720, 405, -960, 739},
+		{above, 1440, 900, 720, 450, 1520, -450},
+		{Display{ID: 4, X: -800, Width: 800, Height: 600}, 1440, 1080, 1439, 1079, -1, 599},
+	} {
+		b := &fakeBackend{screens: map[uint32]Screen{tc.display.ID: {
+			Display: tc.display, Width: tc.width, Height: tc.height, DesktopWidth: tc.display.Width, DesktopHeight: tc.display.Height,
+		}}}
+		c := New(b)
+		out, err := c.Call(context.Background(), "chat", "observe", Request{DisplayID: tc.display.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var observation struct {
+			ID string `json:"observation_id"`
+		}
+		if err := json.Unmarshal([]byte(out.Text), &observation); err != nil {
+			t.Fatal(err)
+		}
+		_, err = c.Call(context.Background(), "chat", "click", Request{ObservationID: observation.ID, X: &tc.x, Y: &tc.y, DisplayID: 99})
+		if err != nil || *b.last.X != tc.wantX || *b.last.Y != tc.wantY || *b.last.Display != tc.display {
+			t.Fatalf("display %d: wrong click target %+v, %v", tc.display.ID, b.last, err)
+		}
 	}
 }

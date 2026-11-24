@@ -84,3 +84,11 @@ int main(void) {
 		}
 	}
 }
+
+func TestFindMyNameUsesStableBundleID(t *testing.T) {
+	for _, name := range []string{"Find my", "FindMy.app", "나의 찾기", "com.apple.findmy"} {
+		if got := ApplicationBundleAlias(name); got != "com.apple.findmy" {
+			t.Errorf("unexpected bundle identifier for %q: %q", name, got)
+		}
+	}
+}

@@ -9,12 +9,15 @@ import (
 	bundledata "dinkisstyle-chat/bundle"
 	"dinkisstyle-chat/internal/promptkit"
 	"dinkisstyle-chat/internal/skillkit"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 )
 
@@ -163,4 +166,29 @@ func compileChatSkills(userText string, compactDiscovery bool, toolLists ...[]pr
 		log.Printf("[Skills] %s: %s", diagnostic.Path, diagnostic.Message)
 	}
 	return result
+}
+
+func handleSkillCatalog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	skills, _ := skillkit.Discover(skillkit.Config{BuiltinDir: getBundledSkillsDir(), UserDir: getWritableSkillsDir()})
+	type catalogEntry struct {
+		Namespace   string `json:"namespace"`
+		Name        string `json:"name"`
+		DisplayName string `json:"display_name"`
+		Description string `json:"description"`
+	}
+	catalog := make([]catalogEntry, 0, len(skills))
+	for _, skill := range skills {
+		catalog = append(catalog, catalogEntry{skill.Namespace, skill.Name, skill.DisplayName, skill.Description})
+	}
+	sort.Slice(catalog, func(i, j int) bool {
+		return catalog[i].Name < catalog[j].Name || (catalog[i].Name == catalog[j].Name && catalog[i].Namespace < catalog[j].Namespace)
+	})
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(catalog)
 }

@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"dinkisstyle-chat/internal/computeruse"
 )
 
 type DesktopTaskStep struct {
@@ -199,6 +201,9 @@ func (t *DesktopTask) Apply(d DesktopDecision, receipts []DesktopReceipt, allowe
 }
 
 func DesktopApplicationMatches(target, actual string) bool {
+	if alias := computeruse.ApplicationBundleAlias(target); alias != "" {
+		return alias == computeruse.ApplicationBundleAlias(actual)
+	}
 	normalize := func(s string) string { return strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(s)), "")) }
 	target, actual = normalize(target), normalize(actual)
 	return target != "" && actual != "" && (target == actual || strings.Contains(actual, target))

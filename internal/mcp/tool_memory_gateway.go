@@ -75,11 +75,22 @@ func FastMemoryContextWithOptions(userID, input string, useVectors bool) AutoSea
 	if db == nil || strings.TrimSpace(userID) == "" || strings.TrimSpace(input) == "" {
 		return debug
 	}
-	candidates, err := buildMemoryCandidatesMode(userID, input, 6, false, useVectors)
+	subjects := automaticMemorySubjects(input)
+	if len(subjects) == 0 {
+		return debug
+	}
+	candidates, err := buildMemoryCandidatesMode(userID, strings.Join(subjects, " "), 12, false, useVectors)
 	if err != nil {
 		log.Printf("[Memory] fast retrieval failed: %v", err)
 		return debug
 	}
+	relevant := candidates[:0]
+	for _, candidate := range candidates {
+		if matchesAutomaticMemorySubject(candidate.Title+" "+candidate.Snippet, subjects) {
+			relevant = append(relevant, candidate)
+		}
+	}
+	candidates = relevant
 	debug.ChunkMatchCount = len(candidates)
 	memoryChoiceProvider.RLock()
 	choose := memoryChoiceProvider.choose
@@ -121,6 +132,35 @@ func FastMemoryContextWithOptions(userID, input string, useVectors bool) AutoSea
 	}
 	debug.SearchDurationMs = time.Since(started).Milliseconds()
 	return debug
+}
+
+// Automatic context must share a topic with this turn. FTS matches generic
+// words independently, and vector similarity alone can surface old conversations.
+func automaticMemorySubjects(input string) []string {
+	var subjects []string
+	seen := map[string]struct{}{}
+	for _, field := range splitSearchFields(input) {
+		term := normalizeSearchField(field)
+		switch term {
+		case "", "이름", "이름은", "이름이", "이름을", "호칭", "변천사", "질문", "알려줘", "알려주세요", "기억", "뭐야", "뭐지", "뭐고", "어떻게",
+			"name", "names", "what", "when", "where", "your", "my", "the", "with", "please", "about", "tell", "history":
+			continue
+		}
+		appendUniqueToken(&subjects, seen, term)
+	}
+	return subjects
+}
+
+func matchesAutomaticMemorySubject(text string, subjects []string) bool {
+	fields := splitSearchFields(strings.ToLower(text))
+	for _, subject := range subjects {
+		for _, field := range fields {
+			if field == subject || (hasEastAsianRune(subject) && strings.Contains(field, subject)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type memoryChunkContext struct {

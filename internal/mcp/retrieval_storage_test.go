@@ -330,3 +330,24 @@ func TestReindexPublishesProviderBeforeQueuedWrites(t *testing.T) {
 		t.Fatalf("new writes used previous model: %d", count)
 	}
 }
+
+func TestAutomaticMemoryContextRequiresCurrentSubject(t *testing.T) {
+	openRetrievalTestDB(t)
+	for _, text := range []string{
+		"User: 이름은 뭐야?\nAssistant: 이전 별칭입니다.",
+		"타이탄 이름 생성기 안내",
+		"남산타워 명칭은 시기에 따라 달라졌다.",
+	} {
+		if _, err := InsertMemory("alice", text); err != nil {
+			t.Fatal(err)
+		}
+	}
+	matched := FastMemoryContextWithOptions("alice", "남산타워 이름 변천사", false)
+	if !strings.Contains(matched.Context, "남산타워") || strings.Contains(matched.Context, "이전 별칭") || strings.Contains(matched.Context, "타이탄") {
+		t.Fatalf("wrong automatic evidence: %s", matched.Context)
+	}
+	unrelated := FastMemoryContextWithOptions("alice", "세종대왕 이름 변천사", false)
+	if unrelated.Context != "" {
+		t.Fatalf("unrelated turn inherited automatic evidence: %s", unrelated.Context)
+	}
+}

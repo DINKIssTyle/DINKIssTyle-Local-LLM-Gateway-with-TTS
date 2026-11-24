@@ -109,7 +109,7 @@
     <link rel="stylesheet" href="icons.css?v=4">
 
     <!-- Styles -->
-    <link rel="stylesheet" href="style.css?v=16">
+    <link rel="stylesheet" href="style.css?v=20">
 
     <!-- Highlight.js -->
     <link rel="stylesheet" href="vendor/github-dark.min.css">
@@ -818,24 +818,36 @@
         </div>
 
         <div id="input-area">
+            <div id="skill-picker" class="skill-picker" hidden>
+                <div id="skill-picker-status" role="status"></div>
+                <div id="skill-options" role="listbox" data-i18n-aria-label="skills.menu" aria-label="Skills"></div>
+            </div>
             <div class="input-container">
                 <span class="composer-progress-shimmer" aria-hidden="true">
                     <span class="composer-progress-shimmer__beam"></span>
                 </span>
                 <div id="chat-progress-dock" class="chat-progress-dock" hidden></div>
+                <div id="composer-skills" class="composer-skills" hidden></div>
                 <div class="input-main">
                     <textarea id="message-input" name="chat_prompt_input" rows="1" placeholder="Type a message..."
                         data-i18n-placeholder="input.placeholder"
                         autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false"
                         writingsuggestions="false"
                         enterkeyhint="send" inputmode="text" data-form-type="other" data-lpignore="true"
-                        aria-autocomplete="none"></textarea>
+                        aria-autocomplete="none" aria-controls="skill-options"></textarea>
 
                     <div class="input-actions">
                         <span id="stateful-budget-indicator" class="stateful-budget-indicator" hidden
                             aria-hidden="true"></span>
                         <input type="file" id="image-upload" accept="image/*" style="display: none"
                             onchange="handleImageUpload(this)">
+                        <button class="icon-btn" id="open-skill-picker" type="button" aria-haspopup="dialog"
+                            aria-label="Choose a skill" title="Choose a skill">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                                <path id="skill-puzzle-icon" d="M9 4V3a3 3 0 0 1 6 0v1h4a1 1 0 0 1 1 1v4h1a3 3 0 0 1 0 6h-1v4a1 1 0 0 1-1 1h-4v-1a3 3 0 0 0-6 0v1H5a1 1 0 0 1-1-1v-4h1a3 3 0 0 0 0-6H4V5a1 1 0 0 1 1-1z" transform="translate(1.8 2.5) scale(.85)"/>
+                            </svg>
+                        </button>
                         <button class="icon-btn" onclick="triggerImagePicker()" title="Upload Image">
                             <span class="material-icons-round">add_photo_alternate</span>
                         </button>
@@ -851,6 +863,20 @@
             </div>
         </div>
     </div>
+
+    <dialog id="skill-dialog" class="skill-dialog" aria-labelledby="skill-dialog-title">
+        <header class="skill-dialog-header">
+            <h2 id="skill-dialog-title" data-i18n="skills.menu">Choose a skill</h2>
+            <form method="dialog">
+                <button class="icon-btn" type="submit" aria-label="Close" id="close-skill-dialog">
+                    <span class="material-icons-round" aria-hidden="true">close</span>
+                </button>
+            </form>
+        </header>
+        <p class="skill-dialog-help" data-i18n="skills.help">Choose a skill, then finish typing your request.</p>
+        <div id="skill-dialog-status" role="status"></div>
+        <div id="skill-dialog-options" class="skill-dialog-options"></div>
+    </dialog>
 
     <!-- Libraries -->
     <script>
@@ -940,7 +966,7 @@
             });
     </script>
     <script src="app-utils.js?v=3"></script>
-    <script src="app-i18n.js?v=14"></script>
+    <script src="app-i18n.js?v=16"></script>
     <script src="app-transcript-library.js?v=1"></script>
     <script src="app-saved-library.js?v=2"></script>
     <script src="app-models.js?v=2"></script>
@@ -952,7 +978,7 @@
     <script src="app-chat-ui.js?v=1"></script>
     <script src="app-progress-ui.js?v=1"></script>
     <script src="app-mic.js?v=4"></script>
-    <script src="app.js?v=42"></script>
+    <script src="app.js?v=46"></script>
 
 </body>
 

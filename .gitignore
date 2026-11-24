@@ -16,6 +16,7 @@ all_funcs.txt
 !internal/core/tool_parser_test.go
 !internal/core/tool_diagnostics_test.go
 !internal/core/auth_tools_test.go
+!internal/core/profile_identity_test.go
 !internal/core/evenhub_cors_test.go
 !internal/core/stt_runtime_test.go
 !internal/core/stt_triggers_test.go

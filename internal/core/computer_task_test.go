@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -292,7 +293,8 @@ func TestWeatherRequestBypassesDesktopPlanningThroughGateway(t *testing.T) {
 					var request map[string]any
 					_ = json.NewDecoder(r.Body).Decode(&request)
 					raw, _ := json.Marshal(request)
-					if strings.Contains(string(raw), "computer_observe") || strings.Contains(string(raw), "#### builtin:computer-use") {
+					providerTools, _ := json.Marshal(request["tools"])
+					if strings.Contains(string(providerTools), "computer_observe") || strings.Contains(string(raw), "#### builtin:computer-use") {
 						t.Error("desktop tools/procedure leaked into ordinary weather request")
 					}
 					if !strings.Contains(string(raw), "search_web") {
@@ -463,5 +465,102 @@ func TestDesktopWindowPresenceUsesFirstObservationWithoutModelOrActivation(t *te
 		if _, ok := desktopWindowPresenceTarget(question); ok {
 			t.Errorf("treated %q as window presence", question)
 		}
+	}
+}
+
+func TestExplicitDesktopSkillKeepsShortRequestInDesktopRunner(t *testing.T) {
+	const request = "$user:desktop-example 확인해줘"
+	const procedure = "Read the visible status with computer_observe."
+	if desktopInputCandidate(request) || !skillUsesDesktop("user:desktop-example", procedure) ||
+		skillUsesDesktop("builtin:wikipedia-search", "Use read_web_page.") {
+		t.Fatal("unexpected desktop skill classification")
+	}
+	tools, calls := fakeDesktopRegistry(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		raw, _ := json.Marshal(payload)
+		if !strings.Contains(string(raw), procedure) {
+			t.Error("manually selected procedure is missing from desktop request")
+		}
+		switch r.Header.Get("X-DKST-Task-Phase") {
+		case "route":
+			http.Error(w, "structured routing unavailable", http.StatusBadRequest)
+		case "plan":
+			_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{
+				"message": map[string]any{"content": `{"desktop_required":false,"steps":[]}`},
+			}}})
+		default:
+			t.Error("unexpected tool review or ordinary chat fallback")
+		}
+	}))
+	defer upstream.Close()
+
+	model := desktopTaskModel{endpoint: upstream.URL, procedure: procedure, explicitSkill: true}
+	handled, answer := runDesktopTask(context.Background(), model, request, "", tools, toolruntime.ExecutionContext{}, func(string, map[string]any) {})
+	if !handled || !strings.Contains(answer, "실행할 데스크톱 작업을 확인하지 못했습니다") || *calls != 0 {
+		t.Fatalf("expected a handled no-action result, got %t %q (%d calls)", handled, answer, *calls)
+	}
+	handled, answer = runDesktopTask(context.Background(), model, request, "", nil, toolruntime.ExecutionContext{}, func(string, map[string]any) {})
+	if !handled || !strings.Contains(answer, "관찰 도구를 사용할 수 없습니다") {
+		t.Fatalf("missing desktop-tool availability result: %t %q", handled, answer)
+	}
+}
+
+func TestExplicitFullScreenRequestReturnsStoredAttachment(t *testing.T) {
+	const originalRequest = "컴퓨터 유즈 스킬로 화면을 찍어서 보내줘"
+	const request = "컴퓨터 화면 캡쳐해서 보내줘"
+	if !isSimpleFullScreenshotRequest(originalRequest) || !isSimpleFullScreenshotRequest("컴퓨터 화면 캡처해서 보내줘") {
+		t.Fatal("full-screen request variants should all use the same attachment path")
+	}
+	for _, test := range []struct {
+		name, userID, status string
+	}{
+		{"saved", "screenshot-user", "completed"},
+		{"store refused", "", "blocked"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			oldTools, oldStore := toolruntime.Default, computerScreenshots
+			dir := t.TempDir()
+			computerScreenshots = &computerScreenshotStore{dirFunc: func() string { return dir }}
+			toolruntime.Default = toolruntime.NewRegistry()
+			t.Cleanup(func() { toolruntime.Default, computerScreenshots = oldTools, oldStore })
+			png, err := os.ReadFile(filepath.Join("testdata", "desktop_gateway.png"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var calls int
+			def := toolruntime.Definition{Name: "computer_screenshot", InputSchema: json.RawMessage(`{"type":"object"}`)}
+			if err := toolruntime.Default.Register(def, func(context.Context, toolruntime.ExecutionContext, json.RawMessage) (toolruntime.Result, error) {
+				calls++
+				return toolruntime.Result{ImageURLs: []string{"data:image/png;base64," + base64.StdEncoding.EncodeToString(png)}}, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			var status string
+			var events []string
+			handled, answer := runDesktopTask(context.Background(), desktopTaskModel{}, request, "", []promptkit.ToolDefinition{{Name: def.Name}}, toolruntime.ExecutionContext{UserID: test.userID}, func(event string, payload map[string]any) {
+				events = append(events, event)
+				if task, ok := payload["task"].(chatharness.DesktopTask); ok {
+					status = task.Status
+				}
+			})
+			if !handled || calls != 1 || status != test.status {
+				t.Fatalf("handled=%v calls=%d status=%q answer=%q", handled, calls, status, answer)
+			}
+			if test.status == "completed" {
+				_, tail, _ := strings.Cut(answer, "/api/computer/screenshots/")
+				id, _, ok := strings.Cut(tail, ".png)")
+				raw, found := computerScreenshots.Load(test.userID, id)
+				if !ok || !found || string(raw) != string(png) {
+					t.Fatal("completion had no retrievable screenshot")
+				}
+			} else if strings.Contains(answer, "/api/computer/screenshots/") || slices.Contains(events, "tool_call.success") {
+				t.Fatal("failed screenshot storage was shown as successful")
+			}
+		})
+	}
+	if isSimpleFullScreenshotRequest("왼쪽 창을 캡쳐해서 첨부해줘") || !screenshotAttachmentRequested("왼쪽 창을 캡쳐해서 첨부해줘") {
+		t.Fatal("targeted capture must go through the task planner")
 	}
 }

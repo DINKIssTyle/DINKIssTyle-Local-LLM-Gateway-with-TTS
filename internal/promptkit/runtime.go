@@ -444,7 +444,7 @@ func buildMemoryTemplate(staticMemory string, recentContext string, userProfile 
 	}
 	if retrievalInjected && strings.TrimSpace(activeContext) != "" {
 		rules = append([]string{
-			"0. ACTIVE CONTEXT was already retrieved for this turn; prefer answering from RECENT CONTEXT plus ACTIVE CONTEXT when sufficient.",
+			"0. ACTIVE CONTEXT contains historical evidence. Use it only for the current subject, after applying the latest user statement and known profile facts.",
 		}, rules...)
 	}
 

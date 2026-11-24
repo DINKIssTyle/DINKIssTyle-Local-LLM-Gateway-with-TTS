@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const src = fs.readFileSync('plugin.js','utf8').replace(/^import .*\n/gm, '').replace('  function enqueueClip(', `  window.__queueTest={ai(){resetQueuesForModeSwitch('ai');config.glassesMode='ai';captureFailure='';isRecording=true;segmenter=new SpeechSegmenter();},resetCaptureBuffer(){resetQueuesForModeSwitch(config.glassesMode,true,true);renderLiveHUD();},ensureModel:ensureModelLoaded,gateway:gatewayFetch,refreshIcons(){queueHudIcons(true);},headerMode(mode){config.glassesMode=mode;renderLiveHUD();},iconPhase(phase,error=''){aiPhaseTitle=phase;aiPhaseDetail='';aiStatusError=error;processingAI=!!phase;renderLiveHUD();},microphone:toggleVoiceRecording,dismiss:dismissAIWindow,headIMU:handleHeadIMU,headWait(){return headTransition?.catch(()=>{});},headState(){return {paused:headPaused,imu:headImuActive,phase:headCalibrationPhase,uncertain:micCloseUncertain};},audit:hintAudit,metrics:translationMetrics,forceRebuild(render=true){nativeBodyLayoutKey='';if(render)renderLiveHUD();},previewDuringSave(id){activeUtterance={id,agreement:new LocalAgreement()};pendingPreview={bytes:new Uint8Array(6400),sessionId,segmentId:id,engine:activeSttEngine,revision:1,startedAt:new Date().toISOString(),endedAt:new Date().toISOString(),mode:'translate',sourceLang:'en',targetLang:'ko'};drainPreview();},stack:hintStack,addHint(title,text,auditMeta){displayHintCard({topic:title,kind:'key',evidence:title,auditMeta},text);},reviseTranscript:reconcileHintTranscript,lifetime:hintLifetime,showHint(title,text,transcript){answerAutoCloseEligible=!!text;answerVoicePrompt='';answerTitle=title;answerText=text;captionFinal=transcript;captionStable=captionDraft='';startHintLifetime();renderLiveHUD();},enableIcons(){hudImagesDisabled=false;lastHudIconKeys.clear();},sttPayload,settings:applyLiveSettings,preview:observeAIPreview,hintGate,liveTranslations,translationHistory,enqueueClip,drainAI,drainClips,stopVoiceRecording,reset(){resetQueuesForModeSwitch('translate');config.glassesMode='translate';},state(){return{received:receivedCaptureAudio,bytes:recordedBytes,captureStatus:captureStatus(),answer:answerText,title:answerTitle,ids:pendingClips.map(c=>c.segmentId),failure:captureFailure,recording:isRecording,engine:activeSttEngine,mode:config.glassesMode,active:activeUtterance?.id,previewBusy};},record(){isRecording=true;segmenter=new SpeechSegmenter();}};
+const src = fs.readFileSync('plugin.js','utf8').replace(/^import .*\n/gm, '').replace('  function enqueueClip(', `  window.__queueTest={ai(){resetQueuesForModeSwitch('ai');config.glassesMode='ai';captureFailure='';isRecording=true;segmenter=new SpeechSegmenter();},resetCaptureBuffer(){resetQueuesForModeSwitch(config.glassesMode,true,true);renderLiveHUD();},ensureModel:ensureModelLoaded,gateway:gatewayFetch,refreshIcons(){queueHudIcons(true);},headerMode(mode){config.glassesMode=mode;renderLiveHUD();},iconPhase(phase,error=''){aiPhaseTitle=phase;aiPhaseDetail='';aiStatusError=error;processingAI=!!phase;renderLiveHUD();},microphone:toggleVoiceRecording,dismiss:dismissAIWindow,headIMU:handleHeadIMU,headWait(){return headTransition?.catch(()=>{});},headState(){return {paused:headPaused,imu:headImuActive,phase:headCalibrationPhase,uncertain:micCloseUncertain};},audit:hintAudit,metrics:translationMetrics,queryChat:queryDKSTChat,forceRebuild(render=true){nativeBodyLayoutKey='';if(render)renderLiveHUD();},previewDuringSave(id){activeUtterance={id,agreement:new LocalAgreement()};pendingPreview={bytes:new Uint8Array(6400),sessionId,segmentId:id,engine:activeSttEngine,revision:1,startedAt:new Date().toISOString(),endedAt:new Date().toISOString(),mode:'translate',sourceLang:'en',targetLang:'ko'};drainPreview();},stack:hintStack,addHint(title,text,auditMeta){displayHintCard({topic:title,kind:'key',evidence:title,auditMeta},text);},reviseTranscript:reconcileHintTranscript,lifetime:hintLifetime,showHint(title,text,transcript){answerAutoCloseEligible=!!text;answerVoicePrompt='';answerTitle=title;answerText=text;captionFinal=transcript;captionStable=captionDraft='';startHintLifetime();renderLiveHUD();},enableIcons(){hudImagesDisabled=false;lastHudIconKeys.clear();},sttPayload,settings:applyLiveSettings,preview:observeAIPreview,hintGate,liveTranslations,translationHistory,enqueueClip,drainAI,drainClips,stopVoiceRecording,reset(){resetQueuesForModeSwitch('translate');config.glassesMode='translate';},state(){return{received:receivedCaptureAudio,bytes:recordedBytes,captureStatus:captureStatus(),answer:answerText,title:answerTitle,ids:pendingClips.map(c=>c.segmentId),failure:captureFailure,recording:isRecording,engine:activeSttEngine,mode:config.glassesMode,active:activeUtterance?.id,previewBusy};},record(){isRecording=true;segmenter=new SpeechSegmenter();}};
   function enqueueClip(`);
 const elements = new Map();
 function element(id) {
@@ -95,6 +95,7 @@ const testKeepAlive=setInterval(()=>{},1000);
 const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting asynchronous integration work');process.exit(1);},60000);
 (async()=>{
  const {validateEvenHubPageContainer}=await import('@evenrealities/even_hub_sdk');
+ Object.assign(context,await import('./chat-images.mjs'));
  validatePage=page=>{const result=validateEvenHubPageContainer(page);assert.equal(result.valid,true,JSON.stringify(result));};
  for(const module of ['./hint-quality.mjs','./translation-direction.mjs','./audio-upload.mjs','./translation-metrics.mjs','./llm-translation.mjs','./hint-audit.mjs'])Object.assign(context,await import(module));
  Object.assign(context,await import('./head-gesture.mjs'));
@@ -2187,6 +2188,34 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  await queue.stopVoiceRecording(false);qwenWarmupFailure=false;
  await queue.settings({sttEngine,translationEngine,translateSourceLang,translateTargetLang});
  console.log('PASS: Qwen local warmup, language payloads, no Chrome requests and preparation fallback');
+ await queue.settings({glassesMode:'ai',connectionMode:'sse'});
+ queue.enableIcons();
+ const screenshotPath='/api/computer/screenshots/0123456789ab-00112233445566778899aabb.png';
+ const secondScreenshotPath='/api/computer/screenshots/0123456789ab-ffeeddccbbaa998877665544.png';
+ const frame=new Uint8Array(288*144/2).fill(0x88);
+ const requestedShots=[];
+ context.fetchChatImage=async(_fetch,server,path,headers)=>{requestedShots.push({server,path,headers});return frame;};
+ const screenshotStart=imageUpdates.length;
+ chatReply={ok:true,body:{getReader(){
+  let sent=false;
+  return {read:async()=>sent?{done:true}:(sent=true,{done:false,value:Buffer.from('data: '+JSON.stringify({type:'request.complete',final_assistant_content:'캡처 결과\n\n![창]('+screenshotPath+')\n\n![두 번째 창]('+secondScreenshotPath+')'})+'\n\n')})};
+ }}};
+ await queue.queryChat('화면 캡처','','ai');
+ for(let i=0;i<30 && !imageUpdates.slice(screenshotStart).some(update=>update.containerID===14);i++)await tick();
+ assert.deepEqual(requestedShots.map(shot=>shot.path),[screenshotPath,secondScreenshotPath]);
+ for(const shot of requestedShots)assert.match(shot.headers.Authorization,/^Bearer /);
+ const screenshotContainer=nativePage.imageObject.find(container=>container.containerID===13);
+ assert.equal(screenshotContainer.width,288);
+ assert.equal(screenshotContainer.height,144);
+ assert.equal(nativePage.imageObject.find(container=>container.containerID===14).xPosition,288);
+ assert.equal(imageUpdates.slice(screenshotStart).find(update=>update.containerID===14).imageData, frame);
+ assert.equal(nativePage.textObject.find(container=>container.containerID===1).yPosition,171);
+ assert.equal(imageUpdates.slice(screenshotStart).find(update=>update.containerID===13).imageData, frame);
+ assert.equal(queue.state().answer,'캡처 결과');
+ queue.dismiss();
+ for(let i=0;i<20;i++)await tick();
+ assert.ok(!nativePage.imageObject.some(container=>container.containerID===13),'dismissing the answer removes its screenshot');
+ console.log('PASS: authenticated chat screenshot attachment renders in a validated Gray4 HUD container');
  const restoredPrepareStart=requests.length;
  nativeSaved=JSON.stringify({...JSON.parse(nativeSaved),aiHeaderLayout:'status-icon',aiIconPosition:276,translationLayout:'subtitles',subtitleLines:3});
  elements.clear();

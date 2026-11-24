@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -19,7 +20,24 @@ import (
 	"dinkisstyle-chat/internal/toolruntime"
 )
 
-type desktopTaskModel struct{ endpoint, token, model, procedure string }
+type desktopTaskModel struct {
+	endpoint, token, model, procedure string
+	explicitSkill                     bool
+}
+
+var desktopSkillToolName = regexp.MustCompile(`\bcomputer_[a-z_]+\b`)
+
+func skillUsesDesktop(name, instructions string) bool {
+	if name == "builtin:computer-use" {
+		return true
+	}
+	for _, tool := range desktopSkillToolName.FindAllString(instructions, -1) {
+		if toolruntime.IsComputerTool(tool) {
+			return true
+		}
+	}
+	return false
+}
 
 func isRecentInboxRequest(question string) bool {
 	question = strings.ToLower(strings.TrimRight(strings.TrimSpace(question), "?.!"))
@@ -34,7 +52,7 @@ func isRecentInboxRequest(question string) bool {
 // Only requests with a UI operation or an in-app inspection cue need routing.
 func desktopInputCandidate(question string) bool {
 	question = strings.ToLower(strings.TrimSpace(question))
-	for _, cue := range []string{"$computer-use", "$builtin:computer-use", "화면", "창을", "탭 목록", "클릭", "앱 전환", "앱 실행", "열어", "실행해", "전환해", "screen", "window", "click", "open ", "launch ", "switch to", "running apps", "browser tabs", "계속해", "continue"} {
+	for _, cue := range []string{"$computer-use", "$builtin:computer-use", "화면", "모니터에", "디스플레이에", "창을", "탭 목록", "클릭", "앱 전환", "앱 실행", "열어", "실행해", "전환해", "스크린샷", "캡처", "캡쳐", "screen", "screenshot", "monitor", "window", "click", "open ", "launch ", "switch to", "running apps", "browser tabs", "계속해", "continue"} {
 		if strings.Contains(question, cue) {
 			return true
 		}
@@ -161,6 +179,9 @@ func evidenceInQuestion(question, evidence string) bool {
 func latestObservationID(receipts []chatharness.DesktopReceipt) string {
 	for i := len(receipts) - 1; i >= 0; i-- {
 		r := receipts[i]
+		if r.Tool == "computer_screenshot" {
+			continue
+		}
 		if r.Tool != "computer_observe" {
 			return ""
 		}
@@ -196,8 +217,8 @@ func desktopPlanSchema() map[string]any {
 	return taskObject(map[string]any{"desktop_required": map[string]any{"type": "boolean"}, "kind": taskEnum("list_apps", "desktop_work"), "goal": taskString(), "steps": map[string]any{"type": "array", "maxItems": 6, "items": taskObject(map[string]any{"title": taskString(), "done_when": taskString(), "requires_screen": map[string]any{"type": "boolean"}})}})
 }
 
-// Routing sees no desktop procedures or plan schema. Plan only after the
-// current request authorizes desktop access; uncertainty stays in normal chat.
+// Routing uses the current request to classify desktop intent. Explicitly
+// selected desktop procedures also supply context for terse requests.
 type desktopIntent struct {
 	Mode              string `json:"mode"`
 	RequestEvidence   string `json:"request_evidence"`
@@ -211,8 +232,11 @@ func (m desktopTaskModel) routeIntent(ctx context.Context, question, history str
 	prompt := `현재 요청이 실행 중인 컴퓨터 화면이나 앱을 직접 확인/조작하라는 요청이면 desktop, 그 외는 chat으로 분류한다. 앱 이름을 언급하거나 사용법을 질문하는 것만으로 desktop이 되지 않는다. 날씨·검색·계산·번역·일반 설명은 chat이다. 이전 대화가 desktop이어도 현재 주제가 바뀌면 chat이다. 같은 앱을 다시 확인하라는 현재 요청은 이전에 완료했더라도 desktop이다. "계속해" 같은 생략된 요청만 이전 작업을 참고한다. desktop이면 request_evidence에 현재 요청의 원문을 그대로 복사하고, chat이면 빈 문자열을 넣는다. 작업 계획은 만들지 않는다.
 Examples: "내일 아침 날씨" -> chat; "컴퓨터 유즈 설명해줘" -> chat; "사파리 사용법 알려줘" -> chat; "사파리 열어줘" -> desktop; "LM Studio에서 다운로드 중인 작업이 얼마나 진행됐는지 확인해봐" -> desktop; "현재 화면 내용이 뭐야" -> desktop.` + "\nCurrent request:\n" + question + "\nRecent conversation (reference only):\n" + history
 	prompt += "\nFor desktop, target_application is the canonical running app name explicitly requested (e.g. Google Chrome), or empty for the current screen. text_input_evidence is empty for any status/content inspection. Only when the user explicitly asks to enter, fill, search within, or write text in a desktop field, quote the exact current instruction authorizing that input; do not infer typing permission from plans, navigation, viewing tabs or checking progress. Never type narration, thoughts or instructions to yourself."
+	if m.explicitSkill {
+		prompt += "\nThe user explicitly selected a desktop skill. Interpret short requests in the scope of that skill. A question about the skill itself is chat; perform no desktop operations for it.\nSelected procedures:\n" + m.procedure
+	}
 	if err := m.structured(ctx, "route", prompt, schema, nil, &route); err != nil {
-		desktopTrace("task.route_error", "Desktop routing unavailable; keeping ordinary chat", map[string]any{"error": err.Error()})
+		desktopTrace("task.route_error", "Desktop intent classification unavailable", map[string]any{"error": err.Error()})
 		return desktopIntent{}
 	}
 	desktopTrace("task.routed", "Classified current request independently of desktop planning", map[string]any{"mode": route.Mode, "evidence": route.RequestEvidence})
@@ -221,7 +245,7 @@ Examples: "내일 아침 날씨" -> chat; "컴퓨터 유즈 설명해줘" -> cha
 	}
 	// Models often paraphrase or trim the quote slightly; an explicit desktop
 	// cue in the request is enough evidence that the classification is grounded.
-	if !evidenceInQuestion(question, route.RequestEvidence) && !desktopInputCandidate(question) {
+	if !evidenceInQuestion(question, route.RequestEvidence) && !desktopInputCandidate(question) && !m.explicitSkill {
 		desktopTrace("task.route_rejected", "Desktop route evidence not found in request", map[string]any{"evidence": route.RequestEvidence})
 		return desktopIntent{}
 	}
@@ -260,7 +284,7 @@ func desktopReviewSchema(tools []promptkit.ToolDefinition, task chatharness.Desk
 		eligible := []int{}
 		lastInput := 0
 		for _, r := range receipts {
-			if r.Tool != "computer_observe" && r.Tool != "computer_list_apps" {
+			if r.Tool != "computer_observe" && r.Tool != "computer_list_apps" && r.Tool != "computer_screenshot" {
 				lastInput = r.ID
 			}
 		}
@@ -415,7 +439,7 @@ func desktopAvailableTools(tools []promptkit.ToolDefinition, task chatharness.De
 		}
 	} else {
 		last := receipts[len(receipts)-1]
-		if last.Tool != "computer_observe" && last.Tool != "computer_list_apps" {
+		if last.Tool != "computer_observe" && last.Tool != "computer_list_apps" && last.Tool != "computer_screenshot" {
 			required = "computer_observe"
 		}
 	}
@@ -432,7 +456,7 @@ func desktopAvailableTools(tools []promptkit.ToolDefinition, task chatharness.De
 		if r.Success && r.Tool == "computer_list_apps" {
 			lastList = r.ID
 		}
-		if r.Tool != "computer_list_apps" && r.Tool != "computer_observe" {
+		if r.Tool != "computer_list_apps" && r.Tool != "computer_observe" && r.Tool != "computer_screenshot" {
 			lastChange = r.ID
 		}
 	}
@@ -480,7 +504,17 @@ func runDesktopTask(ctx context.Context, m desktopTaskModel, question, history s
 			catalog = append(catalog, tool)
 		}
 	}
+	needsAttachment := screenshotAttachmentRequested(question)
+	if needsAttachment && !allowed["computer_screenshot"] {
+		return true, "화면을 첨부하는 데 필요한 스크린샷 도구를 사용할 수 없습니다."
+	}
+	if isSimpleFullScreenshotRequest(question) {
+		return true, captureFullDesktopScreenshot(ctx, question, execCtx, emit)
+	}
 	if !allowed["computer_observe"] || len(names) == 0 {
+		if m.explicitSkill || needsAttachment {
+			return true, "선택한 스킬에 필요한 데스크톱 관찰 도구를 사용할 수 없습니다."
+		}
 		return false, ""
 	}
 	if target, ok := desktopWindowPresenceTarget(question); ok {
@@ -488,7 +522,7 @@ func runDesktopTask(ctx context.Context, m desktopTaskModel, question, history s
 		return true, runDesktopWindowPresence(ctx, target, korean, execCtx, emit)
 	}
 	intent := m.routeIntent(ctx, question, history)
-	if intent.Mode != "desktop" {
+	if intent.Mode != "desktop" && !m.explicitSkill && !needsAttachment {
 		return false, ""
 	}
 	goalContext := chatharness.DesktopTaskLanguageInstruction(question) + "\nCurrent user request:\n" + question + "\nRecent conversation (reference only):\n" + history
@@ -497,12 +531,21 @@ func runDesktopTask(ctx context.Context, m desktopTaskModel, question, history s
 	}
 	planPrompt := `Decide whether the CURRENT request actually requires reading or operating the gateway host desktop. Ordinary conversation, general advice, public web research and questions answerable from supplied content do not. Resolve short follow-ups using recent conversation. If no desktop work is needed, set desktop_required=false and steps=[]. Otherwise set true and make 1-6 concrete action steps with observable done_when criteria in the user's language. Use kind=list_apps ONLY when the request merely asks for running app names; all other desktop work uses desktop_work. App discovery is not proof of app content/status. Locate an already running app before launching it. Do not include narration, planning or reporting as work steps. Screen/content/status and changed-state verification require requires_screen=true. Stay within the user's requested scope; reading status never implies cancellation or settings changes.
 ` + goalContext
+	if m.explicitSkill {
+		planPrompt += "\nThe user explicitly selected the desktop procedure above. Interpret a short task in that scope even if no app or screen is named. A question about the procedure itself does not authorize desktop work."
+	}
 	var task chatharness.DesktopTask
 	if err := m.structured(ctx, "plan", planPrompt, desktopPlanSchema(), nil, &task); err != nil {
 		desktopTrace("task.plan_error", "Could not establish a desktop task plan", map[string]any{"error": err.Error()})
 		return true, "작업 계획을 만들지 못해 실행을 시작하지 못했습니다. 모델의 구조화 응답 설정을 확인해 주세요."
 	}
 	if !task.DesktopRequired {
+		if needsAttachment {
+			return true, "화면 캡처 대상을 확인하지 못해 이미지를 첨부하지 못했습니다."
+		}
+		if m.explicitSkill {
+			return true, "선택한 스킬로 실행할 데스크톱 작업을 확인하지 못했습니다. 이 요청에서는 앱을 조작하지 않았습니다."
+		}
 		return false, ""
 	}
 	task.AllowTextInput = intent.TextInputEvidence != ""
@@ -514,6 +557,7 @@ func runDesktopTask(ctx context.Context, m desktopTaskModel, question, history s
 	progress()
 	receipts := []chatharness.DesktopReceipt{}
 	var images []string
+	var attachedScreenshots []attachedScreenshot
 	catalogJSON, _ := json.Marshal(catalog)
 	validation := ""
 	rejections := 0
@@ -526,8 +570,11 @@ func runDesktopTask(ctx context.Context, m desktopTaskModel, question, history s
 			return true, task.Reason
 		}
 		state, _ := json.Marshal(map[string]any{"task": task, "receipts": receipts})
-		prompt := `Inside decision, choose action_type FIRST, then the matching fields. Review every step against ACTUAL execution receipts and the latest attached screenshot. The steps object MUST have one key for EVERY step ID (for example 1 and 2), each with status and evidence_ids. A plan, promise, PID discovery or input_posted does not prove an app's internal status or changed UI. Completed steps MUST cite successful receipt IDs; steps requiring a screen MUST cite computer_observe with has_image=true. Never invent evidence IDs or read values from tool descriptions. If work remains, action_type=continue and select exactly one available next_tool, its arguments as a JSON object (not a string), and the unfinished next_step id. Use exact pids and fresh observation_id values from receipts. Observe before every input and after actions. On observation_id expiry or foreground changes, observe again. Do not restart app discovery when the correct app is already active. No further permission is needed for navigation within the requested scope. Inspection must not change settings or cancel downloads. Never call computer_type for narration or planning. When allow_text_input=false, text input and submit shortcuts are unavailable. For completion, findings MUST quote concrete values or messages actually visible (e.g. progress amount/status or tab titles), and answer must contain those exact facts. A statement that information is displayed, a promise, or telling the user to inspect an image is NOT a finding. Only action_type=completed when ALL criteria are visibly verified (running app lists need only list evidence); give a concise answer in the user's language with observed facts. For real obstacles or two unsuccessful attempts at the same step, action_type=blocked, cite the blocker receipt in top-level evidence_ids and explain the specific unfinished part in answer. Empty next_tool and arguments={}, next_step=1 for terminal outcomes (ignored). Do not finish merely because a tool was called or because you said you would continue.
+		prompt := `Inside decision, choose action_type FIRST, then the matching fields. Review every step against ACTUAL execution receipts and the latest attached screenshot. The steps object MUST have one key for EVERY step ID (for example 1 and 2), each with status and evidence_ids. A plan, promise, PID discovery or input_posted does not prove an app's internal status or changed UI. Completed steps MUST cite successful receipt IDs; steps requiring a screen MUST cite computer_observe with has_image=true. Never invent evidence IDs or read values from tool descriptions. If work remains, action_type=continue and select exactly one available next_tool, its arguments as a JSON object (not a string), and the unfinished next_step id. Use exact pids and fresh observation_id values from receipts. If the target is on another monitor, observe it using an exact display_id from the displays list. Verify actions on the same display unless the target moved. Observe before every input and after actions. On observation_id expiry or foreground changes, observe again. Do not restart app discovery when the correct app is already active. No further permission is needed for navigation within the requested scope. Inspection must not change settings or cancel downloads. Never call computer_type for narration or planning. When allow_text_input=false, text input and submit shortcuts are unavailable. For completion, findings MUST quote concrete values or messages actually visible (e.g. progress amount/status or tab titles), and answer must contain those exact facts. A statement that information is displayed, a promise, or telling the user to inspect an image is NOT a finding. Only action_type=completed when ALL criteria are visibly verified (running app lists need only list evidence); give a concise answer in the user's language with observed facts. For real obstacles or two unsuccessful attempts at the same step, action_type=blocked, cite the blocker receipt in top-level evidence_ids and explain the specific unfinished part in answer. Empty next_tool and arguments={}, next_step=1 for terminal outcomes (ignored). Do not finish merely because a tool was called or because you said you would continue.
 ` + goalContext + "\nAvailable tools:\n" + string(catalogJSON) + "\nExecution state:\n" + string(state) + "\nPrevious validation feedback:\n" + validation
+		if needsAttachment {
+			prompt += fmt.Sprintf("\nAn image attachment is required. Stored attachments: %d. An observe image is model-only evidence. Call computer_screenshot with the requested region or display before completing.", len(attachedScreenshots))
+		}
 		var envelope struct {
 			Decision chatharness.DesktopDecision `json:"decision"`
 		}
@@ -561,6 +608,9 @@ func runDesktopTask(ctx context.Context, m desktopTaskModel, question, history s
 				}
 			}
 		}
+		if err == nil && decision.Outcome == "completed" && needsAttachment && len(attachedScreenshots) == 0 {
+			err = fmt.Errorf("no stored image attachment: use computer_screenshot for the requested screen or crop before completing")
+		}
 		if err == nil && decision.Outcome == "completed" {
 			decision.Answer = mergeFindingsIntoAnswer(decision.Answer, decision.Findings)
 		}
@@ -580,6 +630,9 @@ func runDesktopTask(ctx context.Context, m desktopTaskModel, question, history s
 			if rejections >= 4 {
 				task.Status = "blocked"
 				task.Reason = "작업 상태를 검증하지 못해 중단했습니다. 완료로 처리하지 않았습니다."
+				if needsAttachment && len(attachedScreenshots) == 0 {
+					task.Reason = "요청한 화면 캡처를 첨부하지 못했습니다."
+				}
 				progress()
 				desktopTrace("task.review_error", "Task review failed validation repeatedly", map[string]any{"error": err.Error()})
 				return true, task.Reason
@@ -591,6 +644,9 @@ func runDesktopTask(ctx context.Context, m desktopTaskModel, question, history s
 		rejections = 0
 		progress()
 		if decision.Outcome != "continue" {
+			if decision.Outcome == "completed" {
+				return true, appendScreenshotMarkdown(decision.Answer, attachedScreenshots)
+			}
 			return true, decision.Answer
 		}
 		if action == 32 {
@@ -600,7 +656,7 @@ func runDesktopTask(ctx context.Context, m desktopTaskModel, question, history s
 			return true, task.Reason
 		}
 		args := decision.Arguments
-		if id := latestObservationID(receipts); id != "" && decision.NextTool != "computer_observe" && decision.NextTool != "computer_list_apps" && decision.NextTool != "computer_launch_app" && decision.NextTool != "computer_switch_app" {
+		if id := latestObservationID(receipts); id != "" && decision.NextTool != "computer_observe" && decision.NextTool != "computer_screenshot" && decision.NextTool != "computer_list_apps" && decision.NextTool != "computer_launch_app" && decision.NextTool != "computer_switch_app" {
 			var fields map[string]any
 			if json.Unmarshal(args, &fields) == nil && fields != nil {
 				fields["observation_id"] = id
@@ -620,6 +676,16 @@ func runDesktopTask(ctx context.Context, m desktopTaskModel, question, history s
 		if callErr != nil {
 			text = callErr.Error() + "\n" + text
 		}
+		if success && decision.NextTool == "computer_screenshot" {
+			caption, _ := argObject["caption"].(string)
+			shot, err := saveDesktopScreenshot(execCtx.UserID, caption, result)
+			if err != nil {
+				success, text = false, err.Error()
+			} else {
+				attachedScreenshots = append(attachedScreenshots, shot)
+				text += "\nImage stored and ready to attach."
+			}
+		}
 		if success {
 			emit("tool_call.success", map[string]any{"tool": decision.NextTool})
 		} else {
@@ -637,7 +703,7 @@ func runDesktopTask(ctx context.Context, m desktopTaskModel, question, history s
 				return true, task.Reason
 			}
 		}
-		if success && len(result.ImageURLs) > 0 {
+		if success && decision.NextTool != "computer_screenshot" && len(result.ImageURLs) > 0 {
 			images = result.ImageURLs
 		}
 	}

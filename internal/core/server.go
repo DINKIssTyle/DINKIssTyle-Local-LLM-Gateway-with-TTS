@@ -2927,6 +2927,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	mux.HandleFunc("/api/chat-session/events/stream", AuthMiddleware(authMgr, handleChatSessionEventsStream()))
 	mux.HandleFunc("/api/chat-session/stop", AuthMiddleware(authMgr, handleStopCurrentChat()))
 	mux.HandleFunc("/api/chat-session/clear", AuthMiddleware(authMgr, handleClearCurrentChat()))
+	mux.HandleFunc("/api/computer/screenshots/", AuthMiddleware(authMgr, handleComputerScreenshot()))
 	mux.HandleFunc("/api/tts", AuthMiddleware(authMgr, handleTTS))
 	mux.HandleFunc("/api/tts/on-device/status", AuthMiddleware(authMgr, handleOnDeviceTTSStatus(app)))
 	mux.HandleFunc("/api/tts/on-device/assets/", AuthMiddleware(authMgr, handleOnDeviceTTSAsset()))
@@ -3182,6 +3183,7 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 
 		json.NewEncoder(w).Encode(resp)
 	}))
+	mux.HandleFunc("/api/skills", AuthMiddleware(authMgr, handleSkillCatalog))
 	mux.HandleFunc("/api/tts/styles", AuthMiddleware(authMgr, handleTTSStyles))
 	mux.HandleFunc("/v1/chat/completions", AuthMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
 		// Pass authMgr to allow user settings lookup
@@ -3312,9 +3314,11 @@ func handleLogin(am *AuthManager) http.HandlerFunc {
 // handleLogout processes logout requests
 func handleLogout(am *AuthManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		cookie, err := r.Cookie("session")
-		if err == nil {
-			am.InvalidateSession(cookie.Value)
+		if token := extractSessionTokenFromRequest(r); token != "" {
+			if user, valid := am.ValidateSession(token); valid && user != nil {
+				computerScreenshots.PurgeUser(user.ID)
+			}
+			am.InvalidateSession(token)
 		}
 
 		http.SetCookie(w, &http.Cookie{
@@ -3349,6 +3353,7 @@ func handleLogoutAllSessions(am *AuthManager) http.HandlerFunc {
 			http.Error(w, "Failed to revoke sessions", http.StatusInternalServerError)
 			return
 		}
+		computerScreenshots.PurgeUser(userID)
 
 		http.SetCookie(w, &http.Cookie{
 			Name:     "session",
@@ -4833,10 +4838,17 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	recentContext := ""
 	recentContextTurns := 0
 	recentContextSource := ""
+	profileAnswer := ""
+	if !glassesRequest && enableMemory && strings.TrimSpace(userID) != "" &&
+		directAssistantNameQuestion.MatchString(strings.Join(strings.Fields(initialUserInputText), " ")) {
+		if facts, err := mcp.GetUserProfileFacts(userID); err == nil {
+			profileAnswer = storedIdentityAnswer(initialUserInputText, facts)
+		}
+	}
 	memorySnapshotDebug := mcp.MemorySnapshotDebug{}
 	autoContextDebug := mcp.AutoSearchMemoryDebug{}
 	if contextStrategy == "retrieval" {
-		if enableMemory && strings.TrimSpace(userID) != "" && chatCtx.Err() == nil {
+		if profileAnswer == "" && enableMemory && strings.TrimSpace(userID) != "" && chatCtx.Err() == nil {
 			autoContextDebug = mcp.FastMemoryContextWithOptions(userID, initialUserInputText, useMemoryVectors)
 			autoContext = autoContextDebug.Context
 		}
@@ -5443,8 +5455,12 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 	// --- TURN LOOP START ---
 	desktopHandled := false
+	if profileAnswer != "" && chatCtx.Err() == nil {
+		emitCanonicalAssistantDelta(profileAnswer)
+		desktopHandled = true
+	}
 	pingTarget := diagnosticPingTarget(initialUserInputText)
-	if !hintJudge && (bulkToolTestRequest || pingTarget != "") {
+	if !desktopHandled && !hintJudge && (bulkToolTestRequest || pingTarget != "") {
 		emitDiagnosticEvent := func(kind, tool, callID string, payload map[string]interface{}) {
 			payload["type"], payload["tool"], payload["call_id"] = kind, tool, callID
 			appendChatEvent("assistant", kind, payload)
@@ -5466,7 +5482,18 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		emitCanonicalAssistantDelta(answer)
 		desktopHandled = true
 	}
-	if !desktopHandled && app.computerTaskPlanning && enableTools && !glassesRequest && desktopInputCandidate(initialUserInputText) {
+	explicitDesktopSkill := false
+	for _, skill := range skillCompilation.Selected {
+		if skillUsesDesktop(skill.Namespace, skill.Instructions) {
+			explicitDesktopSkill = true
+			break
+		}
+	}
+	if !desktopHandled && !glassesRequest && explicitDesktopSkill && (!enableTools || !app.computerTaskPlanning) {
+		emitCanonicalAssistantDelta("선택한 스킬을 실행하려면 이 대화에서 도구 사용과 데스크톱 작업 실행이 활성화되어 있어야 합니다.")
+		desktopHandled = true
+	}
+	if !desktopHandled && app.computerTaskPlanning && enableTools && !glassesRequest && (explicitDesktopSkill || desktopInputCandidate(initialUserInputText)) {
 		history := []string{}
 		if messages, ok := reqMap["messages"].([]interface{}); ok {
 			for _, raw := range messages[max(0, len(messages)-8):] {
@@ -5490,7 +5517,12 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				procedure = skill.Instructions
 			}
 		}
-		desktopHandled, taskAnswer = runDesktopTask(chatCtx, desktopTaskModel{endpoint: endpoint, token: token, model: modelID, procedure: procedure}, initialUserInputText, strings.Join(history, "\n"), desktopTools, toolExecCtx, func(event string, payload map[string]interface{}) {
+		for _, skill := range skillCompilation.Selected {
+			if skill.Namespace != "builtin:computer-use" {
+				procedure += "\n\nSelected skill " + skill.Namespace + ":\n" + skill.Instructions
+			}
+		}
+		desktopHandled, taskAnswer = runDesktopTask(chatCtx, desktopTaskModel{endpoint: endpoint, token: token, model: modelID, procedure: procedure, explicitSkill: explicitDesktopSkill}, initialUserInputText, strings.Join(history, "\n"), desktopTools, toolExecCtx, func(event string, payload map[string]interface{}) {
 			payload["type"] = event
 			appendChatEvent("assistant", event, payload)
 			if raw, err := json.Marshal(payload); err == nil {

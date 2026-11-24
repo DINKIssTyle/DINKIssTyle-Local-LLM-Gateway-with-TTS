@@ -1912,7 +1912,8 @@ textarea::-webkit-credentials-auto-fill-button {
 }
 
 .skill-status-card .skill-status-icon {
-  color: var(--success-color);
+  flex-shrink: 0;
+  color: inherit;
   transform: none;
 }
 
@@ -4154,3 +4155,176 @@ html[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
 .desktop-task-card ol { margin: 12px 0 0; padding-left: 20px; }
 .desktop-task-card li { margin-top: 9px; }
 .desktop-task-criterion { margin-top: 3px; }
+
+.skill-picker,
+.skill-dialog {
+  color: var(--text-color);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 18%);
+  padding: 8px;
+}
+
+.skill-picker {
+  position: absolute;
+  z-index: 24;
+  left: 14px;
+  right: 14px;
+  bottom: calc(100% + 4px);
+  max-height: min(320px, 40dvh);
+  overflow-y: auto;
+}
+
+.skill-picker[hidden] {
+  display: none;
+}
+
+.skill-dialog {
+  box-sizing: border-box;
+  width: min(480px, calc(100% - 32px));
+  max-height: min(560px, 80dvh);
+  overflow: hidden;
+}
+
+.skill-dialog::backdrop {
+  background: rgb(0 0 0 / 45%);
+}
+
+.skill-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px 8px;
+}
+
+.skill-dialog-header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.skill-dialog-options {
+  max-height: min(440px, 60dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.skill-picker [role="status"]:not(:empty),
+.skill-dialog [role="status"]:not(:empty) {
+  color: var(--text-secondary);
+  padding: 10px;
+}
+
+.skill-option {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.skill-option:hover,
+.skill-option:focus-visible,
+.skill-option[aria-selected="true"] {
+  background: var(--bg-color);
+  outline: 1px solid var(--border-color);
+  outline-offset: -1px;
+}
+
+.skill-option code,
+.skill-option span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.skill-option span {
+  flex-basis: 100%;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.skill-dialog-help {
+  margin: 0 8px 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.composer-skills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+  padding: 8px 12px 0;
+}
+
+.composer-skills[hidden] {
+  display: none;
+}
+
+.composer-skill-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding-inline-start: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  color: var(--text-color);
+  background: var(--bg-color);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.composer-skill-chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-skill-chip button {
+  flex: none;
+  min-width: 32px;
+  min-height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.composer-skill-chip button:hover,
+.composer-skill-chip button:focus-visible {
+  background: var(--bg-card);
+}
+
+.message-skill-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.message-skill-chip {
+  max-width: 100%;
+  padding: 3px 8px;
+  border: 1px solid rgb(255 255 255 / 28%);
+  border-radius: 7px;
+  background: rgb(255 255 255 / 13%);
+  font-size: 0.8em;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.message-skill-body {
+  margin-top: 5px;
+}

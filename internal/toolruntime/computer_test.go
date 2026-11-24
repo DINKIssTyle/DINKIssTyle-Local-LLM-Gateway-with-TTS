@@ -11,7 +11,7 @@ import (
 type testComputerBackend struct{ calls int }
 
 func (*testComputerBackend) Available() bool { return true }
-func (b *testComputerBackend) Observe(context.Context) (computeruse.Screen, []byte, error) {
+func (b *testComputerBackend) Observe(context.Context, uint32) (computeruse.Screen, []byte, error) {
 	b.calls++
 	return computeruse.Screen{Width: 100, Height: 100, DesktopWidth: 200, DesktopHeight: 200}, []byte("png"), nil
 }

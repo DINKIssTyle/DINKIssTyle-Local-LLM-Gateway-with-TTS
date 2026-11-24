@@ -22,8 +22,9 @@ func evenHubCORS(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// Only opt the read into Even Hub CORS; preserve normal config writes.
-		if r.URL.Path == "/api/config" && r.Method != http.MethodGet &&
+		// Only opt reads into Even Hub CORS on these endpoints.
+		readOnly := r.URL.Path == "/api/config" || strings.HasPrefix(r.URL.Path, "/api/computer/screenshots/")
+		if readOnly && r.Method != http.MethodGet &&
 			!(r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") == http.MethodGet) {
 			next.ServeHTTP(w, r)
 			return
@@ -58,6 +59,10 @@ func evenHubCORS(next http.Handler) http.Handler {
 }
 
 func evenHubAPIPath(path string) bool {
+	if name, ok := strings.CutPrefix(path, "/api/computer/screenshots/"); ok {
+		id, png := strings.CutSuffix(name, ".png")
+		return png && isSafeScreenshotID(id)
+	}
 	switch path {
 	case "/api/glasses/hint-events", "/api/apple/status", "/api/stt/apple/prepare", "/api/stt/apple/stop", "/api/translate/apple", "/api/translate/apple/prepare", "/api/stt/chrome/stop", "/api/stt/chrome/prepare", "/api/translate/chrome", "/api/translate/chrome/prepare", "/api/glasses/hint-decision", "/api/config", "/api/login", "/api/auth/check", "/api/health", "/api/models", "/api/models/ensure",
 		"/api/stt/transcribe", "/api/stt/preview", "/api/stt/warmup", "/api/stt/status", "/api/stt/transcripts", "/api/chat", "/api/tts":
