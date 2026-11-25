@@ -142,6 +142,10 @@ export function GetModelsRootDir() {
   return window['go']['core']['App']['GetModelsRootDir']();
 }
 
+export function GetOpenClawModels(arg1) {
+  return window['go']['core']['App']['GetOpenClawModels'](arg1);
+}
+
 export function GetServerStatus() {
   return window['go']['core']['App']['GetServerStatus']();
 }
@@ -198,6 +202,10 @@ export function GetUserMemoryRetentionConfig(arg1) {
   return window['go']['core']['App']['GetUserMemoryRetentionConfig'](arg1);
 }
 
+export function GetUserOpenClawSettings(arg1) {
+  return window['go']['core']['App']['GetUserOpenClawSettings'](arg1);
+}
+
 export function GetUsers() {
   return window['go']['core']['App']['GetUsers']();
 }
@@ -220,6 +228,10 @@ export function HideToTray() {
 
 export function IsServerRunning() {
   return window['go']['core']['App']['IsServerRunning']();
+}
+
+export function IssueUserOpenClawToken(arg1) {
+  return window['go']['core']['App']['IssueUserOpenClawToken'](arg1);
 }
 
 export function LoadModel(arg1) {
@@ -364,6 +376,10 @@ export function SetUserLLMAPIKeys(arg1, arg2) {
 
 export function SetUserMemoryRetentionConfig(arg1, arg2) {
   return window['go']['core']['App']['SetUserMemoryRetentionConfig'](arg1, arg2);
+}
+
+export function SetUserOpenClawSettings(arg1, arg2, arg3, arg4) {
+  return window['go']['core']['App']['SetUserOpenClawSettings'](arg1, arg2, arg3, arg4);
 }
 
 export function Show() {

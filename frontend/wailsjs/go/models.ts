@@ -220,6 +220,26 @@ export namespace core {
 	        this.progressText = source["progressText"];
 	    }
 	}
+	export class OpenClawStatus {
+	    enabled: boolean;
+	    model: string;
+	    has_token: boolean;
+	    endpoint: string;
+	    custom_endpoint: string;
+
+	    static createFrom(source: any = {}) {
+	        return new OpenClawStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.model = source["model"];
+	        this.has_token = source["has_token"];
+	        this.endpoint = source["endpoint"];
+	        this.custom_endpoint = source["custom_endpoint"];
+	    }
+	}
 	export class ServerTTSConfig {
 	    engine: string;
 	    voiceStyle: string;

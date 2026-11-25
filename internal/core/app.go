@@ -1056,6 +1056,30 @@ func (l *chanListener) Addr() net.Addr {
 	return l.addr
 }
 
+// httpCompatibilityHandler serves authenticated APIs over the compatibility
+// listener and redirects web pages to the primary HTTPS port.
+func httpCompatibilityHandler(next http.Handler, httpsPort string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Allow API endpoints to work on HTTP for local/web clients.
+		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/v1/chat/completions" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		host := r.Host
+		if h, _, err := net.SplitHostPort(r.Host); err == nil {
+			host = h
+		}
+		// We redirect to the SAME port but with https://
+		target := fmt.Sprintf("https://%s:%s%s", host, httpsPort, r.URL.Path)
+		if len(r.URL.RawQuery) > 0 {
+			target += "?" + r.URL.RawQuery
+		}
+		log.Printf("[REDIRECT] HTTP -> HTTPS redirect for %s", r.URL.Path)
+		http.Redirect(w, r, target, http.StatusMovedPermanently)
+	})
+}
+
 // StartServer starts the HTTP server on the specified port
 func (a *App) StartServer(port string) error {
 	a.serverMux.Lock()
@@ -1088,26 +1112,7 @@ func (a *App) StartServer(port string) error {
 	portInt, _ := strconv.Atoi(port)
 	httpPort := strconv.Itoa(portInt + 1)
 
-	// Redirect Handler: Redirects HTTP to HTTPS on the SAME port
-	redirectHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Allow API endpoints to work on HTTP for local/web clients.
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			loggingMux.ServeHTTP(w, r)
-			return
-		}
-
-		host := r.Host
-		if h, _, err := net.SplitHostPort(r.Host); err == nil {
-			host = h
-		}
-		// We redirect to the SAME port but with https://
-		target := fmt.Sprintf("https://%s:%s%s", host, port, r.URL.Path)
-		if len(r.URL.RawQuery) > 0 {
-			target += "?" + r.URL.RawQuery
-		}
-		log.Printf("[REDIRECT] HTTP -> HTTPS redirect for %s", r.URL.Path)
-		http.Redirect(w, r, target, http.StatusMovedPermanently)
-	})
+	redirectHandler := httpCompatibilityHandler(loggingMux, port)
 
 	a.httpServer = &http.Server{
 		Addr:    ":" + port, // Same port as HTTPS

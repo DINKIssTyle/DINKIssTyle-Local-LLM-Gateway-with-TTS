@@ -69,6 +69,7 @@ all_funcs.txt
 !internal/core/model_ensure_test.go
 
 !internal/core/llm_connections_test.go
+!internal/core/openclaw_test.go
 
 !internal/evenrealities/*_test.go
 !internal/core/evenrealities_request_test.go

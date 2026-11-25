@@ -732,6 +732,104 @@
         .model-memory-settings__status { margin: 6px 0 0; font-size: 11px; font-weight: 400; color: var(--text-secondary); }
         .model-memory-settings__status:empty { display: none; }
 
+        .openclaw-settings {
+            margin-top: 16px;
+            padding-top: 18px;
+            border-top: 1px solid var(--border-color);
+            display: grid;
+            gap: 12px;
+        }
+
+        .openclaw-settings__heading {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            color: var(--text-color);
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .openclaw-settings__toggle {
+            appearance: none;
+            -webkit-appearance: none;
+            position: relative;
+            flex: none;
+            width: 34px;
+            height: 20px;
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            background: var(--bg-color);
+            cursor: pointer;
+        }
+
+        .openclaw-settings__toggle::after {
+            content: '';
+            position: absolute;
+            top: 3px;
+            left: 3px;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: var(--text-secondary);
+        }
+
+        .openclaw-settings__toggle:checked { background: var(--accent-color); border-color: var(--accent-color); }
+        .openclaw-settings__toggle:checked::after { left: 17px; background: var(--bg-color); }
+        .openclaw-settings__toggle:disabled { opacity: 0.5; cursor: not-allowed; }
+        .openclaw-settings__toggle:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 3px; }
+
+        .openclaw-settings__model-label { display: block; margin-bottom: 6px; font-size: 12px; }
+        .openclaw-settings__model-row { display: flex; align-items: center; gap: 8px; }
+        .openclaw-settings__select-wrap { position: relative; flex: 1; min-width: 0; }
+        .openclaw-settings__select-wrap::after {
+            content: '';
+            position: absolute;
+            right: 14px;
+            top: 14px;
+            width: 6px;
+            height: 6px;
+            border-right: 1.5px solid var(--text-secondary);
+            border-bottom: 1.5px solid var(--text-secondary);
+            transform: rotate(45deg);
+            pointer-events: none;
+        }
+
+        .openclaw-settings select {
+            appearance: none;
+            -webkit-appearance: none;
+            color-scheme: dark;
+            display: block;
+            width: 100%;
+            min-width: 0;
+            height: 36px;
+            padding: 0 34px 0 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--bg-color);
+            color: var(--text-color);
+            font: inherit;
+            font-size: 13px;
+            text-overflow: ellipsis;
+            cursor: pointer;
+        }
+
+        .openclaw-settings select:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 2px; }
+        .openclaw-settings select:disabled { opacity: 0.5; cursor: wait; }
+        .openclaw-settings__refresh { flex: none; width: 36px; height: 36px; padding: 0; justify-content: center; border-radius: 8px; }
+        .openclaw-settings__help { font-size: 12px; line-height: 1.65; font-weight: 400; overflow-wrap: anywhere; }
+        .openclaw-settings__endpoint { padding: 10px 12px; border-radius: 8px; background: var(--bg-color); }
+        .openclaw-settings__error { color: var(--danger-color); font-size: 12px; line-height: 1.6; }
+        .openclaw-settings__error:empty { display: none; }
+        .openclaw-account { margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border-color); }
+        .openclaw-account .openclaw-settings { margin-top: 0; padding-top: 0; border-top: 0; }
+        .openclaw-settings__field { width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color); color: var(--text-color); font: inherit; font-size: 12px; }
+        .openclaw-settings__field:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 2px; }
+        .openclaw-settings__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+        .openclaw-settings__status { color: var(--text-secondary); font-size: 12px; font-weight: 400; line-height: 1.6; }
+
+
         #model-manager-modal {
             z-index: 120;
         }
@@ -1305,6 +1403,7 @@
         }
     </style>
     <script src="llm-connection-ui.js?v=2.23.2"></script>
+    <script src="openclaw-ui.js"></script>
     <script src="google-integration-ui.js?v=3"></script>
 </head>
 
@@ -1708,9 +1807,11 @@
             <div class="modal-header"><div class="modal-title" id="additional-llm-title" data-i18n="llm.connections.title">추가 LLM 설정</div>
                 <button class="icon-btn" type="button" aria-label="닫기" data-i18n-aria-label="action.close" onclick="closeAdditionalLLMModal()"><span class="material-icons-round">close</span></button>
             </div>
-            <div class="modal-body" style="overflow-y:auto;min-height:0"><div id="server-llm-connections"></div></div>
+            <div class="modal-body" style="overflow-y:auto;min-height:0">
+                <div id="server-llm-connections"></div>
+            </div>
             <div class="modal-footer" style="display:flex;gap:8px;justify-content:space-between">
-                <button class="btn" style="background:var(--border-color)" type="button" onclick="closeAdditionalLLMModal()" data-i18n="action.close">닫기</button>
+                <button class="btn btn-secondary" type="button" onclick="closeAdditionalLLMModal()" data-i18n="action.close">닫기</button>
                 <button class="btn btn-primary" type="button" onclick="document.getElementById('server-llm-connections').addConnection?.()"><span class="material-icons-round">add</span><span data-i18n="llm.connections.add">LLM 추가</span></button>
             </div>
         </div>
@@ -1915,6 +2016,7 @@
                     <div id="edit-user-llm-keys" style="margin-top:16px;display:grid;gap:12px"></div>
                 </div>
 
+                <div id="edit-user-openclaw" class="openclaw-account"></div>
                 <div id="edit-user-google" style="margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--border-color)"></div>
 
                 <!-- Memory Retention Section -->
@@ -4065,14 +4167,22 @@
         function closeAdditionalLLMModal(){closeAdditionalLLMEditor();document.getElementById('additional-llm-modal').style.display='none';}
         document.addEventListener('keydown',event=>{if(event.key==='Escape'){if(document.getElementById('additional-llm-edit-modal').style.display==='flex')closeAdditionalLLMEditor();else if(document.getElementById('additional-llm-modal').style.display==='flex')closeAdditionalLLMModal();}});
 
+        let editUserLoadGeneration = 0;
         async function openEditUserModal(userId) {
             if (typeof window.go === 'undefined') return;
+            const generation = ++editUserLoadGeneration;
+            document.getElementById('edit-user-openclaw').disposeOpenClaw?.();
 
             try {
                 // Load user details
                 const userDetail = await window.go.core.App.GetUserDetail(userId);
+                if (generation !== editUserLoadGeneration) return;
 
                 document.getElementById('edit-user-id').value = userId;
+                window.DKSTOpenClawUI?.mount(document.getElementById('edit-user-openclaw'), {
+                    userId, api: window.go.core.App,
+                    confirmRegenerate: () => new Promise(resolve => showConfirm(currentServerLanguage === 'ko' ? '토큰을 재발급하면 기존 Even 연결의 토큰은 무효화됩니다. 재발급할까요?' : 'Regenerating invalidates the token currently used by Even. Continue?', resolve))
+                });
                 window.DKSTGoogleUI?.mount(document.getElementById('edit-user-google'), {userId, api:window.go.core.App, language:()=>currentServerLanguage});
                 document.getElementById('edit-user-id-display').textContent = userId;
 
@@ -4086,6 +4196,7 @@
 
                 // Load API Key (full token)
                 const apiKey = await window.go.core.App.GetUserApiToken(userId);
+                if (generation !== editUserLoadGeneration) return;
                 document.getElementById('edit-user-api-key').value = apiKey || '';
 
                 window.DKSTConnectionUI?.mountKeys(document.getElementById('edit-user-llm-keys'),{
@@ -4094,6 +4205,7 @@
                     save:keys=>window.go.core.App.SetUserLLMAPIKeys(userId,keys)
                 });
                 const retention = await window.go.core.App.GetUserMemoryRetentionConfig(userId);
+                if (generation !== editUserLoadGeneration) return;
                 document.getElementById('edit-retention-core-days').value = String(retention?.coreDays ?? 0);
                 document.getElementById('edit-retention-working-days').value = String(retention?.workingDays ?? 0);
                 document.getElementById('edit-retention-ephemeral-days').value = String(retention?.ephemeralDays ?? 14);
@@ -4102,6 +4214,7 @@
                 let disabledTools = [];
                 try {
                     disabledTools = await window.go.core.App.GetUserDisabledTools(userId) || [];
+                    if (generation !== editUserLoadGeneration) return;
                 } catch (e) {
                     console.warn('Failed to load disabled tools:', e);
                 }
@@ -4111,7 +4224,9 @@
                 let disallowedDirs = [];
                 try {
                     disallowedCmds = await window.go.core.App.GetUserDisallowedCommands(userId) || [];
+                    if (generation !== editUserLoadGeneration) return;
                     disallowedDirs = await window.go.core.App.GetUserDisallowedDirectories(userId) || [];
+                    if (generation !== editUserLoadGeneration) return;
                 } catch (e) {
                     console.warn('Failed to load disallowed lists:', e);
                 }
@@ -4196,13 +4311,16 @@
 
                 document.getElementById('edit-user-modal').style.display = 'flex';
             } catch (e) {
+                if (generation !== editUserLoadGeneration) return;
                 console.error('Failed to load user details:', e);
                 showAlert(t('error.loadUserDetails', { error: e.message }));
             }
         }
 
         function closeEditUserModal() {
+            editUserLoadGeneration++;
             document.getElementById('edit-user-google').disposeGoogle?.();
+            document.getElementById('edit-user-openclaw').disposeOpenClaw?.();
             document.getElementById('edit-user-modal').style.display = 'none';
         }
 
@@ -4277,6 +4395,7 @@
 
             try {
                 await document.getElementById('edit-user-google').saveGoogleSettings?.();
+                await document.getElementById('edit-user-openclaw').saveOpenClawSettings?.();
                 // Update role if changed
                 if (newRole !== editUserOriginalRole) {
                     await window.go.core.App.UpdateUserRole(userId, newRole);
@@ -4330,7 +4449,7 @@
                 .replace(/'/g, '&#39;');
         }
 
-        new MutationObserver(()=>document.getElementById('edit-user-google').refreshGoogleLanguage?.()).observe(document.documentElement,{attributes:true,attributeFilter:['lang']});
+        new MutationObserver(()=>{document.getElementById('edit-user-google').refreshGoogleLanguage?.();document.getElementById('edit-user-openclaw').refreshOpenClawLanguage?.();}).observe(document.documentElement,{attributes:true,attributeFilter:['lang']});
         init();
     </script>
 </body>

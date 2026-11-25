@@ -4451,6 +4451,20 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	}
 	defer r.Body.Close()
 
+	if external, _ := r.Context().Value(openClawAuthKey{}).(bool); external {
+		var envelope struct {
+			Model string `json:"model"`
+		}
+		if err := json.Unmarshal(body, &envelope); err != nil {
+			http.Error(w, "Invalid JSON request", http.StatusBadRequest)
+			return
+		}
+		if envelope.Model != "openclaw" {
+			http.Error(w, "This token only permits the account's openclaw model", http.StatusForbidden)
+			return
+		}
+	}
+
 	body, structuredGlassesRequest, glassesTurn, err := evenrealities.AssembleRequestWithChatTurn(body)
 	if errors.Is(err, evenrealities.ErrUnresolvedTask) {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
@@ -4653,6 +4667,30 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	var routedBody map[string]any
 	_ = json.Unmarshal(body, &routedBody)
 	selectedModel, _ := routedBody["model"].(string)
+	selectedModel, aliasApplied, aliasErr := authMgr.resolveOpenClawModel(selectedModel, userID)
+	if aliasErr != nil {
+		http.Error(w, aliasErr.Error(), http.StatusBadRequest)
+		return
+	}
+	if aliasApplied {
+		// External OpenAI clients do not supply the web UI's turn identifier.
+		// Session snapshots and retrieval history require a distinct ID per turn.
+		if clientTurnID == "" {
+			clientTurnID = "openclaw-" + rand.Text()
+		}
+		if stream, _ := routedBody["stream"].(bool); !stream {
+			originalWriter := w
+			buffered := &openClawJSONResponse{header: make(http.Header)}
+			w = buffered
+			defer buffered.finish(originalWriter)
+		}
+		routedBody["stream"] = true
+		routedBody["model"] = selectedModel
+		body, _ = json.Marshal(routedBody)
+		// Even sends Chat Completions messages, including on Native defaults.
+		llmMode = "standard"
+		contextStrategy = normalizeContextStrategyForMode(llmMode, contextStrategy)
+	}
 	connectionID, rawModel, routeErr := splitRoutedModel(selectedModel)
 	if routeErr != nil {
 		http.Error(w, routeErr.Error(), 400)
@@ -4703,7 +4741,7 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		contextStrategy = normalizeContextStrategyForMode(llmMode, contextStrategy)
 	}
 	gemmaHasRoleHistory := false
-	if connectionID != "" || structuredGlassesRequest || gemma4Chat {
+	if connectionID != "" || aliasApplied || structuredGlassesRequest || gemma4Chat {
 		if err := normalizeConnectionPayload(routedBody, llmMode); err != nil {
 			http.Error(w, err.Error(), 400)
 			return

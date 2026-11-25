@@ -76,6 +76,8 @@ export function GetModelIdleMinutes():Promise<number>;
 
 export function GetModelsRootDir():Promise<string>;
 
+export function GetOpenClawModels(arg1:string):Promise<Array<Record<string, string>>>;
+
 export function GetServerStatus():Promise<Record<string, any>>;
 
 export function GetServerUILanguage():Promise<string>;
@@ -104,6 +106,8 @@ export function GetUserLLMConnections(arg1:string):Promise<Array<core.LLMConnect
 
 export function GetUserMemoryRetentionConfig(arg1:string):Promise<mcp.MemoryRetentionConfig>;
 
+export function GetUserOpenClawSettings(arg1:string):Promise<core.OpenClawStatus>;
+
 export function GetUsers():Promise<Array<Record<string, string>>>;
 
 export function GetVoiceStyles():Promise<Array<string>>;
@@ -115,6 +119,8 @@ export function GetWindowDimensions():Promise<Record<string, number>>;
 export function HideToTray():Promise<void>;
 
 export function IsServerRunning():Promise<boolean>;
+
+export function IssueUserOpenClawToken(arg1:string):Promise<string>;
 
 export function LoadModel(arg1:string):Promise<void>;
 
@@ -187,6 +193,8 @@ export function SetUserGoogleSettings(arg1:string,arg2:googleintegration.Setting
 export function SetUserLLMAPIKeys(arg1:string,arg2:Record<string, string>):Promise<void>;
 
 export function SetUserMemoryRetentionConfig(arg1:string,arg2:mcp.MemoryRetentionConfig):Promise<void>;
+
+export function SetUserOpenClawSettings(arg1:string,arg2:boolean,arg3:string,arg4:string):Promise<void>;
 
 export function Show():Promise<void>;
 

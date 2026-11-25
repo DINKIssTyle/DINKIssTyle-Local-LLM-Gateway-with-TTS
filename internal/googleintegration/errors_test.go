@@ -42,3 +42,16 @@ func TestGmail403RetainsStructuredReasonThroughTool(t *testing.T) {
 		t.Fatalf("actionable Google error lost: %v", err)
 	}
 }
+
+func TestGoogleTokenErrorsExplainRecoveryWithoutLeakingCredentials(t *testing.T) {
+	for _, code := range []string{"invalid_grant", "invalid_client", "unauthorized_client", "invalid_scope", "SECRET_UNKNOWN"} {
+		body, _ := json.Marshal(map[string]string{"error": code, "error_description": "SECRET_TOKEN_AND_CLIENT"})
+		err := googleTokenError(400, strings.NewReader(string(body)))
+		if strings.Contains(err.Error(), "SECRET") || !strings.Contains(err.Error(), "400") {
+			t.Fatal(err)
+		}
+		if code != "SECRET_UNKNOWN" && !strings.Contains(err.Error(), "["+code+"]") {
+			t.Fatal("OAuth reason lost", err)
+		}
+	}
+}

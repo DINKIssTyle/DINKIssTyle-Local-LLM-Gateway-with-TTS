@@ -6,11 +6,13 @@
 package core
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -27,6 +29,7 @@ import (
 
 // UserSettings holds user-specific overrides
 type UserSettings struct {
+	OpenClaw        OpenClawSettings  `json:"openclaw,omitempty"`
 	LLMAPIKeys      map[string]string `json:"llm_api_keys,omitempty"`
 	ApiEndpoint     *string           `json:"api_endpoint,omitempty"`
 	ApiToken        *string           `json:"api_token,omitempty"`
@@ -744,14 +747,39 @@ func extractSessionTokenFromRequest(r *http.Request) string {
 func AuthMiddleware(am *AuthManager, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token := extractSessionTokenFromRequest(r)
+		// Explicit external credentials select the account even if a WebView
+		// happens to carry another account's browser session cookie.
+		if header := strings.TrimSpace(r.Header.Get("Authorization")); len(header) >= 7 && strings.EqualFold(header[:7], "Bearer ") {
+			if bearer := strings.TrimSpace(header[7:]); strings.HasPrefix(bearer, openClawTokenPrefix) {
+				token = bearer
+			}
+		}
 		if token == "" {
+			log.Printf("[Auth] Rejected %s %s from %s: missing token", r.Method, r.URL.Path, r.RemoteAddr)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 
-		user, valid := am.ValidateSession(token)
+		var user *User
+		var valid bool
+		if strings.HasPrefix(token, openClawTokenPrefix) {
+			if r.Method == http.MethodPost && (r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/api/v1/chat") {
+				user, valid = am.validateOpenClawToken(token)
+				if valid {
+					log.Printf("[OpenClaw] Authenticated account=%q from %s", user.ID, r.RemoteAddr)
+					r = r.WithContext(context.WithValue(r.Context(), openClawAuthKey{}, true))
+				}
+			}
+		} else {
+			user, valid = am.ValidateSession(token)
+		}
 		if !valid {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			log.Printf("[Auth] Rejected %s %s from %s: invalid or unavailable account token", r.Method, r.URL.Path, r.RemoteAddr)
+			message := "Unauthorized"
+			if strings.HasPrefix(token, openClawTokenPrefix) {
+				message = "Unauthorized: invalid or disabled account openclaw token"
+			}
+			http.Error(w, message, http.StatusUnauthorized)
 			return
 		}
 

@@ -62,3 +62,22 @@ func googleAPIError(service string, status int, body io.Reader) error {
 	}
 	return fmt.Errorf("Google %s returned HTTP %d: %s", service, status, hint)
 }
+
+// OAuth token errors use a different envelope from service API errors. Preserve
+// only recognized error codes and our guidance; descriptions may contain secrets.
+func googleTokenError(status int, body io.Reader) error {
+	var payload struct {
+		Error string `json:"error"`
+	}
+	_ = json.NewDecoder(io.LimitReader(body, 64<<10)).Decode(&payload)
+	guidance := map[string]string{
+		"invalid_grant":       "Google 인증을 갱신할 수 없습니다. 계정 관리에서 Google 연결 / 권한 업데이트를 다시 진행하세요. Reconnect Google in account management.",
+		"invalid_client":      "Google OAuth 클라이언트 인증이 거부되었습니다. 계정 설정의 Desktop OAuth Client ID와 Client Secret이 같은 클라이언트의 값인지 확인하세요. Check the OAuth client ID and secret.",
+		"unauthorized_client": "이 OAuth 클라이언트에서 요청한 인증 방식이 허용되지 않습니다. Desktop OAuth 클라이언트 설정을 확인하세요. Check the Desktop OAuth client configuration.",
+		"invalid_scope":       "Google 요청 권한이 올바르지 않습니다. 사용할 서비스를 선택하고 Google 연결 / 권한 업데이트를 다시 진행하세요. Reconnect with the selected service permissions.",
+	}
+	if hint, known := guidance[payload.Error]; known {
+		return fmt.Errorf("Google authorization failed (HTTP %d) [%s]: %s", status, payload.Error, hint)
+	}
+	return fmt.Errorf("Google authorization failed (HTTP %d); reconnect or check the OAuth client configuration", status)
+}

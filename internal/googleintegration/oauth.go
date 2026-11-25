@@ -121,7 +121,7 @@ func (m *Manager) token(ctx context.Context, values url.Values) (tokenResponse, 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return tokenResponse{}, fmt.Errorf("Google authorization failed (HTTP %d); reconnect or check the OAuth client configuration", resp.StatusCode)
+		return tokenResponse{}, googleTokenError(resp.StatusCode, resp.Body)
 	}
 	var t tokenResponse
 	if err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&t); err != nil {
