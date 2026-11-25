@@ -1664,6 +1664,16 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.match(queue.state().title,/가상 국내 관객 수 집계/);
  assert.equal(queue.state().answer,rankDate+' '+rankResult);
  assert.equal(queue.hintGate.currentTopic,'영화','verified source headline must not become the next conversation topic');
+ await queue.audit.flush();for(let i=0;i<20;i++)await tick();
+ const provenanceEvent=requests.filter(r=>r.url.endsWith('/api/glasses/hint-events') && r.opts.body).flatMap(r=>JSON.parse(r.opts.body).events).find(e=>e.reason==='hint_provenance' && e.segmentId==='context-movie-card');
+ assert.ok(provenanceEvent,'a displayed hint must persist its trigger and selected source');
+ const provenance=JSON.parse(provenanceEvent.text);
+ assert.equal(provenance.trigger.segmentId,'context-movie-card');
+ assert.equal(provenance.sources[0].url,rankingProof.records[0].url);
+ assert.deepEqual(provenance.sources[0].sentences,[1,2]);
+ assert.match(provenance.quote,/가상 작품 A/);
+ assert.ok(provenanceEvent.jobId);
+
  await queue.stopVoiceRecording(false);
  element('model-hint-decision').value='__jev__';await element('model-hint-decision').handlers.change();
  await queue.stopVoiceRecording(false);

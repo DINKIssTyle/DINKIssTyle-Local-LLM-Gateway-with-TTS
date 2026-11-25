@@ -20,3 +20,43 @@ history.record({jobId:'sdk',stage:'device_error',reason:'sdk_transport_error',te
 await history.flush();while(history.active)await new Promise(r=>setImmediate(r));
 assert.ok(sent.some(x=>x.body.events.some(e=>e.stage==='generation' && e.text.includes('synthetic-role'))));
 assert.ok(sent.some(x=>x.body.events.some(e=>e.stage==='device_error' && e.text.includes('timeout'))));
+
+const {hintProvenance,formatHintProvenance,hintReasonGroup,hintReasonGroupLabel,formatHintHistoryEvent}=await import('./hint-audit.mjs');
+const job={id:'segment-current',focusText:'배터리 수명',evidenceEntries:[{id:'segment-prior',text:'배터리가 추위에 약하다는데'}]};
+const plan={question:'저온에서 배터리 성능이 낮아지는 이유',source:'web'};
+const verified={source:'web',fact:'저온에서는 전해질의 이온 이동이 느려진다.',reference:{title:'배터리 성능',url:'https://example.com/battery?token=synthetic-secret#private'},selection:{record:2,sentences:[1,3]}};
+const trace=hintProvenance(job,plan,verified),decoded=JSON.parse(trace);
+assert.equal(decoded.trigger.segmentId,'segment-current');
+assert.equal(decoded.transcripts[0].segmentId,'segment-prior');
+assert.equal(decoded.sources.length,1);
+assert.deepEqual(decoded.sources[0],{title:'배터리 성능',url:'https://example.com/battery',record:2,sentences:[1,3]});
+assert.ok(!trace.includes('synthetic-secret'));assert.ok(!trace.includes('#private'));
+const rendered=formatHintProvenance(trace);
+assert.match(rendered,/발생 계기 \(사실 근거 아님\): 배터리 수명/);
+assert.match(rendered,/외부 출처: 배터리 성능/);assert.match(rendered,/자료 2 \/ 문장 1, 3/);
+assert.match(rendered,/검증된 원문/);
+assert.match(formatHintProvenance(hintProvenance(job,{source:'internal'},{source:'internal',fact:'stable fact'})),/모델 내부 지식 · 외부 출처 검증 없음/);
+assert.match(formatHintProvenance(hintProvenance(job,{source:'memory'},{source:'memory',fact:'stored fact',reference:{title:'saved note'}})),/저장된 개인 기록/);
+for(const badURL of ['file:///private/secret','javascript:alert(1)','https://user:password@example.com/path'])assert.equal(JSON.parse(hintProvenance(job,plan,{...verified,reference:{url:badURL}})).sources[0].url,'');
+const escaped='\u0001"\\한😀'.repeat(1000);
+const bounded=hintProvenance({id:escaped,focusText:escaped,evidenceEntries:[{id:escaped,text:escaped},{id:escaped,text:escaped}]},{question:escaped},{...verified,fact:escaped,reference:{title:escaped}});
+assert.ok(Array.from(bounded).length<=1900);assert.ok(JSON.parse(bounded));
+assert.match(formatHintProvenance('{invalid'),/형식 오류/);
+assert.match(formatHintProvenance('null'),/형식 오류/);
+for(const [reason,group] of Object.entries({unresolved_hint_subject:'insufficient_context',no_additional_information:'no_incremental_value',transcript_echo:'no_incremental_value',unsupported_quote_or_name:'insufficient_evidence',judge_timeout:'error',writer_error:'error',missing_proof:'error',invalid_source_selection:'error',sdk_transport_error:'error',topic_changed:'lifecycle',memory_not_requested:'policy',llm_skip:'other'}))assert.equal(hintReasonGroup({stage:'skipped',reason}),group,reason);
+assert.equal(hintReasonGroup({stage:'validated',reason:'source_validated'}),'');
+assert.equal(hintReasonGroup({stage:'skipped',reason:'future_reason'}),'other');
+assert.equal(hintReasonGroupLabel('insufficient_evidence'),'근거 부족');
+const oldEvent=formatHintHistoryEvent({createdAt:'2026-01-01T00:00:00Z',stage:'skipped',reason:'judge_timeout',jobId:'old-job'});
+assert.match(oldEvent,/처리 오류/);assert.match(oldEvent,/judge_timeout/);assert.match(oldEvent,/old-job/);assert.ok(!oldEvent.includes('근거 부족'));
+const displayed=formatHintHistoryEvent({occurredAt:'2026-01-01T00:00:00Z',stage:'decision_response',reason:'hint_provenance',text:trace,jobId:'job-trace'});
+assert.match(displayed,/job-trace/);assert.match(displayed,/전사 구간: segment-current/);assert.match(displayed,/https:\/\/example.com\/battery/);
+// Provenance uses an existing body-bearing stage and survives audit transport.
+history.record({jobId:'job-trace',segmentId:job.id,stage:'decision_response',reason:'hint_provenance',text:bounded});
+await history.flush();while(history.active)await new Promise(r=>setImmediate(r));
+const stored=sent.flatMap(x=>x.body.events).find(e=>e.reason==='hint_provenance');
+assert.equal(stored.segmentId,job.id);assert.deepEqual(JSON.parse(stored.text),JSON.parse(bounded));
+console.log('PASS: trigger/source separation, selected-source trace, safe URLs, bounded valid JSON, reason categories and legacy history rendering');
+
+const earlier=JSON.parse(hintProvenance({...job,evidenceEntries:[{id:'earlier-segment',text:'배터리 수명에 대해 이야기'}]},plan,verified));
+assert.equal(earlier.trigger.segmentId,'earlier-segment','anchor in prior speech must refer to that segment, not the latest speech');
