@@ -219,7 +219,7 @@ func appendScreenshotMarkdown(answer string, shots []attachedScreenshot) string 
 	return strings.Join(parts, "\n\n")
 }
 
-var simpleFullScreenshot = regexp.MustCompile(`(?i)^(?:(?:\$(?:builtin:)?computer-use|컴퓨터(?:\s*유즈(?:\s*스킬로)?)?)\s+)?(?:(?:현재\s*|전체\s*)?화면(?:을)?\s*(?:찍어서|캡처해서|캡처해(?:서)?)\s*(?:보내|첨부해)\s*(?:줘|주세요)?|(?:take|attach|send)(?: me)? (?:a |the )?(?:full[- ]screen )?screenshot(?: of (?:the |my )?screen)?)[.!?]*$`)
+var simpleFullScreenshot = regexp.MustCompile(`(?i)^(?:(?:\$(?:builtin:)?computer-use|컴퓨터(?:\s*유즈(?:\s*스킬로)?)?)\s+)?(?:(?:(?:현재|전체|지금)\s*)?(?:화면(?:의|을)?\s*)?(?:스크린샷(?:을)?\s*)?(?:찍어(?:서)?|캡처해(?:서)?|캡처)\s*(?:보내|첨부해|줘|주세요)(?:\s*(?:줘|주세요))?|(?:(?:현재|전체|지금)\s*)?(?:화면\s*)?스크린샷(?:을)?\s*(?:보내|첨부해)(?:\s*(?:줘|주세요))?|(?:take|attach|send)(?: me)? (?:a |the )?(?:full[- ]screen )?screenshot(?: of (?:the |my )?screen)?)[.!?]*$`)
 
 func normalizeScreenshotRequest(question string) string {
 	return strings.ReplaceAll(strings.TrimSpace(question), "캡쳐", "캡처")

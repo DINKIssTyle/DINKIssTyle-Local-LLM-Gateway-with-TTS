@@ -258,7 +258,7 @@ func (m desktopTaskModel) route(ctx context.Context, question, history string) b
 	return m.routeIntent(ctx, question, history).Mode == "desktop"
 }
 
-func desktopReviewSchema(tools []promptkit.ToolDefinition, task chatharness.DesktopTask, receipts []chatharness.DesktopReceipt) map[string]any {
+func desktopReviewSchema(tools []promptkit.ToolDefinition, task chatharness.DesktopTask, receipts []chatharness.DesktopReceipt, requireScreenshot bool) map[string]any {
 	ids := []int{}
 	for i := range task.Steps {
 		ids = append(ids, i+1)
@@ -369,7 +369,7 @@ func desktopReviewSchema(tools []promptkit.ToolDefinition, task chatharness.Desk
 	if len(receipts) > 0 {
 		variants = append(variants, variant("blocked", stepFields, "", nil))
 	}
-	if allProof && (canComplete || (task.Kind == "list_apps" && appList)) {
+	if allProof && !requireScreenshot && (canComplete || (task.Kind == "list_apps" && appList)) {
 		variants = append(variants, variant("completed", completedFields, "", nil))
 	}
 	return taskObject(map[string]any{"decision": map[string]any{"anyOf": variants}})
@@ -550,6 +550,23 @@ func runDesktopTask(ctx context.Context, m desktopTaskModel, question, history s
 	}
 	task.AllowTextInput = intent.TextInputEvidence != ""
 	task.TargetApplication = intent.TargetApplication
+	// Guard against small models misclassifying multi-step or skill-driven
+	// desktop work as list_apps, which would otherwise skip screen verification.
+	if task.Kind == "list_apps" {
+		hasScreenStep := false
+		for _, s := range task.Steps {
+			if s.RequiresScreen {
+				hasScreenStep = true
+				break
+			}
+		}
+		if len(task.Steps) > 1 || m.explicitSkill || needsAttachment || hasScreenStep || task.TargetApplication != "" {
+			task.Kind = "desktop_work"
+		}
+	}
+	if task.Kind != "list_apps" && len(task.Steps) > 0 {
+		task.Steps[len(task.Steps)-1].RequiresScreen = true
+	}
 	if err := task.Initialize(); err != nil {
 		return true, "유효한 작업 단계와 완료 조건을 만들지 못해 실행을 시작하지 못했습니다."
 	}
@@ -583,7 +600,7 @@ func runDesktopTask(ctx context.Context, m desktopTaskModel, question, history s
 		for _, tool := range legalTools {
 			legal[tool.Name] = true
 		}
-		err := m.structured(ctx, "review", prompt, desktopReviewSchema(legalTools, task, receipts), images, &envelope)
+		err := m.structured(ctx, "review", prompt, desktopReviewSchema(legalTools, task, receipts, needsAttachment && len(attachedScreenshots) == 0), images, &envelope)
 		decision := envelope.Decision
 		if err == nil && decision.Outcome == "continue" && decision.NextTool == "computer_switch_app" {
 			var input struct {
@@ -610,6 +627,9 @@ func runDesktopTask(ctx context.Context, m desktopTaskModel, question, history s
 		}
 		if err == nil && decision.Outcome == "completed" && needsAttachment && len(attachedScreenshots) == 0 {
 			err = fmt.Errorf("no stored image attachment: use computer_screenshot for the requested screen or crop before completing")
+		}
+		if err == nil && decision.Outcome == "completed" && containsUnfilledPlaceholder(decision.Answer, decision.Findings) {
+			err = fmt.Errorf("answer or findings contain unfilled template placeholders like [...]; report concrete values actually read from the screen")
 		}
 		if err == nil && decision.Outcome == "completed" {
 			decision.Answer = mergeFindingsIntoAnswer(decision.Answer, decision.Findings)
@@ -728,4 +748,35 @@ func mergeFindingsIntoAnswer(answer string, findings []string) string {
 		answer += "\n\n"
 	}
 	return answer + strings.Join(missing, "\n")
+}
+
+// Rejects unfilled bracketed template slots such as "[큰아들 이름]" or "[읽어낸 주소]"
+// while allowing Markdown links/images ("[label](url)") and numeric citations ("[1]").
+var unfilledPlaceholderPattern = regexp.MustCompile(`\[[^\]]{2,40}\]`)
+
+func containsUnfilledPlaceholder(answer string, findings []string) bool {
+	check := func(s string) bool {
+		for _, loc := range unfilledPlaceholderPattern.FindAllStringIndex(s, -1) {
+			// Skip Markdown links/images where ']' is immediately followed by '('.
+			if loc[1] < len(s) && s[loc[1]] == '(' {
+				continue
+			}
+			inner := strings.TrimSpace(s[loc[0]+1 : loc[1]-1])
+			for _, kw := range []string{"이름", "주소", "시각", "상태", "위치", "내용", "결과", "값", "읽어낸", "확인한", "placeholder", "address", "name", "status", "time", "value"} {
+				if strings.Contains(strings.ToLower(inner), kw) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	if check(answer) {
+		return true
+	}
+	for _, f := range findings {
+		if check(f) {
+			return true
+		}
+	}
+	return false
 }
