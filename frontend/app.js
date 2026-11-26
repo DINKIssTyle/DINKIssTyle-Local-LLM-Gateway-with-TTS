@@ -500,11 +500,15 @@ const USER_BUBBLE_THEMES = {
 };
 
 function rerenderAllMarkdownHosts() {
+    const shouldStayAtBottom = !!chatMessages && !AppState.chat.isGenerating && isChatNearBottom();
     document.querySelectorAll('.markdown-committed, #saved-turn-modal-response').forEach((host) => {
         const source = host?.dataset?.markdownSource;
         if (typeof source !== 'string') return;
         renderMarkdownIntoHost(host, source);
     });
+    if (shouldStayAtBottom) {
+        scrollToBottom(true, { immediate: true });
+    }
 }
 
 function syncHapticsPreference() {
@@ -2252,8 +2256,9 @@ function maintainInputFocusAfterTouch() {
 }
 
 function ensureChatRestoredToLatest() {
+    scrollToBottom(true, { immediate: true });
     runAfterViewportStabilizes(() => {
-        scrollToBottom(true);
+        scrollToBottom(true, { immediate: true });
     }, { maxWaitMs: 360, requiredStableFrames: 1 });
 }
 
@@ -5237,7 +5242,7 @@ function hydrateChatSessionEventsSnapshot(items, sessionSnapshot = null) {
         AppState.session.replay.currentTurnId = users[users.length - 1].turnId;
         AppState.session.replay.currentAssistantId = assistantByTurn.get(AppState.session.replay.currentTurnId) || '';
     }
-    scrollToBottom(isChatNearBottom());
+    scrollToBottom(true, { immediate: true });
     ensureChatRestoredToLatest();
     requestAnimationFrame(() => {
         reconcileVisibleAssistantActionBars();
@@ -5985,9 +5990,9 @@ function finishChatSessionRestore() {
             chatRestoreOverlay.hidden = true;
         }
         chatMessages?.classList.remove('is-session-hydrating');
-        scrollToBottom(true);
+        scrollToBottom(true, { immediate: true });
         requestAnimationFrame(() => {
-            scrollToBottom(true);
+            scrollToBottom(true, { immediate: true });
         });
         ensureChatRestoredToLatest();
     });
@@ -8767,9 +8772,9 @@ function jumpToLatestMessages() {
     return chatUIController.jumpToLatestMessages();
 }
 
-function scrollToBottom(force = false) {
+function scrollToBottom(force = false, options = {}) {
     if (!chatUIController) return;
-    return chatUIController.scrollToBottom(force);
+    return chatUIController.scrollToBottom(force, options);
 }
 
 function holdAutoScrollAtBottom(durationMs = 700) {

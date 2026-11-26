@@ -9,8 +9,8 @@
 package core
 
 import (
-	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -19,64 +19,36 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
 
-	"github.com/go-audio/audio"
-	"github.com/go-audio/wav"
 	"github.com/sjzar/go-lame"
 	ort "github.com/yalue/onnxruntime_go"
 	"golang.org/x/text/unicode/norm"
 )
 
-type memoryWriteSeeker struct {
-	buf []byte
-	pos int64
-}
-
-func (m *memoryWriteSeeker) Write(p []byte) (int, error) {
-	end := m.pos + int64(len(p))
-	if end > int64(len(m.buf)) {
-		newLen := int(end)
-		newCap := cap(m.buf)
-		if newCap == 0 {
-			newCap = 4096
-		}
-		for newCap < newLen {
-			newCap *= 2
-		}
-		grow := make([]byte, newLen, newCap)
-		copy(grow, m.buf)
-		m.buf = grow
-	}
-	copy(m.buf[m.pos:end], p)
-	m.pos = end
-	return len(p), nil
-}
-
-func (m *memoryWriteSeeker) Seek(offset int64, whence int) (int64, error) {
-	var next int64
-	switch whence {
-	case 0:
-		next = offset
-	case 1:
-		next = m.pos + offset
-	case 2:
-		next = int64(len(m.buf)) + offset
-	default:
-		return 0, fmt.Errorf("invalid whence: %d", whence)
-	}
-	if next < 0 {
-		return 0, fmt.Errorf("negative position: %d", next)
-	}
-	m.pos = next
-	return next, nil
-}
-
-func (m *memoryWriteSeeker) Bytes() []byte {
-	return bytes.Clone(m.buf)
-}
+var (
+	reTTSHeading        = regexp.MustCompile(`(?m)^(#{1,6})\s+(.+?)([.!?]?)\s*$`)
+	reTTSBulletList     = regexp.MustCompile(`(?m)^\s*[-*+]\s+(.+?)\s*$`)
+	reTTSOrderedList    = regexp.MustCompile(`(?m)^\s*(\d+)[\.\)]\s+(.+?)\s*$`)
+	reTTSHorizontalRule = regexp.MustCompile(`(?m)^([-*_]){3,}\s*$`)
+	reTTSParagraphBreak = regexp.MustCompile(`\n\s*\n+`)
+	reTTSLineBreak      = regexp.MustCompile(`([^\s.!?])\n`)
+	reTTSNewlines       = regexp.MustCompile(`\n+`)
+	reTTSAllowedChars   = regexp.MustCompile(`[^\p{L}\p{M}\p{N}\s.,!?:;'"\(\)\[\]\-]`)
+	reTTSWhitespace     = regexp.MustCompile(`\s+`)
+	reTTSPeriodPause    = regexp.MustCompile(`\.(\s+)([A-Z가-힣])`)
+	reTTSExclaimPause   = regexp.MustCompile(`([!?])(\s+)`)
+	reTTSColonPause     = regexp.MustCompile(`([:;])(\s*)`)
+	reTTSEqualsSign     = regexp.MustCompile(`\s*=\s*`)
+	reTTSTrailingPunct  = regexp.MustCompile(`[.!?;:,'"]$`)
+	ttsPunctReplacer    = strings.NewReplacer(
+		"_", " ", "“", "\"", "”", "\"", "‘", "'", "’", "'",
+		"–", "-", "—", "-", "−", "-", "。", ".", "！", "!", "？", "?",
+	)
+)
 
 // Available languages for Supertonic 3 multilingual TTS.
 var AvailableLangs = []string{
@@ -502,22 +474,17 @@ func (tts *TextToSpeech) infer(ctx context.Context, textList []string, langList 
 		return nil, nil, fmt.Errorf("failed to run duration predictor: %w", err)
 	}
 	durTensor := dpOutputs[0].(*ort.Tensor[float32])
-	defer durTensor.Destroy()
-	durOnnx := durTensor.GetData()
+	durOnnx := slices.Clone(durTensor.GetData())
+	durTensor.Destroy()
 
 	for i := range durOnnx {
 		durOnnx[i] /= speed
 	}
 
-	// Encode text
-	textIDsTensor2, err := intArrayToTensor(textIDs, textIDsShape)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create text ids tensor for encoder: %w", err)
-	}
-	defer textIDsTensor2.Destroy()
+	// Encode text (reuse textIDsTensor and textMaskTensor)
 	textEncOutputs := make([]ort.ArbitraryTensor, 1)
 	err = tts.textEncOrt.RunWithOptions(
-		[]ort.ArbitraryTensor{textIDsTensor2, style.TtlTensor, textMaskTensor},
+		[]ort.ArbitraryTensor{textIDsTensor, style.TtlTensor, textMaskTensor},
 		textEncOutputs,
 		runOptions,
 	)
@@ -530,9 +497,8 @@ func (tts *TextToSpeech) infer(ctx context.Context, textList []string, langList 
 	textEmbTensor := textEncOutputs[0].(*ort.Tensor[float32])
 	defer textEmbTensor.Destroy()
 
-	// Sample noisy latent
-	xt, latentMask := tts.sampleNoisyLatent(durOnnx)
-	latentShape := []int64{int64(bsz), int64(len(xt[0])), int64(len(xt[0][0]))}
+	// Sample noisy latent directly into flat float32 buffer
+	latentFlat, latentShape, latentMask := tts.sampleNoisyLatentFlat(durOnnx)
 	latentMaskShape := []int64{int64(bsz), 1, int64(len(latentMask[0][0]))}
 
 	totalStepArray := make([]float32, bsz)
@@ -540,7 +506,10 @@ func (tts *TextToSpeech) infer(ctx context.Context, textList []string, langList 
 		totalStepArray[b] = float32(totalStep)
 	}
 	scalarShape := []int64{int64(bsz)}
-	totalStepTensor, _ := ort.NewTensor(scalarShape, totalStepArray)
+	totalStepTensor, err := ort.NewTensor(scalarShape, totalStepArray)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create total step tensor: %w", err)
+	}
 	defer totalStepTensor.Destroy()
 
 	// Optimization: Move invariant tensor creation OUT of the loop
@@ -549,13 +518,20 @@ func (tts *TextToSpeech) infer(ctx context.Context, textList []string, langList 
 		return nil, nil, fmt.Errorf("failed to create latent mask tensor: %w", err)
 	}
 	defer latentMaskTensor.Destroy()
-	textMaskTensor2, err := arrayToTensor(textMask, textMaskShape)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create text mask tensor for denoiser: %w", err)
-	}
-	defer textMaskTensor2.Destroy()
 
-	// Denoising loop
+	latentTensor, err := ort.NewTensor(latentShape, latentFlat)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create noisy latent tensor: %w", err)
+	}
+	defer func() {
+		if latentTensor != nil {
+			latentTensor.Destroy()
+		}
+	}()
+
+	currentStepArray := make([]float32, bsz)
+
+	// Denoising loop: pass denoised output tensor directly into the next step and vocoder
 	for step := 0; step < totalStep; step++ {
 		// Check for cancellation
 		select {
@@ -564,7 +540,6 @@ func (tts *TextToSpeech) infer(ctx context.Context, textList []string, langList 
 		default:
 		}
 
-		currentStepArray := make([]float32, bsz)
 		for b := 0; b < bsz; b++ {
 			currentStepArray[b] = float32(step)
 		}
@@ -573,22 +548,16 @@ func (tts *TextToSpeech) infer(ctx context.Context, textList []string, langList 
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to create current step tensor: %w", err)
 		}
-		noisyLatentTensor, err := arrayToTensor(xt, latentShape)
-		if err != nil {
-			currentStepTensor.Destroy()
-			return nil, nil, fmt.Errorf("failed to create noisy latent tensor: %w", err)
-		}
 
 		vectorEstOutputs := make([]ort.ArbitraryTensor, 1)
 		err = tts.vectorEstOrt.RunWithOptions(
-			[]ort.ArbitraryTensor{noisyLatentTensor, textEmbTensor, style.TtlTensor, latentMaskTensor, textMaskTensor2,
+			[]ort.ArbitraryTensor{latentTensor, textEmbTensor, style.TtlTensor, latentMaskTensor, textMaskTensor,
 				currentStepTensor, totalStepTensor},
 			vectorEstOutputs,
 			runOptions,
 		)
+		currentStepTensor.Destroy()
 		if err != nil {
-			currentStepTensor.Destroy()
-			noisyLatentTensor.Destroy()
 			if ctx.Err() != nil {
 				return nil, nil, ctx.Err()
 			}
@@ -596,33 +565,14 @@ func (tts *TextToSpeech) infer(ctx context.Context, textList []string, langList 
 		}
 
 		denoisedTensor := vectorEstOutputs[0].(*ort.Tensor[float32])
-		denoisedData := denoisedTensor.GetData()
-
-		idx := 0
-		for b := 0; b < bsz; b++ {
-			for d := 0; d < len(xt[b]); d++ {
-				for t := 0; t < len(xt[b][d]); t++ {
-					xt[b][d][t] = float64(denoisedData[idx])
-					idx++
-				}
-			}
-		}
-
-		noisyLatentTensor.Destroy()
-		currentStepTensor.Destroy()
-		denoisedTensor.Destroy()
+		latentTensor.Destroy()
+		latentTensor = denoisedTensor
 	}
 
-	// Generate waveform
-	finalLatentTensor, err := arrayToTensor(xt, latentShape)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create final latent tensor: %w", err)
-	}
-	defer finalLatentTensor.Destroy()
-
+	// Generate waveform directly from final denoised latent tensor
 	vocoderOutputs := make([]ort.ArbitraryTensor, 1)
 	err = tts.vocoderOrt.RunWithOptions(
-		[]ort.ArbitraryTensor{finalLatentTensor},
+		[]ort.ArbitraryTensor{latentTensor},
 		vocoderOutputs,
 		runOptions,
 	)
@@ -634,13 +584,13 @@ func (tts *TextToSpeech) infer(ctx context.Context, textList []string, langList 
 	}
 
 	wavBatchTensor := vocoderOutputs[0].(*ort.Tensor[float32])
-	defer wavBatchTensor.Destroy()
-	wav := wavBatchTensor.GetData()
+	wav := slices.Clone(wavBatchTensor.GetData())
+	wavBatchTensor.Destroy()
 
 	return wav, durOnnx, nil
 }
 
-func (tts *TextToSpeech) sampleNoisyLatent(durOnnx []float32) ([][][]float64, [][][]float64) {
+func (tts *TextToSpeech) sampleNoisyLatentFlat(durOnnx []float32) ([]float32, []int64, [][][]float64) {
 	bsz := len(durOnnx)
 	maxDur := float64(0)
 	for _, d := range durOnnx {
@@ -659,33 +609,26 @@ func (tts *TextToSpeech) sampleNoisyLatent(durOnnx []float32) ([][][]float64, []
 	latentLen := int((wavLenMax + float64(chunkSize) - 1) / float64(chunkSize))
 	latentDim := tts.ldim * tts.chunkCompress
 
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	noisyLatent := make([][][]float64, bsz)
-	for b := 0; b < bsz; b++ {
-		batch := make([][]float64, latentDim)
-		for d := 0; d < latentDim; d++ {
-			row := make([]float64, latentLen)
-			for t := 0; t < latentLen; t++ {
-				row[t] = rng.NormFloat64()
-			}
-			batch[d] = row
-		}
-		noisyLatent[b] = batch
-	}
-
 	latentMask := tts.getLatentMask(wavLengths)
-
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	flat := make([]float32, bsz*latentDim*latentLen)
+	idx := 0
 	for b := 0; b < bsz; b++ {
+		maskRow := latentMask[b][0]
+		maskLen := len(maskRow)
 		for d := 0; d < latentDim; d++ {
 			for t := 0; t < latentLen; t++ {
-				if t < len(latentMask[b][0]) {
-					noisyLatent[b][d][t] *= latentMask[b][0][t]
+				val := rng.NormFloat64()
+				if t < maskLen {
+					val *= maskRow[t]
 				}
+				flat[idx] = float32(val)
+				idx++
 			}
 		}
 	}
 
-	return noisyLatent, latentMask
+	return flat, []int64{int64(bsz), int64(latentDim), int64(latentLen)}, latentMask
 }
 
 func (tts *TextToSpeech) getLatentMask(wavLengths []int64) [][][]float64 {
@@ -721,31 +664,44 @@ func LoadTTSConfig(onnxDir string) (TTSConfig, error) {
 	return cfg, nil
 }
 
-// GenerateWAV generates WAV bytes from audio data
+// GenerateWAV generates 16-bit mono PCM WAV bytes directly in a single allocation.
 func GenerateWAV(audioData []float32, sampleRate int) ([]byte, error) {
-	intData := make([]int, len(audioData))
-	for i, sample := range audioData {
+	if sampleRate <= 0 {
+		return nil, fmt.Errorf("invalid sample rate: %d", sampleRate)
+	}
+	const (
+		numChannels   = 1
+		bitsPerSample = 16
+		headerSize    = 44
+	)
+	dataSize := len(audioData) * (bitsPerSample / 8)
+	buf := make([]byte, headerSize+dataSize)
+
+	copy(buf[0:4], "RIFF")
+	binary.LittleEndian.PutUint32(buf[4:8], uint32(36+dataSize))
+	copy(buf[8:12], "WAVE")
+	copy(buf[12:16], "fmt ")
+	binary.LittleEndian.PutUint32(buf[16:20], 16) // PCM fmt chunk size
+	binary.LittleEndian.PutUint16(buf[20:22], 1)  // PCM format
+	binary.LittleEndian.PutUint16(buf[22:24], numChannels)
+	binary.LittleEndian.PutUint32(buf[24:28], uint32(sampleRate))
+	byteRate := sampleRate * numChannels * (bitsPerSample / 8)
+	binary.LittleEndian.PutUint32(buf[28:32], uint32(byteRate))
+	blockAlign := numChannels * (bitsPerSample / 8)
+	binary.LittleEndian.PutUint16(buf[32:34], uint16(blockAlign))
+	binary.LittleEndian.PutUint16(buf[34:36], bitsPerSample)
+	copy(buf[36:40], "data")
+	binary.LittleEndian.PutUint32(buf[40:44], uint32(dataSize))
+
+	offset := headerSize
+	for _, sample := range audioData {
 		clamped := math.Max(-1.0, math.Min(1.0, float64(sample)))
-		intData[i] = int(clamped * 32767)
+		val := int16(clamped * 32767)
+		binary.LittleEndian.PutUint16(buf[offset:offset+2], uint16(val))
+		offset += 2
 	}
 
-	out := &memoryWriteSeeker{}
-	encoder := wav.NewEncoder(out, sampleRate, 16, 1, 1)
-	audioBuf := &audio.IntBuffer{
-		Data:           intData,
-		Format:         &audio.Format{SampleRate: sampleRate, NumChannels: 1},
-		SourceBitDepth: 16,
-	}
-
-	if err := encoder.Write(audioBuf); err != nil {
-		return nil, err
-	}
-
-	if err := encoder.Close(); err != nil {
-		return nil, err
-	}
-
-	return out.Bytes(), nil
+	return buf, nil
 }
 
 // GenerateMP3 generates MP3 bytes from audio data using LAME encoder
@@ -817,39 +773,35 @@ func preprocessText(text string, lang string) string {
 	text = strings.ReplaceAll(text, "\r", "\n")
 
 	// Convert markdown structure into explicit pause boundaries before stripping symbols.
-	text = regexp.MustCompile(`(?m)^(#{1,6})\s+(.+?)([.!?]?)\s*$`).ReplaceAllString(text, "$2$3\n\n")
-	text = regexp.MustCompile(`(?m)^\s*[-*+]\s+(.+?)\s*$`).ReplaceAllString(text, "$1.\n")
-	text = regexp.MustCompile(`(?m)^\s*(\d+)[\.\)]\s+(.+?)\s*$`).ReplaceAllString(text, "$1. $2.\n")
-	text = regexp.MustCompile(`(?m)^([-*_]){3,}\s*$`).ReplaceAllString(text, "\n\n")
+	text = reTTSHeading.ReplaceAllString(text, "$2$3\n\n")
+	text = reTTSBulletList.ReplaceAllString(text, "$1.\n")
+	text = reTTSOrderedList.ReplaceAllString(text, "$1. $2.\n")
+	text = reTTSHorizontalRule.ReplaceAllString(text, "\n\n")
 
-	text = regexp.MustCompile(`\n\s*\n+`).ReplaceAllString(text, ". . ")
-	text = regexp.MustCompile(`([^\s.!?])\n`).ReplaceAllString(text, "$1. ")
-	text = regexp.MustCompile(`\n+`).ReplaceAllString(text, ", ")
+	text = reTTSParagraphBreak.ReplaceAllString(text, ". . ")
+	text = reTTSLineBreak.ReplaceAllString(text, "$1. ")
+	text = reTTSNewlines.ReplaceAllString(text, ", ")
 
 	// Map punctuation before filtering so contractions and ranges survive.
-	text = strings.NewReplacer(
-		"_", " ", "“", "\"", "”", "\"", "‘", "'", "’", "'",
-		"–", "-", "—", "-", "−", "-", "。", ".", "！", "!", "？", "?",
-	).Replace(text)
-	allowedPattern := regexp.MustCompile(`[^\p{L}\p{M}\p{N}\s.,!?:;'"\(\)\[\]\-]`)
-	text = allowedPattern.ReplaceAllString(text, " ")
+	text = ttsPunctReplacer.Replace(text)
+	text = reTTSAllowedChars.ReplaceAllString(text, " ")
 
 	// First normalize all whitespace to single spaces
-	text = regexp.MustCompile(`\s+`).ReplaceAllString(text, " ")
+	text = reTTSWhitespace.ReplaceAllString(text, " ")
 	text = strings.TrimSpace(text)
 
 	// Add natural pauses after punctuation marks by duplicating punctuation
 	// This technique works with many TTS engines to create brief pauses
 	// Period: add comma for pause between sentences
-	text = regexp.MustCompile(`\.(\s+)([A-Z가-힣])`).ReplaceAllString(text, "., $2")
+	text = reTTSPeriodPause.ReplaceAllString(text, "., $2")
 	// Exclamation/Question: add period for pause
-	text = regexp.MustCompile(`([!?])(\s+)`).ReplaceAllString(text, "$1, ")
+	text = reTTSExclaimPause.ReplaceAllString(text, "$1, ")
 	// Colon/Semicolon: add comma for medium pause
-	text = regexp.MustCompile(`([:;])(\s*)`).ReplaceAllString(text, "$1, ")
+	text = reTTSColonPause.ReplaceAllString(text, "$1, ")
 	// Equals sign in context: ensure space
-	text = regexp.MustCompile(`\s*=\s*`).ReplaceAllString(text, " - ")
+	text = reTTSEqualsSign.ReplaceAllString(text, " - ")
 
-	if text != "" && !regexp.MustCompile(`[.!?;:,'"]$`).MatchString(text) {
+	if text != "" && !reTTSTrailingPunct.MatchString(text) {
 		text += "."
 	}
 
@@ -882,7 +834,7 @@ func chunkText(text string, maxLen int) []string {
 
 	// Keep paragraph prosody intact. Only paragraphs above the hard limit are
 	// wrapped at whitespace; punctuation is never used as a chunk boundary.
-	paragraphs := regexp.MustCompile(`\n\s*\n+`).Split(text, -1)
+	paragraphs := reTTSParagraphBreak.Split(text, -1)
 	var finalChunks []string
 
 	for _, p := range paragraphs {

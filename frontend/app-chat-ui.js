@@ -32,6 +32,7 @@
         let suppressNextScrollEvent = false;
         let activeStreamingMessageId = null;
         let pendingScrollToBottomFrame = 0;
+        let pendingForcedScrollToBottom = false;
         let latestScrollTarget = 0;
         let chatScrollMetrics = {
             scrollTop: 0,
@@ -308,6 +309,7 @@
                 global.cancelAnimationFrame(pendingScrollToBottomFrame);
                 pendingScrollToBottomFrame = 0;
             }
+            pendingForcedScrollToBottom = false;
             suppressNextScrollEvent = false;
             if (stopFollowing) {
                 shouldAutoScroll = false;
@@ -315,15 +317,43 @@
             }
         }
 
-        function scheduleChatScrollToBottom() {
+        function scheduleChatScrollToBottom(options = {}) {
             if (!chatMessages) return;
+            const immediate = !!options.immediate;
+            const forced = !!options.force;
             const metrics = syncChatScrollMetrics();
             latestScrollTarget = Math.max(0, metrics.scrollHeight - metrics.clientHeight);
-            if (pendingScrollToBottomFrame) return;
+            if (immediate) {
+                if (pendingScrollToBottomFrame) {
+                    global.cancelAnimationFrame(pendingScrollToBottomFrame);
+                    pendingScrollToBottomFrame = 0;
+                }
+                pendingForcedScrollToBottom = false;
+                if (Math.abs(latestScrollTarget - chatMessages.scrollTop) > 0.5) {
+                    suppressNextScrollEvent = true;
+                    chatMessages.scrollTop = latestScrollTarget;
+                }
+                chatScrollMetrics = refreshChatScrollMetrics?.() || metrics;
+                commitChatScrollMetrics?.(chatScrollMetrics);
+                scrollActiveMessageIntoView();
+                updateScrollToBottomButton();
+                return;
+            }
+            if (pendingScrollToBottomFrame) {
+                if (forced) {
+                    pendingForcedScrollToBottom = true;
+                }
+                return;
+            }
+            pendingForcedScrollToBottom = forced;
 
             const animate = () => {
                 pendingScrollToBottomFrame = 0;
-                if (!chatMessages || (!shouldAutoScroll && !lockScrollToLatest)) return;
+                const allowForced = pendingForcedScrollToBottom;
+                if (!chatMessages || (!allowForced && !shouldAutoScroll && !lockScrollToLatest)) {
+                    pendingForcedScrollToBottom = false;
+                    return;
+                }
 
                 const currentMetrics = syncChatScrollMetrics();
                 latestScrollTarget = Math.max(0, currentMetrics.scrollHeight - currentMetrics.clientHeight);
@@ -344,6 +374,7 @@
                     return;
                 }
 
+                pendingForcedScrollToBottom = false;
                 scrollActiveMessageIntoView();
                 updateScrollToBottomButton();
             };
@@ -351,14 +382,15 @@
             pendingScrollToBottomFrame = global.requestAnimationFrame(animate);
         }
 
-        function scrollToBottom(force = false) {
+        function scrollToBottom(force = false, options = {}) {
             if (!chatMessages) return;
+            const immediate = !!options.immediate;
             const isManualStreamingMode = getStreamingScrollMode?.() === 'label-top';
             if (isManualStreamingMode && !lockScrollToLatest && !force) return;
             if (!force && !shouldAutoScroll && !lockScrollToLatest) return;
             if (chatMessages.classList.contains('is-label-top-streaming') && !lockScrollToLatest && !force) return;
             clearTurnFocusSpacer();
-            scheduleChatScrollToBottom();
+            scheduleChatScrollToBottom({ force: !!force, immediate });
             if (!isManualStreamingMode) {
                 shouldAutoScroll = true;
             } else {

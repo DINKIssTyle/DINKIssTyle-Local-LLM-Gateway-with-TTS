@@ -7549,6 +7549,23 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
+	if strings.TrimSpace(req.Text) == "" {
+		http.Error(w, "Text is required", http.StatusBadRequest)
+		return
+	}
+
+	// Validate voice style name before entering the scheduler to prevent path traversal.
+	styleName := strings.TrimSpace(ttsConfig.VoiceStyle)
+	if strings.TrimSpace(req.VoiceStyle) != "" {
+		styleName = strings.TrimSpace(req.VoiceStyle)
+	}
+	if styleName == "" || strings.ContainsAny(styleName, `/\`) || strings.Contains(styleName, "..") || filepath.Base(styleName) != styleName {
+		http.Error(w, "Invalid voice style", http.StatusBadRequest)
+		return
+	}
+	if !strings.HasSuffix(styleName, ".json") {
+		styleName += ".json"
+	}
 
 	if req.Lang == "" {
 		req.Lang = "ko"
@@ -7596,14 +7613,7 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Load voice style from config or request
-	styleName := ttsConfig.VoiceStyle
-	if req.VoiceStyle != "" {
-		styleName = req.VoiceStyle
-	}
-	if !strings.HasSuffix(styleName, ".json") {
-		styleName += ".json"
-	}
+	// Load voice style from validated style name
 	voiceStylePath := filepath.Join(getTTSAssetsDir(), legacyTTSVoiceStylesDir, styleName)
 
 	// Check Cache

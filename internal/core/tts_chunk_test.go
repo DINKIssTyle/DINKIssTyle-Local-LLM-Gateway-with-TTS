@@ -2,8 +2,11 @@ package core
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -268,6 +271,61 @@ func TestPreprocessTextPreservesPronunciationAndSentenceBoundaries(t *testing.T)
 		t.Run(tt.text, func(t *testing.T) {
 			if got := preprocessText(tt.text, tt.lang); got != tt.want {
 				t.Fatalf("preprocessText = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGenerateWAVHeaderAndClampedSamples(t *testing.T) {
+	samples := []float32{-1.5, -1.0, 0.0, 1.0, 1.5}
+	data, err := GenerateWAV(samples, 44100)
+	if err != nil {
+		t.Fatalf("GenerateWAV failed: %v", err)
+	}
+	if wantLen := 44 + len(samples)*2; len(data) != wantLen {
+		t.Fatalf("len(data) = %d, want %d", len(data), wantLen)
+	}
+	if string(data[0:4]) != "RIFF" || string(data[8:12]) != "WAVE" || string(data[36:40]) != "data" {
+		t.Fatalf("invalid WAV header markers")
+	}
+	if got := binary.LittleEndian.Uint32(data[24:28]); got != 44100 {
+		t.Fatalf("sample rate = %d, want 44100", got)
+	}
+	if got := binary.LittleEndian.Uint32(data[40:44]); got != uint32(len(samples)*2) {
+		t.Fatalf("data chunk size = %d, want %d", got, len(samples)*2)
+	}
+	gotSamples := []int16{
+		int16(binary.LittleEndian.Uint16(data[44:46])),
+		int16(binary.LittleEndian.Uint16(data[46:48])),
+		int16(binary.LittleEndian.Uint16(data[48:50])),
+		int16(binary.LittleEndian.Uint16(data[50:52])),
+		int16(binary.LittleEndian.Uint16(data[52:54])),
+	}
+	wantSamples := []int16{-32767, -32767, 0, 32767, 32767}
+	for i := range wantSamples {
+		if gotSamples[i] != wantSamples[i] {
+			t.Fatalf("sample[%d] = %d, want %d", i, gotSamples[i], wantSamples[i])
+		}
+	}
+}
+
+func TestHandleTTSRejectsEmptyTextAndInvalidVoiceStyle(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{name: "empty text", body: `{"text":"   ","lang":"ko"}`},
+		{name: "path traversal style", body: `{"text":"안녕하세요","lang":"ko","voiceStyle":"../secret"}`},
+		{name: "slash style", body: `{"text":"안녕하세요","lang":"ko","voiceStyle":"nested/F1"}`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/tts", strings.NewReader(tc.body))
+			rec := httptest.NewRecorder()
+			handleTTS(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusBadRequest, rec.Body.String())
 			}
 		})
 	}

@@ -3,7 +3,7 @@
  * Copyright (C) 2026 DINKI'ssTyle. All rights reserved.
  */
 
-const CACHE_NAME = 'dkst-chat-v60';
+const CACHE_NAME = 'dkst-chat-v62';
 const ASSETS = [
     '/',
     '/index.html',
@@ -18,15 +18,15 @@ const ASSETS = [
     '/app-saved-library.js?v=1',
     '/app-models.js?v=1',
     '/supertonic3.js?v=3',
-    '/app-tts.js?v=13',
+    '/app-tts.js?v=14',
     '/vendor/supertonic3-worker.js',
     '/app-session.js?v=2',
     '/app-stream-protocol.js?v=1',
     '/app-chat-streaming.js?v=1',
-    '/app-chat-ui.js?v=1',
+    '/app-chat-ui.js?v=2',
     '/app-progress-ui.js?v=1',
     '/app-mic.js?v=3',
-    '/app.js?v=46',
+    '/app.js?v=47',
     '/icons.css',
     '/public/icon-512.png',
     '/site.webmanifest',

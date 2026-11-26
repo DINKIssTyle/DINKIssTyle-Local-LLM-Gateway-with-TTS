@@ -28,6 +28,10 @@
         let osTTSVoices = [];
         let osTTSVoicesReady = false;
         let activeTTSSessionId = 0;
+        let ttsRequestSeq = 0;
+        const ttsClientId = `web-${Math.random().toString(36).slice(2, 10)}`;
+        let activeServerAbortController = null;
+        let fallbackAudioContext = null;
         let lastSupertonicToastAt = 0;
         let streamingCommittedIndex = 0;
         let streamingChunks = [];
@@ -55,7 +59,31 @@
 
         function unlockAudioContext() {
             if (global.DKSTSupertonic3?.unlockSupertonic3Audio) {
-                global.DKSTSupertonic3.unlockSupertonic3Audio().catch(() => {});
+                return global.DKSTSupertonic3.unlockSupertonic3Audio().catch(() => {});
+            }
+            return Promise.resolve();
+        }
+
+        function getServerTTSAudioContext() {
+            const shared = global.DKSTSupertonic3?.getSupertonic3AudioContext?.();
+            if (shared) return shared;
+            if (!fallbackAudioContext) {
+                const AudioCtx = global.AudioContext || global.webkitAudioContext;
+                if (AudioCtx) {
+                    fallbackAudioContext = new AudioCtx({ sampleRate: 44100 });
+                }
+            }
+            return fallbackAudioContext;
+        }
+
+        function abortActiveServerTTS() {
+            if (activeServerAbortController) {
+                try {
+                    activeServerAbortController.abort();
+                } catch {
+                    // Ignore abort error
+                }
+                activeServerAbortController = null;
             }
         }
 
@@ -120,6 +148,7 @@
 
         function stopAllAudio() {
             activeTTSSessionId += 1;
+            abortActiveServerTTS();
             streamingChunks = [];
             isStreamingPlaying = false;
             streamingCommittedIndex = 0;
@@ -300,9 +329,14 @@
         async function speakWithServerSupertonic(cleanText, btn, sessionId, options = {}) {
             const isStreamingChunk = !!options.isStreaming;
             const targetBtn = btn || (getPlaybackState?.() || {}).currentAudioBtn;
+            const abortController = activeServerAbortController || (typeof global.AbortController === 'function' ? new global.AbortController() : null);
+            if (!isStreamingChunk || !activeServerAbortController) {
+                activeServerAbortController = abortController;
+            }
+            let finalPlayback = Promise.resolve();
             try {
                 const chunks = global.DKSTSupertonic3?.chunkSpeechText
-                    ? global.DKSTSupertonic3.chunkSpeechText(cleanText, 300)
+                    ? global.DKSTSupertonic3.chunkSpeechText(cleanText, config.ttsLang || 'ko')
                     : [cleanText];
 
                 if (targetBtn) {
@@ -312,20 +346,28 @@
                     if (icon) icon.textContent = 'stop';
                 }
 
-                unlockAudioContext();
-                const audioCtx = global.DKSTSupertonic3?.getSupertonic3AudioContext?.()
-                    || new (global.AudioContext || global.webkitAudioContext)({ sampleRate: 44100 });
+                await unlockAudioContext();
+                if (sessionId !== activeTTSSessionId) return finalPlayback;
 
-                let finalPlayback = Promise.resolve();
+                const audioCtx = getServerTTSAudioContext();
+                if (!audioCtx) {
+                    throw new Error('Web Audio API is unavailable.');
+                }
 
                 for (let index = 0; index < chunks.length; index += 1) {
                     if (sessionId !== activeTTSSessionId) break;
                     const chunk = chunks[index];
                     if (!chunk.trim()) continue;
 
-                    const res = await fetch('/api/tts', {
+                    const fetchOptions = {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-TTS-Client-ID': ttsClientId,
+                            'X-TTS-Session-ID': String(sessionId),
+                            'X-TTS-Request-ID': String(++ttsRequestSeq)
+                        },
                         body: JSON.stringify({
                             text: chunk,
                             lang: config.ttsLang || 'ko',
@@ -335,11 +377,27 @@
                             steps: parseInt(config.ttsSteps) || 5,
                             prechunked: true
                         })
-                    });
+                    };
+                    if (abortController?.signal) {
+                        fetchOptions.signal = abortController.signal;
+                    }
+
+                    const res = await fetch('/api/tts', fetchOptions);
 
                     if (sessionId !== activeTTSSessionId) break;
+                    if (res.status === 409) {
+                        // Superseded by a newer TTS session on the server.
+                        break;
+                    }
                     if (!res.ok) {
-                        throw new Error(`Server TTS failed (${res.status})`);
+                        let detail = `Server TTS failed (${res.status})`;
+                        try {
+                            const errBody = await res.json();
+                            if (errBody?.message) detail = errBody.message;
+                        } catch {
+                            // Ignore non-JSON error body
+                        }
+                        throw new Error(detail);
                     }
 
                     const arrayBuffer = await res.arrayBuffer();
@@ -348,7 +406,7 @@
                     const decodedBuffer = await audioCtx.decodeAudioData(arrayBuffer);
                     if (sessionId !== activeTTSSessionId) break;
 
-                    const isFinal = index === chunks.length - 1;
+                    const isFinal = !isStreamingChunk && index === chunks.length - 1;
                     const pauseSeconds = isFinal ? 0 : (global.DKSTSupertonic3?.boundaryPause?.(chunk) ?? 0.08);
 
                     if (global.DKSTSupertonic3?.scheduleSupertonic3AudioBuffer) {
@@ -356,19 +414,30 @@
                     }
                 }
 
+                if (isStreamingChunk) {
+                    return { playbackPromise: finalPlayback };
+                }
+
                 await finalPlayback;
 
-                if (!isStreamingChunk && sessionId === activeTTSSessionId) {
+                if (sessionId === activeTTSSessionId) {
                     endTTS(targetBtn, sessionId);
                 }
             } catch (err) {
-                if (sessionId === activeTTSSessionId) {
+                const isAbort = err?.name === 'AbortError' || abortController?.signal?.aborted;
+                if (!isAbort && sessionId === activeTTSSessionId) {
                     console.error('[Server TTS] synthesis error:', err);
+                    global.showToast?.(err?.message || 'TTS generation failed', true);
                     if (!isStreamingChunk) {
                         endTTS(targetBtn, sessionId);
                     }
                 }
+            } finally {
+                if (!isStreamingChunk && activeServerAbortController === abortController) {
+                    activeServerAbortController = null;
+                }
             }
+            return { playbackPromise: finalPlayback };
         }
 
         async function speakWithOSTTS(text, btn, sessionId, options = {}) {
@@ -517,6 +586,7 @@
             if (isStreamingPlaying) return;
             isStreamingPlaying = true;
             const sessionId = activeTTSSessionId;
+            let lastScheduledPlayback = Promise.resolve();
 
             syncCurrentAudioButtonUI();
 
@@ -529,7 +599,7 @@
                         await new Promise((resolve) => global.setTimeout(resolve, 80));
                         continue;
                     }
-                    // Streaming ended and all chunks played
+                    // Streaming ended and all chunks scheduled
                     break;
                 }
 
@@ -542,7 +612,18 @@
                 } else if (engine === 'supertonic-ondevice') {
                     await speakWithOnDeviceSupertonic(chunk, null, sessionId, { isStreaming: true });
                 } else {
-                    await speakWithServerSupertonic(chunk, null, sessionId, { isStreaming: true });
+                    const scheduled = await speakWithServerSupertonic(chunk, null, sessionId, { isStreaming: true });
+                    if (scheduled?.playbackPromise) {
+                        lastScheduledPlayback = scheduled.playbackPromise;
+                    }
+                }
+            }
+
+            if (sessionId === activeTTSSessionId) {
+                try {
+                    await lastScheduledPlayback;
+                } catch {
+                    // Ignore playback interruption
                 }
             }
 
