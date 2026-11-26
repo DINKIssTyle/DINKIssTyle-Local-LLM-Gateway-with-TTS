@@ -408,3 +408,50 @@ func TestHintMemoryRejectsChatAndToolArtifacts(t *testing.T) {
 		}
 	}
 }
+
+func TestFallbackHintWebSearchQueryStripsEnglishMetaWrapper(t *testing.T) {
+	cases := []struct {
+		req  hintResearchRequest
+		want string
+	}{
+		{
+			req:  hintResearchRequest{Query: `Explain the meaning of "就比呀，跑得比别人要久，要长" in context.`, Anchor: `就比呀，跑得比别人要久，要长`},
+			want: `就比呀，跑得比别人要久，要长`,
+		},
+		{
+			req:  hintResearchRequest{Query: `Explain the meaning and usage of the Korean phrase "이런 식으로 하기."`, Anchor: `이런 식으로 하기`},
+			want: `이런 식으로 하기`,
+		},
+		{
+			req:  hintResearchRequest{Query: `피라미드의 건립 목적`, Anchor: `피라미드`},
+			want: `피라미드의 건립 목적`,
+		},
+	}
+	for _, tc := range cases {
+		if got := fallbackHintWebSearchQuery(tc.req); got != tc.want {
+			t.Fatalf("fallbackHintWebSearchQuery(%q) = %q, want %q", tc.req.Query, got, tc.want)
+		}
+	}
+}
+
+func TestHintRejectsUnspokenMetaWordDictionaryRecords(t *testing.T) {
+	redKiwi := hintSourceRecord{
+		Title: "explain: 뜻과 사용법 살펴보기 | RedKiwi Words",
+		URL:   "https://words.redkiwiapp.com/word/explain",
+		Text:  "[ɪkˈspleɪn] explain 것은 더 자세한 내용이나 관련 사실을 제공하여 아이디어, 상황 또는 문제를 명확하게 하는 것입니다.",
+	}
+	unspoken := hintResearchRequest{
+		Anchor:   "就比呀，跑得比别人要久，要长",
+		Observed: "就比呀，跑得比别人要久，要长",
+	}
+	if !hintIrrelevantMetaWordDictionaryRecord(redKiwi, unspoken) {
+		t.Fatal("expected unspoken 'explain' dictionary hit to be rejected")
+	}
+	spoken := hintResearchRequest{
+		Anchor:   "explain",
+		Observed: "영어 단어 explain이 정확히 무슨 뜻이야?",
+	}
+	if hintIrrelevantMetaWordDictionaryRecord(redKiwi, spoken) {
+		t.Fatal("expected dictionary hit to be allowed when user actually spoke 'explain'")
+	}
+}

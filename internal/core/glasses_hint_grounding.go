@@ -42,11 +42,31 @@ type hintGrounding struct {
 
 var hintTranslationCatalog = regexp.MustCompile(`(?i)\btranslations?\s+in\s+context\b|\btranslation\s+into\s+[\p{L} -]+\s*[-–—]|\bcontextual\s+translation\s+of\b`)
 var hintLanguageTask = regexp.MustCompile(`(?i)\b(translat(e|ion|ions|ing)|pronunciation|romanization|grammar|wording|idiom|usage examples?)\b|번역|발음|문법|용례|영어로|한국어로|일본어로|중국어로`)
+var hintMetaWordDictionaryLead = regexp.MustCompile(`(?i)^\s*(?:\[[^\]]+\]\s*)?(explain|define|meaning|context|describe|clarify|summary|summarize)\b(?:\s*[:|\-–—]|\s+(?:뜻|의미|사용법|용법|것은|meaning|definition))`)
+var hintDictionaryCue = regexp.MustCompile(`(?i)뜻과\s*사용법|뜻·용법|dictionary|definition\s+of|meaning\s+in\s+(?:english|korean)|\[[^\]]*[ˈˌəɪʊʃʒŋ][^\]]*\]`)
 
 // Translation catalogs illustrate wording; their example claims are not
 // evidence about the subject discussed. Match content, not a site blacklist.
 func hintIrrelevantTranslationRecord(record hintSourceRecord, task string) bool {
 	return !hintLanguageTask.MatchString(task) && hintTranslationCatalog.MatchString(record.Title+"\n"+record.Text)
+}
+
+// Reject dictionary definitions of English meta-instruction verbs (e.g. "explain")
+// when that word was never actually spoken by the user.
+func hintIrrelevantMetaWordDictionaryRecord(record hintSourceRecord, req hintResearchRequest) bool {
+	match := hintMetaWordDictionaryLead.FindStringSubmatch(record.Title)
+	if len(match) < 2 {
+		match = hintMetaWordDictionaryLead.FindStringSubmatch(record.Text)
+	}
+	if len(match) < 2 {
+		return false
+	}
+	if !hintDictionaryCue.MatchString(record.Title + "\n" + record.Text) {
+		return false
+	}
+	word := strings.ToLower(match[1])
+	spoken := strings.ToLower(req.Anchor + " " + req.Observed)
+	return !strings.Contains(spoken, word)
 }
 
 // Read only source titles/snippets, never Query/Provider/Source-ID echoes.
@@ -225,7 +245,7 @@ func prepareHintGrounding(ctx context.Context, registry *toolruntime.Registry, e
 	if req.Source == "web" {
 		var records []hintSourceRecord
 		for _, record := range result.Records {
-			if !hintIrrelevantTranslationRecord(record, req.Query) {
+			if !hintIrrelevantTranslationRecord(record, req.Query) && !hintIrrelevantMetaWordDictionaryRecord(record, req) {
 				records = append(records, record)
 			}
 		}

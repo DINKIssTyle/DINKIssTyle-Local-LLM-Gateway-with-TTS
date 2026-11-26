@@ -422,6 +422,28 @@ type hintResearchRequest struct {
 	Source           string `json:"source"`
 }
 
+var (
+	reHintMetaQueryPrefix = regexp.MustCompile(`(?i)^\s*(?:please\s+)?(?:explain|define|describe|clarify|summarize)\s+(?:the\s+)?(?:(?:meaning|context|reason|usage|definition|background|significance)(?:\s+(?:and|or)\s+(?:meaning|context|reason|usage|definition|background|significance))?\s+(?:of|behind)\s+)?(?:the\s+)?(?:(?:korean|chinese|japanese|english|foreign)\s+)?(?:term|phrase|word|statement|expression|exchange|sentence|concept)?\s*`)
+	reHintMetaQuerySuffix = regexp.MustCompile(`(?i)\s+(?:in\s+(?:the\s+)?(?:general\s+|given\s+|provided\s+)?context(?:\s+provided)?|in\s+this\s+context)\.?\s*$`)
+)
+
+func fallbackHintWebSearchQuery(research hintResearchRequest) string {
+	raw := strings.TrimSpace(research.Query)
+	if !reHintMetaQueryPrefix.MatchString(raw) {
+		return raw
+	}
+	cleaned := reHintMetaQueryPrefix.ReplaceAllString(raw, "")
+	cleaned = reHintMetaQuerySuffix.ReplaceAllString(cleaned, "")
+	cleaned = strings.TrimSpace(strings.Trim(cleaned, `"'“”‘’.?!`))
+	if anchor := strings.TrimSpace(research.Anchor); anchor != "" && (cleaned == "" || strings.EqualFold(cleaned, anchor)) {
+		return anchor
+	}
+	if cleaned != "" {
+		return cleaned
+	}
+	return raw
+}
+
 func loadHintEvidence(ctx context.Context, registry *toolruntime.Registry, execCtx toolruntime.ExecutionContext, enableTools bool, research hintResearchRequest) (string, string, error) {
 	if research.Source == "internal" || research.Source == "" {
 		return "", "", nil
@@ -445,8 +467,12 @@ func loadHintEvidence(ctx context.Context, registry *toolruntime.Registry, execC
 		return "", "", fmt.Errorf("invalid hint research query")
 	}
 	query := research.Query
-	if research.Source == "web" && strings.TrimSpace(research.SearchQuery) != "" {
-		query = strings.TrimSpace(research.SearchQuery)
+	if research.Source == "web" {
+		if strings.TrimSpace(research.SearchQuery) != "" {
+			query = strings.TrimSpace(research.SearchQuery)
+		} else {
+			query = fallbackHintWebSearchQuery(research)
+		}
 	}
 	if len([]rune(query)) > 300 {
 		return "", "", fmt.Errorf("invalid hint search query")
