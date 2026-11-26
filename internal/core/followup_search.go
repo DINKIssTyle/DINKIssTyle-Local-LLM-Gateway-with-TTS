@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -15,8 +16,14 @@ import (
 	"dinkisstyle-chat/internal/chatharness"
 )
 
+type priorConversationTurn struct {
+	User      string
+	Assistant string
+}
+
 var (
 	followupThinkingStrip = regexp.MustCompile(`(?is)<think>.*?(?:</think>|$)|<\|channel>\s*thought\b.*?(?:<channel\|>|$)`)
+	followupStrongCode    = regexp.MustCompile(`\b(?:[A-Za-z]{1,4}[-]?\d{2,5}[A-Za-z]?|\d{3,4})\b`)
 	followupSubjectNumber = regexp.MustCompile(`\b(?:19\d{2}|20\d{2}|\d{2,5})\b`)
 	followupSubjectLatin  = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9-]{2,}\b`)
 	followupSubjectHangul = regexp.MustCompile(`[가-힣]{2,}`)
@@ -27,9 +34,11 @@ var followupAnaphoraCues = []string{
 	"그 사고", "그 사건", "그 사람", "그 영화", "그 책", "그 회사", "그 모델", "그 제품",
 	"그거", "그것", "이거", "이것", "해당 ", "방금", "아까", "위에서", "위의 ", "거기",
 	"원인이", "원인은", "이유가", "이유는", "결과가", "결과는", "생존자", "사망자", "피해",
+	"몇년", "몇 년", "몇월", "몇 월", "며칠", "언제", "어느 날", "정확한 날짜", "정확한 시점",
+	"알려줘야지", "말해줘야지", "바뀌었어", "바뀐", "이후",
 	"more detail", "more details", "more about", "tell me more", "further detail",
 	"that accident", "the accident", "that incident", "the incident", "that person",
-	"what happened", "why did it", "how did it",
+	"what happened", "why did it", "how did it", "what date", "which year", "which month",
 }
 
 var followupGenericLatin = map[string]bool{
@@ -40,6 +49,8 @@ var followupGenericLatin = map[string]bool{
 	"report": true, "noted": true, "user": true, "assistant": true, "detail": true,
 	"details": true, "accident": true, "incident": true, "crash": true, "plane": true,
 	"jet": true, "engine": true, "issue": true, "fire": true, "piece": true, "ice": true,
+	"http": true, "https": true, "www": true, "com": true, "org": true, "net": true,
+	"html": true, "news": true, "view": true, "article": true,
 }
 
 var followupGenericHangul = map[string]bool{
@@ -52,9 +63,15 @@ var followupGenericHangul = map[string]bool{
 	"파괴": true, "고장": true, "언급": true, "사람": true, "최근": true, "작품": true,
 	"영화": true, "회사": true, "제품": true, "모델": true, "정도": true, "경우": true,
 	"대한": true, "관련": true, "정말": true, "너무": true, "계속": true, "그냥": true,
+	"편명": true, "변경": true, "날짜": true, "시점": true, "발표": true, "보도": true,
+	"기사": true, "링크": true, "참고": true, "출처": true, "노선": true, "착륙": true,
 }
 
-func extractImmediatePriorTurn(reqMap map[string]interface{}, snapshot chatharness.SessionUISnapshot) (string, string) {
+func extractRecentPriorTurns(reqMap map[string]interface{}, snapshot chatharness.SessionUISnapshot, maxTurns int) []priorConversationTurn {
+	if maxTurns <= 0 {
+		maxTurns = 3
+	}
+	var turns []priorConversationTurn
 	if reqMap != nil {
 		if messages, ok := reqMap["messages"].([]interface{}); ok && len(messages) > 0 {
 			lastUser := -1
@@ -66,49 +83,48 @@ func extractImmediatePriorTurn(reqMap map[string]interface{}, snapshot chatharne
 				}
 			}
 			if lastUser > 0 {
-				var prevUser, prevAssistant string
-				var curUser, curAssistant string
+				var cur priorConversationTurn
 				for _, raw := range messages[:lastUser] {
 					m, _ := raw.(map[string]interface{})
 					role, _ := m["role"].(string)
 					content, _ := m["content"].(string)
 					switch role {
 					case "user":
-						if curUser != "" && curAssistant != "" {
-							prevUser, prevAssistant = curUser, curAssistant
+						if cur.User != "" && cur.Assistant != "" {
+							turns = append(turns, cur)
 						}
-						curUser = strings.TrimSpace(content)
-						curAssistant = ""
+						cur = priorConversationTurn{User: strings.TrimSpace(content)}
 					case "assistant":
 						if m["tool_calls"] == nil {
 							cleaned := strings.TrimSpace(followupThinkingStrip.ReplaceAllString(content, ""))
 							if cleaned != "" {
-								curAssistant = cleaned
+								cur.Assistant = cleaned
 							}
 						}
 					}
 				}
-				if curUser != "" && curAssistant != "" {
-					prevUser, prevAssistant = curUser, curAssistant
-				}
-				if prevUser != "" && prevAssistant != "" {
-					return prevUser, prevAssistant
+				if cur.User != "" && cur.Assistant != "" {
+					turns = append(turns, cur)
 				}
 			}
 		}
 	}
-	for i := len(snapshot.Turns) - 1; i >= 0; i-- {
-		t := snapshot.Turns[i]
-		if t.Status != "" && t.Status != "completed" {
-			continue
-		}
-		u := strings.TrimSpace(t.UserContent)
-		a := strings.TrimSpace(followupThinkingStrip.ReplaceAllString(t.AssistantContent, ""))
-		if u != "" && a != "" {
-			return u, a
+	if len(turns) == 0 {
+		for _, t := range snapshot.Turns {
+			if t.Status != "" && t.Status != "completed" {
+				continue
+			}
+			u := strings.TrimSpace(t.UserContent)
+			a := strings.TrimSpace(followupThinkingStrip.ReplaceAllString(t.AssistantContent, ""))
+			if u != "" && a != "" {
+				turns = append(turns, priorConversationTurn{User: u, Assistant: a})
+			}
 		}
 	}
-	return "", ""
+	if len(turns) > maxTurns {
+		turns = turns[len(turns)-maxTurns:]
+	}
+	return turns
 }
 
 func extractPrimarySearchQuery(toolName, argsJSON string) (string, map[string]interface{}, bool) {
@@ -152,16 +168,65 @@ func hasFollowupCue(text string) bool {
 	return false
 }
 
-func queryContainsPriorSubjectToken(query, prevUser, prevAssistant string) bool {
-	prior := prevUser + "\n" + prevAssistant
+var urlStripPattern = regexp.MustCompile(`https?://\S+`)
+
+func extractStrongIdentifiers(text string) []string {
+	cleaned := urlStripPattern.ReplaceAllString(text, " ")
+	raw := followupStrongCode.FindAllString(cleaned, -1)
+	seen := map[string]bool{}
+	out := make([]string, 0, len(raw))
+	for _, tok := range raw {
+		lower := strings.ToLower(tok)
+		if seen[lower] {
+			continue
+		}
+		seen[lower] = true
+		out = append(out, lower)
+	}
+	return out
+}
+
+func queryContainsPriorAnchor(query string, turns []priorConversationTurn) bool {
+	if len(turns) == 0 {
+		return false
+	}
+	latest := turns[len(turns)-1]
+	latestText := latest.User + "\n" + latest.Assistant
+	var allBuilder strings.Builder
+	for _, t := range turns {
+		allBuilder.WriteString(t.User)
+		allBuilder.WriteByte('\n')
+		allBuilder.WriteString(t.Assistant)
+		allBuilder.WriteByte('\n')
+	}
+	allText := allBuilder.String()
 	queryLower := strings.ToLower(query)
 
-	for _, num := range followupSubjectNumber.FindAllString(prior, -1) {
+	// If the most recent turn contains distinguishing identifiers (e.g. OZ214,
+	// OZ212, F-28, 221, 2013), require at least one identifier from the recent
+	// conversation to appear in the query so broad names alone (e.g. "아시아나항공")
+	// do not skip follow-up disambiguation.
+	latestIDs := extractStrongIdentifiers(latestText)
+	if len(latestIDs) > 0 {
+		for _, id := range extractStrongIdentifiers(allText) {
+			if strings.Contains(queryLower, id) {
+				return true
+			}
+			// Also match the numeric core of alphanumeric flight/model codes (e.g. "214" for "OZ214").
+			if digits := followupSubjectNumber.FindString(id); len(digits) >= 3 && strings.Contains(queryLower, digits) {
+				return true
+			}
+		}
+		return false
+	}
+
+	cleanedLatest := urlStripPattern.ReplaceAllString(latestText, " ")
+	for _, num := range followupSubjectNumber.FindAllString(cleanedLatest, -1) {
 		if strings.Contains(queryLower, strings.ToLower(num)) {
 			return true
 		}
 	}
-	for _, word := range followupSubjectLatin.FindAllString(prior, -1) {
+	for _, word := range followupSubjectLatin.FindAllString(cleanedLatest, -1) {
 		w := strings.ToLower(word)
 		if followupGenericLatin[w] {
 			continue
@@ -170,11 +235,10 @@ func queryContainsPriorSubjectToken(query, prevUser, prevAssistant string) bool 
 			return true
 		}
 	}
-	for _, word := range followupSubjectHangul.FindAllString(prior, -1) {
+	for _, word := range followupSubjectHangul.FindAllString(cleanedLatest, -1) {
 		if followupGenericHangul[word] || utf8.RuneCountInString(word) < 2 {
 			continue
 		}
-		// Match stem prefix of at least 2 Hangul runes to handle particles (e.g. "한국항공" vs "한국항공이").
 		runes := []rune(word)
 		stem := word
 		if len(runes) > 3 {
@@ -187,20 +251,18 @@ func queryContainsPriorSubjectToken(query, prevUser, prevAssistant string) bool 
 	return false
 }
 
-// needsFollowupSearchRewrite detects when a model emits a context-less or
-// echoed follow-up search query that omits the concrete subject from the
-// immediately preceding turn.
-func needsFollowupSearchRewrite(toolName, argsJSON, currentUserText, prevUser, prevAssistant string) (string, bool) {
-	if strings.TrimSpace(prevUser) == "" && strings.TrimSpace(prevAssistant) == "" {
+// needsFollowupSearchRewrite detects when a model emits a context-less,
+// overly broad, or echoed follow-up search query that omits the distinguishing
+// subject/identifiers from the recent conversation.
+func needsFollowupSearchRewrite(toolName, argsJSON, currentUserText string, turns []priorConversationTurn) (string, bool) {
+	if len(turns) == 0 {
 		return "", false
 	}
 	rawQuery, _, supported := extractPrimarySearchQuery(toolName, argsJSON)
 	if !supported {
 		return "", false
 	}
-	// If the model already included a concrete subject token from the previous
-	// turn, leave its query untouched.
-	if rawQuery != "" && queryContainsPriorSubjectToken(rawQuery, prevUser, prevAssistant) {
+	if rawQuery != "" && queryContainsPriorAnchor(rawQuery, turns) {
 		return rawQuery, false
 	}
 	if rawQuery == "" {
@@ -221,8 +283,25 @@ func needsFollowupSearchRewrite(toolName, argsJSON, currentUserText, prevUser, p
 	return rawQuery, false
 }
 
-func rewriteFollowupSearchArguments(ctx context.Context, endpoint, token, modelID, toolName, argsJSON, currentUserText, prevUser, prevAssistant string) (string, bool) {
-	rawQuery, needed := needsFollowupSearchRewrite(toolName, argsJSON, currentUserText, prevUser, prevAssistant)
+func formatPriorTurnsForRewrite(turns []priorConversationTurn) string {
+	var b strings.Builder
+	for i, t := range turns {
+		if i == len(turns)-1 {
+			b.WriteString("Most recent turn (primary reference):\n")
+		} else {
+			fmt.Fprintf(&b, "Earlier turn %d:\n", i+1)
+		}
+		b.WriteString("User: ")
+		b.WriteString(compactText(t.User, 450))
+		b.WriteString("\nAssistant: ")
+		b.WriteString(compactText(t.Assistant, 550))
+		b.WriteString("\n\n")
+	}
+	return b.String()
+}
+
+func rewriteFollowupSearchArguments(ctx context.Context, endpoint, token, modelID, toolName, argsJSON, currentUserText string, turns []priorConversationTurn) (string, bool) {
+	rawQuery, needed := needsFollowupSearchRewrite(toolName, argsJSON, currentUserText, turns)
 	if !needed || strings.TrimSpace(endpoint) == "" || strings.TrimSpace(modelID) == "" {
 		return argsJSON, false
 	}
@@ -236,9 +315,8 @@ func rewriteFollowupSearchArguments(ctx context.Context, endpoint, token, modelI
 		"required":             []string{"rewritten", "query"},
 		"additionalProperties": false,
 	}
-	userPrompt := "Immediately preceding turn:\nUser: " + compactText(prevUser, 600) +
-		"\nAssistant: " + compactText(prevAssistant, 600) +
-		"\n\nCurrent user follow-up:\n" + compactText(currentUserText, 300)
+	userPrompt := formatPriorTurnsForRewrite(turns) +
+		"Current user follow-up:\n" + compactText(currentUserText, 300)
 	if rawQuery != "" {
 		userPrompt += "\n\nModel's initial search query:\n" + compactText(rawQuery, 200)
 	}
@@ -250,8 +328,12 @@ func rewriteFollowupSearchArguments(ctx context.Context, endpoint, token, modelI
 		"max_tokens":  120,
 		"messages": []any{
 			map[string]any{
-				"role":    "system",
-				"content": "Rewrite the user follow-up into one concise, self-contained web search query by combining it with the specific subject (name, event, flight/model, year, place) from the immediately preceding turn. If the current request is already a completely new self-contained topic unrelated to the previous turn, set rewritten=false and keep the query unchanged. Return only JSON.",
+				"role": "system",
+				"content": "Rewrite the user follow-up into one concise, self-contained web search query (3-10 keywords, no filler words like '관련 정보'). " +
+					"Resolve the subject from the MOST RECENT turn first, and carry over key distinguishing identifiers " +
+					"(flight/model numbers like OZ214/OZ212, years like 2013, specific locations or events) from earlier turns when they belong to the same ongoing topic, " +
+					"so search results will not match unrelated events. " +
+					"If the current request is a completely new self-contained topic unrelated to the conversation, set rewritten=false and keep the query unchanged. Return only JSON.",
 			},
 			map[string]any{"role": "user", "content": userPrompt},
 		},

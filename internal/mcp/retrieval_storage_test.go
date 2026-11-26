@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func openRetrievalTestDB(t *testing.T) string {
@@ -270,6 +271,37 @@ func TestReindexRejectsConcurrentMemoryChanges(t *testing.T) {
 	db.QueryRow(`SELECT embedding_model FROM memory_chunk_embeddings`).Scan(&model)
 	if model != "test" {
 		t.Fatal(model)
+	}
+}
+
+func TestChatTurnSemanticMatchRespectsScopeAndProviderChanges(t *testing.T) {
+	previous := getBufferedEmbeddingProvider()
+	t.Cleanup(func() { SetBufferedEmbeddingProvider(previous) })
+	SetBufferedEmbeddingProvider(BufferedEmbeddingProvider{
+		ModelName: "chat-test",
+		BuildWithUsage: func(string, BufferedEmbeddingUsage) ([]float64, string, error) {
+			return []float64{1, 0}, "chat-test", nil
+		},
+	})
+	candidates := []string{"서비스 인프라를 이전할 계획입니다."}
+	if got := MatchChatTurn("alice/session", "마이그레이션", candidates, true); got != -1 {
+		t.Fatalf("cold cache returned semantic hit: %d", got)
+	}
+	select {
+	case chatTurnIndexSlot <- struct{}{}:
+	case <-time.After(time.Second):
+		t.Fatal("turn indexing did not finish")
+	}
+	defer func() { <-chatTurnIndexSlot }()
+	if got := MatchChatTurn("alice/session", "마이그레이션", candidates, true); got != 0 {
+		t.Fatalf("warm cache did not return semantic hit: %d", got)
+	}
+	if got := MatchChatTurn("bob/session", "마이그레이션", candidates, true); got != -1 {
+		t.Fatalf("semantic cache crossed conversation scope: %d", got)
+	}
+	SetBufferedEmbeddingProvider(getBufferedEmbeddingProvider())
+	if got := MatchChatTurn("alice/session", "마이그레이션", candidates, true); got != -1 {
+		t.Fatalf("provider replacement reused a stale vector: %d", got)
 	}
 }
 

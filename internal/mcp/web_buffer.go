@@ -83,6 +83,7 @@ func SetBufferedEmbeddingProvider(provider BufferedEmbeddingProvider) {
 	bufferedEmbeddingProviderM.Lock()
 	defer bufferedEmbeddingProviderM.Unlock()
 	bufferedEmbeddingProvider = provider
+	resetChatTurnVectors()
 }
 
 func getBufferedEmbeddingProvider() BufferedEmbeddingProvider {

@@ -153,6 +153,54 @@ func TestSearchRelevanceFilterRemovesProviderNoise(t *testing.T) {
 	if !containsKoreanText("로컬 LLM") || containsKoreanText("local LLM") {
 		t.Fatal("Korean locale detection failed")
 	}
+
+	particleFiltered := filterRelevantSearchResults("아시아나항공의 샌프란시스코에서 편명이", []webSearchResult{
+		{Title: "아시아나항공 OZ214 편명 변경", Snippet: "샌프란시스코 노선 OZ212 변경"},
+	})
+	if len(particleFiltered) != 1 {
+		t.Fatalf("Korean particle terms failed to match stem in result: %#v", particleFiltered)
+	}
+}
+
+func TestNonFreshnessSearchFallsBackToGoogleNewsAndRelaxedQuery(t *testing.T) {
+	t.Run("google_news_rss fallback", func(t *testing.T) {
+		client := &http.Client{Transport: searchRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch req.URL.Host {
+			case "lite.duckduckgo.com":
+				return searchResponse(req, `<html><body></body></html>`), nil
+			case "www.bing.com":
+				return searchResponse(req, `<?xml version="1.0"?><rss><channel></channel></rss>`), nil
+			case "news.google.com":
+				return searchResponse(req, `<?xml version="1.0"?><rss><channel><item><title>아시아나항공 OZ214 편명 변경</title><link>https://news.google.com/rss/articles/oz214</link><description>2013년 8월 12일부터 OZ212로 변경</description></item></channel></rss>`), nil
+			default:
+				return searchResponse(req, ""), nil
+			}
+		})}
+		results, provider, err := searchWebWithProviders("아시아나항공 OZ214 편명 변경", client)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if provider != "google_news_rss" || len(results) != 1 {
+			t.Fatalf("expected google_news_rss fallback, got provider=%q results=%#v", provider, results)
+		}
+	})
+
+	t.Run("relaxed query retry", func(t *testing.T) {
+		client := &http.Client{Transport: searchRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+			q := req.URL.Query().Get("q")
+			if req.URL.Host == "www.bing.com" && len(strings.Fields(q)) <= 4 {
+				return searchResponse(req, `<?xml version="1.0"?><rss><channel><item><title>아시아나항공 OZ214 OZ212 편명 변경</title><link>https://example.com/oz214</link><description>2013년 8월 12일 편명 변경</description></item></channel></rss>`), nil
+			}
+			return searchResponse(req, `<?xml version="1.0"?><rss><channel></channel></rss>`), nil
+		})}
+		results, provider, err := searchWebWithProviders("아시아나항공 OZ214 OZ212 편명 변경 2013년 7월 6일 샌프란시스코 사고 관련 정보", client)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if provider != "bing_rss" || len(results) != 1 {
+			t.Fatalf("expected relaxed query bing_rss recovery, got provider=%q results=%#v", provider, results)
+		}
+	})
 }
 
 func TestParseNaverSearchResultsExtractsCompactCards(t *testing.T) {

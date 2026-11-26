@@ -1565,6 +1565,50 @@ func searchWebWithProviders(query string, client *http.Client) ([]webSearchResul
 		return results, "bing_rss", nil
 	}
 
+	// Fall back to Google News RSS for non-freshness queries as well when both
+	// DuckDuckGo and Bing RSS return no usable results.
+	if !freshnessSearch {
+		var newsResults []webSearchResult
+		newsResults, newsErr = searchGoogleNewsRSS(query, client)
+		newsResults = filterRelevantSearchResults(query, newsResults)
+		if newsErr == nil && len(newsResults) > 0 {
+			emitTraceEvent("tool_runtime", "search_web.fallback", "Using Google News RSS after DuckDuckGo and Bing RSS returned no usable results", traceDetailsMap(
+				"query", query,
+				"from_provider", "bing_rss",
+				"to_provider", "google_news_rss",
+				"reason", toolErrorDetail(bingErr),
+			))
+			return newsResults, "google_news_rss", nil
+		}
+	}
+
+	// If an over-constrained query returned zero results across all providers,
+	// retry once with a compact relaxed query built from its core terms.
+	if relaxed := relaxSearchQuery(query); relaxed != "" && !strings.EqualFold(relaxed, strings.TrimSpace(query)) {
+		if relaxedBing, err := searchBingRSS(relaxed, client); err == nil {
+			relaxedBing = filterRelevantSearchResults(relaxed, relaxedBing)
+			if len(relaxedBing) > 0 {
+				emitTraceEvent("tool_runtime", "search_web.fallback", "Using relaxed query on Bing RSS after exact query returned no usable results", traceDetailsMap(
+					"query", query,
+					"relaxed_query", relaxed,
+					"to_provider", "bing_rss",
+				))
+				return relaxedBing, "bing_rss", nil
+			}
+		}
+		if relaxedNews, err := searchGoogleNewsRSS(relaxed, client); err == nil {
+			relaxedNews = filterRelevantSearchResults(relaxed, relaxedNews)
+			if len(relaxedNews) > 0 {
+				emitTraceEvent("tool_runtime", "search_web.fallback", "Using relaxed query on Google News RSS after exact query returned no usable results", traceDetailsMap(
+					"query", query,
+					"relaxed_query", relaxed,
+					"to_provider", "google_news_rss",
+				))
+				return relaxedNews, "google_news_rss", nil
+			}
+		}
+	}
+
 	if duckErr == nil {
 		duckErr = fmt.Errorf("DuckDuckGo returned no parsed results")
 	}
@@ -1575,6 +1619,36 @@ func searchWebWithProviders(query string, client *http.Client) ([]webSearchResul
 		return nil, "", fmt.Errorf("all web search providers failed: duckduckgo: %v; google_news_rss: %v; bing_rss: %v", duckErr, newsErr, bingErr)
 	}
 	return nil, "", fmt.Errorf("all web search providers failed: duckduckgo: %v; bing_rss: %v", duckErr, bingErr)
+}
+
+func relaxSearchQuery(query string) string {
+	cleaned := strings.NewReplacer("(", " ", ")", " ", "[", " ", "]", " ", "\"", " ", "'", " ", ",", " ", "/", " ").Replace(strings.TrimSpace(query))
+	fields := strings.Fields(cleaned)
+	if len(fields) <= 4 {
+		return ""
+	}
+	filler := map[string]bool{
+		"관련": true, "정보": true, "내용": true, "상세": true, "자세한": true, "자세히": true,
+		"알려줘": true, "찾아줘": true, "찾아와줘": true, "검색": true, "대한": true, "대해": true,
+		"details": true, "information": true, "about": true, "please": true,
+	}
+	kept := make([]string, 0, 5)
+	seen := map[string]bool{}
+	for _, f := range fields {
+		lower := strings.ToLower(f)
+		if filler[lower] || seen[lower] {
+			continue
+		}
+		seen[lower] = true
+		kept = append(kept, f)
+		if len(kept) >= 4 {
+			break
+		}
+	}
+	if len(kept) < 2 {
+		return ""
+	}
+	return strings.Join(kept, " ")
 }
 
 func searchGoogleNewsRSS(query string, client *http.Client) ([]webSearchResult, error) {
@@ -1640,6 +1714,18 @@ func searchHaystackContainsTerm(haystack, term string) bool {
 
 var fourDigitSearchYearPattern = regexp.MustCompile(`^\d{4}(?:년)?$`)
 
+func stripKoreanParticleSuffix(term string) string {
+	for _, suffix := range []string{"에서", "으로", "부터", "까지", "은", "는", "이", "가", "을", "를", "의", "에", "로", "와", "과", "도", "만"} {
+		if strings.HasSuffix(term, suffix) {
+			stem := strings.TrimSuffix(term, suffix)
+			if len([]rune(stem)) >= 2 {
+				return stem
+			}
+		}
+	}
+	return ""
+}
+
 func searchRelevanceTerms(query string) []string {
 	stop := map[string]bool{
 		"latest": true, "current": true, "today": true, "recent": true, "news": true, "update": true,
@@ -1648,14 +1734,18 @@ func searchRelevanceTerms(query string) []string {
 	}
 	seen := make(map[string]bool)
 	var terms []string
+	addTerm := func(term string) {
+		if len([]rune(term)) < 2 || stop[term] || fourDigitSearchYearPattern.MatchString(term) || seen[term] {
+			return
+		}
+		seen[term] = true
+		terms = append(terms, term)
+	}
 	for _, field := range strings.Fields(strings.ToLower(query)) {
 		term := strings.Trim(field, " \t\r\n.,:;!?()[]{}\"'`/\\|-_+")
-		if len([]rune(term)) < 2 || stop[term] || fourDigitSearchYearPattern.MatchString(term) {
-			continue
-		}
-		if !seen[term] {
-			seen[term] = true
-			terms = append(terms, term)
+		addTerm(term)
+		if stem := stripKoreanParticleSuffix(term); stem != "" {
+			addTerm(stem)
 		}
 	}
 	return terms
@@ -1703,12 +1793,12 @@ func isDuckDuckGoChallengePage(input string) bool {
 }
 
 func searchBingRSS(query string, client *http.Client) ([]webSearchResult, error) {
-	searchURL := fmt.Sprintf("https://www.bing.com/search?format=rss&count=5&q=%s", url.QueryEscape(query))
+	searchURL := fmt.Sprintf("https://www.bing.com/search?format=rss&count=8&q=%s", url.QueryEscape(query))
 	content, err := fetchSearchPage(client, searchURL)
 	if err != nil {
 		return nil, err
 	}
-	return parseBingRSSResults(content, 5)
+	return parseBingRSSResults(content, 8)
 }
 
 func parseBingRSSResults(input string, limit int) ([]webSearchResult, error) {

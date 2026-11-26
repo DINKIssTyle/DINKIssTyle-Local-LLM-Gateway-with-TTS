@@ -4890,9 +4890,27 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			autoContextDebug = mcp.FastMemoryContextWithOptions(userID, initialUserInputText, useMemoryVectors)
 			autoContext = autoContextDebug.Context
 		}
-		recentContext, recentContextTurns, recentContextSource = getRecentConversationContext(userID)
-		if gemmaHasRoleHistory {
-			recentContext, recentContextTurns, recentContextSource = "", 0, "role_history"
+		assembled := false
+		if llmMode != "stateful" && !glassesRequest && userID != "" && chatCtx.Err() == nil {
+			if session, err := mcp.GetCurrentChatSession(userID); err == nil {
+				snapshot := chatharness.ParseUISnapshot(session.UIStateJSON)
+				if len(snapshot.Turns) > 0 {
+					var pastTurn string
+					recentContext, pastTurn, recentContextTurns = assembleChatContext(userID+"\x00"+session.SessionKey, initialUserInputText, clientTurnID, reqMap, snapshot, useMemoryVectors)
+					if pastTurn != "" {
+						autoContext = strings.TrimSpace(pastTurn + "\n\n" + autoContext)
+					}
+					recentContextSource = "assembled_turns"
+					assembled = true
+				}
+			}
+		}
+		if !assembled {
+			if gemmaHasRoleHistory {
+				recentContextSource = "role_history"
+			} else {
+				recentContext, recentContextTurns, recentContextSource = getRecentConversationContext(userID)
+			}
 		}
 		if hasPreviousResponseID {
 			recentContext = compactRecentTurnContent(recentContext, recentContextStatefulBudget)
@@ -7079,8 +7097,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			if repairedArgsJSON, repaired := chatharness.RepairMissingReadWebPageArguments(lastToolName, lastToolArgsStr, initialUserInputText); repaired {
 				lastToolArgsStr = repairedArgsJSON
 			}
-			if prevUser, prevAssistant := extractImmediatePriorTurn(reqMap, sessionUISnapshot); prevUser != "" || prevAssistant != "" {
-				if rewrittenArgsJSON, rewritten := rewriteFollowupSearchArguments(chatCtx, endpoint, token, modelID, lastToolName, lastToolArgsStr, initialUserInputText, prevUser, prevAssistant); rewritten {
+			if priorTurns := extractRecentPriorTurns(reqMap, sessionUISnapshot, 3); len(priorTurns) > 0 {
+				if rewrittenArgsJSON, rewritten := rewriteFollowupSearchArguments(chatCtx, endpoint, token, modelID, lastToolName, lastToolArgsStr, initialUserInputText, priorTurns); rewritten {
 					lastToolArgsStr = rewrittenArgsJSON
 				}
 			}
