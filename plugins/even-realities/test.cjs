@@ -440,7 +440,10 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  await tick();await tick();
  assert.ok(requests.some(r=>r.url.endsWith('/api/stt/preview')));
  assert.equal(element('hud-trigger-keyword').style.opacity,'1','preview wake immediately activates trigger display');
- assert.match(element('hud-screen').innerHTML,/이븐: 임시로 인식한 문장/,'wake input box shows live STT immediately');
+ assert.match(element('hud-screen').innerHTML,/이븐: 임시로 인식한 문장_/,'wake input shows live STT with cursor immediately');
+ assert.match(element('hud-screen').innerHTML,/hud-ai-borderless/,'listening wake input has no box border');
+ for(let i=0;i<150 && nativePage.textObject.find(c=>c.containerID===1)?.borderWidth!==0;i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(nativePage.textObject.find(c=>c.containerID===1)?.borderWidth,0,'native listening wake input must omit border');
  assert.doesNotMatch(element('hud-screen').innerHTML,/이븐 질문|hud-ai-header/,'draft question has no redundant title row');
  assert.equal(requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).length,finalsBeforePreview);
  assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,chatCount,'draft trigger must not call AI');
@@ -677,7 +680,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  const beforeWake=requests.filter(r=>r.url.endsWith('/api/chat')).length;
  nextTranscript='이븐';utterance();await tick();await tick();await tick();
  assert.equal(requests.filter(r=>r.url.endsWith('/api/chat')).length,beforeWake,'wake-only must not spend an LLM request');
- assert.match(element('hud-screen').innerHTML,/이븐: 듣는 중\.\.\./);
+ assert.match(element('hud-screen').innerHTML,/이븐: [_ ]/);
  assert.doesNotMatch(element('hud-screen').innerHTML,/이븐 질문|hud-ai-header/,'wake-only acknowledgement has no title row');
  for(let i=0;i<150 && nativePage.textObject.some(c=>c.containerID===9);i++)await new Promise(resolve=>setTimeout(resolve,20));
  assert.equal(nativePage.textObject.some(c=>c.containerID===9),false,'native wake input omits the title container');
@@ -703,7 +706,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  holdChat=true;element('chat-input').value='취소할 오래된 질문';element('text-chat-form').handlers.submit({preventDefault(){}});
  await tick();await tick();
  nextTranscript='이븐';utterance();await tick();await tick();await tick();
- assert.match(element('hud-screen').innerHTML,/이븐: 듣는 중\.\.\./);
+ assert.match(element('hud-screen').innerHTML,/이븐: [_ ]/);
  assert.doesNotMatch(element('hud-screen').innerHTML,/이븐 질문|hud-ai-header/,'wake-only acknowledgement has no title row');
  for(let i=0;i<150 && nativePage.textObject.some(c=>c.containerID===9);i++)await new Promise(resolve=>setTimeout(resolve,20));
  assert.equal(nativePage.textObject.some(c=>c.containerID===9),false,'native wake input omits the title container');
@@ -1958,7 +1961,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  fs.writeFileSync('/private/tmp/dkst-pinned-panel-preview.json',JSON.stringify({html:element('hud-screen').innerHTML,native:nativePage}));
  const closeTapMic=audioCalls.length;handler({textEvent:{}});await tick();await tick();
  assert.equal(queue.state().answer,'');assert.equal(queue.state().recording,true);assert.equal(audioCalls.length,closeTapMic,'tap closes the response without muting');
- handler({sysEvent:{eventType:0}});await tick();assert.match(queue.state().answer,/듣는 중/,'tap from a closed window arms a question');
+ handler({sysEvent:{eventType:0}});await tick();assert.match(queue.state().answer,/이븐: [_ ]/,'tap from a closed window arms a question');
  assert.equal(queue.lifetime.active,false);
  const manualTapStarts=requests.filter(r=>r.url.endsWith('/api/stt/transcribe')).length;
  nextTranscript='탭으로 호출한 질문입니다';
@@ -2010,7 +2013,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  element('hide-transcript').checked=true;await element('hide-transcript').handlers.change();
  assert.equal(element('trigger-transcript-only').checked,true);assert.equal(element('hide-transcript').checked,true);
  queue.dismiss();nextTranscript='이븐';queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'both-options-wake-only');for(let i=0;i<10;i++)await tick();
- assert.match(queue.state().answer,/이븐: 듣는 중\.\.\./);
+ assert.match(queue.state().answer,/이븐: [_ ]/);
  holdChat=true;chatReply=null;nextTranscript='피라미드 높이를 알려줘';queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'both-options-followup');for(let i=0;i<12;i++)await tick();
  assert.match(element('hud-screen').innerHTML,/hud-ai-body">이븐: 피라미드 높이를 알려줘/,'wake-only acknowledgement must yield to the question preview');
  releaseChat();for(let i=0;i<12;i++)await tick();queue.dismiss();holdChat=true;chatReply=null;
@@ -2110,7 +2113,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  stackSnapshots.push({html:element('hud-screen').innerHTML,native:JSON.parse(JSON.stringify(nativePage))});
  fs.writeFileSync('/private/tmp/dkst-card-stack-preview.json',JSON.stringify(stackSnapshots));
  nextTranscript='이븐';queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'stack-wake-only');for(let i=0;i<15;i++)await tick();
- assert.equal(queue.stack.cards.length,0,'explicit wake acknowledgement retains its single answer window');assert.match(queue.state().answer,/이븐: 듣는 중\.\.\./);
+ assert.equal(queue.stack.cards.length,0,'explicit wake acknowledgement retains its single answer window');assert.match(queue.state().answer,/이븐: [_ ]/);
  queue.dismiss();
  element('trigger-transcript-only').checked=true;await element('trigger-transcript-only').handlers.change();
  element('hint-auto-close').checked=true;await element('hint-auto-close').handlers.change();element('hint-seconds-per-line').value='2.5';await element('hint-seconds-per-line').handlers.change();
@@ -2200,9 +2203,9 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'before-tap-inflight');await tick();
  const beforeTapAudioCalls=audioCalls.length;
  handler({sysEvent:{eventType:0}});await tick();
- assert.match(queue.state().answer,/듣는 중/);assert.equal(audioCalls.length,beforeTapAudioCalls,'AI tap must not mute an active mic');
+ assert.match(queue.state().answer,/이븐: [_ ]/);assert.equal(audioCalls.length,beforeTapAudioCalls,'AI tap must not mute an active mic');
  finishPriorTapAudio();for(let i=0;i<10;i++)await tick();
- assert.match(queue.state().answer,/듣는 중/,'pre-tap speech cannot consume the armed question');
+ assert.match(queue.state().answer,/이븐: [_ ]/,'pre-tap speech cannot consume the armed question');
  queue.enqueueClip(Buffer.alloc(6400),true,Date.now(),'after-tap-question');for(let i=0;i<15;i++)await tick();
  assert.equal(queue.state().title,'호출어 없이 탭한 뒤 질문');assert.equal(queue.state().recording,true);
  // A delayed finalized wake call must still route to chat, not be discarded.
@@ -2214,7 +2217,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  handler({sysEvent:{eventType:0}});handler({sysEvent:{eventType:0}});
  for(let i=0;i<20;i++)await tick();
  assert.equal(queue.state().recording,true,'AI tap starts STT when stopped');assert.equal(queue.state().answer,'','second tap during microphone opening cancels the window');
- handler({sysEvent:{eventType:0}});await tick();assert.match(queue.state().answer,/듣는 중/);
+ handler({sysEvent:{eventType:0}});await tick();assert.match(queue.state().answer,/이븐: [_ ]/);
  const secondTapMic=audioCalls.length;handler({sysEvent:{eventType:0}});await tick();assert.equal(queue.state().answer,'');assert.equal(audioCalls.length,secondTapMic,'closing listening window preserves STT');
  assert.equal(audioCalls.filter(c=>c[0]).length,stoppedTapOpens+1,'rapid taps open one microphone');
  await queue.stopVoiceRecording(false);

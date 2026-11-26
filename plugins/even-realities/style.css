@@ -651,3 +651,9 @@ summary:focus-visible { outline:2px solid var(--accent-blue); outline-offset:2px
 .translation-mode .hud-subtitle-text { font-size: 15px; line-height: 22px; }
 .translation-mode .hud-ai-body { min-height: 0; max-height: 112px; }
 .translation-mode .hud-translation-replies .hud-transcript-body { min-height: 0; max-height: 72px; }
+
+.hud-ai-box.hud-ai-borderless {
+  border-color: transparent;
+  background: transparent;
+  padding: 0;
+}

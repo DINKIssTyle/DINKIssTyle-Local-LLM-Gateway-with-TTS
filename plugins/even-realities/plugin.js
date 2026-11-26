@@ -162,6 +162,11 @@ import { LocalAgreement } from './local-agreement.mjs';
   let answerImageScope = '';
   let answerTitle = '';
   let answerIsWakeInput=false;
+  let wakeInputListening=false;
+  let wakeInputName='';
+  let wakeInputPrompt='';
+  let wakeBlinkOn=true;
+  let wakeBlinkTimer=null;
   let answerVoicePrompt='';
   let answerIsHint=false;
   let updatingHintStack=false;
@@ -208,7 +213,31 @@ import { LocalAgreement } from './local-agreement.mjs';
   let aiStatusError='';
   let aiIconPositionApplied=null,aiIconPositionTimer=null;
   let lastTranscriptBrightness=null;
-  function wakeInputDisplay(name,question=''){const q=String(question || '').trim();return `${name}: ${q?`${q} …`:'듣는 중...'}`;}
+  function wakeInputDisplay(name,question='',blinkOn=true){const q=String(question || '').trim();const cursor=blinkOn?'_':' ';return `${name}: ${q?`${q}${cursor}`:cursor}`;}
+  function stopWakeBlink(){if(wakeBlinkTimer){clearTimeout(wakeBlinkTimer);wakeBlinkTimer=null;}wakeBlinkOn=true;}
+  function scheduleWakeBlink(){
+    if(wakeBlinkTimer)return;
+    const step=()=>{
+      if(!answerIsWakeInput || !wakeInputListening){wakeBlinkTimer=null;wakeBlinkOn=true;return;}
+      wakeBlinkOn=!wakeBlinkOn;
+      answerText=wakeInputDisplay(wakeInputName,wakeInputPrompt,wakeBlinkOn);
+      renderLiveHUD();
+      wakeBlinkTimer=setTimeout(step,700);
+    };
+    wakeBlinkTimer=setTimeout(step,700);
+  }
+  function setWakeListening(name,question=''){
+    answerIsWakeInput=true;wakeInputListening=true;wakeInputName=name;wakeInputPrompt=String(question || '').trim();wakeBlinkOn=true;
+    answerTitle=`${name} 질문`;answerText=wakeInputDisplay(name,wakeInputPrompt,true);
+    if(els.chatOutput)els.chatOutput.textContent=answerText;
+    scheduleWakeBlink();
+  }
+  function setWakeSubmitted(name,prompt){
+    stopWakeBlink();
+    answerIsWakeInput=true;wakeInputListening=false;wakeInputName=name;wakeInputPrompt=String(prompt || '').trim();
+    answerTitle=`${name} 질문`;answerText=`${name}: ${wakeInputPrompt}`;
+    if(els.chatOutput)els.chatOutput.textContent=answerText;
+  }
   function finishWakeJob(token){if(token!==undefined)voiceWakeJobs.delete(token);queueHudIcons();}
   let transcriptText = '';
   const transcriptContext = [];
@@ -243,7 +272,7 @@ import { LocalAgreement } from './local-agreement.mjs';
     if(answerImages.length && answerImageScope===chatScope() && answerText && !answerIsHint && !answerIsWakeInput && !hudImagesDisabled && normalizeGlassesMode(config.glassesMode)==='ai' && !subtitleOnly()){
       return {key:`answer-images-${answerImageRevision}`,show:true,showTranscript:false,titleHeight:CHAT_IMAGE_HEIGHT,bodyHeight:288-27-CHAT_IMAGE_HEIGHT,contentLines:4,images:answerImages};
     }
-    if(subtitleOnly())return {key:`subtitles-${subtitleLineCount()}`,show:true,showTranscript:false,hint:false,height:subtitleLineCount()*27,bodyHeight:subtitleLineCount()*27,titleHeight:0,contentLines:subtitleLineCount(),transcriptLines:0};if(hintStackActive())return stackedHintPresentation(hintStack,bottomCaptionHidden());return adaptiveHUD({mode:normalizeGlassesMode(config.glassesMode),title:answerTitle,hideTitle:answerIsWakeInput,text:aiPresentationText(),hideTranscript:bottomCaptionHidden()});}
+    if(subtitleOnly())return {key:`subtitles-${subtitleLineCount()}`,show:true,showTranscript:false,hint:false,borderless:false,height:subtitleLineCount()*27,bodyHeight:subtitleLineCount()*27,titleHeight:0,contentLines:subtitleLineCount(),transcriptLines:0};if(hintStackActive())return stackedHintPresentation(hintStack,bottomCaptionHidden());return adaptiveHUD({mode:normalizeGlassesMode(config.glassesMode),title:answerTitle,hideTitle:answerIsWakeInput,borderless:answerIsWakeInput && wakeInputListening,text:aiPresentationText(),hideTranscript:bottomCaptionHidden()});}
   function aiVisibleLines(){return currentBodyLayout().contentLines || 6;}
   let nativeTranslateLayout=false,nativeHeaderLayoutKey='',nativeBodyLayoutKey='';
   const AI_SCROLL_START_MS = 5000;
@@ -445,8 +474,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       previewWakePrompt=String(data.text || '').trim();
       const wakeName=triggerLabels()[0] || 'AI';
       clearHintStack();hintLifetime.clear();answerAutoCloseEligible=false;answerVoicePrompt='';
-      answerIsWakeInput=true;answerTitle=`${wakeName} 질문`;answerText=wakeInputDisplay(wakeName,previewWakePrompt);
-      if(els.chatOutput)els.chatOutput.textContent=answerText;
+      setWakeListening(wakeName,previewWakePrompt);
       setHUDNotice(previewWakePrompt?'질문 인식 중':'질문 대기');
       return;
     }
@@ -458,14 +486,13 @@ import { LocalAgreement } from './local-agreement.mjs';
       if(activeAIJob?.hint){activeAIJob.cancelReason='chat_priority';aiAbortController?.abort();}
       for(let i=pendingAI.length-1;i>=0;i--)if(pendingAI[i].hint)pendingAI.splice(i,1);
     }else if(!intent.wake){
-      if(previewWakeId){previewWakeId='';previewWakePrompt='';if(answerTitle.endsWith(' 질문') && !processingAI){answerIsWakeInput=false;answerTitle='';answerText='';if(els.chatOutput)els.chatOutput.textContent='';}}
+      if(previewWakeId){previewWakeId='';previewWakePrompt='';if(answerTitle.endsWith(' 질문') && !processingAI){stopWakeBlink();answerIsWakeInput=false;wakeInputListening=false;answerTitle='';answerText='';if(els.chatOutput)els.chatOutput.textContent='';}}
     }
     if(intent.wake){
       previewWakePrompt=intent.prompt || '';
       const wakeName=triggerLabels()[0] || 'AI';
       clearHintStack();hintLifetime.clear();answerAutoCloseEligible=false;answerVoicePrompt='';
-      answerIsWakeInput=true;answerTitle=`${wakeName} 질문`;answerText=wakeInputDisplay(wakeName,previewWakePrompt);
-      if(els.chatOutput)els.chatOutput.textContent=answerText;
+      setWakeListening(wakeName,previewWakePrompt);
       setHUDNotice(previewWakePrompt?'질문 인식 중':'질문 대기');
     }
     if(intent.hintText && !previewWakeId)hintGate.observe(intent.hintText,{id:snapshot.segmentId,preview:true});
@@ -475,12 +502,12 @@ import { LocalAgreement } from './local-agreement.mjs';
   function syncHintStack(){
     const top=hintStack.cards[0];
     currentHintAudit=top?.auditMeta || null;
-    answerIsWakeInput=false;answerText=top?.text || '';answerTitle=top?.title || '';answerVoicePrompt='';
+    stopWakeBlink();answerIsWakeInput=false;wakeInputListening=false;answerText=top?.text || '';answerTitle=top?.title || '';answerVoicePrompt='';
     answerIsHint=!!top;answerAutoCloseEligible=!!top;
     if(els.chatOutput)els.chatOutput.textContent=answerText;
     renderLiveHUD();
   }
-  function clearHintStack(){answerIsWakeInput=false;answerIsHint=false;currentHintAudit=null;hintStack.clear();}
+  function clearHintStack(){stopWakeBlink();answerIsWakeInput=false;wakeInputListening=false;answerIsHint=false;currentHintAudit=null;hintStack.clear();}
   function displayHintCard(note,text){
     hintLifetime.clear();stopAIAutoScroll();aiScrollOffset=0;
     if(config.hintCardCount===2){
@@ -1236,7 +1263,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         imageObject:[{containerID:5,containerName:'mic-state',xPosition:layout.micIconX,yPosition:1,width:24,height:24},{containerID:6,containerName:'mode-state',xPosition:layout.modeIconX,yPosition:1,width:24,height:24},{containerID:11,containerName:'capture-state',xPosition:layout.stateIconX,yPosition:1,width:24,height:24}],
         textObject: [...nativeAITitles(translate,body),...(body.show?[{
           xPosition: 0, yPosition: 27+body.titleHeight, width: 576, height: body.cards?.length>1?body.cards[0].rows*27:body.bodyHeight,
-          borderWidth: 1, borderColor: 4, borderRadius: translate?4:0, paddingLength:body.cards?.length>1?0:2,
+          borderWidth: body.borderless?0:1, borderColor: 4, borderRadius: translate?4:0, paddingLength:body.borderless?0:(body.cards?.length>1?0:2),
           containerID: 1, containerName: 'gateway',
           content: lastAIHUDContent || '',
           isEventCapture: 1,
@@ -1644,7 +1671,7 @@ import { LocalAgreement } from './local-agreement.mjs';
         els.hudScreen.innerHTML=`<div class="hud-subtitle-status" style="--subtitle-icon-percent:${ratio*100}%;--subtitle-icon-offset:${ratio*24}px"><img src="${hudIconPath(state.key)}" width="24" height="24" alt="${escapeHtml(state.label)}" style="opacity:${hudLuminance(hudTextBrightness(11))}"></div><div id="hud-ai-body" class="hud-subtitle-text" style="height:${subtitleLineCount()*27}px;flex:0 0 ${subtitleLineCount()*27}px">${escapeHtml(aiWindowText)}</div>`;
       }
       else els.hudScreen.innerHTML =
-        (stackedMarkup || (body.show?`<div class="hud-ai-box${body.hint?' hud-hint-box':''}"${!translateMode?` style="flex:0 0 auto;--hud-content-lines:${body.contentLines}"`:''}>` +
+        (stackedMarkup || (body.show?`<div class="hud-ai-box${body.hint?' hud-hint-box':''}${body.borderless?' hud-ai-borderless':''}"${!translateMode?` style="flex:0 0 auto;--hud-content-lines:${body.contentLines}"`:''}>` +
           (translateMode || body.titleHeight?`<div class="hud-ai-header">` +
             `<span id="hud-ai-badge" class="hud-ai-badge">${escapeHtml(body.hint?body.title:badgeLabel)}</span>` +
             `<span id="hud-ai-meta" class="hud-ai-meta">${escapeHtml(!translateMode?(hintLifetime.active?`${hintLifetime.remaining}초`:''):config.chromeTranslation!==false?'':aiMetaLabel)}</span>` +
@@ -2067,7 +2094,7 @@ import { LocalAgreement } from './local-agreement.mjs';
       else {
         chatEpoch++;aiAbortController?.abort();pendingAI.length=0;
         previewWakeId='';previewWakePrompt='';voiceWakeJobs.clear();hintGate.reset();
-        answerIsWakeInput=false;answerTitle=answerVoicePrompt='';renderLiveHUD();
+        stopWakeBlink();answerIsWakeInput=false;wakeInputListening=false;answerTitle=answerVoicePrompt='';renderLiveHUD();
       }
       return;
     }
@@ -2116,8 +2143,8 @@ import { LocalAgreement } from './local-agreement.mjs';
       hintGate.reset();hintLifetime.clear();clearHintStack();voiceWakeJobs.clear();
       tapQuestionAfterSequence=nextCaptureSequence;pendingTrigger=true;
       const name=triggerLabels()[0] || 'AI';
-      answerIsWakeInput=true;answerAutoCloseEligible=false;answerVoicePrompt='';answerTitle=`${name} 질문`;answerText=wakeInputDisplay(name);
-      els.chatOutput.textContent=answerText;els.hintStatus.textContent='AI 질문 대기 · 호출어 없이 말씀하세요';
+      answerAutoCloseEligible=false;answerVoicePrompt='';setWakeListening(name,'');
+      els.hintStatus.textContent='AI 질문 대기 · 호출어 없이 말씀하세요';
       setHUDNotice('질문 대기');renderLiveHUD();
     })();
     tapChatPromise=work;
@@ -2648,7 +2675,7 @@ import { LocalAgreement } from './local-agreement.mjs';
             voiceWakeJobs.clear();previewWakeId='';previewWakePrompt='';
                   const wakeName=triggerLabels()[0] || data.matchedTrigger || 'AI';
             chatEpoch++;hintGate.reset();aiAbortController?.abort();pendingAI.length=0;
-            clearHintStack();hintLifetime.clear();answerAutoCloseEligible=false;answerVoicePrompt='';answerIsWakeInput=true;answerTitle=`${wakeName} 질문`;answerText=route.ack;els.chatOutput.textContent=route.ack;
+            clearHintStack();hintLifetime.clear();answerAutoCloseEligible=false;answerVoicePrompt='';setWakeListening(wakeName,'');
             els.hintStatus.textContent='호출어 확인 · 다음 문장을 AI 채팅 질문으로 받습니다';
             setHUDNotice('질문 대기');renderLiveHUD();continue;
           }
@@ -2656,7 +2683,7 @@ import { LocalAgreement } from './local-agreement.mjs';
             const wakeName=triggerLabels()[0] || data.matchedTrigger || 'AI';
             previewWakeId='';previewWakePrompt='';
             hintLifetime.clear();clearHintStack();answerAutoCloseEligible=false;
-            answerIsWakeInput=true;answerTitle=`${wakeName} 질문`;answerVoicePrompt='';answerText=`${wakeName}: ${route.prompt}`;els.chatOutput.textContent=answerText;
+            answerVoicePrompt='';setWakeSubmitted(wakeName,route.prompt);
             chatSession=true;prompt=route.prompt;wakeToken=++nextWakeJob;voiceWakeJobs.set(wakeToken,prompt);
             directIntent={...directQuestionIntent(prompt),direct:true};
             hintGate.reset();if(activeAIJob?.hint){activeAIJob.cancelReason='chat_priority';aiAbortController?.abort();}
