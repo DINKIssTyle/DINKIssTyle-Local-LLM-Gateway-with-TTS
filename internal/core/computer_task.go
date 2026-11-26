@@ -49,10 +49,31 @@ func isRecentInboxRequest(question string) bool {
 	}
 }
 
+var desktopScreenCue = regexp.MustCompile(
+	`(?:컴퓨터|맥|mac|데스크톱|데스크탑|서버|호스트|현재|지금|바탕|주|보조)\s*화면` +
+		`|화면(?:을|의)?\s*(?:좀\s*)?(?:봐|보여\s*줘|확인|찍|캡처|캡쳐|읽어|분석|조작|제어|클릭|스크롤|내용|상태)` +
+		`|화면(?:에|에서)\s*(?:뭐|무엇|어떤|열려|떠|표시|클릭|눌러|다운로드|진행|버튼|창|앱|탭)` +
+		`|화면(?:에|에서)\s+\S+(?:\s+\S+){0,3}\s*(?:있나|있는지|있어|떠\s*있|열려|표시|보여|보이나)` +
+		`|\b(?:current|host|mac|desktop|primary|main|computer)\s+screen\b` +
+		`|\b(?:check|inspect|read|see|look at|watch|capture|share|click|scroll)\s+(?:the\s+|my\s+)?screen\b` +
+		`|\bwhat(?:'s| is)\s+on\s+(?:the\s+|my\s+)?screen\b` +
+		`|\bon[- ]screen\b` +
+		`|\bscreen\s+(?:content|contents|status|progress|capture|shot)\b`,
+)
+
 // Only requests with a UI operation or an in-app inspection cue need routing.
 func desktopInputCandidate(question string) bool {
+	if _, ok := desktopWindowPresenceTarget(question); ok {
+		return true
+	}
+	if screenshotAttachmentRequested(question) {
+		return true
+	}
 	question = strings.ToLower(strings.TrimSpace(question))
-	for _, cue := range []string{"$computer-use", "$builtin:computer-use", "화면", "모니터에", "디스플레이에", "창을", "탭 목록", "클릭", "앱 전환", "앱 실행", "열어", "실행해", "전환해", "스크린샷", "캡처", "캡쳐", "screen", "screenshot", "monitor", "window", "click", "open ", "launch ", "switch to", "running apps", "browser tabs", "계속해", "continue"} {
+	if desktopScreenCue.MatchString(question) {
+		return true
+	}
+	for _, cue := range []string{"$computer-use", "$builtin:computer-use", "모니터에", "디스플레이에", "창을", "탭 목록", "클릭", "앱 전환", "앱 실행", "열어", "실행해", "전환해", "스크린샷", "캡처", "캡쳐", "screenshot", "on the monitor", "on my monitor", "active window", "open window", "close window", "switch window", "window list", "click", "open ", "launch ", "switch to", "running apps", "browser tabs", "계속해", "continue"} {
 		if strings.Contains(question, cue) {
 			return true
 		}
@@ -229,8 +250,8 @@ type desktopIntent struct {
 func (m desktopTaskModel) routeIntent(ctx context.Context, question, history string) desktopIntent {
 	var route desktopIntent
 	schema := taskObject(map[string]any{"mode": taskEnum("chat", "desktop"), "request_evidence": taskString(), "text_input_evidence": taskString(), "target_application": taskString()})
-	prompt := `현재 요청이 실행 중인 컴퓨터 화면이나 앱을 직접 확인/조작하라는 요청이면 desktop, 그 외는 chat으로 분류한다. 앱 이름을 언급하거나 사용법을 질문하는 것만으로 desktop이 되지 않는다. 날씨·검색·계산·번역·일반 설명은 chat이다. 이전 대화가 desktop이어도 현재 주제가 바뀌면 chat이다. 같은 앱을 다시 확인하라는 현재 요청은 이전에 완료했더라도 desktop이다. "계속해" 같은 생략된 요청만 이전 작업을 참고한다. desktop이면 request_evidence에 현재 요청의 원문을 그대로 복사하고, chat이면 빈 문자열을 넣는다. 작업 계획은 만들지 않는다.
-Examples: "내일 아침 날씨" -> chat; "컴퓨터 유즈 설명해줘" -> chat; "사파리 사용법 알려줘" -> chat; "사파리 열어줘" -> desktop; "LM Studio에서 다운로드 중인 작업이 얼마나 진행됐는지 확인해봐" -> desktop; "현재 화면 내용이 뭐야" -> desktop.` + "\nCurrent request:\n" + question + "\nRecent conversation (reference only):\n" + history
+	prompt := `현재 요청이 실행 중인 컴퓨터 화면이나 앱을 직접 확인/조작하라는 요청이면 desktop, 그 외는 chat으로 분류한다. 앱 이름을 언급하거나 사용법을 질문하는 것만으로 desktop이 되지 않는다. 단순히 "화면", "모니터", "창" 같은 단어가 들어가거나 시야·눈 증상, 기기·안경·폰·TV 표시 문제, 원인·해결법·일반 설명을 묻는 요청은 chat이다. 날씨·검색·계산·번역·일반 설명은 chat이다. 이전 대화가 desktop이어도 현재 주제가 바뀌면 chat이다. 같은 앱을 다시 확인하라는 현재 요청은 이전에 완료했더라도 desktop이다. "계속해" 같은 생략된 요청만 이전 작업을 참고한다. desktop이면 request_evidence에 현재 요청의 원문을 그대로 복사하고, chat이면 빈 문자열을 넣는다. 작업 계획은 만들지 않는다.
+Examples: "내일 아침 날씨" -> chat; "컴퓨터 유즈 설명해줘" -> chat; "사파리 사용법 알려줘" -> chat; "화면이 좌우 2개로 보이는데 이런 증상은 뭐야?" -> chat; "모니터 화면이 깜빡이는 이유 알려줘" -> chat; "사파리 열어줘" -> desktop; "LM Studio에서 다운로드 중인 작업이 얼마나 진행됐는지 확인해봐" -> desktop; "현재 화면 내용이 뭐야" -> desktop.` + "\nCurrent request:\n" + question + "\nRecent conversation (reference only):\n" + history
 	prompt += "\nFor desktop, target_application is the canonical running app name explicitly requested (e.g. Google Chrome), or empty for the current screen. text_input_evidence is empty for any status/content inspection. Only when the user explicitly asks to enter, fill, search within, or write text in a desktop field, quote the exact current instruction authorizing that input; do not infer typing permission from plans, navigation, viewing tabs or checking progress. Never type narration, thoughts or instructions to yourself."
 	if m.explicitSkill {
 		prompt += "\nThe user explicitly selected a desktop skill. Interpret short requests in the scope of that skill. A question about the skill itself is chat; perform no desktop operations for it.\nSelected procedures:\n" + m.procedure
@@ -529,7 +550,7 @@ func runDesktopTask(ctx context.Context, m desktopTaskModel, question, history s
 	if m.procedure != "" {
 		goalContext += "\nShared desktop procedure (apply only within the current user's requested scope):\n" + m.procedure
 	}
-	planPrompt := `Decide whether the CURRENT request actually requires reading or operating the gateway host desktop. Ordinary conversation, general advice, public web research and questions answerable from supplied content do not. Resolve short follow-ups using recent conversation. If no desktop work is needed, set desktop_required=false and steps=[]. Otherwise set true and make 1-6 concrete action steps with observable done_when criteria in the user's language. Use kind=list_apps ONLY when the request merely asks for running app names; all other desktop work uses desktop_work. App discovery is not proof of app content/status. Locate an already running app before launching it. Do not include narration, planning or reporting as work steps. Screen/content/status and changed-state verification require requires_screen=true. Stay within the user's requested scope; reading status never implies cancellation or settings changes.
+	planPrompt := `Decide whether the CURRENT request actually requires reading or operating the gateway host desktop. Ordinary conversation, general advice, symptom or troubleshooting explanations, questions about another device (phone, glasses, TV), public web research and questions answerable from supplied content do not — even if words like "screen"/"화면", "monitor", or "window" appear. Resolve short follow-ups using recent conversation. If no desktop work is needed, set desktop_required=false and steps=[]. Otherwise set true and make 1-6 concrete action steps with observable done_when criteria in the user's language. Use kind=list_apps ONLY when the request merely asks for running app names; all other desktop work uses desktop_work. App discovery is not proof of app content/status. Locate an already running app before launching it. Do not include narration, planning or reporting as work steps. Screen/content/status and changed-state verification require requires_screen=true. Stay within the user's requested scope; reading status never implies cancellation or settings changes.
 ` + goalContext
 	if m.explicitSkill {
 		planPrompt += "\nThe user explicitly selected the desktop procedure above. Interpret a short task in that scope even if no app or screen is named. A question about the procedure itself does not authorize desktop work."

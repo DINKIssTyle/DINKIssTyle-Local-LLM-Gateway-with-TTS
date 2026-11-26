@@ -1,28 +1,24 @@
 ---
 name: msn-weather-current
-description: Check the current weather for a requested location on the Korean MSN Weather forecast page. Use for current weather, temperature, sky conditions, feels-like temperature, humidity, precipitation, or wind requests, including Korean questions about 현재 날씨, 기온, 습도, 강수, or 바람.
+description: Check current local weather on Korean MSN Weather, with or without a specified place. Use for weather, temperature, sky, feels-like, humidity, precipitation, wind, 현재 날씨, 기온, 습도, 강수, or 바람 requests.
 ---
 
 # MSN Current Weather
 
 ## Workflow
 
-1. Extract the requested `지역` and `도시`. If the location is ambiguous and cannot be resolved safely from context, ask for the missing geographic detail.
-2. Build this URL, replacing the placeholders with the Korean location names:
-
-   `https://www.msn.com/ko-kr/weather/forecast/in-지역,도시`
-
-   Preserve the comma between `지역` and `도시`. URL-encode the path when the browsing tool requires it.
-
-3. **The first web tool call MUST be `read_web_page` with that direct MSN URL.** Do not call `search_web`, `search_web_multi`, `naver_search`, or a general search provider for this request.
-4. Find the page's **현재 날씨** section and verify that its displayed location matches the request. If the direct result includes a current-conditions excerpt and the location matches, use it directly. If the excerpt is missing or insufficient, read the buffered source using 현재 날씨 and the requested location as the query.
-5. Report the current condition and temperature. Include feels-like temperature, precipitation, humidity, wind, or observation time only when the page exposes them.
-6. Link to the MSN Weather page used for the answer.
+1. Resolve the location in this order:
+   - Use the place requested in this turn or established in recent conversation; never override it with device location.
+   - If no place was specified (e.g. `지금 밖에 날씨 어때?`), use supplied client location or call `get_current_location` with `{}`. Do not repeat a lookup already performed by the server.
+   - JSON `lat`/`lon` are usable location information. If names are missing, look up the coordinates to establish `지역` and `도시`. Geographic search is allowed only for this preparation, not for weather data. Do not guess a city from coordinates or timezone.
+   - Ask for a place only if context and available location lookup cannot establish one, or an explicitly requested place remains ambiguous.
+2. Build `https://www.msn.com/ko-kr/weather/forecast/in-지역,도시` using the resolved Korean names. Preserve the comma; URL-encode when required.
+3. After geographic preparation, the **first web tool call MUST be `read_web_page`** with that direct MSN URL for weather. Do not use `search_web`, `search_web_multi`, `naver_search`, or general search for weather values.
+4. Read **현재 날씨** and verify the displayed location. If the excerpt is insufficient, use `read_buffered_source` with 현재 날씨 and the location. If redirected to a wrong place, correct the URL and retry once.
+5. Report the resolved place, condition and temperature, linking the MSN page. Include feels-like, precipitation, humidity, wind or observation time only when exposed.
 
 ## Accuracy Rules
 
-- Treat the **현재 날씨** section as the source for present conditions; do not substitute hourly or daily forecast values.
-- Do not invent values that are absent or obscured.
-- If the page redirects to the wrong location, correct the region and city and try the direct URL once more.
-- If MSN Weather cannot be read, state that clearly. Do not present another provider's data as an MSN Weather result.
-- Generic freshness and multi-source search guidance does not override this skill's direct MSN lookup workflow.
+- Use 현재 날씨, not hourly/daily forecast values. Never invent missing values.
+- If MSN cannot be read, say so; do not label another provider's data as MSN.
+- Generic freshness/multi-source guidance does not override this workflow.

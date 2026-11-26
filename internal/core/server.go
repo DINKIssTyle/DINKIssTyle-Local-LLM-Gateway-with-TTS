@@ -4972,18 +4972,21 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	}
 	weatherCoordinates := ""
 	if enableTools && !glassesRequest && isRegisteredPromptTool("get_current_location", promptTools) && weatherQuestion != "" {
-		if isBareForecastRequest(weatherQuestion) {
-			location, locationErr := toolruntime.Default.Call(chatCtx, toolExecCtx, "get_current_location", json.RawMessage("{}"))
-			if locationErr == nil && !location.IsError {
-				weatherCoordinates = forecastCoordinates(location.Content)
-			}
-			AddDebugTrace("chat", "weather.location_lookup", "Checked client location for a forecast without a specified place", map[string]interface{}{
-				"available": weatherCoordinates != "",
-			})
+		// This reads the location already supplied by the client, without a network
+		// lookup. Supply it as a fallback for any phrasing; the model must preserve
+		// places explicitly requested in this turn or established in conversation.
+		location, locationErr := toolruntime.Default.Call(chatCtx, toolExecCtx, "get_current_location", json.RawMessage("{}"))
+		if locationErr == nil && !location.IsError {
+			weatherCoordinates = forecastCoordinates(location.Content)
 		}
-		skillCompilation.Prompt += "\nFor the weather request, preserve the location and time already specified in the conversation. Use the client's available location only when the user did not specify a place. Ask for a place only when neither source provides one. Weather request: " + compactText(weatherQuestion, 200)
+		AddDebugTrace("chat", "weather.location_lookup", "Checked client location as a fallback for the weather request", map[string]interface{}{
+			"available": weatherCoordinates != "",
+		})
+		skillCompilation.Prompt += "\nFor the weather request, preserve the location and time already specified in the conversation. Use the client's available location only when the user did not specify a place. The server has already checked get_current_location for this request; do not repeat that call. Ask for a place only when neither source provides one. Weather request: " + compactText(weatherQuestion, 200)
 		if weatherCoordinates != "" {
-			skillCompilation.Prompt += "\nApproximate client location for this forecast: " + weatherCoordinates
+			skillCompilation.Prompt += "\nApproximate client location fallback (latitude, longitude): " + weatherCoordinates + ". These coordinates are a usable location. If no place was specified, resolve their region/city with a geographic lookup before reading MSN Weather; do not ask the user for a city just because only coordinates were supplied."
+		} else {
+			skillCompilation.Prompt += "\nThe client location lookup did not provide usable coordinates. Use any place specified in the conversation; otherwise ask for the missing place."
 		}
 	}
 
@@ -7075,6 +7078,11 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			})
 			if repairedArgsJSON, repaired := chatharness.RepairMissingReadWebPageArguments(lastToolName, lastToolArgsStr, initialUserInputText); repaired {
 				lastToolArgsStr = repairedArgsJSON
+			}
+			if prevUser, prevAssistant := extractImmediatePriorTurn(reqMap, sessionUISnapshot); prevUser != "" || prevAssistant != "" {
+				if rewrittenArgsJSON, rewritten := rewriteFollowupSearchArguments(chatCtx, endpoint, token, modelID, lastToolName, lastToolArgsStr, initialUserInputText, prevUser, prevAssistant); rewritten {
+					lastToolArgsStr = rewrittenArgsJSON
+				}
 			}
 			if repairedArgsJSON, repaired := chatharness.RepairMissingSearchToolArguments(lastToolName, lastToolArgsStr, initialUserInputText); repaired {
 				lastToolArgsStr = repairedArgsJSON

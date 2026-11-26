@@ -248,12 +248,34 @@ func TestDesktopRouteFailureFallsBackWithoutPlanning(t *testing.T) {
 }
 
 func TestDesktopInputCandidate(t *testing.T) {
-	for _, question := range []string{"남은 메모리량", "계속 비가 내리나?", "내일 아침 날씨", "논산"} {
+	for _, question := range []string{
+		"남은 메모리량",
+		"계속 비가 내리나?",
+		"내일 아침 날씨",
+		"논산",
+		"왜 계속 화면이 좌우 2개로 보이는 거죠?\n다른 사람들에게 확인해 보라고 주면 다들 화면이 1개로 보인다네요.\n왜 나만... 나만... 2개로 보이죠. ㅠㅠ\n신기술도 이용 못하는 저주 받은 몸땡이... 매직아이 못 보는데, 그래서 그런걸까요...\n이런 증상은 뭐야?",
+		"화면이 흐릿하게 보여요. 눈 문제인가요?",
+		"스마트폰 화면이 깨졌는데 수리비가 얼마야?",
+		"화면을 오래 보면 눈이 아픈 이유",
+		"Why does the screen look doubled to me? What symptom is this?",
+		"What is a blue screen of death?",
+	} {
 		if desktopInputCandidate(question) {
 			t.Errorf("ordinary request reached desktop routing: %q", question)
 		}
 	}
-	for _, question := range []string{"현재 화면 내용", "LM Studio에서 다운로드 상태 확인", "크롬 탭 목록"} {
+	for _, question := range []string{
+		"현재 화면 내용",
+		"지금 화면에 뭐가 떠 있어?",
+		"컴퓨터 화면에 크롬브라우저가 있나?",
+		"화면에 로그인 버튼이 있나?",
+		"화면 좀 봐줘",
+		"화면 확인해줘",
+		"Inspect current screen progress",
+		"What's on my screen?",
+		"LM Studio에서 다운로드 상태 확인",
+		"크롬 탭 목록",
+	} {
 		if !desktopInputCandidate(question) {
 			t.Errorf("desktop request skipped routing: %q", question)
 		}

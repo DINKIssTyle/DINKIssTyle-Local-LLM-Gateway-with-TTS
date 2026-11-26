@@ -226,11 +226,11 @@ export namespace core {
 	    has_token: boolean;
 	    endpoint: string;
 	    custom_endpoint: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new OpenClawStatus(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
