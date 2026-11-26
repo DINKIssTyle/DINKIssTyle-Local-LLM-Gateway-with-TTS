@@ -3,6 +3,7 @@ package mcp
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -382,4 +383,74 @@ func TestAutomaticMemoryContextRequiresCurrentSubject(t *testing.T) {
 	if unrelated.Context != "" {
 		t.Fatalf("unrelated turn inherited automatic evidence: %s", unrelated.Context)
 	}
+}
+
+func TestFastMemoryContextJevChoiceIncludesNoneAndReranksByProbability(t *testing.T) {
+	openRetrievalTestDB(t)
+	id1, err := InsertMemory("alice", "프로젝트 알파 일정은 5월입니다.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id2, err := InsertMemory("alice", "프로젝트 알파 담당자는 민수입니다.")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var sawNone bool
+	var maxCriteriaLen int
+	SetMemoryChoiceProvider(func(query string, criteria map[string]string) (string, map[string]float64, error) {
+		_, sawNone = criteria["none"]
+		maxCriteriaLen = len(criteria)
+		return fmt.Sprint(id2), map[string]float64{
+			"none":           0.05,
+			fmt.Sprint(id1):  0.15,
+			fmt.Sprint(id2):  0.80,
+		}, nil
+	})
+	defer SetMemoryChoiceProvider(nil)
+
+	res := FastMemoryContextWithOptions("alice", "프로젝트 알파 담당자", true)
+	if !sawNone {
+		t.Fatal("expected 'none' option in memory choice criteria")
+	}
+	if maxCriteriaLen > 7 {
+		t.Fatalf("expected capped criteria (<= 6 candidates + none), got %d", maxCriteriaLen)
+	}
+	idx1 := strings.Index(res.Context, "5월")
+	idx2 := strings.Index(res.Context, "민수")
+	if idx2 < 0 || (idx1 >= 0 && idx2 > idx1) {
+		t.Fatalf("expected higher-probability memory to be ranked first:\n%s", res.Context)
+	}
+}
+
+func TestMatchChatTurnWarmsMultipleMissingCandidates(t *testing.T) {
+	resetChatTurnVectors()
+	t.Cleanup(resetChatTurnVectors)
+	prev := getBufferedEmbeddingProvider()
+	t.Cleanup(func() { SetBufferedEmbeddingProvider(prev) })
+
+	SetBufferedEmbeddingProvider(BufferedEmbeddingProvider{
+		ModelName: "test-embed",
+		BuildWithUsage: func(text string, usage BufferedEmbeddingUsage) ([]float64, string, error) {
+			return []float64{1, 0}, "test-embed", nil
+		},
+	})
+
+	candidates := []string{"첫 번째 대화 턴", "두 번째 대화 턴", "세 번째 대화 턴", "네 번째 대화 턴", "다섯 번째 대화 턴"}
+	_ = MatchChatTurn("scope-1", "관련 질문", candidates, true)
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		chatTurnVectors.Lock()
+		n := len(chatTurnVectors.entries)
+		chatTurnVectors.Unlock()
+		if n >= 4 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	chatTurnVectors.Lock()
+	got := len(chatTurnVectors.entries)
+	chatTurnVectors.Unlock()
+	t.Fatalf("expected up to 4 missing turns warmed in background, got %d", got)
 }

@@ -234,11 +234,16 @@ func classifyGlassesHint(req glassesHintRequest) (glassesHintDecision, error) {
 	if rt == nil {
 		return glassesHintDecision{Reason: "embedding_unavailable"}, nil
 	}
+	releaseMemory := embeddingModelMemory.use()
+	defer releaseMemory()
 	// Hints are optional. Never queue behind reindexing or memory retrieval.
 	if !rt.mu.TryLock() {
 		return glassesHintDecision{Reason: "embedding_busy"}, nil
 	}
 	defer rt.mu.Unlock()
+	if err := rt.ensureLoadedLocked(); err != nil {
+		return glassesHintDecision{Reason: "jev_unavailable"}, nil
+	}
 	worker, ok := rt.encoder.(*jevEncoder)
 	if !ok || rt.modelID != jevModelID {
 		return glassesHintDecision{Reason: "jev_required"}, nil

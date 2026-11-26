@@ -58,13 +58,12 @@ func MatchChatTurn(scope, question string, candidates []string, useVectors bool)
 	chatTurnVectors.Lock()
 	generation := chatTurnVectors.generation
 	vectors := make([]queryEmbeddingValue, len(candidates))
-	var missingKey [32]byte
-	var missingText string
+	var missing []pendingChatTurn
 	for i, candidate := range candidates {
 		key := sha256.Sum256([]byte(scope + "\x00" + candidate))
 		vectors[i] = chatTurnVectors.entries[key]
-		if len(vectors[i].vector) == 0 && missingText == "" {
-			missingKey, missingText = key, candidate
+		if len(vectors[i].vector) == 0 && len(missing) < 4 {
+			missing = append(missing, pendingChatTurn{key: key, text: candidate})
 		}
 	}
 	chatTurnVectors.Unlock()
@@ -79,8 +78,8 @@ func MatchChatTurn(scope, question string, candidates []string, useVectors bool)
 			}
 		}
 	}
-	if missingText != "" {
-		warmChatTurnVector(generation, missingKey, missingText)
+	if len(missing) > 0 {
+		warmChatTurnVectors(generation, missing)
 	}
 	return best
 }
@@ -98,7 +97,12 @@ func bestSemanticChatTurn(query []float64, model string, vectors []queryEmbeddin
 	return best
 }
 
-func warmChatTurnVector(generation uint64, key [32]byte, text string) {
+type pendingChatTurn struct {
+	key  [32]byte
+	text string
+}
+
+func warmChatTurnVectors(generation uint64, items []pendingChatTurn) {
 	select {
 	case chatTurnIndexSlot <- struct{}{}:
 	default:
@@ -106,21 +110,34 @@ func warmChatTurnVector(generation uint64, key [32]byte, text string) {
 	}
 	go func() {
 		defer func() { <-chatTurnIndexSlot }()
-		vector, model := buildBufferedEmbedding(text, BufferedEmbeddingUsageDocument)
-		if len(vector) == 0 || model == webEmbeddingModel {
-			return
-		}
-		chatTurnVectors.Lock()
-		defer chatTurnVectors.Unlock()
-		if generation != chatTurnVectors.generation {
-			return
-		}
-		if len(chatTurnVectors.entries) >= 512 {
-			for evict := range chatTurnVectors.entries {
-				delete(chatTurnVectors.entries, evict)
-				break
+		for _, item := range items {
+			chatTurnVectors.Lock()
+			stale := generation != chatTurnVectors.generation
+			_, alreadyPresent := chatTurnVectors.entries[item.key]
+			chatTurnVectors.Unlock()
+			if stale {
+				return
 			}
+			if alreadyPresent {
+				continue
+			}
+			vector, model := buildBufferedEmbedding(item.text, BufferedEmbeddingUsageDocument)
+			if len(vector) == 0 || model == webEmbeddingModel {
+				continue
+			}
+			chatTurnVectors.Lock()
+			if generation != chatTurnVectors.generation {
+				chatTurnVectors.Unlock()
+				return
+			}
+			if len(chatTurnVectors.entries) >= 512 {
+				for evict := range chatTurnVectors.entries {
+					delete(chatTurnVectors.entries, evict)
+					break
+				}
+			}
+			chatTurnVectors.entries[item.key] = queryEmbeddingValue{vector: vector, model: model}
+			chatTurnVectors.Unlock()
 		}
-		chatTurnVectors.entries[key] = queryEmbeddingValue{vector: vector, model: model}
 	}()
 }

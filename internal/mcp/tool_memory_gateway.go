@@ -54,10 +54,10 @@ type AutoSearchMemoryDebug struct {
 
 var memoryChoiceProvider struct {
 	sync.RWMutex
-	choose func(string, map[string]string) (string, error)
+	choose func(string, map[string]string) (string, map[string]float64, error)
 }
 
-func SetMemoryChoiceProvider(choose func(string, map[string]string) (string, error)) {
+func SetMemoryChoiceProvider(choose func(string, map[string]string) (string, map[string]float64, error)) {
 	memoryChoiceProvider.Lock()
 	defer memoryChoiceProvider.Unlock()
 	memoryChoiceProvider.choose = choose
@@ -95,17 +95,41 @@ func FastMemoryContextWithOptions(userID, input string, useVectors bool) AutoSea
 	memoryChoiceProvider.RLock()
 	choose := memoryChoiceProvider.choose
 	memoryChoiceProvider.RUnlock()
-	if useVectors && choose != nil && len(candidates) > 1 {
-		criteria := make(map[string]string)
-		for _, c := range candidates {
-			criteria[fmt.Sprint(c.MemoryID)] = compactMemoryText(c.Snippet, 500)
+	if useVectors && choose != nil && len(candidates) > 0 {
+		const maxChoiceCandidates = 6
+		limit := len(candidates)
+		if limit > maxChoiceCandidates {
+			limit = maxChoiceCandidates
 		}
-		if selected, err := choose(input, criteria); err == nil {
-			for i, c := range candidates {
-				if fmt.Sprint(c.MemoryID) == selected {
-					copy(candidates[1:i+1], candidates[:i])
-					candidates[0] = c
-					break
+		criteria := make(map[string]string, limit+1)
+		criteria["none"] = "None of these stored memories are directly relevant to answering the user's request."
+		for _, c := range candidates[:limit] {
+			criteria[fmt.Sprint(c.MemoryID)] = compactMemoryText(c.Snippet, 300)
+		}
+		if selected, probs, err := choose(input, criteria); err == nil {
+			noneProb := probs["none"]
+			if selected == "none" && noneProb >= 0.70 {
+				filtered := candidates[:0]
+				for _, c := range candidates {
+					if c.FTSScore > 0 || c.VectorScore >= 0.75 {
+						filtered = append(filtered, c)
+					}
+				}
+				candidates = filtered
+			} else if len(probs) > 0 {
+				evaluated := candidates[:limit]
+				sort.SliceStable(evaluated, func(i, j int) bool {
+					pi := probs[fmt.Sprint(evaluated[i].MemoryID)]
+					pj := probs[fmt.Sprint(evaluated[j].MemoryID)]
+					return pi > pj
+				})
+			} else if selected != "" && selected != "none" {
+				for i, c := range candidates[:limit] {
+					if fmt.Sprint(c.MemoryID) == selected {
+						copy(candidates[1:i+1], candidates[:i])
+						candidates[0] = c
+						break
+					}
 				}
 			}
 		}

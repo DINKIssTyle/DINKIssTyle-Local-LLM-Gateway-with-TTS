@@ -8,8 +8,41 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
+
+const maxHintCompareEmbeddingCache = 128
+
+var hintCompareEmbeddings = struct {
+	sync.Mutex
+	entries map[string][]float64
+	order   []string
+}{entries: make(map[string][]float64)}
+
+func getCachedHintCompareEmbedding(key string) ([]float64, bool) {
+	hintCompareEmbeddings.Lock()
+	defer hintCompareEmbeddings.Unlock()
+	vec, ok := hintCompareEmbeddings.entries[key]
+	return vec, ok
+}
+
+func putCachedHintCompareEmbedding(key string, vec []float64) {
+	if len(vec) == 0 {
+		return
+	}
+	hintCompareEmbeddings.Lock()
+	defer hintCompareEmbeddings.Unlock()
+	if _, exists := hintCompareEmbeddings.entries[key]; !exists {
+		if len(hintCompareEmbeddings.order) >= maxHintCompareEmbeddingCache {
+			evict := hintCompareEmbeddings.order[0]
+			hintCompareEmbeddings.order = hintCompareEmbeddings.order[1:]
+			delete(hintCompareEmbeddings.entries, evict)
+		}
+		hintCompareEmbeddings.order = append(hintCompareEmbeddings.order, key)
+	}
+	hintCompareEmbeddings.entries[key] = vec
+}
 
 type hintCompareRequest struct {
 	Text    string   `json:"text"`
@@ -151,15 +184,21 @@ func runHintComparison(req hintCompareRequest) (hintCompareResult, error) {
 	if rt == nil {
 		return hintCompareResult{Reason: "embedding_unavailable"}, nil
 	}
+	releaseMemory := embeddingModelMemory.use()
+	defer releaseMemory()
 	// Optional checks never queue behind transcription-related memory/reindex work.
 	if !rt.mu.TryLock() {
 		return hintCompareResult{Reason: "embedding_busy"}, nil
 	}
 	defer rt.mu.Unlock()
+	if err := rt.ensureLoadedLocked(); err != nil {
+		return hintCompareResult{Reason: "jev_unavailable"}, nil
+	}
 	worker, ok := rt.encoder.(*jevEncoder)
 	if !ok || rt.modelID != jevModelID {
 		return hintCompareResult{Reason: "jev_required"}, nil
 	}
+	cachePrefix := rt.modelID + "\x00" + rt.backend + "\x00"
 	deadline := time.Now().Add(3 * time.Second)
 	return compareHintInformation(req, func(text string, criteria map[string]string, instructions string) (jevReply, error) {
 		if time.Until(deadline) < 200*time.Millisecond {
@@ -167,10 +206,19 @@ func runHintComparison(req hintCompareRequest) (hintCompareResult, error) {
 		}
 		return worker.request(map[string]any{"op": "choice", "text": text, "criteria": criteria, "instructions": instructions}, 2*time.Second)
 	}, func(text string) ([]float64, error) {
+		cacheKey := cachePrefix + text
+		if cached, ok := getCachedHintCompareEmbedding(cacheKey); ok {
+			return cached, nil
+		}
 		if time.Until(deadline) < 200*time.Millisecond {
 			return nil, fmt.Errorf("comparison budget exhausted")
 		}
-		return worker.Encode(text, embeddingUsageQuery)
+		vec, err := worker.Encode(text, embeddingUsageQuery)
+		if err != nil {
+			return nil, err
+		}
+		putCachedHintCompareEmbedding(cacheKey, vec)
+		return vec, nil
 	})
 }
 

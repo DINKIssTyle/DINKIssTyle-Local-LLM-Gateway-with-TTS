@@ -162,6 +162,7 @@ func rankCachedVectors(userID, query string, limit int, saved bool) ([]vectorHit
 var queryEmbeddings = struct {
 	sync.Mutex
 	entries map[string]queryEmbeddingValue
+	order   []string
 }{entries: make(map[string]queryEmbeddingValue)}
 
 type queryEmbeddingValue struct {
@@ -171,19 +172,29 @@ type queryEmbeddingValue struct {
 
 func queryEmbedding(text string) ([]float64, string) {
 	queryEmbeddings.Lock()
-	defer queryEmbeddings.Unlock()
 	if value, ok := queryEmbeddings.entries[text]; ok {
+		queryEmbeddings.Unlock()
 		return value.vector, value.model
 	}
+	queryEmbeddings.Unlock()
+
 	vector, model := buildBufferedEmbedding(text, BufferedEmbeddingUsageQuery)
-	if len(queryEmbeddings.entries) >= 64 {
-		queryEmbeddings.entries = make(map[string]queryEmbeddingValue)
-	}
+
 	// A runtime failure falls back to token hashes; do not persist that fallback
 	// when a semantic model is configured, so a recovered worker is retried.
 	provider := getBufferedEmbeddingProvider()
 	if len(vector) > 0 && !(model == webEmbeddingModel && (provider.Build != nil || provider.BuildWithUsage != nil)) {
+		queryEmbeddings.Lock()
+		if _, exists := queryEmbeddings.entries[text]; !exists {
+			if len(queryEmbeddings.order) >= 64 {
+				evict := queryEmbeddings.order[0]
+				queryEmbeddings.order = queryEmbeddings.order[1:]
+				delete(queryEmbeddings.entries, evict)
+			}
+			queryEmbeddings.order = append(queryEmbeddings.order, text)
+		}
 		queryEmbeddings.entries[text] = queryEmbeddingValue{vector, model}
+		queryEmbeddings.Unlock()
 	}
 	return vector, model
 }
