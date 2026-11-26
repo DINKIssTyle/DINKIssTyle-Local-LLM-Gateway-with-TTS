@@ -249,7 +249,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
 
  assert.equal(startup.textObject.find(c=>c.containerName==='transcript').containerID,4);
  assert.equal(startup.textObject.find(c=>c.containerName==='transcript').yPosition,27);
- assert.deepEqual(Array.from(startup.menuObject.menuItems,m=>m.itemName),['AI 모드','번역 모드','입력 소스 전환','인식 언어','번역 언어','번역 엔진','음성 인식 엔진','내 목소리 제외','안경 입력 감지 민감도','전사문 숨기기']);
+ assert.deepEqual(Array.from(startup.menuObject.menuItems,m=>m.itemName),['AI 모드','번역 모드','언어 설정','화면 표시','역할별 LLM 모델','설정']);
  assert.equal(startup.textObject.find(c=>c.containerName==='notice').yPosition,0);
  assert.ok(startup.textObject.find(c=>c.containerName==='notice').width<=startup.textObject.find(c=>c.containerName==='status').xPosition);
  assert.equal(startup.textObject.filter(c=>c.isEventCapture===1).length,1);
@@ -739,7 +739,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.equal(replyBox.yPosition+replyBox.height,288);
  assert.equal(replyBox.textColor,4,'translation reply choices remain readable');
  assert.equal(translationBox.textColor,4);assert.equal(translationBox.borderColor,4,'decoration is dimmer than translation text');
- assert.equal(translatedLayout.menuObject.menuItems.length,10);
+ assert.equal(translatedLayout.menuObject.menuItems.length,6);
  assert.match(element('hud-screen').innerHTML,/번역 · 추천 답변/);
  chatReply=sseReply('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify({translation:"커피 드시겠어요?",positive:"Yes, please.\n네, 주세요.",negative:"No, thank you.\n괜찮습니다."})}}]})+'\n\ndata: [DONE]\n\n');
  nextTranscript='Would you like some coffee?';
@@ -1407,6 +1407,90 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  assert.equal(JSON.parse(nativeSaved).glassesInput.sensitivity,'standard');
  handler({menuItemClickEvent:{itemID:4}});handler({sysEvent:{eventType:9}});await tick();
  assert.equal(shutdown,1,'picker back must not exit the app');
+ // Language hub (Level 2 with value previews, 2-option inline toggle -> Level 3 -> double-tap back to Level 2 -> double-tap back to HUD).
+ handler({menuItemClickEvent:{itemID:13}});
+ for(let i=0;i<100 && rebuilds.at(-1)?.textObject?.[0]?.content!=='언어 설정';i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(rebuilds.at(-1).textObject[0].content,'언어 설정');
+ assert.equal(rebuilds.at(-1).listObject[0].itemContainer.itemCount,3);
+ assert.ok(rebuilds.at(-1).listObject[0].itemContainer.itemName[0].startsWith('인식 언어 - '));
+ assert.ok(rebuilds.at(-1).listObject[0].itemContainer.itemName[1].startsWith('번역 언어 - '));
+ assert.equal(rebuilds.at(-1).listObject[0].itemContainer.itemName[2],'내 목소리 제외 - 제외 안함');
+ // Tapping 2-option '내 목소리 제외' toggles inline without entering Level 3.
+ handler({listEvent:{containerID:30,eventType:0,currentSelectItemIndex:2}});
+ for(let i=0;i<100 && rebuilds.at(-1)?.listObject?.[0]?.itemContainer?.itemName?.[2]!=='내 목소리 제외 - 제외함';i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(rebuilds.at(-1).textObject[0].content,'언어 설정','2-option setting must toggle inline in Level 2');
+ assert.equal(JSON.parse(nativeSaved).translateExcludeSelf,true);
+ // Toggle back to restore prior value.
+ handler({listEvent:{containerID:30,eventType:0,currentSelectItemIndex:2}});
+ for(let i=0;i<100 && rebuilds.at(-1)?.listObject?.[0]?.itemContainer?.itemName?.[2]!=='내 목소리 제외 - 제외 안함';i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(JSON.parse(nativeSaved).translateExcludeSelf,false);
+ handler({listEvent:{containerID:30,eventType:0,currentSelectItemIndex:0}});
+ for(let i=0;i<100 && rebuilds.at(-1)?.textObject?.[0]?.content!=='인식 언어';i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(rebuilds.at(-1).textObject[0].content,'인식 언어');
+ handler({listEvent:{containerID:30,eventType:3,currentSelectItemIndex:0}});
+ for(let i=0;i<100 && rebuilds.at(-1)?.textObject?.[0]?.content!=='언어 설정';i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(rebuilds.at(-1).textObject[0].content,'언어 설정','double-tap in listEvent must return to parent Level 2');
+ handler({listEvent:{containerID:30,eventType:3,currentSelectItemIndex:0}});await tick();
+ // Display hub (Level 2: 3 inline toggles + Level 3 subtitleLines picker).
+ handler({menuItemClickEvent:{itemID:10}});
+ for(let i=0;i<100 && rebuilds.at(-1)?.textObject?.[0]?.content!=='화면 표시';i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(rebuilds.at(-1).listObject[0].itemContainer.itemCount,4);
+ assert.equal(rebuilds.at(-1).listObject[0].itemContainer.itemName[0],'전사문 숨기기 - 3줄');
+ assert.equal(rebuilds.at(-1).listObject[0].itemContainer.itemName[1],'AI모드 상단 레이아웃 - 기본');
+ assert.equal(rebuilds.at(-1).listObject[0].itemContainer.itemName[2],'번역모드 레이아웃 - 기본');
+ assert.equal(rebuilds.at(-1).listObject[0].itemContainer.itemName[3],'자막 표시 줄 수 - 2줄');
+ handler({listEvent:{containerID:30,eventType:0,currentSelectItemIndex:1}});
+ for(let i=0;i<100 && rebuilds.at(-1)?.listObject?.[0]?.itemContainer?.itemName?.[1]!=='AI모드 상단 레이아웃 - 간결';i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(JSON.parse(nativeSaved).aiHeaderLayout,'status-icon');
+ handler({listEvent:{containerID:30,eventType:0,currentSelectItemIndex:1}});
+ for(let i=0;i<100 && rebuilds.at(-1)?.listObject?.[0]?.itemContainer?.itemName?.[1]!=='AI모드 상단 레이아웃 - 기본';i++)await new Promise(resolve=>setTimeout(resolve,20));
+ handler({listEvent:{containerID:30,eventType:0,currentSelectItemIndex:2}});
+ for(let i=0;i<100 && rebuilds.at(-1)?.listObject?.[0]?.itemContainer?.itemName?.[2]!=='번역모드 레이아웃 - 간결';i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(JSON.parse(nativeSaved).translationLayout,'subtitles');
+ handler({listEvent:{containerID:30,eventType:0,currentSelectItemIndex:2}});
+ for(let i=0;i<100 && rebuilds.at(-1)?.listObject?.[0]?.itemContainer?.itemName?.[2]!=='번역모드 레이아웃 - 기본';i++)await new Promise(resolve=>setTimeout(resolve,20));
+ handler({listEvent:{containerID:30,eventType:0,currentSelectItemIndex:3}});
+ for(let i=0;i<100 && rebuilds.at(-1)?.textObject?.[0]?.content!=='자막 표시 줄 수';i++)await new Promise(resolve=>setTimeout(resolve,20));
+ handler({listEvent:{containerID:30,eventType:0,currentSelectItemIndex:3}});
+ for(let i=0;i<100 && rebuilds.at(-1)?.textObject?.[0]?.content!=='화면 표시';i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(rebuilds.at(-1).listObject[0].itemContainer.itemName[3],'자막 표시 줄 수 - 4줄');
+ assert.equal(JSON.parse(nativeSaved).subtitleLines,4);
+ handler({listEvent:{containerID:30,eventType:0,currentSelectItemIndex:3}});
+ for(let i=0;i<100 && rebuilds.at(-1)?.textObject?.[0]?.content!=='자막 표시 줄 수';i++)await new Promise(resolve=>setTimeout(resolve,20));
+ handler({listEvent:{containerID:30,eventType:0,currentSelectItemIndex:1}});
+ for(let i=0;i<100 && rebuilds.at(-1)?.textObject?.[0]?.content!=='화면 표시';i++)await new Promise(resolve=>setTimeout(resolve,20));
+ handler({listEvent:{containerID:30,eventType:3,currentSelectItemIndex:0}});await tick();
+ // Settings hub (Level 2 with glasses gain -> Level 3 -> back to Level 2 -> back to HUD).
+ handler({menuItemClickEvent:{itemID:12}});
+ for(let i=0;i<100 && rebuilds.at(-1)?.textObject?.[0]?.content!=='설정';i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(rebuilds.at(-1).textObject[0].content,'설정');
+ assert.equal(rebuilds.at(-1).listObject[0].itemContainer.itemCount,4);
+ assert.ok(rebuilds.at(-1).listObject[0].itemContainer.itemName[0].startsWith('번역 엔진 - '));
+ assert.ok(rebuilds.at(-1).listObject[0].itemContainer.itemName[3].startsWith('안경 입력 증폭 - '));
+ handler({listEvent:{containerID:30,eventType:0,currentSelectItemIndex:3}});
+ for(let i=0;i<100 && rebuilds.at(-1)?.textObject?.[0]?.content!=='안경 입력 증폭';i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(rebuilds.at(-1).textObject[0].content,'안경 입력 증폭');
+ handler({listEvent:{containerID:30,eventType:0,currentSelectItemIndex:2}});
+ for(let i=0;i<100 && rebuilds.at(-1)?.textObject?.[0]?.content!=='설정';i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(rebuilds.at(-1).listObject[0].itemContainer.itemName[3],'안경 입력 증폭 - 2배');
+ assert.equal(JSON.parse(nativeSaved).glassesInput.gain,2);
+ handler({menuItemClickEvent:{itemID:90}});await tick();
+ // Role-based LLM model menu (Level 2 roles -> Level 3 model select -> apply & return to Level 2).
+ const savedChatRole=JSON.parse(nativeSaved).roleModels?.chat || '';
+ handler({menuItemClickEvent:{itemID:11}});
+ for(let i=0;i<100 && rebuilds.at(-1)?.textObject?.[0]?.content!=='역할별 LLM 모델';i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(rebuilds.at(-1).listObject[0].itemContainer.itemCount,5);
+ assert.ok(rebuilds.at(-1).listObject[0].itemContainer.itemName[0].startsWith('AI 채팅 - '));
+ handler({listEvent:{containerID:30,eventType:0,currentSelectItemIndex:0}});
+ for(let i=0;i<100 && rebuilds.at(-1)?.textObject?.[0]?.content!=='역할별 LLM · AI 채팅';i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(rebuilds.at(-1).textObject[0].content,'역할별 LLM · AI 채팅');
+ handler({listEvent:{containerID:30,eventType:0,currentSelectItemIndex:1}});
+ for(let i=0;i<100 && rebuilds.at(-1)?.textObject?.[0]?.content!=='역할별 LLM 모델';i++)await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(rebuilds.at(-1).textObject[0].content,'역할별 LLM 모델');
+ assert.ok(JSON.parse(nativeSaved).roleModels.chat,'selected role model must persist');
+ // Restore previous chat role so downstream persistence assertions see the original state.
+ element('model-ai-chat').value=savedChatRole;element('model-ai-chat').handlers.change();await tick();
+ handler({menuItemClickEvent:{itemID:90}});await tick();
  // Record, change each phone setting, and verify a confirmed close precedes one resumed open.
  context.window.__queueTest.microphone();await tick();await tick();await tick();
  assert.equal(queue.state().recording,true);
@@ -1721,7 +1805,7 @@ const testWatchdog=setTimeout(()=>{console.error('Test timed out while awaiting 
  for(let i=0;i<150 && nativePage.textObject.find(c=>c.containerID===1)?.height!==222;i++)await new Promise(resolve=>setTimeout(resolve,20));
  assert.equal(nativePage.textObject.find(c=>c.containerID===1).height,222,'hidden transcript allows up to eight hint body rows');
  const callsBeforeMenu=audioCalls.length;
- handler({menuItemClickEvent:{itemID:10}});handler({listEvent:{containerID:30,currentSelectItemIndex:0}});
+ handler({menuItemClickEvent:{itemID:10}});handler({listEvent:{containerID:30,currentSelectItemIndex:0}});handler({listEvent:{containerID:30,eventType:3,currentSelectItemIndex:0}});
  for(let i=0;i<150 && !nativePage.textObject.some(c=>c.containerID===4);i++)await new Promise(resolve=>setTimeout(resolve,20));
  assert.equal(element('hide-transcript').checked,false);assert.equal(nativePage.textObject.find(c=>c.containerID===4).height,81);
  assert.equal(queue.state().recording,true);assert.equal(audioCalls.length,callsBeforeMenu,'native hide/show setting must not restart the microphone');

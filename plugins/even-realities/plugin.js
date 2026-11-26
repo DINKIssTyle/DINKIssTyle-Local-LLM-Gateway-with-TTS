@@ -16,7 +16,7 @@ import {HeadGesture,imuVector,poseSample,makeHeadCalibration,validHeadCalibratio
 import {HintLifetime,secondsPerHintLine,timedHintLines,hintCountdownWindow,aiTitleLine} from './hint-autoclose.mjs';
 import {adaptiveHUD,hintWindow} from './adaptive-hud.mjs';
 import {hintPresentation,JEV_ONLY,normalizeHintBudget,requestHintJudgment,suggestedHintJudge,HINT_DECISION_TIMEOUT_MS} from './hint-judge.mjs';
-import {SETTINGS_MENUS,settingsMenuItems,settingsPickerPage} from './settings-menu.mjs';
+import {DISPLAY_MENU_ID,LANGUAGE_MENU_ID,ROLE_MODEL_MENU_ID,SETTINGS_HUB_MENU_ID,SETTINGS_MENUS,displayHubPicker,languageHubPicker,roleModelHubPicker,roleModelSelectPicker,settingCurrentValue,settingsHubPicker,settingsMenuItems,settingsPickerPage} from './settings-menu.mjs';
 import {GlassesInputProcessor,normalizeGlassesInput,inputSegmentOptions,levelDb,GLASSES_THRESHOLDS} from './glasses-input.mjs';
 import {aiStatusIcon,normalizeAIHeaderLayout,normalizeAIIconPosition,aiIconPositionLabel} from './ai-status-icon.mjs';
 import {headerLayout,stackedHeaderLabel} from './header-layout.mjs';
@@ -1260,7 +1260,6 @@ import { LocalAgreement } from './local-agreement.mjs';
           menuItems: [
             { itemID: 1, itemName: 'AI 모드' },
             { itemID: 2, itemName: '번역 모드' },
-            { itemID: 3, itemName: '입력 소스 전환' },
             ...settingsMenuItems(config.audioInputSource==='glasses'),
           ],
         },
@@ -1298,22 +1297,97 @@ import { LocalAgreement } from './local-agreement.mjs';
       return page;
   }
 
-  function openSettingsPicker(id){
+  function settingPatchFor(menu,value){
+    if(menu.subKey)return {[menu.key]:{...config[menu.key],[menu.subKey]:value}};
+    return {[menu.key]:value};
+  }
+  function openSettingsPicker(id,parent=''){
     const menu=SETTINGS_MENUS[id];if(!menu)return;
-    if(id===9 && config.audioInputSource!=='glasses'){setVoiceHint('안경 입력 감지 민감도는 안경 입력에서만 적용됩니다.');return;}
+    if((id===9 || id===14) && config.audioInputSource!=='glasses'){setVoiceHint(`${menu.title} 설정은 안경 입력에서만 적용됩니다.`);return;}
     // Keep engines discoverable even before the asynchronous capability check.
     const options=menu.options;
-    settingsPicker={...menu,options,value:id===9?config.glassesInput.sensitivity:config[menu.key],index:0,pageKey:String(id)};
+    settingsPicker={...menu,options,value:settingCurrentValue(id,config),index:0,parent,help:parent?'탭: 선택 · 더블탭: 이전 메뉴':'탭: 선택 · 더블탭: 돌아가기',pageKey:`${id}:${parent}`};
     flushHUD();
   }
-  function closeSettingsPicker(){settingsPicker=null;flushHUD();}
+  function applyDisplaySetting(key,value){
+    if(key==='hideTranscript'){setTranscriptHidden(value);return;}
+    settingsEdited=true;
+    if(key==='aiHeaderLayout'){config.aiHeaderLayout=normalizeAIHeaderLayout(value);syncAIHeaderControls();}
+    else if(key==='translationLayout'){config.translationLayout=value==='subtitles'?'subtitles':'standard';syncTranslationLayoutControls();syncAIHeaderControls();}
+    else if(key==='subtitleLines'){config.subtitleLines=Number(value);syncTranslationLayoutControls();syncAIHeaderControls();}
+    renderLiveHUD();persistSettings().catch(console.warn);
+  }
+  function openDisplayHub(values=config,index=0){
+    settingsPicker={...displayHubPicker(values),index};
+    flushHUD();
+  }
+  function openLanguageHub(values=config,index=0){
+    settingsPicker={...languageHubPicker(values),index};
+    flushHUD();
+  }
+  function openSettingsHub(values=config,index=0){
+    settingsPicker={...settingsHubPicker(config.audioInputSource==='glasses',values),index};
+    flushHUD();
+  }
+  function openRoleModelHub(){
+    settingsPicker=roleModelHubPicker({roleModels:config.roleModels,baseModel:config.model,models:availableModels,jevOnly:JEV_ONLY});
+    flushHUD();
+  }
+  function openRoleModelPicker(role){
+    settingsPicker=roleModelSelectPicker(role,{roleModels:config.roleModels,baseModel:config.model,models:availableModels,jevOnly:JEV_ONLY});
+    flushHUD();
+  }
+  function closeSettingsPicker(){
+    const parent=settingsPicker?.parent || '';
+    if(parent==='display-hub'){openDisplayHub();return;}
+    if(parent==='language-hub'){openLanguageHub();return;}
+    if(parent==='role-models'){openRoleModelHub();return;}
+    if(parent==='settings-hub'){openSettingsHub();return;}
+    settingsPicker=null;flushHUD();
+  }
   function selectSettingsPicker(index){
     const picker=settingsPicker;
     if(!picker || !Number.isInteger(index) || !picker.options[index])return;
     const value=picker.options[index][0];
-    if(picker.key==='hideTranscript'){settingsPicker=null;setTranscriptHidden(value);return;}
-    closeSettingsPicker();
-    applyLiveSettings({[picker.key]:picker.key==='glassesInput'?{...config.glassesInput,sensitivity:value}:value});
+    if(picker.kind==='display-hub' || picker.kind==='language-hub' || picker.kind==='settings-hub'){
+      const target=SETTINGS_MENUS[value];
+      if(target && target.options.length===2){
+        const current=settingCurrentValue(value,config);
+        const nextValue=current===target.options[0][0]?target.options[1][0]:target.options[0][0];
+        const patch=settingPatchFor(target,nextValue);
+        const nextPreview={...config,...patch};
+        if(picker.kind==='display-hub'){openDisplayHub(nextPreview,index);applyDisplaySetting(target.key,nextValue);return;}
+        if(picker.kind==='language-hub')openLanguageHub(nextPreview,index);
+        else openSettingsHub(nextPreview,index);
+        applyLiveSettings(patch);
+        return;
+      }
+      openSettingsPicker(value,picker.kind);
+      return;
+    }
+    if(picker.kind==='role-models'){openRoleModelPicker(value);return;}
+    if(picker.kind==='role-model-select'){
+      settingsEdited=true;
+      config.roleModels={...normalizeRoleModels(config.roleModels),[picker.role]:value};
+      if(picker.role==='hintDecision'){config.hintDecisionAuto=false;hintGate.reset();if(els.hintJudgeStatus)els.hintJudgeStatus.textContent='새 판별 모델 적용 · 다음 전사 대기';}
+      renderRoleModelSelectors();
+      persistSettings().catch(console.warn);
+      openRoleModelHub();
+      return;
+    }
+    if(['hideTranscript','aiHeaderLayout','translationLayout','subtitleLines'].includes(picker.key)){
+      const nextPreview={...config,[picker.key]:value};
+      if(picker.parent==='display-hub')openDisplayHub(nextPreview);
+      else{settingsPicker=null;flushHUD();}
+      applyDisplaySetting(picker.key,value);
+      return;
+    }
+    const patch=settingPatchFor(picker,value);
+    const nextPreview={...config,...patch};
+    if(picker.parent==='language-hub'){openLanguageHub(nextPreview);}
+    else if(picker.parent==='settings-hub'){openSettingsHub(nextPreview);}
+    else{settingsPicker=null;flushHUD();}
+    applyLiveSettings(patch);
   }
 
   async function initEvenRealitiesBridge() {
@@ -1367,6 +1441,10 @@ import { LocalAgreement } from './local-agreement.mjs';
         // Handle Glasses Contextual Menu (전사 / AI / 번역 모드 선택)
         if (event.menuItemClickEvent) {
           if(event.menuItemClickEvent.itemID===90){closeSettingsPicker();return;}
+          if(event.menuItemClickEvent.itemID===DISPLAY_MENU_ID){openDisplayHub();return;}
+          if(event.menuItemClickEvent.itemID===LANGUAGE_MENU_ID){openLanguageHub();return;}
+          if(event.menuItemClickEvent.itemID===ROLE_MODEL_MENU_ID){openRoleModelHub();return;}
+          if(event.menuItemClickEvent.itemID===SETTINGS_HUB_MENU_ID){openSettingsHub();return;}
           if(SETTINGS_MENUS[event.menuItemClickEvent.itemID]){openSettingsPicker(event.menuItemClickEvent.itemID);return;}
           if(event.menuItemClickEvent.itemID===3){switchAudioInputSource();return;}
           const selectedMode = glassesModeMenuIdToMode(event.menuItemClickEvent.itemID);
@@ -1381,7 +1459,9 @@ import { LocalAgreement } from './local-agreement.mjs';
           if(list){
             if(list.containerID!==30 && list.containerName!=='settings-list')return;
             if(Number.isInteger(list.currentSelectItemIndex))settingsPicker.index=list.currentSelectItemIndex;
-            if((list.eventType ?? 0)===0)selectSettingsPicker(settingsPicker.index);
+            const listType=list.eventType ?? 0;
+            if(listType===0)selectSettingsPicker(settingsPicker.index);
+            else if(listType===3 || listType===9)closeSettingsPicker();
           }else{
             const type=event.sysEvent?.eventType ?? event.textEvent?.eventType ?? null;
             if(type===0)selectSettingsPicker(settingsPicker.index);
