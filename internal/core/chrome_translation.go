@@ -41,6 +41,9 @@ type chromeTranslator struct {
 	mu              sync.RWMutex
 	translationMu   sync.Mutex
 	speechMu        sync.Mutex
+	pairsMu         sync.Mutex
+	pairsLoaded     bool
+	pairs           map[string]bool
 	profile         string
 	profileLock     *os.File
 	tab             context.Context
@@ -217,23 +220,45 @@ func (s *chromeTranslator) preparedPath() string {
 	return filepath.Join(profile, "dkst-translation-pairs.json")
 }
 func (s *chromeTranslator) preparedPairs() map[string]bool {
-	pairs := map[string]bool{}
-	data, err := os.ReadFile(s.preparedPath())
-	if err == nil {
-		_ = json.Unmarshal(data, &pairs)
+	s.pairsMu.Lock()
+	defer s.pairsMu.Unlock()
+	if !s.pairsLoaded {
+		pairs := map[string]bool{}
+		data, err := os.ReadFile(s.preparedPath())
+		if err == nil {
+			_ = json.Unmarshal(data, &pairs)
+		}
+		if pairs == nil {
+			pairs = map[string]bool{}
+		}
+		s.pairs = pairs
+		s.pairsLoaded = true
 	}
-	if pairs == nil {
-		pairs = map[string]bool{}
+	copyPairs := make(map[string]bool, len(s.pairs))
+	for k, v := range s.pairs {
+		copyPairs[k] = v
 	}
-	return pairs
+	return copyPairs
 }
 func (s *chromeTranslator) rememberPair(key string) error {
-	pairs := s.preparedPairs()
-	if len(pairs) >= 16 {
-		pairs = map[string]bool{}
+	s.pairsMu.Lock()
+	defer s.pairsMu.Unlock()
+	if !s.pairsLoaded {
+		pairs := map[string]bool{}
+		if data, err := os.ReadFile(s.preparedPath()); err == nil {
+			_ = json.Unmarshal(data, &pairs)
+		}
+		if pairs == nil {
+			pairs = map[string]bool{}
+		}
+		s.pairs = pairs
+		s.pairsLoaded = true
 	}
-	pairs[key] = true
-	data, _ := json.Marshal(pairs)
+	if len(s.pairs) >= 16 {
+		s.pairs = map[string]bool{}
+	}
+	s.pairs[key] = true
+	data, _ := json.Marshal(s.pairs)
 	return os.WriteFile(s.preparedPath(), data, 0600)
 }
 
@@ -260,10 +285,31 @@ func (s *chromeTranslator) run(ctx context.Context, req chromeTranslationRequest
 		result.Status = "ready"
 		return result, nil
 	}
-	if !s.translationMu.TryLock() {
+	if !prepare {
+		if cached, ok := getCachedTranslation("chrome-translator", req.Source, req.Target, req.Text); ok {
+			result.Text = cached
+			result.Status = "ready"
+			return result, nil
+		}
+	}
+	wait := 250 * time.Millisecond
+	if prepare {
+		wait = 0
+	}
+	if !tryLockWithTimeout(ctx, &s.translationMu, wait) {
+		if ctx.Err() != nil {
+			return result, ctx.Err()
+		}
 		return result, errChromeTranslationBusy
 	}
 	defer s.translationMu.Unlock()
+	if !prepare {
+		if cached, ok := getCachedTranslation("chrome-translator", req.Source, req.Target, req.Text); ok {
+			result.Text = cached
+			result.Status = "ready"
+			return result, nil
+		}
+	}
 	tab, release, err := s.leaseBrowser(ctx)
 	if err != nil {
 		return result, err
@@ -307,10 +353,13 @@ func (s *chromeTranslator) run(ctx context.Context, req chromeTranslationRequest
 		if err != nil || !retryChromeTranslation(result.Error, attempt, prepare || restore) {
 			break
 		}
-		select {
-		case <-task.Done():
-			err = task.Err()
-		case <-time.After(time.Duration(attempt+1) * 350 * time.Millisecond):
+		// Recreate transient UnknownError/InvalidStateError immediately without artificial sleep.
+		if strings.HasPrefix(result.Error, "NotSupportedError:") {
+			select {
+			case <-task.Done():
+				err = task.Err()
+			case <-time.After(time.Duration(attempt+1) * 350 * time.Millisecond):
+			}
 		}
 		if err != nil {
 			break
@@ -335,6 +384,8 @@ func (s *chromeTranslator) run(ctx context.Context, req chromeTranslationRequest
 		if err := s.rememberPair(req.Source + ">" + req.Target); err != nil {
 			return result, err
 		}
+	} else {
+		putCachedTranslation("chrome-translator", req.Source, req.Target, req.Text, result.Text)
 	}
 	return result, nil
 }

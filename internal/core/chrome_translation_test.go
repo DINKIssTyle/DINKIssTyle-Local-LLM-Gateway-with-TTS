@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -219,4 +220,29 @@ func TestChromeTranslationSpeechConcurrency(t *testing.T) {
 	if !observed {
 		t.Fatal("native translation cancellation not propagated")
 	}
+}
+
+func TestTranslationCacheAndTryLockWait(t *testing.T) {
+	translationResultCache.Lock()
+	translationResultCache.entries = make(map[string]string)
+	translationResultCache.order = nil
+	translationResultCache.Unlock()
+
+	putCachedTranslation("chrome-translator", "en", "ko", "Good morning", "좋은 아침입니다")
+	s := newChromeTranslator(t.TempDir())
+	res, err := s.run(context.Background(), chromeTranslationRequest{Source: "en", Target: "ko", Text: "Good morning"}, false)
+	if err != nil || res.Status != "ready" || res.Text != "좋은 아침입니다" {
+		t.Fatalf("expected cached chrome translation without browser launch, got %+v err=%v", res, err)
+	}
+
+	var mu sync.Mutex
+	mu.Lock()
+	go func() {
+		time.Sleep(25 * time.Millisecond)
+		mu.Unlock()
+	}()
+	if !tryLockWithTimeout(context.Background(), &mu, 200*time.Millisecond) {
+		t.Fatal("tryLockWithTimeout should acquire mutex released within wait window")
+	}
+	mu.Unlock()
 }

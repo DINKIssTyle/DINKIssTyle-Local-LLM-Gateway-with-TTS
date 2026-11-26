@@ -34,12 +34,93 @@ var appleNative = &appleRuntimeWorker{}
 var appleSpeechMu sync.Mutex
 var appleTranslationMu sync.Mutex
 
+var (
+	macOSMajorVersionOnce sync.Once
+	macOSMajorVersionVal  int
+	macOSMajorVersionErr  error
+)
+
+func detectMacOSMajorVersion() (int, error) {
+	macOSMajorVersionOnce.Do(func() {
+		version, err := exec.Command("/usr/bin/sw_vers", "-productVersion").Output()
+		if err != nil {
+			macOSMajorVersionErr = err
+			return
+		}
+		macOSMajorVersionVal, macOSMajorVersionErr = strconv.Atoi(strings.Split(strings.TrimSpace(string(version)), ".")[0])
+	})
+	return macOSMajorVersionVal, macOSMajorVersionErr
+}
+
+func tryLockWithTimeout(ctx context.Context, mu *sync.Mutex, wait time.Duration) bool {
+	if mu.TryLock() {
+		return true
+	}
+	if wait <= 0 {
+		return false
+	}
+	deadline := time.Now().Add(wait)
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+			if mu.TryLock() {
+				return true
+			}
+		}
+	}
+	return mu.TryLock()
+}
+
+const maxTranslationResultCache = 128
+
+var translationResultCache = struct {
+	sync.Mutex
+	entries map[string]string
+	order   []string
+}{entries: make(map[string]string)}
+
+func translationCacheKey(backend, source, target, text string) string {
+	return backend + "\x00" + source + "\x00" + target + "\x00" + text
+}
+
+func getCachedTranslation(backend, source, target, text string) (string, bool) {
+	if text == "" {
+		return "", false
+	}
+	key := translationCacheKey(backend, source, target, text)
+	translationResultCache.Lock()
+	defer translationResultCache.Unlock()
+	val, ok := translationResultCache.entries[key]
+	return val, ok
+}
+
+func putCachedTranslation(backend, source, target, text, translated string) {
+	if text == "" || strings.TrimSpace(translated) == "" {
+		return
+	}
+	key := translationCacheKey(backend, source, target, text)
+	translationResultCache.Lock()
+	defer translationResultCache.Unlock()
+	if _, exists := translationResultCache.entries[key]; !exists {
+		if len(translationResultCache.order) >= maxTranslationResultCache {
+			evict := translationResultCache.order[0]
+			translationResultCache.order = translationResultCache.order[1:]
+			delete(translationResultCache.entries, evict)
+		}
+		translationResultCache.order = append(translationResultCache.order, key)
+	}
+	translationResultCache.entries[key] = translated
+}
+
 func appleRuntimeExecutable() (string, error) {
 	if runtime.GOOS != "darwin" {
 		return "", errors.New("Apple 엔진은 macOS 26 이상에서만 지원합니다")
 	}
-	version, err := exec.Command("/usr/bin/sw_vers", "-productVersion").Output()
-	major, _ := strconv.Atoi(strings.Split(strings.TrimSpace(string(version)), ".")[0])
+	major, err := detectMacOSMajorVersion()
 	if err != nil || major < 26 {
 		return "", errors.New("Apple 엔진은 macOS 26 이상이 필요합니다")
 	}
@@ -197,8 +278,17 @@ func runAppleSpeech(ctx context.Context, metadata STTTranscribeRequest, audio []
 	if metadata.Format != "" && metadata.Format != "pcm" {
 		return output, errors.New("Apple STT는 PCM16 입력이 필요합니다")
 	}
-	if !appleSpeechMu.TryLock() {
-		return output, errSTTBusy
+	if preview {
+		if !appleSpeechMu.TryLock() {
+			return output, errSTTBusy
+		}
+	} else {
+		if !tryLockWithTimeout(ctx, &appleSpeechMu, 2*time.Second) {
+			if ctx.Err() != nil {
+				return output, ctx.Err()
+			}
+			return output, errSTTBusy
+		}
 	}
 	defer appleSpeechMu.Unlock()
 	output.LockMS = float64(time.Since(started).Microseconds()) / 1000
@@ -261,14 +351,46 @@ func handleAppleOperation(op string) http.HandlerFunc {
 			http.Error(w, "invalid Apple request", 400)
 			return
 		}
+		var validatedTranslation chromeTranslationRequest
 		if op == "translate" || op == "translationPrepare" {
-			if !appleTranslationMu.TryLock() {
+			validatedTranslation = chromeTranslationRequest{Source: req.Source, Target: req.Target, Text: req.Text}
+			if err := validateChromeTranslation(&validatedTranslation, op == "translationPrepare"); err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			if op == "translate" {
+				if validatedTranslation.Source == validatedTranslation.Target {
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(map[string]any{"status": "ready", "text": validatedTranslation.Text})
+					return
+				}
+				if cached, ok := getCachedTranslation("apple", validatedTranslation.Source, validatedTranslation.Target, validatedTranslation.Text); ok {
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(map[string]any{"status": "ready", "text": cached, "cached": true})
+					return
+				}
+			}
+			wait := 250 * time.Millisecond
+			if op == "translationPrepare" {
+				wait = 0
+			}
+			if !tryLockWithTimeout(r.Context(), &appleTranslationMu, wait) {
+				if r.Context().Err() != nil {
+					return
+				}
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(429)
 				_ = json.NewEncoder(w).Encode(map[string]any{"status": "busy", "error": "Apple 번역 처리 중입니다"})
 				return
 			}
 			defer appleTranslationMu.Unlock()
+			if op == "translate" {
+				if cached, ok := getCachedTranslation("apple", validatedTranslation.Source, validatedTranslation.Target, validatedTranslation.Text); ok {
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(map[string]any{"status": "ready", "text": cached, "cached": true})
+					return
+				}
+			}
 		}
 		p := map[string]any{"op": op}
 		switch op {
@@ -287,14 +409,9 @@ func handleAppleOperation(op string) http.HandlerFunc {
 			p["owner"] = owner
 			p["session"] = key
 		default:
-			translation := chromeTranslationRequest{Source: req.Source, Target: req.Target, Text: req.Text}
-			if err := validateChromeTranslation(&translation, op == "translationPrepare"); err != nil {
-				http.Error(w, err.Error(), 400)
-				return
-			}
-			p["source"] = translation.Source
-			p["target"] = translation.Target
-			p["text"] = translation.Text
+			p["source"] = validatedTranslation.Source
+			p["target"] = validatedTranslation.Target
+			p["text"] = validatedTranslation.Text
 		}
 		timeout := 12 * time.Second
 		if op == "sttPrepare" || op == "translationPrepare" {
@@ -313,6 +430,10 @@ func handleAppleOperation(op string) http.HandlerFunc {
 			result["error"] = err.Error()
 			result["status"] = "error"
 			w.WriteHeader(503)
+		} else if op == "translate" {
+			if translated, ok := result["text"].(string); ok && strings.TrimSpace(translated) != "" {
+				putCachedTranslation("apple", validatedTranslation.Source, validatedTranslation.Target, validatedTranslation.Text, translated)
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(result)

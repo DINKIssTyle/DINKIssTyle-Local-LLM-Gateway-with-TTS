@@ -48,22 +48,10 @@ func (s *chromeTranslator) speech(ctx context.Context, req chromeSpeechRequest, 
 	if len(req.Language) != 2 {
 		return result, errors.New("Chrome STT 인식 언어를 선택하세요")
 	}
-	locked := s.speechMu.TryLock()
-	if !locked {
-		deadline := time.Now().Add(200 * time.Millisecond)
-		for time.Now().Before(deadline) {
-			select {
-			case <-ctx.Done():
-				return result, ctx.Err()
-			case <-time.After(25 * time.Millisecond):
-			}
-			if s.speechMu.TryLock() {
-				locked = true
-				break
-			}
+	if !tryLockWithTimeout(ctx, &s.speechMu, 200*time.Millisecond) {
+		if ctx.Err() != nil {
+			return result, ctx.Err()
 		}
-	}
-	if !locked {
 		return result, errSTTBusy
 	}
 	defer s.speechMu.Unlock()
@@ -169,7 +157,7 @@ func runChromeSpeech(ctx context.Context, metadata STTTranscribeRequest, audio [
 			select {
 			case <-ctx.Done():
 				return output, ctx.Err()
-			case <-time.After(100 * time.Millisecond):
+			case <-time.After(25 * time.Millisecond):
 			}
 			next, pollErr := chromeTranslation.speech(ctx, req, "read")
 			if pollErr == errSTTBusy {
@@ -264,6 +252,7 @@ const chromeSpeechScript = `
    seg.draftText=draft;
    if(seg.ending && !draft && seg.finalText){
     seg.finished=true;
+    seg.doneResolve?.();
    }
   };
   const baseOnError=e=>{if(e.error!=='no-speech' && !(e.error==='aborted' && st.finished))st.error='Chrome STT: '+e.error;};
@@ -274,6 +263,7 @@ const chromeSpeechScript = `
     if(!seg.finalText && seg.draftText)seg.finalText=seg.draftText;
     seg.draftText='';
     seg.finished=true;
+    seg.doneResolve?.();
    }
    try{st.track.stop();}catch{}
    st.writer.close().catch(()=>{});
@@ -299,7 +289,8 @@ const chromeSpeechScript = `
    prev.finished=true;
   }
   st.currentSegId=p.id;
-  seg={id:p.id,owner:p.owner,stream:st,bytes:0,startResultIndex:st.finalCount,finalText:'',draftText:'',finished:false,ending:false};
+  let doneResolve;const done=new Promise(resolve=>{doneResolve=resolve;});
+  seg={id:p.id,owner:p.owner,stream:st,bytes:0,startResultIndex:st.finalCount,finalText:'',draftText:'',finished:false,ending:false,done,doneResolve};
   segments.set(p.id,seg);
   while(segments.size>8){const key=segments.keys().next().value;if(key!==p.id)segments.delete(key);else break;}
   return seg;
@@ -310,7 +301,7 @@ const chromeSpeechScript = `
    const seg=segments.get(p.id);
    if(seg && !seg.finished){
     if(!seg.finalText && seg.draftText)seg.finalText=seg.draftText;
-    seg.draftText='';seg.finished=true;
+    seg.draftText='';seg.finished=true;seg.doneResolve?.();
    }
    if(activeStream && activeStream.owner===p.owner && !activeStream.finished)closeStream(activeStream);
    return {status:'ready'};
@@ -338,8 +329,12 @@ const chromeSpeechScript = `
        else if(seg.finalText && seg.draftText)seg.finalText=(seg.finalText+' '+seg.draftText).trim();
        seg.draftText='';
        seg.finished=true;
+       seg.doneResolve?.();
       }
      },900);
+    }
+    if(p.final && !seg.finished){
+     await Promise.race([seg.done,new Promise(resolve=>setTimeout(resolve,1000))]);
     }
     return snapshot(seg);
    };

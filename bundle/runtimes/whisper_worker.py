@@ -106,16 +106,23 @@ class SpeechFilter:
     def apply(self, audio, mode='strict'):
         import numpy as np
         state = np.zeros((2, 1, 128), dtype=np.float32)
-        context = np.zeros((1, 64), dtype=np.float32)
+        sr = np.array(16000, dtype=np.int64)
+        value = np.zeros((1, 576), dtype=np.float32)
+        threshold = 0.75 if mode == 'strict' else 0.5
         voiced = []
         self.stats = {'speech_seconds': 0.0, 'speech_ratio': 0.0}
-        for offset in range(0, len(audio), 512):
-            frame = audio[offset:offset + 512]
-            frame = np.pad(frame, (0, 512 - len(frame))).reshape(1, 512)
-            value = np.concatenate((context, frame), axis=1)
-            probability, state = self.session.run(None, {'input': value, 'state': state, 'sr': np.array(16000, dtype=np.int64)})
-            voiced.append(float(probability.reshape(-1)[0]) >= (0.75 if mode == 'strict' else 0.5))
-            context = frame[:, -64:]
+        total = len(audio)
+        for offset in range(0, total, 512):
+            end = offset + 512
+            if end <= total:
+                value[0, 64:] = audio[offset:end]
+            else:
+                n = total - offset
+                value[0, 64:64 + n] = audio[offset:total]
+                value[0, 64 + n:] = 0.0
+            probability, state = self.session.run(None, {'input': value, 'state': state, 'sr': sr})
+            voiced.append(float(probability.reshape(-1)[0]) >= threshold)
+            value[0, :64] = value[0, 512:]
         self.stats = {'speech_seconds': min(len(audio)/16000, sum(voiced)*512/16000),
                       'speech_ratio': sum(voiced)/max(1,len(voiced))}
         run = longest = 0
