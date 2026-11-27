@@ -1,6 +1,8 @@
 ---
 name: python-calculator
 description: Calculate complex mathematics, date/time arithmetic, D-days, calendar lookups, ages, statistics, interest/loan rates, and precise numerical evaluations using Python. Use for requests involving 날짜 계산, D-day, 며칠 남았는지, 며칠 전/후, 요일 계산, 만 나이 계산, 복잡한 수학 연산, 백분율, 복리/이자 계산, 통계, or when exact numerical precision is needed.
+requires-tools: [execute_command]
+triggers: [계산, 며칠, d-day, calculate, calculator]
 ---
 
 # Python Calculator & Date/Math Skill

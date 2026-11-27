@@ -132,7 +132,15 @@ func (r *Registry) Call(ctx context.Context, execCtx ExecutionContext, name stri
 	tool, ok := r.tools[name]
 	r.mu.RUnlock()
 	if !ok {
-		return Result{IsError: true}, fmt.Errorf("tool not found: %s", name)
+		var available []string
+		for _, definition := range r.List(execCtx) {
+			available = append(available, definition.Name)
+		}
+		feedback := "No tool was executed. Call only a tool from the provided tool definitions. Skill IDs (builtin:... or user:...) identify instructions, not callable tools; follow the skill using its prescribed real tools. Continue with the corrected tool call rather than promising to retry in a final answer."
+		if len(available) > 0 {
+			feedback += " Available tool names: " + strings.Join(available, ", ")
+		}
+		return Result{IsError: true, Content: feedback}, fmt.Errorf("tool not found: %s", name)
 	}
 	if !googleToolAllowed(execCtx, name) {
 		return Result{IsError: true}, fmt.Errorf("Google tool is not connected and enabled for this account")

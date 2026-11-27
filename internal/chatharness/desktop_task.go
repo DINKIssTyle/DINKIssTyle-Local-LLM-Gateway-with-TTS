@@ -61,10 +61,17 @@ func (t *DesktopTask) Initialize() error {
 	if !t.DesktopRequired {
 		return nil
 	}
-	if t.Kind != "list_apps" && t.Kind != "desktop_work" {
-		return fmt.Errorf("invalid desktop task kind")
+	if t.Kind != "list_apps" && t.Kind != "desktop_work" && t.Kind != "workflow" {
+		return fmt.Errorf("invalid task kind")
 	}
-	if strings.TrimSpace(t.Goal) == "" || len(t.Steps) == 0 || len(t.Steps) > 6 {
+	minSteps := 1
+	if t.Kind == "workflow" {
+		minSteps = 2
+	}
+	if strings.TrimSpace(t.Goal) == "" || len(t.Steps) < minSteps || len(t.Steps) > 6 {
+		if t.Kind == "workflow" {
+			return fmt.Errorf("workflow task needs a goal and 2 to 6 steps")
+		}
 		return fmt.Errorf("desktop task needs a goal and 1 to 6 steps")
 	}
 	t.Status = "running"
@@ -75,13 +82,13 @@ func (t *DesktopTask) Initialize() error {
 			return fmt.Errorf("each step needs a title and observable completion criterion")
 		}
 		s.Status, s.EvidenceIDs = "pending", nil
-		if t.Kind == "list_apps" {
+		if t.Kind == "list_apps" || t.Kind == "workflow" {
 			s.RequiresScreen = false
 		}
 	}
-	// An app list can answer a list-only request; other desktop outcomes need
-	// visual confirmation even if the planner forgets to request it.
-	if t.Kind != "list_apps" {
+	// An app list or non-desktop workflow does not require screen capture;
+	// desktop_work outcomes always need visual confirmation.
+	if t.Kind == "desktop_work" {
 		t.Steps[len(t.Steps)-1].RequiresScreen = true
 	}
 	return nil
@@ -151,7 +158,7 @@ func (t *DesktopTask) Apply(d DesktopDecision, receipts []DesktopReceipt, allowe
 				return fmt.Errorf("cannot finish while a task step remains unfinished")
 			}
 		}
-		if t.Kind != "list_apps" {
+		if t.Kind == "desktop_work" {
 			lastInput, lastScreen := 0, 0
 			for _, r := range receipts {
 				if r.Tool == "computer_observe" && r.Success && r.HasImage {

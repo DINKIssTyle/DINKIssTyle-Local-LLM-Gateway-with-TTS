@@ -1,6 +1,8 @@
 ---
 name: google-drive
 description: Search and read Google Drive for 드라이브 files or Google Docs questions.
+requires-tools: [google_drive_search]
+triggers: [드라이브, 구글 문서, google drive, google docs]
 ---
 
 For "드라이브 확인" or "최근 파일", call `google_drive_search` with `{}` immediately: up to 10 recently modified non-folder files, no keyword required. Show names, modification times and links without reading every file.

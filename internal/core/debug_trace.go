@@ -108,6 +108,8 @@ func shouldBufferDebugTraceEntry(entry DebugTraceEntry) bool {
 	stage := strings.TrimSpace(entry.Stage)
 
 	switch {
+	case source == "recovery":
+		return true
 	case source == "chat" && strings.HasPrefix(stage, "request."):
 		return true
 	case source == "chat" && strings.HasPrefix(stage, "skills."):
@@ -116,13 +118,21 @@ func shouldBufferDebugTraceEntry(entry DebugTraceEntry) bool {
 		return true
 	case source == "chat" && stage == "turn.followup":
 		return true
+	case source == "chat" && stage == "turn.error":
+		return true
 	case source == "chat" && strings.HasPrefix(stage, "tool_call."):
+		return true
+	case source == "chat" && strings.HasPrefix(stage, "self_correction."):
+		return true
+	case source == "chat" && strings.HasPrefix(stage, "final_answer."):
+		return true
+	case source == "chat" && strings.HasPrefix(stage, "task."):
+		return true
+	case source == "chat" && strings.HasPrefix(stage, "workflow."):
 		return true
 	case source == "tool_runtime" || source == "mcp":
 		return true
-	case source == "saved-turn-title" && stage == "llm.request":
-		return true
-	case source == "saved-turn-title" && stage == "llm.response":
+	case source == "saved-turn-title" && (stage == "llm.request" || stage == "llm.response" || stage == "llm.error"):
 		return true
 	default:
 		return false

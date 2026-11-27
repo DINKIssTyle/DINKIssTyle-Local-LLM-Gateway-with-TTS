@@ -1,6 +1,8 @@
 ---
 name: google-gmail
 description: Search and read Gmail for email questions, 메일 검색, 받은 편지, or 지메일.
+requires-tools: [gmail_search]
+triggers: [메일, 받은 편지, gmail, email, inbox]
 ---
 
 For "최근 이메일 확인", "메일 확인" or "recent email", immediately call `gmail_search` with `{}` for up to 10 recent inbox messages. No sender, keyword or date is needed. Show sender, subject, date and snippets; a list needs no body reads.

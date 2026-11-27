@@ -3189,7 +3189,7 @@ import { LocalAgreement } from './local-agreement.mjs';
           if (!line.startsWith('data:')) return;
           const dataStr = line.slice(5).trim();
           if (!dataStr) return;
-          if(dataStr==='[DONE]'){streamComplete=true;return;}
+          if(dataStr==='[DONE]')return;
           if(eventName==='error')throw new Error(dataStr);
           const parsed = JSON.parse(dataStr);
           if (parsed.error) throw new Error(typeof parsed.error === 'string' ? parsed.error : parsed.error.message || JSON.stringify(parsed.error));
@@ -3204,6 +3204,7 @@ import { LocalAgreement } from './local-agreement.mjs';
           }
 
           const statusChanged = applyStreamStatusEvent(type, parsed);
+          if(type==='tool_call.start'){rawAnswer='';}
 
           const final=finalChatText(parsed);
           if(final!==null)rawAnswer=final;

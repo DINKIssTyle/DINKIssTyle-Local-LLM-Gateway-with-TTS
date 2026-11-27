@@ -59,7 +59,8 @@ type App struct {
 	serverUILanguageMux sync.RWMutex
 	serverUILanguage    string
 
-	computerTaskPlanning bool
+	computerTaskPlanning  bool
+	multiStepTaskPlanning bool
 
 	// Server-side Model Cache
 	modelCache     []byte
@@ -317,7 +318,8 @@ func NewApp(assets embed.FS) *App {
 	a := &App{
 		authMgr:              NewAuthManager(GetResourcePath("users.json")),
 		assets:               assets,
-		computerTaskPlanning: true,
+		computerTaskPlanning:  true,
+		multiStepTaskPlanning: true,
 	}
 	globalApp = a
 	mcp.SetHelpDocsFS(assets, "frontend/public/help")
@@ -2005,4 +2007,22 @@ func (a *App) GetWindowDimensions() map[string]int {
 		"minWidth":     config.WindowMinWidth,
 		"minHeight":    config.WindowMinHeight,
 	}
+}
+
+// GetLLMIncidentSummary returns per-model failure counts and recovery rates for diagnostics.
+func (a *App) GetLLMIncidentSummary(limit int) []mcp.ModelFailureStat {
+	stats, err := mcp.GetModelFailureSummary(limit)
+	if err != nil {
+		return []mcp.ModelFailureStat{}
+	}
+	return stats
+}
+
+// GetRecentLLMIncidents returns recent recorded LLM failures and recovery attempts.
+func (a *App) GetRecentLLMIncidents(modelID string, limit int) []mcp.LLMIncident {
+	items, err := mcp.ListLLMIncidents(modelID, limit)
+	if err != nil {
+		return []mcp.LLMIncident{}
+	}
+	return items
 }

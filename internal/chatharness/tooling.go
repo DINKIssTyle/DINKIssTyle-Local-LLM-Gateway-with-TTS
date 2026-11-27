@@ -129,6 +129,10 @@ func formatToolEvidence(toolName, result string) (string, bool) {
 	switch toolName {
 	case "search_web", "search_web_multi", "naver_search":
 		limit = 2400
+	case "gmail_search":
+		limit = 3000
+	case "gmail_read", "google_drive_read":
+		limit = 6000
 	}
 	if strings.HasPrefix(toolName, "computer_") {
 		limit = 16000
@@ -180,6 +184,43 @@ func IsFreshnessSensitiveWebRequest(text string) bool {
 		"최신", "현재", "오늘", "뉴스", "속보", "최근", "업데이트", "동향", "사태", "이번 주", "이번달", "이번 달",
 	} {
 		if strings.Contains(normalized, signal) {
+			return true
+		}
+	}
+	return false
+}
+
+// NeedsGemmaFreshnessWebLookup catches cases where a Gemma model confidently
+// answers a time-sensitive public question from stale parametric memory without
+// calling search_web. Personal account, local time, and static requests are excluded.
+func NeedsGemmaFreshnessWebLookup(question, answer string) bool {
+	q := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(question)), " "))
+	if len([]rune(q)) < 4 || strings.TrimSpace(answer) == "" {
+		return false
+	}
+	for _, personalOrLocal := range []string{
+		"이메일", "메일", "지메일", "gmail", "inbox", "받은편지", "받은 편지",
+		"캘린더", "달력", "일정", "스케줄", "calendar", "schedule",
+		"드라이브", "google drive", "drive", "녹취", "회의록", "transcript",
+		"메모리", "기억", "memory", "화면", "스크린", "screen", "실행 중인 앱",
+		"몇 시", "현재 시간", "지금 시간", "오늘 날짜", "무슨 요일", "what time", "what day",
+	} {
+		if strings.Contains(q, personalOrLocal) {
+			return false
+		}
+	}
+	if IsFreshnessSensitiveWebRequest(q) {
+		return true
+	}
+	currentYear := time.Now().Format("2006")
+	if strings.Contains(q, currentYear) {
+		return true
+	}
+	for _, cue := range []string{
+		"주가", "환율", "시세", "비트코인", "코스피", "나스닥", "출시일", "최신 버전", "신제품", "경기 결과", "우승", "순위", "요즘",
+		"stock price", "exchange rate", "release date", "latest version", "who is the current", "score", "standings",
+	} {
+		if strings.Contains(q, cue) {
 			return true
 		}
 	}

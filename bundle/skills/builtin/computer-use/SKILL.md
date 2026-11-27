@@ -1,6 +1,8 @@
 ---
 name: computer-use
 description: Inspect app content and status or complete desktop tasks on the gateway host Mac through screen, mouse and keyboard tools. Use for 앱 상태 확인, 작업 진행 상황, 앱 실행·전환 and 화면 조작.
+requires-tools: [computer_observe]
+discovery: always
 ---
 
 # Computer use

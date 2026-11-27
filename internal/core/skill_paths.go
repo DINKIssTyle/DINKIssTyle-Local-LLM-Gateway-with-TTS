@@ -136,16 +136,11 @@ func compileActiveSkills(userText string, toolLists ...[]promptkit.ToolDefinitio
 }
 
 func compileChatSkills(userText string, compactDiscovery bool, toolLists ...[]promptkit.ToolDefinition) skillkit.Compilation {
-	var excluded []string
+	var availableTools []string
 	if len(toolLists) > 0 {
-		available := map[string]bool{}
+		availableTools = make([]string, 0, len(toolLists[0]))
 		for _, tool := range toolLists[0] {
-			available[tool.Name] = true
-		}
-		for skill, tool := range map[string]string{"google-gmail": "gmail_search", "google-drive": "google_drive_search", "google-calendar": "google_calendar_search", "msn-weather-current": "read_web_page", "computer-use": "computer_observe"} {
-			if !available[tool] {
-				excluded = append(excluded, skill)
-			}
+			availableTools = append(availableTools, tool.Name)
 		}
 	}
 	userDir := getWritableSkillsDir()
@@ -155,7 +150,7 @@ func compileChatSkills(userText string, compactDiscovery bool, toolLists ...[]pr
 	}
 	result := skillkit.LoadAndCompile(skillkit.Config{
 		BuiltinDir:       getBundledSkillsDir(),
-		ExcludedNames:    excluded,
+		AvailableTools:   availableTools,
 		UserDir:          userDir,
 		CompactDiscovery: compactDiscovery,
 	}, userText)

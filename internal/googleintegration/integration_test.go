@@ -372,3 +372,14 @@ func TestDriveAndCalendarDefaultSearches(t *testing.T) {
 		})
 	}
 }
+
+func TestTextHTMLPreservesHTTPLinks(t *testing.T) {
+	raw := `<div><p>Your UPS package shipped!</p><a href="https://www.ups.com/track?tracknum=1Z999AA10123456784">Track Package</a><a href="javascript:void(0)">Ignore</a><a href="mailto:test@example.com">Mail</a></div>`
+	got := textHTML(raw)
+	if !strings.Contains(got, "[Track Package](https://www.ups.com/track?tracknum=1Z999AA10123456784)") {
+		t.Fatalf("expected UPS tracking link to be preserved, got: %q", got)
+	}
+	if strings.Contains(got, "javascript:void") {
+		t.Fatalf("unsafe javascript link should not be preserved: %q", got)
+	}
+}

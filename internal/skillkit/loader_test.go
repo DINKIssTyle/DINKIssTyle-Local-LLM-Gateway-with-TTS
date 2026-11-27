@@ -271,3 +271,85 @@ func TestCurrentWeatherProcedureGetsPromptBudgetPriority(t *testing.T) {
 		t.Fatalf("weather procedure was not prioritized under the prompt budget: %+v", result.Available)
 	}
 }
+
+func TestDeclarativeUserSkillTriggersAndDiscoveryInCompactMode(t *testing.T) {
+	user := t.TempDir()
+	writeTestSkill(t, user, "stock-brief",
+		"name: stock-brief\ndescription: Summarize stock prices.\ntriggers: [주가, stock price]\npriority: 5",
+		"Check market quotes.")
+	writeTestSkill(t, user, "always-helper",
+		"name: always-helper\ndescription: Always available helper.\ndiscovery: always",
+		"Always check context.")
+	writeTestSkill(t, user, "quiet-helper",
+		"name: quiet-helper\ndescription: Explicit only in compact mode.",
+		"Only when requested.")
+
+	matched := LoadAndCompile(Config{UserDir: user, CompactDiscovery: true}, "애플 주가 알려줘")
+	if len(matched.Diagnostics) > 0 {
+		t.Fatalf("unexpected diagnostics: %+v", matched.Diagnostics)
+	}
+	if len(matched.Available) != 2 {
+		t.Fatalf("expected stock-brief and always-helper, got %+v", matched.Available)
+	}
+	if matched.Available[0].Namespace != "user:stock-brief" || matched.Available[1].Namespace != "user:always-helper" {
+		t.Fatalf("unexpected compact order: %+v", matched.Available)
+	}
+
+	unmatched := LoadAndCompile(Config{UserDir: user, CompactDiscovery: true}, "안녕하세요")
+	if len(unmatched.Available) != 1 || unmatched.Available[0].Namespace != "user:always-helper" {
+		t.Fatalf("expected only discovery=always skill, got %+v", unmatched.Available)
+	}
+}
+
+func TestRequiresToolsExcludesSkillsMissingTools(t *testing.T) {
+	user := t.TempDir()
+	writeTestSkill(t, user, "needs-web",
+		"name: needs-web\ndescription: Uses web reader.\nrequires-tools:\n  - read_web_page\n  - search_web",
+		"Read and search the web.")
+	writeTestSkill(t, user, "no-tools",
+		"name: no-tools\ndescription: Pure reasoning skill.",
+		"Think carefully.")
+
+	missing := LoadAndCompile(Config{UserDir: user, AvailableTools: []string{"read_web_page"}}, "$needs-web $no-tools")
+	if len(missing.Available) != 1 || missing.Available[0].Name != "no-tools" {
+		t.Fatalf("skill with missing required tool should be excluded: %+v", missing.Available)
+	}
+	if len(missing.Selected) != 1 || missing.Selected[0].Name != "no-tools" {
+		t.Fatalf("excluded explicit skill should not appear in Selected: %+v", missing.Selected)
+	}
+
+	satisfied := LoadAndCompile(Config{UserDir: user, AvailableTools: []string{"read_web_page", "search_web"}}, "$needs-web")
+	if len(satisfied.Selected) != 1 || satisfied.Selected[0].Name != "needs-web" {
+		t.Fatalf("skill with satisfied required tools should be selected: %+v", satisfied.Selected)
+	}
+}
+
+func TestPriorityOrdersMatchedSkillsUnderBudget(t *testing.T) {
+	user := t.TempDir()
+	writeTestSkill(t, user, "alpha-low",
+		"name: alpha-low\ndescription: Low priority.\ntriggers: [배포]\npriority: 1",
+		"Low priority deploy steps.")
+	writeTestSkill(t, user, "zeta-high",
+		"name: zeta-high\ndescription: High priority.\ntriggers: [배포]\npriority: 10",
+		"High priority deploy steps.")
+
+	result := LoadAndCompile(Config{UserDir: user}, "배포 체크해줘")
+	if len(result.Available) != 2 || result.Available[0].Name != "zeta-high" {
+		t.Fatalf("expected higher priority skill first, got %+v", result.Available)
+	}
+}
+
+func TestInvalidDiscoveryAndPriorityProduceDiagnostics(t *testing.T) {
+	user := t.TempDir()
+	writeTestSkill(t, user, "bad-discovery",
+		"name: bad-discovery\ndescription: Bad discovery.\ndiscovery: sometimes",
+		"Body.")
+	writeTestSkill(t, user, "bad-priority",
+		"name: bad-priority\ndescription: Bad priority.\npriority: high",
+		"Body.")
+
+	result := LoadAndCompile(Config{UserDir: user}, "test")
+	if result.Discovered != 0 || len(result.Diagnostics) != 2 {
+		t.Fatalf("expected 2 diagnostics for invalid metadata, got discovered=%d diagnostics=%+v", result.Discovered, result.Diagnostics)
+	}
+}

@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"dinkisstyle-chat/internal/chatharness"
+	"dinkisstyle-chat/internal/mcp"
 )
 
 type priorConversationTurn struct {
@@ -369,10 +370,33 @@ func rewriteFollowupSearchArguments(ctx context.Context, endpoint, token, modelI
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {
 		log.Printf("[followup-search] rewrite request failed (%s): %v", time.Since(started).Round(time.Millisecond), err)
+		recordLLMIncident(mcp.LLMIncident{
+			ModelID:     modelID,
+			LLMMode:     "standard",
+			Scope:       "aux.followup_search",
+			FailureKind: "http_error",
+			ErrorDetail: err.Error(),
+			ElapsedMS:   time.Since(started).Milliseconds(),
+		})
 		return argsJSON, false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		failureKind := "http_error"
+		if isSchemaUnsupportedResponse(resp.StatusCode, string(errBody)) {
+			failureKind = "schema_unsupported"
+			noteModelSchemaUnsupported(modelID)
+		}
+		recordLLMIncident(mcp.LLMIncident{
+			ModelID:     modelID,
+			LLMMode:     "standard",
+			Scope:       "aux.followup_search",
+			FailureKind: failureKind,
+			HTTPStatus:  resp.StatusCode,
+			ErrorDetail: compactText(string(errBody), 300),
+			ElapsedMS:   time.Since(started).Milliseconds(),
+		})
 		return argsJSON, false
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
@@ -388,6 +412,15 @@ func rewriteFollowupSearchArguments(ctx context.Context, endpoint, token, modelI
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(raw, &completion); err != nil || len(completion.Choices) != 1 {
+		recordLLMIncident(mcp.LLMIncident{
+			ModelID:     modelID,
+			LLMMode:     "standard",
+			Scope:       "aux.followup_search",
+			FailureKind: "json_parse",
+			ErrorDetail: "invalid completion envelope",
+			RawSnippet:  compactText(string(raw), 400),
+			ElapsedMS:   time.Since(started).Milliseconds(),
+		})
 		return argsJSON, false
 	}
 	controlJSON := strings.TrimSpace(completion.Choices[0].Message.Content)
@@ -403,7 +436,29 @@ func rewriteFollowupSearchArguments(ctx context.Context, endpoint, token, modelI
 		Query     string `json:"query"`
 	}
 	if err := json.Unmarshal([]byte(controlJSON), &result); err != nil {
-		return argsJSON, false
+		if extracted, ok := chatharness.ExtractBalancedJSONObject(completion.Choices[0].Message.Content); ok && json.Unmarshal([]byte(extracted), &result) == nil {
+			recordLLMIncident(mcp.LLMIncident{
+				ModelID:          modelID,
+				LLMMode:          "standard",
+				Scope:            "aux.followup_search",
+				FailureKind:      "json_parse",
+				RecoveryStrategy: "extract_json",
+				Recovered:        true,
+				RawSnippet:       compactText(completion.Choices[0].Message.Content, 400),
+				ElapsedMS:        time.Since(started).Milliseconds(),
+			})
+		} else {
+			recordLLMIncident(mcp.LLMIncident{
+				ModelID:     modelID,
+				LLMMode:     "standard",
+				Scope:       "aux.followup_search",
+				FailureKind: "json_parse",
+				ErrorDetail: err.Error(),
+				RawSnippet:  compactText(controlJSON, 400),
+				ElapsedMS:   time.Since(started).Milliseconds(),
+			})
+			return argsJSON, false
+		}
 	}
 	rewrittenQuery := strings.TrimSpace(result.Query)
 	if !result.Rewritten || rewrittenQuery == "" || rewrittenQuery == rawQuery {

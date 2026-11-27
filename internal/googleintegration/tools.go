@@ -56,6 +56,44 @@ func textHTML(s string) string {
 		if n.Type == html.ElementNode && (n.Data == "script" || n.Data == "style") {
 			return
 		}
+		if n.Type == html.ElementNode && n.Data == "a" {
+			href := ""
+			for _, attr := range n.Attr {
+				if strings.EqualFold(attr.Key, "href") {
+					href = strings.TrimSpace(attr.Val)
+					break
+				}
+			}
+			if isPreservedHTTPLink(href) {
+				var label strings.Builder
+				var collect func(*html.Node)
+				collect = func(cur *html.Node) {
+					if cur.Type == html.ElementNode && (cur.Data == "script" || cur.Data == "style") {
+						return
+					}
+					if cur.Type == html.TextNode {
+						label.WriteString(cur.Data)
+						label.WriteByte(' ')
+					}
+					for c := cur.FirstChild; c != nil; c = c.NextSibling {
+						collect(c)
+					}
+				}
+				for c := n.FirstChild; c != nil; c = c.NextSibling {
+					collect(c)
+				}
+				text := strings.Join(strings.Fields(label.String()), " ")
+				if text == "" {
+					b.WriteString(href)
+				} else if strings.Contains(text, href) {
+					b.WriteString(text)
+				} else {
+					b.WriteString("[" + text + "](" + href + ")")
+				}
+				b.WriteByte(' ')
+				return
+			}
+		}
 		if n.Type == html.TextNode {
 			b.WriteString(n.Data)
 			b.WriteByte(' ')
@@ -66,6 +104,14 @@ func textHTML(s string) string {
 	}
 	walk(doc)
 	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+func isPreservedHTTPLink(href string) bool {
+	if len(href) == 0 || len(href) > 400 {
+		return false
+	}
+	lower := strings.ToLower(href)
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
 }
 func resultJSON(v any) (string, error) { b, err := json.Marshal(v); return string(b), err }
 func (m *Manager) Execute(ctx context.Context, user, name string, args json.RawMessage) (string, error) {

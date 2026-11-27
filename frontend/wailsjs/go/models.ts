@@ -350,6 +350,42 @@ export namespace googleintegration {
 
 export namespace mcp {
 	
+	export class LLMIncident {
+	    id: number;
+	    model_id: string;
+	    model_family: string;
+	    llm_mode: string;
+	    scope: string;
+	    failure_kind: string;
+	    recovery_strategy: string;
+	    recovered: boolean;
+	    http_status?: number;
+	    error_detail?: string;
+	    raw_snippet?: string;
+	    elapsed_ms?: number;
+	    created_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new LLMIncident(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.model_id = source["model_id"];
+	        this.model_family = source["model_family"];
+	        this.llm_mode = source["llm_mode"];
+	        this.scope = source["scope"];
+	        this.failure_kind = source["failure_kind"];
+	        this.recovery_strategy = source["recovery_strategy"];
+	        this.recovered = source["recovered"];
+	        this.http_status = source["http_status"];
+	        this.error_detail = source["error_detail"];
+	        this.raw_snippet = source["raw_snippet"];
+	        this.elapsed_ms = source["elapsed_ms"];
+	        this.created_at = source["created_at"];
+	    }
+	}
 	export class MemoryRetentionConfig {
 	    coreDays: number;
 	    workingDays: number;
@@ -364,6 +400,32 @@ export namespace mcp {
 	        this.coreDays = source["coreDays"];
 	        this.workingDays = source["workingDays"];
 	        this.ephemeralDays = source["ephemeralDays"];
+	    }
+	}
+	export class ModelFailureStat {
+	    model_id: string;
+	    model_family: string;
+	    llm_mode: string;
+	    scope: string;
+	    failure_kind: string;
+	    total_count: number;
+	    recovered_count: number;
+	    last_seen_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ModelFailureStat(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.model_id = source["model_id"];
+	        this.model_family = source["model_family"];
+	        this.llm_mode = source["llm_mode"];
+	        this.scope = source["scope"];
+	        this.failure_kind = source["failure_kind"];
+	        this.total_count = source["total_count"];
+	        this.recovered_count = source["recovered_count"];
+	        this.last_seen_at = source["last_seen_at"];
 	    }
 	}
 

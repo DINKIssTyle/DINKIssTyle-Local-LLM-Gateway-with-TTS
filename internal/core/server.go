@@ -2721,12 +2721,27 @@ func callLLMInternal(ctx context.Context, prompt string, opts savedTurnTitleOpti
 		AddDebugTrace("saved-turn-title", "llm.error", "Title request failed", map[string]interface{}{
 			"error": err,
 		})
+		recordLLMIncident(mcp.LLMIncident{
+			ModelID:     modelID,
+			LLMMode:     llmMode,
+			Scope:       "aux.saved_turn_title",
+			FailureKind: "http_error",
+			ErrorDetail: err.Error(),
+		})
 		return ""
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
+		recordLLMIncident(mcp.LLMIncident{
+			ModelID:     modelID,
+			LLMMode:     llmMode,
+			Scope:       "aux.saved_turn_title",
+			FailureKind: "http_error",
+			HTTPStatus:  resp.StatusCode,
+			ErrorDetail: compactText(string(bodyBytes), 300),
+		})
 		AddDebugTrace("saved-turn-title", "llm.error", "Title request returned non-OK status", map[string]interface{}{
 			"status_code": resp.StatusCode,
 			"__payload":   string(bodyBytes),
@@ -3214,6 +3229,26 @@ func createServerMux(app *App, authMgr *AuthManager) *http.ServeMux {
 	mux.HandleFunc("/api/users", AdminMiddleware(authMgr, handleUsers(authMgr)))
 	mux.HandleFunc("/api/users/add", AdminMiddleware(authMgr, handleAddUser(authMgr)))
 	mux.HandleFunc("/api/users/delete", AdminMiddleware(authMgr, handleDeleteUser(authMgr)))
+	mux.HandleFunc("/api/debug/llm-incidents", AdminMiddleware(authMgr, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		limit := 50
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+				limit = parsed
+			}
+		}
+		modelID := strings.TrimSpace(r.URL.Query().Get("model"))
+		summary, _ := mcp.GetModelFailureSummary(limit)
+		incidents, _ := mcp.ListLLMIncidents(modelID, limit)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"summary":   summary,
+			"incidents": incidents,
+		})
+	}))
 
 	// Even Realities Plugin endpoint
 	pluginDir := filepath.Join(".", "plugins", "even-realities")
@@ -5614,6 +5649,44 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			}
 		}
 	}
+	if !desktopHandled && app.multiStepTaskPlanning && enableTools && !glassesRequest && !bulkToolTestRequest && workflowInputCandidate(initialUserInputText, promptTools) {
+		history := []string{}
+		if messages, ok := reqMap["messages"].([]interface{}); ok {
+			for _, raw := range messages[max(0, len(messages)-8):] {
+				message, _ := raw.(map[string]interface{})
+				role, _ := message["role"].(string)
+				text, _ := message["content"].(string)
+				if role == "user" || role == "assistant" {
+					history = append(history, role+": "+compactText(text, 1200))
+				}
+			}
+		}
+		if len(history) == 0 {
+			for _, prior := range sessionUISnapshot.Turns[max(0, len(sessionUISnapshot.Turns)-4):] {
+				history = append(history, "user: "+compactText(prior.UserContent, 1200)+"\nassistant: "+compactText(prior.AssistantContent, 1200))
+			}
+		}
+		procedure := ""
+		for _, skill := range skillCompilation.Selected {
+			if !skillUsesDesktop(skill.Namespace, skill.Instructions) {
+				procedure += "\n\nSelected skill " + skill.Namespace + ":\n" + skill.Instructions
+			}
+		}
+		workflowHandled, workflowAnswer := runWorkflowTask(chatCtx, desktopTaskModel{endpoint: endpoint, token: token, model: modelID, procedure: strings.TrimSpace(procedure)}, initialUserInputText, strings.Join(history, "\n"), promptTools, toolExecCtx, func(event string, payload map[string]interface{}) {
+			payload["type"] = event
+			appendChatEvent("assistant", event, payload)
+			if raw, err := json.Marshal(payload); err == nil {
+				emitStreamChunk("data: " + string(raw))
+			}
+		})
+		if chatCtx.Err() != nil {
+			return
+		}
+		if workflowHandled {
+			emitCanonicalAssistantDelta(workflowAnswer)
+			desktopHandled = true
+		}
+	}
 	// A bare inbox check has a defined read-only default. Fetch it before asking
 	// the model to summarize so it cannot substitute a clarification for lookup.
 	if !desktopHandled && !glassesRequest && enableTools && isRecentInboxRequest(initialUserInputText) {
@@ -5740,6 +5813,15 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				"status_code": resp.StatusCode,
 				"elapsed_ms":  time.Since(turnStart).Milliseconds(),
 				"error":       compactText(errorMsg, 180),
+			})
+			recordLLMIncident(mcp.LLMIncident{
+				ModelID:     modelID,
+				LLMMode:     llmMode,
+				Scope:       "chat.stream",
+				FailureKind: "http_error",
+				HTTPStatus:  resp.StatusCode,
+				ErrorDetail: compactText(errorMsg, 300),
+				ElapsedMS:   time.Since(turnStart).Milliseconds(),
 			})
 			if _, hasReasoning := reqMap["reasoning"]; nativeAmbient && hasReasoning && !nativeReasoningRetryUsed && nativeReasoningUnsupported(resp.StatusCode, errorMsg) {
 				nativeReasoningRetryUsed = true
@@ -5941,6 +6023,18 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 						emitStreamChunk(fmt.Sprintf("data: %s", string(jsonBytes)))
 						fullResponse += buffer
 						buffer = ""
+					}
+
+					// Suppress premature [DONE] when lookup-recovery will run search_web on this turn.
+					if llmMode != "stateful" && enableTools && !glassesRequest && !toolExecutedThisTurn &&
+						!chatToolCalls.HasCalls() && !needsCorrection && len(toolUsageCounts) == 0 &&
+						isRegisteredPromptTool("search_web", promptTools) &&
+						(chatharness.IsUnfulfilledWeatherLookup(initialUserInputText, fullResponse) ||
+							chatharness.IsUnfulfilledLookupPromise(fullResponse) ||
+							chatharness.IsUnsearchedRefusal(initialUserInputText, fullResponse) ||
+							(gemma4Chat && chatharness.NeedsGemmaFreshnessWebLookup(initialUserInputText, fullResponse)) ||
+							(weatherCoordinates != "" && isBareForecastRequest(weatherQuestion) && strings.Contains(weatherQuestion, "내일") && strings.Contains(fullResponse, "지역"))) {
+						continue
 					}
 
 					// Just forward the DONE
@@ -6281,6 +6375,24 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 								AddDebugTrace("chat", "tool.end_suppressed", "Suppressed intermediate LM Studio end payload containing tool markup", map[string]interface{}{
 									"turn":    turn,
 									"snippet": compactText(endContent, 220),
+								})
+								continue
+							}
+							lookupCandidate := fullResponse
+							if strings.TrimSpace(lookupCandidate) == "" {
+								lookupCandidate = endContent
+							}
+							if llmMode != "stateful" && enableTools && !glassesRequest && !toolExecutedThisTurn &&
+								!chatToolCalls.HasCalls() && !needsCorrection && len(toolUsageCounts) == 0 &&
+								isRegisteredPromptTool("search_web", promptTools) &&
+								(chatharness.IsUnfulfilledWeatherLookup(initialUserInputText, lookupCandidate) ||
+									chatharness.IsUnfulfilledLookupPromise(lookupCandidate) ||
+									chatharness.IsUnsearchedRefusal(initialUserInputText, lookupCandidate) ||
+									(gemma4Chat && chatharness.NeedsGemmaFreshnessWebLookup(initialUserInputText, lookupCandidate)) ||
+									(weatherCoordinates != "" && isBareForecastRequest(weatherQuestion) && strings.Contains(weatherQuestion, "내일") && strings.Contains(lookupCandidate, "지역"))) {
+								AddDebugTrace("chat", "lookup_recovery.end_suppressed", "Suppressed intermediate end payload before automatic web lookup recovery", map[string]interface{}{
+									"turn":    turn,
+									"snippet": compactText(lookupCandidate, 220),
 								})
 								continue
 							}
@@ -6925,14 +7037,17 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				turn, promised, llmMode, enableTools, glassesRequest, toolExecutedThisTurn, chatToolCalls.HasCalls(), needsCorrection, len(toolUsageCounts),
 				isRegisteredPromptTool("search_web", promptTools), compactText(gemmaToolText, 200), compactText(fullResponse, 200))
 		}
-		// Recover a web lookup when the model only promised to search or gave up
-		// without searching first. Preserve genuine location clarifications.
+		// Recover a web lookup when the model only promised to search, gave up
+		// without searching first, or (for Gemma 4) answered a freshness-sensitive
+		// public question from internal memory without searching.
+		gemmaFreshnessGuard := gemma4Chat && chatharness.NeedsGemmaFreshnessWebLookup(initialUserInputText, fullResponse)
 		if llmMode != "stateful" && enableTools && !glassesRequest && !toolExecutedThisTurn &&
 			!chatToolCalls.HasCalls() && !needsCorrection && len(toolUsageCounts) == 0 &&
 			isRegisteredPromptTool("search_web", promptTools) &&
 			(chatharness.IsUnfulfilledWeatherLookup(initialUserInputText, fullResponse) ||
 				chatharness.IsUnfulfilledLookupPromise(fullResponse) ||
 				chatharness.IsUnsearchedRefusal(initialUserInputText, fullResponse) ||
+				gemmaFreshnessGuard ||
 				(weatherCoordinates != "" && isBareForecastRequest(weatherQuestion) && strings.Contains(weatherQuestion, "내일") && strings.Contains(fullResponse, "지역"))) {
 			query := initialUserInputText
 			if weatherCoordinates != "" && isBareForecastRequest(weatherQuestion) {
@@ -6942,8 +7057,19 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			chatToolCalls.RecoverCall(chatharness.ProviderToolCall{
 				ID: fmt.Sprintf("call_weather_%d", turn), Name: "search_web", Arguments: string(args),
 			})
+			if gemmaFreshnessGuard {
+				recordLLMIncident(mcp.LLMIncident{
+					ModelID:          modelID,
+					LLMMode:          llmMode,
+					Scope:            "chat.freshness_guard",
+					FailureKind:      "unsearched_freshness",
+					RecoveryStrategy: "auto_web_search",
+					Recovered:        true,
+					RawSnippet:       compactText(fullResponse, 400),
+				})
+			}
 			fullResponse = ""
-			AddDebugTrace("chat", "weather.lookup_recovered", "Ran search after an unfulfilled lookup promise", map[string]interface{}{"query": query})
+			AddDebugTrace("chat", "weather.lookup_recovered", "Ran search after an unfulfilled lookup promise or unsearched freshness answer", map[string]interface{}{"query": query, "gemma_freshness_guard": gemmaFreshnessGuard})
 		}
 		if enableTools && chatToolCalls.HasCalls() {
 			calls := chatToolCalls.Calls()
@@ -7352,12 +7478,18 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				"final_only":            finalAnswerOnly,
 				"freshness_cross_check": requireFreshnessCrossCheck,
 			})
+			if turn < maxToolTurns-1 {
+				fullResponse = ""
+			}
 			continue // Start next turn loop
 		}
 
 		if enableTools && needsCorrection && badContentCapture != "" && turn < maxToolTurns-1 {
-			correctionPrompt := promptkit.SelfCorrectionPromptTemplate(badContentCapture)
+			modelFamily, _ := chatharness.ClassifyModelFamily(modelID)
+			correctionPrompt := promptkit.SelfCorrectionPromptForMode(badContentCapture, llmMode, modelFamily)
+			strategy := "native_tool_retry"
 			if llmMode == "stateful" {
+				strategy = "xml_tool_retry"
 				reqMap = map[string]interface{}{
 					"model":       modelID,
 					"input":       correctionPrompt + "\n\nOriginal user request:\n" + initialUserInputText,
@@ -7380,8 +7512,21 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			body, marshalErr = json.Marshal(reqMap)
 			if marshalErr == nil {
 				AddDebugTrace("chat", "self_correction.retry", "Retrying malformed tool call through the normal parser", map[string]interface{}{
-					"turn":    turn,
-					"snippet": compactText(badContentCapture, 180),
+					"turn":     turn,
+					"mode":     llmMode,
+					"strategy": strategy,
+					"snippet":  compactText(badContentCapture, 180),
+				})
+				recordLLMIncident(mcp.LLMIncident{
+					ModelID:          modelID,
+					ModelFamily:      modelFamily,
+					LLMMode:          llmMode,
+					Scope:            "chat.tool_call",
+					FailureKind:      "tool_format",
+					RecoveryStrategy: strategy,
+					Recovered:        true,
+					RawSnippet:       compactText(badContentCapture, 500),
+					ElapsedMS:        time.Since(turnStart).Milliseconds(),
 				})
 				needsCorrection = false
 				badContentCapture = ""
@@ -7405,11 +7550,31 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 					"reasoning_chars": len(reasoningResponse),
 					"mode":            llmMode,
 				})
+				recordLLMIncident(mcp.LLMIncident{
+					ModelID:          modelID,
+					LLMMode:          llmMode,
+					Scope:            "chat.stream",
+					FailureKind:      "reasoning_only",
+					RecoveryStrategy: "reasoning_final_retry",
+					Recovered:        true,
+					RawSnippet:       compactText(reasoningResponse, 500),
+					ElapsedMS:        time.Since(turnStart).Milliseconds(),
+				})
 				continue
 			}
 			AddDebugTrace("chat", "final_answer.recovery_error", "Could not prepare reasoning-only final answer recovery", map[string]interface{}{
 				"turn":  turn,
 				"error": recoveryErr.Error(),
+			})
+			recordLLMIncident(mcp.LLMIncident{
+				ModelID:          modelID,
+				LLMMode:          llmMode,
+				Scope:            "chat.stream",
+				FailureKind:      "reasoning_only",
+				RecoveryStrategy: "reasoning_final_retry",
+				Recovered:        false,
+				ErrorDetail:      recoveryErr.Error(),
+				ElapsedMS:        time.Since(turnStart).Milliseconds(),
 			})
 		}
 
@@ -7437,6 +7602,15 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		log.Printf("[handleChat] Tool call remained malformed after self-correction")
 		AddDebugTrace("chat", "self_correction.exhausted", "Tool-call self-correction was exhausted", map[string]interface{}{
 			"snippet": compactText(badContentCapture, 180),
+		})
+		recordLLMIncident(mcp.LLMIncident{
+			ModelID:          modelID,
+			LLMMode:          llmMode,
+			Scope:            "chat.tool_call",
+			FailureKind:      "tool_format",
+			RecoveryStrategy: "self_correction_exhausted",
+			Recovered:        false,
+			RawSnippet:       compactText(badContentCapture, 500),
 		})
 		emitter.SendError("TOOL_CALL_FORMAT_ERROR: The model did not produce a valid app tool call.")
 	}

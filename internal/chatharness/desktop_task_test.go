@@ -90,3 +90,43 @@ func TestTaskCannotCompleteFromAnotherApplicationScreen(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestWorkflowTaskRequiresAtLeastTwoStepsAndCompletesWithoutScreen(t *testing.T) {
+	single := DesktopTask{DesktopRequired: true, Kind: "workflow", Goal: "Single step", Steps: []DesktopTaskStep{{Title: "Only one", DoneWhen: "Done"}}}
+	if err := single.Initialize(); err == nil {
+		t.Fatal("single-step workflow should be rejected")
+	}
+	task := DesktopTask{
+		DesktopRequired: true,
+		Kind:            "workflow",
+		Goal:            "이메일에서 UPS 트래킹 번호 확인 후 배송 조회",
+		Steps: []DesktopTaskStep{
+			{Title: "이메일 확인", DoneWhen: "UPS 트래킹 번호 확보", RequiresScreen: true},
+			{Title: "UPS 배송 조회", DoneWhen: "최신 배송 상태 확인", RequiresScreen: true},
+		},
+	}
+	if err := task.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range task.Steps {
+		if s.RequiresScreen {
+			t.Fatalf("workflow step %d unexpectedly required screen", s.ID)
+		}
+	}
+	receipts := []DesktopReceipt{
+		{ID: 1, Tool: "gmail_read", Success: true, Result: `{"content":"Tracking: 1Z999AA10123456784"}`},
+		{ID: 2, Tool: "read_web_page", Success: true, Result: "In Transit - Arrived at Seoul Hub"},
+	}
+	// Reject completion if step 2 is still pending.
+	incomplete := decisionFixture(t, `{"action_type":"completed","findings":["1Z999AA10123456784"],"answer":"1Z999AA10123456784","steps":{"1":{"status":"completed","evidence_ids":[1]},"2":{"status":"pending","evidence_ids":[]}}}`)
+	if err := task.Apply(incomplete, receipts, nil); err == nil {
+		t.Fatal("workflow completed with unfinished step")
+	}
+	complete := decisionFixture(t, `{"action_type":"completed","findings":["1Z999AA10123456784","In Transit - Arrived at Seoul Hub"],"answer":"트래킹 번호 1Z999AA10123456784의 상태는 In Transit - Arrived at Seoul Hub 입니다.","steps":{"1":{"status":"completed","evidence_ids":[1]},"2":{"status":"completed","evidence_ids":[2]}}}`)
+	if err := task.Apply(complete, receipts, nil); err != nil {
+		t.Fatalf("valid workflow completion rejected: %v", err)
+	}
+	if task.Status != "completed" {
+		t.Fatalf("unexpected task status: %s", task.Status)
+	}
+}

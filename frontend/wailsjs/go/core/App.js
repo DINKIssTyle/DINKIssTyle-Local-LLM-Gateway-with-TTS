@@ -118,6 +118,10 @@ export function GetLLMConnections() {
   return window['go']['core']['App']['GetLLMConnections']();
 }
 
+export function GetLLMIncidentSummary(arg1) {
+  return window['go']['core']['App']['GetLLMIncidentSummary'](arg1);
+}
+
 export function GetLicenseText() {
   return window['go']['core']['App']['GetLicenseText']();
 }
@@ -144,6 +148,10 @@ export function GetModelsRootDir() {
 
 export function GetOpenClawModels(arg1) {
   return window['go']['core']['App']['GetOpenClawModels'](arg1);
+}
+
+export function GetRecentLLMIncidents(arg1, arg2) {
+  return window['go']['core']['App']['GetRecentLLMIncidents'](arg1, arg2);
 }
 
 export function GetServerStatus() {

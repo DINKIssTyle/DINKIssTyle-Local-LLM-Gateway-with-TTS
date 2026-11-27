@@ -1,0 +1,4 @@
+interface:
+  display_name: "wttr.in 날씨"
+  short_description: "Fetch current weather and forecasts with curl"
+  default_prompt: "Use $wttr-weather to fetch weather with curl for the requested place, or get_current_location coordinates when no place is named."

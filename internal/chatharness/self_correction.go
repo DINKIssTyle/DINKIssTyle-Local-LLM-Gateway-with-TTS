@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -163,4 +164,105 @@ func buildSelfCorrectionRequest(input SelfCorrectionInput) (map[string]interface
 		"temperature": 0.1,
 	}
 	return correctionReq, nil
+}
+
+// ClassifyModelFamily normalizes a raw model identifier into a coarse family
+// name and whether it is a small local model (<= 8B) for per-model failure
+// tracking and recovery strategy selection.
+func ClassifyModelFamily(modelID string) (family string, isSmall bool) {
+	lower := strings.ToLower(strings.TrimSpace(modelID))
+	if lower == "" {
+		return "other", false
+	}
+	switch {
+	case strings.Contains(lower, "gemma-4") || strings.Contains(lower, "gemma4"):
+		family = "gemma4"
+	case strings.Contains(lower, "gemma-3") || strings.Contains(lower, "gemma3"):
+		family = "gemma3"
+	case strings.Contains(lower, "gemma"):
+		family = "gemma"
+	case strings.Contains(lower, "qwen"):
+		family = "qwen"
+	case strings.Contains(lower, "llama"):
+		family = "llama"
+	case strings.Contains(lower, "mistral") || strings.Contains(lower, "mixtral"):
+		family = "mistral"
+	case strings.Contains(lower, "deepseek"):
+		family = "deepseek"
+	case strings.Contains(lower, "claude"):
+		family = "claude"
+	case strings.Contains(lower, "gpt-") || strings.Contains(lower, "o1") || strings.Contains(lower, "o3") || strings.Contains(lower, "o4"):
+		family = "gpt"
+	case strings.Contains(lower, "gemini"):
+		family = "gemini"
+	default:
+		family = "other"
+	}
+	isSmall = smallModelSizePattern.MatchString(lower)
+	return family, isSmall
+}
+
+var smallModelSizePattern = regexp.MustCompile(`(?:^|[^0-9a-z])(?:e?[1-4]b|0\.5b|1\.5b|[78]b)(?:$|[^0-9a-z])`)
+
+// ExtractBalancedJSONObject deterministically recovers the outermost valid JSON
+// object from prose-wrapped or markdown-fenced model output without an extra LLM call.
+func ExtractBalancedJSONObject(raw string) (string, bool) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", false
+	}
+	if strings.HasPrefix(s, "```") {
+		if nl := strings.IndexByte(s, '\n'); nl >= 0 {
+			s = s[nl+1:]
+		}
+		if end := strings.LastIndex(s, "```"); end >= 0 {
+			s = s[:end]
+		}
+		s = strings.TrimSpace(s)
+	}
+	if strings.HasPrefix(s, "{") && json.Valid([]byte(s)) {
+		return s, true
+	}
+	for start := 0; start < len(s); start++ {
+		if s[start] != '{' {
+			continue
+		}
+		depth := 0
+		inString := false
+		escaped := false
+		for i := start; i < len(s); i++ {
+			ch := s[i]
+			if inString {
+				if escaped {
+					escaped = false
+					continue
+				}
+				if ch == '\\' {
+					escaped = true
+				} else if ch == '"' {
+					inString = false
+				}
+				continue
+			}
+			switch ch {
+			case '"':
+				inString = true
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth == 0 {
+					candidate := s[start : i+1]
+					if json.Valid([]byte(candidate)) {
+						return candidate, true
+					}
+					break
+				}
+			}
+			if depth == 0 {
+				break
+			}
+		}
+	}
+	return "", false
 }

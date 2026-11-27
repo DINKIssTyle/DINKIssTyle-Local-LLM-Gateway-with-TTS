@@ -61,6 +61,37 @@ func TestRegistryAppliesRequestScopedPolicy(t *testing.T) {
 	}
 }
 
+func TestSkillIDCallReturnsRecoveryWithoutExecutingTool(t *testing.T) {
+	r := NewRegistry()
+	calls := 0
+	for _, name := range []string{"execute_command", "disabled_tool"} {
+		if err := r.Register(Definition{Name: name, InputSchema: json.RawMessage(`{"type":"object"}`)},
+			func(context.Context, ExecutionContext, json.RawMessage) (Result, error) {
+				calls++
+				return Result{Content: "done"}, nil
+			}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	execCtx := ExecutionContext{DisabledTools: []string{"disabled_tool"}}
+	result, err := r.Call(context.Background(), execCtx, "builtin:wttr-weather", json.RawMessage(`{}`))
+	if err == nil || !result.IsError || calls != 0 {
+		t.Fatalf("skill ID was not rejected safely: result=%+v err=%v calls=%d", result, err, calls)
+	}
+	for _, expected := range []string{"No tool was executed", "not callable tools", "execute_command"} {
+		if !strings.Contains(result.Content, expected) {
+			t.Fatalf("missing recovery guidance %q: %s", expected, result.Content)
+		}
+	}
+	if strings.Contains(result.Content, "disabled_tool") {
+		t.Fatalf("recovery advertised a disabled tool: %s", result.Content)
+	}
+	result, err = r.Call(context.Background(), execCtx, "execute_command", json.RawMessage(`{}`))
+	if err != nil || result.IsError || calls != 1 {
+		t.Fatalf("corrected call failed: result=%+v err=%v calls=%d", result, err, calls)
+	}
+}
+
 func TestRegistryHidesMemoryToolsWhenMemoryDisabled(t *testing.T) {
 	for _, definition := range Default.List(ExecutionContext{EnableMemory: false}) {
 		if definition.Name == "search_memory" {

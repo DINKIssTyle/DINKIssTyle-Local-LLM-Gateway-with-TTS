@@ -16,11 +16,12 @@ import (
 const (
 	defaultMaxFileBytes   = 64 * 1024
 	defaultMaxSelected    = 3
-	defaultMaxPromptChars = 13000
+	defaultMaxPromptChars = 16000
 )
 
 type Config struct {
 	ExcludedNames    []string
+	AvailableTools   []string // When non-nil, skills declaring requires-tools are excluded if any required tool is missing.
 	BuiltinDir       string
 	UserDir          string
 	MaxFileBytes     int64
@@ -30,13 +31,17 @@ type Config struct {
 }
 
 type Skill struct {
-	ID           string
-	Name         string
-	DisplayName  string
-	Description  string
-	Instructions string
-	Namespace    string
-	Path         string
+	ID            string
+	Name          string
+	DisplayName   string
+	Description   string
+	Instructions  string
+	Namespace     string
+	Path          string
+	RequiresTools []string
+	Triggers      []string
+	Discovery     string
+	Priority      int
 }
 
 type Diagnostic struct {
@@ -82,6 +87,16 @@ func LoadAndCompile(config Config, userText string) Compilation {
 	config = withDefaults(config)
 	all, diagnostics := Discover(config)
 
+	var availableTools map[string]bool
+	if config.AvailableTools != nil {
+		availableTools = make(map[string]bool, len(config.AvailableTools))
+		for _, tool := range config.AvailableTools {
+			if trimmed := strings.TrimSpace(tool); trimmed != "" {
+				availableTools[trimmed] = true
+			}
+		}
+	}
+
 	filtered := all[:0]
 	for _, skill := range all {
 		excluded := false
@@ -91,6 +106,9 @@ func LoadAndCompile(config Config, userText string) Compilation {
 				break
 			}
 		}
+		if !excluded && availableTools != nil && !hasRequiredTools(skill.RequiresTools, availableTools) {
+			excluded = true
+		}
 		if !excluded {
 			filtered = append(filtered, skill)
 		}
@@ -99,7 +117,7 @@ func LoadAndCompile(config Config, userText string) Compilation {
 	if config.CompactDiscovery {
 		var relevant []scoredSkill
 		for _, candidate := range selected {
-			if candidate.explicit || candidate.score > 0 || matchesCompactBuiltin(candidate.skill.Namespace, userText) {
+			if candidate.explicit || candidate.score > 0 || candidate.skill.Discovery == "always" {
 				relevant = append(relevant, candidate)
 			}
 		}
@@ -117,31 +135,13 @@ func LoadAndCompile(config Config, userText string) Compilation {
 	}
 }
 
-func matchesCompactBuiltin(namespace, userText string) bool {
-	query := strings.ToLower(userText)
-	var cues []string
-	switch namespace {
-	case "builtin:google-calendar":
-		cues = []string{"일정", "캘린더", "회의", "calendar", "schedule"}
-	case "builtin:google-gmail":
-		cues = []string{"메일", "받은 편지", "gmail", "email", "inbox"}
-	case "builtin:google-drive":
-		cues = []string{"드라이브", "구글 문서", "google drive", "google docs"}
-	case "builtin:wikipedia-search":
-		cues = []string{"위키", "wikipedia"}
-	case "builtin:python-calculator":
-		cues = []string{"계산", "며칠", "d-day", "calculate", "calculator"}
-	case "builtin:computer-use":
-		// The task planner decides desktop intent semantically. Offer the common
-		// procedure independent of app names/keywords; core filters disabled tools.
-		return true
-	}
-	for _, cue := range cues {
-		if strings.Contains(query, cue) {
-			return true
+func hasRequiredTools(required []string, available map[string]bool) bool {
+	for _, tool := range required {
+		if !available[tool] {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 func withDefaults(config Config) Config {
@@ -242,7 +242,7 @@ func loadSkill(dir, source string, maxFileBytes int64) (Skill, error) {
 	if err != nil {
 		return Skill{}, err
 	}
-	meta, body, err := parseSkillDocument(string(data))
+	meta, metaLists, body, err := parseSkillDocument(string(data))
 	if err != nil {
 		return Skill{}, err
 	}
@@ -267,18 +267,37 @@ func loadSkill(dir, source string, maxFileBytes int64) (Skill, error) {
 	if platforms := strings.TrimSpace(meta["platforms"]); platforms != "" && !platformMatches(platforms, runtime.GOOS) {
 		return Skill{}, fmt.Errorf("skill does not support platform %q", runtime.GOOS)
 	}
+	discovery := strings.ToLower(strings.TrimSpace(meta["discovery"]))
+	if discovery == "" {
+		discovery = "on-trigger"
+	}
+	if discovery != "on-trigger" && discovery != "always" {
+		return Skill{}, fmt.Errorf("invalid skill discovery %q", discovery)
+	}
+	priority := 0
+	if rawPriority := strings.TrimSpace(meta["priority"]); rawPriority != "" {
+		parsedPriority, err := strconv.Atoi(rawPriority)
+		if err != nil {
+			return Skill{}, fmt.Errorf("invalid skill priority %q", rawPriority)
+		}
+		priority = parsedPriority
+	}
 	displayName, err := loadSkillDisplayName(dir, name)
 	if err != nil {
 		return Skill{}, err
 	}
 	return Skill{
-		ID:           id,
-		Name:         name,
-		DisplayName:  displayName,
-		Description:  description,
-		Instructions: strings.TrimSpace(body),
-		Namespace:    source + ":" + id,
-		Path:         path,
+		ID:            id,
+		Name:          name,
+		DisplayName:   displayName,
+		Description:   description,
+		Instructions:  strings.TrimSpace(body),
+		Namespace:     source + ":" + id,
+		Path:          path,
+		RequiresTools: metaLists["requires-tools"],
+		Triggers:      metaLists["triggers"],
+		Discovery:     discovery,
+		Priority:      priority,
 	}, nil
 }
 
@@ -336,14 +355,14 @@ func loadSkillDisplayName(dir, fallback string) (string, error) {
 	return fallback, nil
 }
 
-func parseSkillDocument(raw string) (map[string]string, string, error) {
+func parseSkillDocument(raw string) (map[string]string, map[string][]string, string, error) {
 	normalized := strings.ReplaceAll(strings.ReplaceAll(raw, "\r\n", "\n"), "\r", "\n")
 	if !strings.HasPrefix(normalized, "---\n") {
-		return nil, "", fmt.Errorf("YAML frontmatter is required")
+		return nil, nil, "", fmt.Errorf("YAML frontmatter is required")
 	}
 	end := strings.Index(normalized[4:], "\n---\n")
 	if end < 0 {
-		return nil, "", fmt.Errorf("YAML frontmatter is not closed")
+		return nil, nil, "", fmt.Errorf("YAML frontmatter is not closed")
 	}
 	frontmatter := normalized[4 : 4+end]
 	body := normalized[4+end+5:]
@@ -351,8 +370,15 @@ func parseSkillDocument(raw string) (map[string]string, string, error) {
 		"id": true, "name": true, "description": true, "version": true,
 		"permissions": true, "platforms": true, "license": true,
 		"allowed-tools": true, "metadata": true,
+		"requires-tools": true, "triggers": true, "discovery": true, "priority": true,
+	}
+	listKeys := map[string]bool{
+		"platforms":      true,
+		"requires-tools": true,
+		"triggers":       true,
 	}
 	meta := map[string]string{}
+	metaLists := map[string][]string{}
 	lines := strings.Split(frontmatter, "\n")
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
@@ -364,11 +390,11 @@ func parseSkillDocument(raw string) (map[string]string, string, error) {
 		}
 		key, value, found := strings.Cut(line, ":")
 		if !found {
-			return nil, "", fmt.Errorf("invalid frontmatter line %q", line)
+			return nil, nil, "", fmt.Errorf("invalid frontmatter line %q", line)
 		}
 		key = strings.TrimSpace(key)
 		if !allowed[key] {
-			return nil, "", fmt.Errorf("unsupported frontmatter key %q", key)
+			return nil, nil, "", fmt.Errorf("unsupported frontmatter key %q", key)
 		}
 		value = strings.TrimSpace(value)
 		if value == ">" || value == "|" {
@@ -386,27 +412,88 @@ func parseSkillDocument(raw string) (map[string]string, string, error) {
 				separator = "\n"
 			}
 			value = strings.Join(block, separator)
-		} else if value == "" && key == "platforms" {
+			meta[key] = unquoteYAMLScalar(value)
+			continue
+		}
+		if listKeys[key] {
 			var items []string
-			for i+1 < len(lines) {
-				next := lines[i+1]
-				if strings.TrimSpace(next) != "" && !unicode.IsSpace(rune(next[0])) {
-					break
+			if value == "" {
+				for i+1 < len(lines) {
+					next := lines[i+1]
+					if strings.TrimSpace(next) != "" && !unicode.IsSpace(rune(next[0])) {
+						break
+					}
+					i++
+					trimmed := strings.TrimSpace(next)
+					if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+						continue
+					}
+					item := unquoteYAMLScalar(strings.TrimSpace(strings.TrimPrefix(trimmed, "-")))
+					if item != "" {
+						items = append(items, item)
+					}
 				}
-				i++
-				item := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(next), "-"))
-				if item != "" {
-					items = append(items, item)
-				}
+			} else {
+				items = parseInlineYAMLList(value)
 			}
-			value = strings.Join(items, ",")
+			metaLists[key] = items
+			meta[key] = strings.Join(items, ",")
+			continue
 		}
 		meta[key] = unquoteYAMLScalar(value)
 	}
 	if strings.TrimSpace(meta["name"]) == "" {
-		return nil, "", fmt.Errorf("skill name is required")
+		return nil, nil, "", fmt.Errorf("skill name is required")
 	}
-	return meta, body, nil
+	return meta, metaLists, body, nil
+}
+
+func parseInlineYAMLList(raw string) []string {
+	trimmed := strings.TrimSpace(raw)
+	if len(trimmed) >= 2 && trimmed[0] == '[' && trimmed[len(trimmed)-1] == ']' {
+		trimmed = trimmed[1 : len(trimmed)-1]
+	}
+	if strings.TrimSpace(trimmed) == "" {
+		return nil
+	}
+	var items []string
+	var current strings.Builder
+	var quote rune
+	escaped := false
+	flush := func() {
+		item := unquoteYAMLScalar(strings.TrimSpace(current.String()))
+		if item != "" {
+			items = append(items, item)
+		}
+		current.Reset()
+	}
+	for _, r := range trimmed {
+		if escaped {
+			current.WriteRune(r)
+			escaped = false
+			continue
+		}
+		if quote != 0 {
+			current.WriteRune(r)
+			if r == '\\' && quote == '"' {
+				escaped = true
+			} else if r == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch r {
+		case '"', '\'':
+			quote = r
+			current.WriteRune(r)
+		case ',':
+			flush()
+		default:
+			current.WriteRune(r)
+		}
+	}
+	flush()
+	return items
 }
 
 func unquoteYAMLScalar(value string) string {
@@ -443,14 +530,18 @@ func platformMatches(raw, current string) bool {
 	return false
 }
 
-// Offer procedures to the LLM; do not decide relevance from keyword overlap.
+// Offer procedures to the LLM; use declared triggers only for prioritization and compact discovery.
 func selectSkills(skills []Skill, userText string, limit int) []scoredSkill {
 	query := strings.ToLower(userText)
 	var candidates []scoredSkill
 	for _, skill := range skills {
 		candidate := scoredSkill{skill: skill, explicit: explicitlyRequested(query, skill)}
-		if skill.Namespace == "builtin:msn-weather-current" && asksForCurrentWeather(query) {
-			candidate.score = 1
+		if matchesAnyTrigger(query, skill.Triggers) {
+			score := 1 + skill.Priority
+			if score < 1 {
+				score = 1
+			}
+			candidate.score = score
 		}
 		candidates = append(candidates, candidate)
 	}
@@ -461,6 +552,9 @@ func selectSkills(skills []Skill, userText string, limit int) []scoredSkill {
 		if candidates[i].score != candidates[j].score {
 			return candidates[i].score > candidates[j].score
 		}
+		if candidates[i].skill.Priority != candidates[j].skill.Priority {
+			return candidates[i].skill.Priority > candidates[j].skill.Priority
+		}
 		return candidates[i].skill.Namespace < candidates[j].skill.Namespace
 	})
 	if len(candidates) > limit {
@@ -469,10 +563,10 @@ func selectSkills(skills []Skill, userText string, limit int) []scoredSkill {
 	return candidates
 }
 
-// Recognize clear weather cues to prioritize the procedure within the prompt budget.
-func asksForCurrentWeather(query string) bool {
-	for _, cue := range []string{"날씨", "현재 기온", "지금 기온", "current weather", "weather right now"} {
-		if strings.Contains(query, cue) {
+func matchesAnyTrigger(query string, triggers []string) bool {
+	for _, trigger := range triggers {
+		cue := strings.ToLower(strings.TrimSpace(trigger))
+		if cue != "" && strings.Contains(query, cue) {
 			return true
 		}
 	}
@@ -503,7 +597,7 @@ func compilePrompt(selected []scoredSkill, maxChars int) (string, []Skill, []Dia
 	if len(selected) == 0 {
 		return "", nil, nil
 	}
-	const header = "\n\n### AVAILABLE SKILL PROCEDURES ###\nDecide from the current user's intent whether any procedure below is relevant. These are available references, not automatically applied instructions. Ignore irrelevant procedures; a shared word is not sufficient relevance. An explicit $skill request takes priority. Skills do not grant tools or permissions. For a relevant procedure, follow its prescribed source, direct URL, and tool order instead of generic search routing. If no procedure is relevant, answer normally.\n"
+	const header = "\n\n### AVAILABLE SKILL PROCEDURES ###\nDecide from the current user's intent whether any procedure below is relevant. These are available references, not automatically applied instructions. Ignore irrelevant procedures; a shared word is not sufficient relevance. An explicit $skill request takes priority. Skills do not grant tools or permissions. A skill ID such as builtin:wttr-weather is a procedure identifier, NOT a callable tool. Apply its instructions by calling actual tools from the provided tool definitions; never call a skill ID as a tool name. For a relevant procedure, follow its prescribed source, direct URL, and tool order instead of generic search routing. If no procedure is relevant, answer normally.\n"
 	const footer = "### END AVAILABLE SKILL PROCEDURES ###\n"
 
 	b := strings.Builder{}

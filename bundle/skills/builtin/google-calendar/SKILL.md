@@ -1,6 +1,8 @@
 ---
 name: google-calendar
 description: Read Google Calendar for 일정, 예약, 회의, or 캘린더 questions.
+requires-tools: [google_calendar_search]
+triggers: [일정, 캘린더, 회의, calendar, schedule]
 ---
 
 Call `google_calendar_search` with `{}` for general "일정 확인" (next 7 days). Use period today/tomorrow for 오늘/내일, this_week/next_week for 이번 주/다음 주, and a lowercase weekday such as wednesday for 수요일 (next occurrence, including today). For a specific date or weekday in a specified week, use RFC3339 offsets from local midnight to the following midnight, exclusive. The server uses the primary calendar time zone across calendars. Never ask users for date syntax, keywords or IDs.

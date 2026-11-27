@@ -841,3 +841,30 @@ func TestPrepareRequestPersonalAssistantUsesCurrentProfile(t *testing.T) {
 		})
 	}
 }
+
+func TestNeedsGemmaFreshnessWebLookup(t *testing.T) {
+	shouldTrigger := []string{
+		"스페인 난민 사태 최신 뉴스 알려줘",
+		"엔비디아 주가 얼마야?",
+		"아이폰 최신 버전 출시일 알려줘",
+		"What is the latest release date for GPT?",
+	}
+	for _, q := range shouldTrigger {
+		if !NeedsGemmaFreshnessWebLookup(q, "내부 지식으로 답변합니다.") {
+			t.Errorf("expected freshness web lookup for %q", q)
+		}
+	}
+
+	shouldSkip := []string{
+		"Go에서 인터페이스를 설명해 주세요",
+		"오늘 내 일정 알려줘",
+		"최근 이메일 확인해줘",
+		"지금 시간 몇 시야?",
+		"현재 화면 내용이 뭐야",
+	}
+	for _, q := range shouldSkip {
+		if NeedsGemmaFreshnessWebLookup(q, "답변") {
+			t.Errorf("unexpected freshness web lookup for %q", q)
+		}
+	}
+}

@@ -1,6 +1,9 @@
 ---
 name: msn-weather-current
 description: Check current local weather on Korean MSN Weather, with or without a specified place. Use for weather, temperature, sky, feels-like, humidity, precipitation, wind, 현재 날씨, 기온, 습도, 강수, or 바람 requests.
+requires-tools: [read_web_page]
+triggers: [날씨, 현재 기온, 지금 기온, current weather, weather right now]
+priority: 10
 ---
 
 # MSN Current Weather

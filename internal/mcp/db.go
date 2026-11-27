@@ -471,6 +471,28 @@ func createSchema() error {
 		key TEXT PRIMARY KEY,
 		value TEXT NOT NULL
 	);
+
+	CREATE TABLE IF NOT EXISTS llm_incidents (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		model_id TEXT NOT NULL DEFAULT '',
+		model_family TEXT NOT NULL DEFAULT 'other',
+		llm_mode TEXT NOT NULL DEFAULT 'standard',
+		scope TEXT NOT NULL,
+		failure_kind TEXT NOT NULL,
+		recovery_strategy TEXT NOT NULL DEFAULT 'none',
+		recovered INTEGER NOT NULL DEFAULT 0,
+		http_status INTEGER NOT NULL DEFAULT 0,
+		error_detail TEXT NOT NULL DEFAULT '',
+		raw_snippet TEXT NOT NULL DEFAULT '',
+		elapsed_ms INTEGER NOT NULL DEFAULT 0,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_llm_incidents_model_created
+	ON llm_incidents(model_id, created_at DESC);
+
+	CREATE INDEX IF NOT EXISTS idx_llm_incidents_family_kind
+	ON llm_incidents(model_family, scope, failure_kind);
 	CREATE TABLE IF NOT EXISTS stt_transcripts (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		user_id TEXT NOT NULL,
