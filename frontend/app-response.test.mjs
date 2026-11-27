@@ -111,3 +111,48 @@ test('reconnect probe uses server liveness rather than upstream model health', a
     assert.equal(await context.probeServerReachability(), true);
     assert.deepEqual(requests, ['/api/health/live']);
 });
+
+test('finalized response replaces provisional streaming TTS when content changes after tool/search', () => {
+    const source = readFileSync(new URL('./app.js', import.meta.url), 'utf8');
+    const start = source.indexOf('function shouldReplaceStreamingTTSWithFinal(');
+    const end = source.indexOf('\nasync function handleStreamEvent(', start);
+    const stopped = [];
+    const spoken = [];
+    const finalized = [];
+    const context = {
+        cleanTextForTTS: text => String(text || '').trim(),
+        document: { getElementById: () => ({ querySelector: () => 'speak-btn' }) },
+        stopAllAudio: () => stopped.push(true),
+        speakMessage: (text, btn) => spoken.push({ text, btn }),
+        finalizeStreamingTTS: text => finalized.push(text)
+    };
+    runInNewContext(source.slice(start, end), context);
+
+    // Case 1: Gemma 4 / web search completely changed the response -> stop old TTS and speak final text
+    const divergedCtx = {
+        elementId: 'msg-1',
+        useStreamingTTS: true,
+        hadToolActivity: true,
+        speechBuffer: '잠시 검색해 보겠습니다.',
+        finalSpeechSynced: false
+    };
+    context.syncFinalizedStreamingTTS(divergedCtx, '오늘 서울의 날씨는 맑고 15도입니다.');
+    assert.equal(stopped.length, 1);
+    assert.equal(spoken.length, 1);
+    assert.equal(spoken[0].text, '오늘 서울의 날씨는 맑고 15도입니다.');
+    assert.equal(finalized.length, 0);
+
+    // Case 2: Normal streaming response without divergence -> finish smoothly without restarting TTS
+    const normalCtx = {
+        elementId: 'msg-2',
+        useStreamingTTS: true,
+        hadToolActivity: false,
+        speechBuffer: '안녕하세요, 반갑습니다.',
+        finalSpeechSynced: false
+    };
+    context.syncFinalizedStreamingTTS(normalCtx, '안녕하세요, 반갑습니다.');
+    assert.equal(stopped.length, 1);
+    assert.equal(spoken.length, 1);
+    assert.equal(finalized.length, 1);
+    assert.equal(finalized[0], '안녕하세요, 반갑습니다.');
+});

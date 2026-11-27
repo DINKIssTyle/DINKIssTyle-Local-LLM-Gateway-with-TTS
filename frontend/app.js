@@ -640,6 +640,8 @@ class StreamState {
         this.hadReasoning = false;
         this.hadToolActivity = false;
         this.hadAssistantContent = false;
+        this.speechResetForTool = false;
+        this.finalSpeechSynced = false;
         this.finalizeError = null;
         this.lastServerCompletion = null;
         this.toolEvents = [];
@@ -880,9 +882,48 @@ function handleSpeechAddition(speechToAdd, ctx) {
         cleaned = cleaned.replace(/<think>/g, '').replace(/<\/think>/g, '');
     }
     if (cleaned) {
+        if (ctx.speechResetForTool && ctx.useStreamingTTS) {
+            ctx.speechResetForTool = false;
+            initStreamingTTS(ctx.elementId);
+        }
         ctx.speechBuffer += cleaned;
         feedStreamingTTS(ctx.speechBuffer);
     }
+}
+
+function shouldReplaceStreamingTTSWithFinal(spokenRaw, finalRaw, hadToolActivity = false) {
+    const cleanFinal = cleanTextForTTS(finalRaw || '').replace(/\s+/g, ' ').trim();
+    if (!cleanFinal) return false;
+    const cleanSpoken = cleanTextForTTS(spokenRaw || '').replace(/\s+/g, ' ').trim();
+    if (!cleanSpoken) return true;
+    if (cleanFinal === cleanSpoken) return false;
+    if (!hadToolActivity && cleanFinal.startsWith(cleanSpoken)) return false;
+    return true;
+}
+
+function syncFinalizedStreamingTTS(ctx, finalText) {
+    if (!ctx?.useStreamingTTS || ctx.finalSpeechSynced) return;
+    const cleanFinal = cleanTextForTTS(finalText || '').trim();
+    if (!cleanFinal) {
+        if (ctx.speechBuffer.trim()) {
+            stopAllAudio();
+            ctx.speechBuffer = '';
+        }
+        ctx.finalSpeechSynced = true;
+        return;
+    }
+    if (shouldReplaceStreamingTTSWithFinal(ctx.speechBuffer, finalText, ctx.hadToolActivity)) {
+        const msgEl = document.getElementById(ctx.elementId);
+        const speakBtn = msgEl?.querySelector('.speak-btn') || null;
+        stopAllAudio();
+        ctx.speechBuffer = finalText;
+        ctx.speechResetForTool = false;
+        ctx.finalSpeechSynced = true;
+        speakMessage(finalText, speakBtn);
+        return;
+    }
+    ctx.finalSpeechSynced = true;
+    finalizeStreamingTTS(ctx.speechBuffer);
 }
 
 async function handleStreamEvent(json, ctx) {
@@ -1007,6 +1048,11 @@ async function handleStreamEvent(json, ctx) {
         if (eventType === 'tool_call.start') {
             ctx.lastToolCallHtml = json.tool || 'Tool';
             setToolCardState(elementId, 'running', '', null, json.tool || 'Tool');
+            if (ctx.useStreamingTTS && ctx.speechBuffer.trim()) {
+                stopAllAudio();
+                ctx.speechBuffer = '';
+                ctx.speechResetForTool = true;
+            }
         } else if (eventType === 'tool_call.name') {
             ctx.lastToolCallHtml = json.tool_name || json.tool || ctx.lastToolCallHtml || 'Tool';
             setToolCardState(elementId, 'running', '', null, ctx.lastToolCallHtml);
@@ -1044,6 +1090,9 @@ function applyServerCompletion(payload, ctx) {
     finalizeMessageContent(ctx.elementId, ctx.fullText);
     upsertChatMessageState({ role: 'assistant', content: ctx.fullText, turnId: ctx.turnId });
     if (ctx.hadAssistantContent) setAssistantActionBarReady(ctx.elementId);
+    if (ctx.useStreamingTTS && typeof syncFinalizedStreamingTTS === 'function') {
+        syncFinalizedStreamingTTS(ctx, ctx.fullText);
+    }
 }
 
 function finalizeStream(ctx, upstreamError = null) {
@@ -1092,8 +1141,12 @@ function finalizeStream(ctx, upstreamError = null) {
         }
     }
 
-    if (ctx.useStreamingTTS) {
-        finalizeStreamingTTS(ctx.speechBuffer);
+    if (ctx.useStreamingTTS && !ctx.finalSpeechSynced) {
+        if (historyContent && !hasFinalizationFailure && !ctx.streamRestartRequested && !ownershipReserved) {
+            syncFinalizedStreamingTTS(ctx, historyContent);
+        } else {
+            finalizeStreamingTTS(ctx.speechBuffer);
+        }
     }
 
     if (historyContent && !hasFinalizationFailure && !ctx.streamRestartRequested && !ownershipReserved) {
@@ -9050,8 +9103,12 @@ function updateMessageInputPlaceholder() {
     if (!messageInput) return;
 
     const backgroundTask = getActiveComposerBackgroundTask();
+    const isSpeakingTTS = !!(AppState.audio?.isPlayingQueue
+        || AppState.audio?.currentAudio
+        || AppState.audio?.streamingTTSActive
+        || window.speechSynthesis?.speaking);
     const nextPlaceholder = AppState.input.isSTTActive
-        ? `${t('input.listening')}...`
+        ? `${isSpeakingTTS ? (t('input.speaking') || '말하고 있는 중') : t('input.listening')}...`
         : AppState.session.isRestoring
             ? t('input.placeholder.restoring')
             : (AppState.ui.progress.active

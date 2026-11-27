@@ -51,11 +51,23 @@
                 if (messageInput) messageInput.classList.add('stt-active');
                 startPlaceholderAnimation();
             } else {
-                if (messageInput) messageInput.classList.remove('stt-active');
+                if (messageInput) {
+                    messageInput.classList.remove('stt-active', 'stt-speaking');
+                }
+                if (giantMicBtn) giantMicBtn.classList.remove('stt-speaking');
+                if (inlineMicBtn) inlineMicBtn.classList.remove('stt-speaking');
+                if (micLayoutContainer) micLayoutContainer.classList.remove('stt-speaking');
                 stopPlaceholderAnimation();
                 updateMessageInputPlaceholder?.();
             }
             updateSendButtonState?.();
+        }
+
+        function isSpeaking() {
+            return !!(AppState.audio?.isPlayingQueue
+                || AppState.audio?.currentAudio
+                || AppState.audio?.streamingTTSActive
+                || global.speechSynthesis?.speaking);
         }
 
         function startPlaceholderAnimation() {
@@ -63,9 +75,15 @@
             AppState.input.sttPlaceholderIndex = 0;
             const updatePlaceholder = () => {
                 const dots = '.'.repeat((AppState.input.sttPlaceholderIndex % 3) + 1);
+                const speaking = isSpeaking();
                 if (messageInput) {
-                    messageInput.placeholder = `${t('input.listening')}${dots}`;
+                    messageInput.classList.toggle('stt-speaking', speaking);
+                    const label = speaking ? (t('input.speaking') || '말하고 있는 중') : t('input.listening');
+                    messageInput.placeholder = `${label}${dots}`;
                 }
+                if (giantMicBtn) giantMicBtn.classList.toggle('stt-speaking', speaking);
+                if (inlineMicBtn) inlineMicBtn.classList.toggle('stt-speaking', speaking);
+                if (micLayoutContainer) micLayoutContainer.classList.toggle('stt-speaking', speaking);
                 AppState.input.sttPlaceholderIndex++;
             };
             updatePlaceholder();
@@ -91,15 +109,26 @@
         let resumeTimer = null;
         let localCapture = null;
         let requestController = null;
+        let previewController = null;
         let processing = false;
         let browserHasText = false;
+        const localSessionId = `web-stt-${Math.random().toString(36).slice(2, 10)}`;
 
         const usesServerSTT = () => ['local', 'qwen3-asr'].includes(config.sttMethod);
 
         function isBusy() {
-            return !!(AppState.chat?.isGenerating || AppState.audio?.isPlayingQueue
-                || AppState.audio?.currentAudio || AppState.audio?.streamingTTSActive
-                || global.speechSynthesis?.speaking);
+            return !!(AppState.chat?.isGenerating || isSpeaking());
+        }
+
+        function encodePCM16Base64(audio) {
+            const bytes = new Uint8Array(audio.length * 2);
+            const view = new DataView(bytes.buffer);
+            audio.forEach((sample, i) => view.setInt16(i * 2, sample, true));
+            let binary = '';
+            for (let i = 0; i < bytes.length; i += 8192) {
+                binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+            }
+            return global.btoa(binary);
         }
 
         function isCurrent(id) {
@@ -128,14 +157,23 @@
             }, 400);
         }
 
-        async function acceptTranscript(text, id) {
+        async function acceptTranscript(text, id, options = {}) {
             if (!isCurrent(id)) return;
             text = String(text || '').trim();
-            if (text && messageInput) {
-                const current = messageInput.value.trim();
-                messageInput.value = current ? `${current} ${text}` : text;
-                messageInput.dispatchEvent(new Event('input', { bubbles: true }));
-                updateSendButtonState?.();
+            if (messageInput) {
+                if (typeof options.baseText === 'string') {
+                    const combined = [options.baseText.trim(), text].filter(Boolean).join(' ');
+                    if (text || messageInput.value !== combined) {
+                        messageInput.value = combined;
+                        messageInput.dispatchEvent(new Event('input', { bubbles: true }));
+                        updateSendButtonState?.();
+                    }
+                } else if (text) {
+                    const current = messageInput.value.trim();
+                    messageInput.value = current ? `${current} ${text}` : text;
+                    messageInput.dispatchEvent(new Event('input', { bubbles: true }));
+                    updateSendButtonState?.();
+                }
             }
             if (!config.sttContinuous) stop();
             if (text && !AppState.input.sttSuppressAutoSend) {
@@ -200,6 +238,7 @@
             recognition.continuous = false;
             recognition.interimResults = true;
             browserHasText = false;
+            let browserCommittedText = messageInput?.value.trim() || '';
             let failed = false;
             let paused = false;
             const pauseTimer = global.setInterval(() => {
@@ -210,14 +249,23 @@
             }, 100);
             recognition.onresult = (event) => {
                 if (!isCurrent(id) || paused || isBusy()) return;
-                let text = '';
+                let finalText = '';
+                let interimText = '';
                 for (let i = event.resultIndex; i < event.results.length; i++) {
-                    if (event.results[i].isFinal) text += event.results[i][0].transcript;
+                    const part = String(event.results[i]?.[0]?.transcript || '');
+                    if (event.results[i].isFinal) finalText += part;
+                    else interimText += part;
                 }
-                if (text && messageInput) {
-                    const current = messageInput.value.trim();
-                    messageInput.value = current ? `${current} ${text}` : text;
+                const trimmedFinal = finalText.trim();
+                const trimmedInterim = interimText.trim();
+                if (trimmedFinal) {
+                    browserCommittedText = browserCommittedText
+                        ? `${browserCommittedText} ${trimmedFinal}`
+                        : trimmedFinal;
                     browserHasText = true;
+                }
+                if ((trimmedFinal || trimmedInterim) && messageInput) {
+                    messageInput.value = [browserCommittedText, trimmedInterim].filter(Boolean).join(' ');
                     messageInput.dispatchEvent(new Event('input', { bubbles: true }));
                     updateSendButtonState?.();
                 }
@@ -234,6 +282,9 @@
                 global.clearInterval(pauseTimer);
                 if (AppState.input.recognition === recognition) AppState.input.recognition = null;
                 if (!isCurrent(id) || failed) return;
+                if (messageInput && browserHasText) {
+                    messageInput.value = browserCommittedText;
+                }
                 const shouldSend = browserHasText && !paused && !AppState.input.sttSuppressAutoSend;
                 browserHasText = false;
                 if (!config.sttContinuous) stop();
@@ -293,7 +344,53 @@
                 localCapture = { stream, context, source, processor };
                 let chunks = [], samples = 0, silent = 0, voiced = 0;
                 let preRoll = [];
-                const reset = () => { chunks = []; samples = 0; silent = 0; voiced = 0; preRoll = []; };
+                let segmentCounter = 0;
+                let currentSegmentId = '';
+                let previewRevision = 0;
+                let previewInFlight = false;
+                let lastPreviewSamples = 0;
+                let localBaseText = '';
+                const reset = () => {
+                    chunks = [];
+                    samples = 0;
+                    silent = 0;
+                    voiced = 0;
+                    preRoll = [];
+                    currentSegmentId = '';
+                    previewRevision = 0;
+                    lastPreviewSamples = 0;
+                    localBaseText = '';
+                };
+                const requestPreview = async (audioSnapshot, segId, rev, baseText) => {
+                    previewInFlight = true;
+                    const controller = new AbortController();
+                    previewController = controller;
+                    try {
+                        const response = await global.fetch('/api/stt/preview', {
+                            method: 'POST', credentials: 'same-origin', signal: controller.signal,
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                engine, fallback: false, audio: encodePCM16Base64(audioSnapshot),
+                                format: 'pcm', sampleRate: 16000,
+                                language: config.ttsLang || 'ko', speechFilter: 'strict',
+                                sessionId: localSessionId, segmentId: segId, revision: rev
+                            })
+                        });
+                        if (!response.ok || !isCurrent(id) || processing || segId !== currentSegmentId) return;
+                        const result = await response.json();
+                        const previewText = String(result?.rejected ? '' : (result?.text || '')).trim();
+                        if (previewText && messageInput && isCurrent(id) && !processing && segId === currentSegmentId) {
+                            messageInput.value = baseText ? `${baseText} ${previewText}` : previewText;
+                            messageInput.dispatchEvent(new Event('input', { bubbles: true }));
+                            updateSendButtonState?.();
+                        }
+                    } catch (_) {
+                        // Preview is best-effort; final /api/stt/transcribe remains authoritative.
+                    } finally {
+                        if (previewController === controller) previewController = null;
+                        previewInFlight = false;
+                    }
+                };
                 processor.onaudioprocess = event => {
                     if (!isCurrent(id) || processing || isBusy()) { reset(); return; }
                     const input = event.inputBuffer.getChannelData(0);
@@ -311,7 +408,13 @@
                         if (preRoll.length > 2) preRoll.shift();
                         return;
                     }
-                    if (!samples) { chunks.push(...preRoll); samples += preRoll.reduce((n, chunk) => n + chunk.length, 0); preRoll = []; }
+                    if (!samples) {
+                        currentSegmentId = `seg-${id}-${++segmentCounter}`;
+                        localBaseText = messageInput?.value.trim() || '';
+                        chunks.push(...preRoll);
+                        samples += preRoll.reduce((n, chunk) => n + chunk.length, 0);
+                        preRoll = [];
+                    }
                     chunks.push(pcm);
                     samples += pcm.length;
                     if (speech) { voiced += pcm.length; silent = 0; }
@@ -321,8 +424,19 @@
                         const audio = new Int16Array(samples);
                         let offset = 0;
                         for (const chunk of chunks) { audio.set(chunk, offset); offset += chunk.length; }
+                        const baseText = localBaseText;
+                        previewController?.abort();
+                        previewController = null;
                         reset();
-                        transcribe(audio, id, engine).catch(error => { if (isCurrent(id)) reportError(error); });
+                        transcribe(audio, id, engine, baseText).catch(error => { if (isCurrent(id)) reportError(error); });
+                        return;
+                    }
+                    if (voiced >= 0.8 * 16000 && !previewInFlight && samples - lastPreviewSamples >= 16000) {
+                        lastPreviewSamples = samples;
+                        const snapshot = new Int16Array(samples);
+                        let offset = 0;
+                        for (const chunk of chunks) { snapshot.set(chunk, offset); offset += chunk.length; }
+                        requestPreview(snapshot, currentSegmentId, ++previewRevision, localBaseText);
                     }
                 };
                 source.connect(processor);
@@ -334,27 +448,22 @@
             }
         }
 
-        async function transcribe(audio, id, engine) {
+        async function transcribe(audio, id, engine, baseText = '') {
             processing = true;
             if (!config.sttContinuous) releaseCapture();
             const controller = new AbortController();
             requestController = controller;
             try {
                 // Encode explicitly as little-endian PCM16, as expected by the server STT engines.
-                const bytes = new Uint8Array(audio.length * 2);
-                const view = new DataView(bytes.buffer);
-                audio.forEach((sample, i) => view.setInt16(i * 2, sample, true));
-                let binary = '';
-                for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
                 const response = await global.fetch('/api/stt/transcribe', {
                     method: 'POST', credentials: 'same-origin', signal: controller.signal,
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ engine, fallback: false, audio: global.btoa(binary), format: 'pcm', sampleRate: 16000,
+                    body: JSON.stringify({ engine, fallback: false, audio: encodePCM16Base64(audio), format: 'pcm', sampleRate: 16000,
                         language: config.ttsLang || 'ko', speechFilter: 'strict' })
                 });
                 if (!response.ok) throw new Error(await response.text());
                 const result = await response.json();
-                await acceptTranscript(result.rejected ? '' : result.text, id);
+                await acceptTranscript(result.rejected ? '' : result.text, id, { baseText });
             } finally {
                 if (requestController === controller) {
                     requestController = null;
@@ -370,6 +479,8 @@
             ++session;
             global.clearTimeout(resumeTimer);
             resumeTimer = null;
+            previewController?.abort();
+            previewController = null;
             requestController?.abort();
             requestController = null;
             processing = false;

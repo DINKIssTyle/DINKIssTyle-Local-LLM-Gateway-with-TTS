@@ -242,3 +242,65 @@ for (const [name,status,errorKey] of [
     assert.match(h.alerts[0],new RegExp(errorKey));
     assert.equal(h.recognitions.length,0);
 });
+
+test('continuous STT shows speaking placeholder during TTS playback and live interim text while listening', async () => {
+    const intervals = [];
+    const h = setup({ sttContinuous: true });
+    h.window.setInterval = (fn) => { intervals.push(fn); return intervals.length; };
+
+    h.controller.start();
+    assert.match(h.input.placeholder, /^input\.listening\./);
+
+    // Browser interim transcript appears immediately in messageInput while speaking
+    h.recognitions[0].onresult({
+        resultIndex: 0,
+        results: [{ isFinal: false, 0: { transcript: '오늘 날씨' } }]
+    });
+    assert.equal(h.input.value, '오늘 날씨');
+
+    // Final transcript replaces interim cleanly and sends on end
+    h.recognitions[0].onresult({
+        resultIndex: 0,
+        results: [{ isFinal: true, 0: { transcript: '오늘 날씨 알려줘' } }]
+    });
+    assert.equal(h.input.value, '오늘 날씨 알려줘');
+    await h.recognitions[0].onend();
+    assert.equal(h.sent.length, 1);
+    assert.equal(h.sent[0].text, '오늘 날씨 알려줘');
+
+    // While TTS plays back, placeholder switches to speaking
+    h.state.audio.isPlayingQueue = true;
+    intervals[0]();
+    assert.match(h.input.placeholder, /^input\.speaking\./);
+
+    // Once TTS finishes, placeholder switches back to listening
+    h.state.audio.isPlayingQueue = false;
+    intervals[0]();
+    assert.match(h.input.placeholder, /^input\.listening\./);
+});
+
+test('local STT displays live /api/stt/preview text in messageInput during speech before final transcribe', async () => {
+    const h = setup({ sttMethod: 'local', sttContinuous: false });
+    h.window.fetch = async (url, options) => {
+        h.requests.push({ url, options });
+        if (url.includes('/status')) return { ok: true, json: async () => ({ status: 'ready' }) };
+        if (url.includes('/preview')) return { ok: true, json: async () => ({ text: '지금 말하고 있는' }) };
+        return { ok: true, json: async () => ({ text: '지금 말하고 있는 문장입니다' }) };
+    };
+    h.controller.start();
+    await flush();
+    const process = h.contexts[0].processor.onaudioprocess;
+    const frame = value => ({ inputBuffer: { getChannelData: () => new Float32Array(4096).fill(value) } });
+
+    // 4 voiced frames = 16384 samples (~1.02s >= 0.8s threshold) -> triggers /api/stt/preview
+    for (let i = 0; i < 4; i++) process(frame(0.1));
+    await flush();
+    assert.ok(h.requests.some(r => r.url.endsWith('/preview')));
+    assert.equal(h.input.value, '지금 말하고 있는');
+
+    // Trailing silence -> triggers /api/stt/transcribe and replaces preview cleanly without duplication
+    for (let i = 0; i < 4; i++) process(frame(0));
+    await flush();
+    assert.equal(h.sent.length, 1);
+    assert.equal(h.sent[0].text, '지금 말하고 있는 문장입니다');
+});
