@@ -114,6 +114,8 @@ func shouldBufferDebugTraceEntry(entry DebugTraceEntry) bool {
 		return true
 	case source == "chat" && strings.HasPrefix(stage, "skills."):
 		return true
+	case source == "chat" && strings.HasPrefix(stage, "jev."):
+		return true
 	case source == "chat" && strings.HasPrefix(stage, "tool."):
 		return true
 	case source == "chat" && stage == "turn.followup":

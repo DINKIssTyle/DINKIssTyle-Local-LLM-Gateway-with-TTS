@@ -4929,10 +4929,30 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	}
 	memorySnapshotDebug := mcp.MemorySnapshotDebug{}
 	autoContextDebug := mcp.AutoSearchMemoryDebug{}
+	var turnGate jevTurnGateDecision
+	if !glassesRequest {
+		hasExplicitSkill := strings.Contains(initialUserInputText, "$")
+		turnGate = decideChatTurnGates(initialUserInputText, reqMap, hasExplicitSkill)
+		if turnGate.Evaluated {
+			AddDebugTrace("chat", "jev.turn_gate", "Evaluated turn memory & thinking gate with local EmbeddingGemma 2", map[string]interface{}{
+				"selected":           turnGate.Selected,
+				"confidence":         turnGate.Confidence,
+				"no_memory_prob":     turnGate.NoMemoryProb,
+				"simple_direct_prob": turnGate.SimpleDirectProb,
+				"skip_memory":        turnGate.SkipMemorySearch,
+				"disable_thinking":   turnGate.DisableThinking,
+				"elapsed_ms":         turnGate.ElapsedMS,
+				"llm_mode":           llmMode,
+				"reason":             turnGate.Reason,
+			})
+		}
+	}
 	if contextStrategy == "retrieval" {
 		if profileAnswer == "" && enableMemory && strings.TrimSpace(userID) != "" && chatCtx.Err() == nil {
-			autoContextDebug = mcp.FastMemoryContextWithOptions(userID, initialUserInputText, useMemoryVectors)
-			autoContext = autoContextDebug.Context
+			if !turnGate.SkipMemorySearch {
+				autoContextDebug = mcp.FastMemoryContextWithOptions(userID, initialUserInputText, useMemoryVectors)
+				autoContext = autoContextDebug.Context
+			}
 		}
 		assembled := false
 		if llmMode != "stateful" && !glassesRequest && userID != "" && chatCtx.Err() == nil {
@@ -5152,6 +5172,15 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 
 	body = preparedRequest.Body
 	reqMap = preparedRequest.ReqMap
+	jevInjectedThinkingDisable := false
+	if !glassesRequest && reqMap != nil && turnGate.DisableThinking && len(skillCompilation.Selected) == 0 {
+		if applyThinkingDisableToRequest(reqMap, llmMode, preparedRequest.ModelID) {
+			jevInjectedThinkingDisable = true
+			if updatedBody, marshalErr := json.Marshal(reqMap); marshalErr == nil {
+				body = updatedBody
+			}
+		}
+	}
 	providerTools, _ := reqMap["tools"].([]interface{})
 	initialUserInputText = preparedRequest.InitialUserInputText
 	endpoint := preparedRequest.Endpoint
@@ -5862,6 +5891,27 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 				AddDebugTrace("stateful", "reset", "Retrying request without invalid previous_response_id", map[string]interface{}{
 					"user": userID,
 					"turn": turn,
+				})
+				resp.Body.Close()
+				continue
+			}
+
+			// Retry automatically without JEV-injected thinking-off control if the
+			// loaded model does not expose reasoning configuration.
+			if jevInjectedThinkingDisable && isUnsupportedReasoningParamError(errorMsg) {
+				markThinkingDisableUnsupportedForModel(modelID, llmMode)
+				jevInjectedThinkingDisable = false
+				if reqMap != nil {
+					delete(reqMap, "reasoning")
+					delete(reqMap, "chat_template_kwargs")
+					if newBody, marshalErr := json.Marshal(reqMap); marshalErr == nil {
+						body = newBody
+					}
+				}
+				AddDebugTrace("chat", "jev.thinking_gate_fallback", "Model does not expose reasoning configuration; caching and retrying without thinking override", map[string]interface{}{
+					"model":    modelID,
+					"llm_mode": llmMode,
+					"turn":     turn,
 				})
 				resp.Body.Close()
 				continue

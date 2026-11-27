@@ -235,7 +235,7 @@ func buildToolUsage(envInfo string, modelID string, useNativeTools bool, tools [
 
 	if has("search_web") {
 		lines = append(lines,
-			"WEB LOOKUP: For clear time-sensitive questions, make one search_web lookup before asking a follow-up. Use the latest data if no date is given. Use a compact query naming the subject and requested fact.",
+			"WEB LOOKUP: For clear time-sensitive questions, make one search_web lookup before asking a follow-up. For any factual question about a product, service, person, event, or recent release you are not certain about, make one search_web lookup before claiming you cannot verify it. Use the latest data if no date is given. Use a compact query naming the subject and requested fact.",
 			"MARKET DATA: For a quote, verify the instrument, currency, and quote or session time from the source. Distinguish live, delayed, and closing prices. Do not treat search retrieval time as the quote time or combine conflicting prices into a current price.",
 		)
 	}
@@ -304,7 +304,7 @@ func buildToolUsage(envInfo string, modelID string, useNativeTools bool, tools [
 
 	if IsGemma4ChatModel(modelID) {
 		lines = append(lines,
-			"GEMMA-4 RULE: Prefer the smallest useful number of tool calls. Once a tool result already answers the user's request well enough, stop calling tools and answer immediately.",
+			"GEMMA-4 RULE: Do not skip a needed lookup when a fact, product, or recent entity is uncertain—make one focused tool call to verify it instead of guessing or saying you cannot confirm. Once a tool result already answers the user's request well enough, stop calling tools and answer immediately.",
 		)
 	}
 

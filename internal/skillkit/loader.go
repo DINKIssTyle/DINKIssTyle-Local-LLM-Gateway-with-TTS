@@ -20,14 +20,18 @@ const (
 )
 
 type Config struct {
-	ExcludedNames    []string
-	AvailableTools   []string // When non-nil, skills declaring requires-tools are excluded if any required tool is missing.
-	BuiltinDir       string
-	UserDir          string
-	MaxFileBytes     int64
-	MaxSelected      int // Deprecated: relevance is decided by the LLM; MaxPromptChars bounds references.
-	MaxPromptChars   int
-	CompactDiscovery bool
+	ExcludedNames       []string
+	AvailableTools      []string // When non-nil, skills declaring requires-tools are excluded if any required tool is missing.
+	BuiltinDir          string
+	UserDir             string
+	MaxFileBytes        int64
+	MaxSelected         int // Deprecated: relevance is decided by the LLM; MaxPromptChars bounds references.
+	MaxPromptChars      int
+	CompactDiscovery    bool
+	PreferredNamespaces map[string]float64 // Optional relevance scores (0..1) from a decision model.
+	CompactRest         bool               // Render top-K/explicit/trigger-matched skills in full and summarize the rest in 1 line.
+	FullSkillLimit      int                // Max non-explicit skills rendered in full when CompactRest is true (default 3).
+	NoSkillConfidence   float64            // When >= 0.90 and no explicit/trigger match, render non-always skills as 1-line summaries.
 }
 
 type Skill struct {
@@ -58,9 +62,11 @@ type Compilation struct {
 }
 
 type scoredSkill struct {
-	skill    Skill
-	score    int
-	explicit bool
+	skill          Skill
+	score          int
+	preferredScore float64
+	explicit       bool
+	compact        bool
 }
 
 // Discover loads valid skills without applying a request's prompt budget.
@@ -113,7 +119,7 @@ func LoadAndCompile(config Config, userText string) Compilation {
 			filtered = append(filtered, skill)
 		}
 	}
-	selected := selectSkills(filtered, userText, len(filtered))
+	selected := selectSkills(filtered, userText, len(filtered), config.PreferredNamespaces)
 	if config.CompactDiscovery {
 		var relevant []scoredSkill
 		for _, candidate := range selected {
@@ -122,6 +128,40 @@ func LoadAndCompile(config Config, userText string) Compilation {
 			}
 		}
 		selected = relevant
+	} else if config.CompactRest && len(selected) > 0 {
+		fullLimit := config.FullSkillLimit
+		if fullLimit <= 0 {
+			fullLimit = defaultMaxSelected
+		}
+		hasExplicitOrTrigger := false
+		for _, candidate := range selected {
+			if candidate.explicit || candidate.score > 0 {
+				hasExplicitOrTrigger = true
+				break
+			}
+		}
+		allCompact := config.NoSkillConfidence >= 0.90 && !hasExplicitOrTrigger
+		fullNonExplicit := 0
+		for i := range selected {
+			if selected[i].explicit || selected[i].skill.Discovery == "always" {
+				selected[i].compact = false
+				continue
+			}
+			if allCompact {
+				selected[i].compact = true
+				continue
+			}
+			if selected[i].score > 0 {
+				selected[i].compact = false
+				continue
+			}
+			if fullNonExplicit < fullLimit {
+				selected[i].compact = false
+				fullNonExplicit++
+			} else {
+				selected[i].compact = true
+			}
+		}
 	}
 	prompt, included, issues := compilePrompt(selected, config.MaxPromptChars)
 	diagnostics = append(diagnostics, issues...)
@@ -530,12 +570,16 @@ func platformMatches(raw, current string) bool {
 	return false
 }
 
-// Offer procedures to the LLM; use declared triggers only for prioritization and compact discovery.
-func selectSkills(skills []Skill, userText string, limit int) []scoredSkill {
+// Offer procedures to the LLM; use declared triggers and optional decision scores for prioritization and compact discovery.
+func selectSkills(skills []Skill, userText string, limit int, preferred map[string]float64) []scoredSkill {
 	query := strings.ToLower(userText)
 	var candidates []scoredSkill
 	for _, skill := range skills {
-		candidate := scoredSkill{skill: skill, explicit: explicitlyRequested(query, skill)}
+		candidate := scoredSkill{
+			skill:          skill,
+			explicit:       explicitlyRequested(query, skill),
+			preferredScore: preferred[skill.Namespace],
+		}
 		if matchesAnyTrigger(query, skill.Triggers) {
 			score := 1 + skill.Priority
 			if score < 1 {
@@ -551,6 +595,9 @@ func selectSkills(skills []Skill, userText string, limit int) []scoredSkill {
 		}
 		if candidates[i].score != candidates[j].score {
 			return candidates[i].score > candidates[j].score
+		}
+		if candidates[i].preferredScore != candidates[j].preferredScore {
+			return candidates[i].preferredScore > candidates[j].preferredScore
 		}
 		if candidates[i].skill.Priority != candidates[j].skill.Priority {
 			return candidates[i].skill.Priority > candidates[j].skill.Priority
@@ -604,7 +651,12 @@ func compilePrompt(selected []scoredSkill, maxChars int) (string, []Skill, []Dia
 	b.WriteString(header)
 	var included []Skill
 	var diagnostics []Diagnostic
+	var compactCandidates []scoredSkill
 	for _, candidate := range selected {
+		if candidate.compact {
+			compactCandidates = append(compactCandidates, candidate)
+			continue
+		}
 		section := fmt.Sprintf("\n#### %s\nDescription: %s\nExplicitly requested: %t\n%s\n", candidate.skill.Namespace, candidate.skill.Description, candidate.explicit, candidate.skill.Instructions)
 		if utf8.RuneCountInString(b.String())+utf8.RuneCountInString(section)+utf8.RuneCountInString(footer) > maxChars {
 			diagnostics = append(diagnostics, Diagnostic{Path: candidate.skill.Path, Message: "skill omitted because the active-skill prompt budget was exceeded"})
@@ -612,6 +664,29 @@ func compilePrompt(selected []scoredSkill, maxChars int) (string, []Skill, []Dia
 		}
 		b.WriteString(section)
 		included = append(included, candidate.skill)
+	}
+	if len(compactCandidates) > 0 {
+		summaryHeader := "\n#### Other Available Skills (summary)\n"
+		summaryBuf := strings.Builder{}
+		summaryBuf.WriteString(summaryHeader)
+		var summaryIncluded []Skill
+		for _, candidate := range compactCandidates {
+			desc := strings.TrimSpace(candidate.skill.Description)
+			if desc == "" {
+				desc = candidate.skill.DisplayName
+			}
+			line := fmt.Sprintf("- %s: %s\n", candidate.skill.Namespace, desc)
+			if utf8.RuneCountInString(b.String())+utf8.RuneCountInString(summaryBuf.String())+utf8.RuneCountInString(line)+utf8.RuneCountInString(footer) > maxChars {
+				diagnostics = append(diagnostics, Diagnostic{Path: candidate.skill.Path, Message: "skill summary omitted because the active-skill prompt budget was exceeded"})
+				continue
+			}
+			summaryBuf.WriteString(line)
+			summaryIncluded = append(summaryIncluded, candidate.skill)
+		}
+		if len(summaryIncluded) > 0 {
+			b.WriteString(summaryBuf.String())
+			included = append(included, summaryIncluded...)
+		}
 	}
 	if len(included) == 0 {
 		return "", nil, diagnostics

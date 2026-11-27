@@ -148,12 +148,30 @@ func compileChatSkills(userText string, compactDiscovery bool, toolLists ...[]pr
 	if err := ensureUserSkillsDir(userDir); err != nil {
 		setupDiagnostic = &skillkit.Diagnostic{Path: userDir, Message: err.Error()}
 	}
-	result := skillkit.LoadAndCompile(skillkit.Config{
+	baseCfg := skillkit.Config{
 		BuiltinDir:       getBundledSkillsDir(),
 		AvailableTools:   availableTools,
 		UserDir:          userDir,
 		CompactDiscovery: compactDiscovery,
-	}, userText)
+	}
+	if !compactDiscovery {
+		discovered, _ := skillkit.Discover(baseCfg)
+		narrowing := scoreChatSkillsWithJev(userText, discovered)
+		if narrowing.Evaluated {
+			baseCfg.PreferredNamespaces = narrowing.Scores
+			baseCfg.CompactRest = true
+			baseCfg.FullSkillLimit = 3
+			baseCfg.NoSkillConfidence = narrowing.NoSkillProb
+			AddDebugTrace("chat", "jev.skill_narrowing", "Ranked skills with local EmbeddingGemma 2 decision model", map[string]interface{}{
+				"discovered":    len(discovered),
+				"selected":      narrowing.Selected,
+				"no_skill_prob": narrowing.NoSkillProb,
+				"full_limit":    baseCfg.FullSkillLimit,
+				"elapsed_ms":    narrowing.ElapsedMS,
+			})
+		}
+	}
+	result := skillkit.LoadAndCompile(baseCfg, userText)
 	if setupDiagnostic != nil {
 		result.Diagnostics = append(result.Diagnostics, *setupDiagnostic)
 	}
