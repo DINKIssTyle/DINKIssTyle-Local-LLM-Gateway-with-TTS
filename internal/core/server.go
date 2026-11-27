@@ -3737,7 +3737,7 @@ func handleChatSessionEventsStream() http.HandlerFunc {
 				currentStatus != lastSessionStatus
 
 			if sessionChanged {
-				if lastHasSession && hasSession && (currentSessionID != lastSessionID || currentClearedAt != lastClearedAt) {
+				if lastHasSession && hasSession && (currentSessionID != lastSessionID || (currentClearedAt != "" && currentClearedAt != lastClearedAt)) {
 					afterSeq = 0
 				}
 				if hasSession {
@@ -3826,19 +3826,28 @@ func handleClearCurrentChat() http.HandlerFunc {
 			log.Printf("[handleClearCurrentChat] Failed to clear chat events for %s: %v", userID, err)
 		}
 
+		clearedAtStr := now.UTC().Format(time.RFC3339Nano)
+		if entry.ClearedAt.Valid {
+			clearedAtStr = entry.ClearedAt.Time.UTC().Format(time.RFC3339Nano)
+		}
 		clearPayload := map[string]interface{}{
 			"source":     "remote_clear",
-			"cleared_at": now.Format(time.RFC3339Nano),
+			"cleared_at": clearedAtStr,
 		}
+		clearEventSeq := 0
 		if clearJSON, marshalErr := json.Marshal(clearPayload); marshalErr != nil {
 			log.Printf("[handleClearCurrentChat] Failed to encode clear event for %s: %v", userID, marshalErr)
-		} else if _, err := mcp.AppendChatEvent(userID, entry.ID, "system", "session.cleared", "", "", string(clearJSON)); err != nil {
+		} else if ev, err := mcp.AppendChatEvent(userID, entry.ID, "system", "session.cleared", "", "", string(clearJSON)); err != nil {
 			log.Printf("[handleClearCurrentChat] Failed to append clear event for %s: %v", userID, err)
+		} else {
+			clearEventSeq = ev.EventSeq
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status": "ok",
+			"status":     "ok",
+			"cleared_at": clearedAtStr,
+			"event_seq":  clearEventSeq,
 		})
 	}
 }

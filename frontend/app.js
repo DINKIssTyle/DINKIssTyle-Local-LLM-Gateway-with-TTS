@@ -2588,8 +2588,18 @@ function ensurePassiveSyncPlaceholder(turnId = '', sessionId = 'default', eventS
 }
 
 function syncSnapshotUserMessages(session = AppState.session.currentCache) {
+    if (AppState.session.isRestoring) return;
     const sessionUISnapshot = getCurrentChatSessionUISnapshot(session);
     const snapshotTurns = getSessionSnapshotTurns(sessionUISnapshot);
+    if (snapshotTurns.length === 0) return;
+
+    // Never insert user-only bubbles into an unhydrated view; full turn hydration
+    // will render user and assistant messages together in order.
+    const hasActiveLocalTurn = !!AppState.chat.activeLocalTurnId || !!AppState.chat.activeLocalAssistantId;
+    if (!hasActiveLocalTurn && !hasSubstantiveAssistantMessages() && AppState.session.eventSeq === 0) {
+        return;
+    }
+
     snapshotTurns.forEach((turn, index) => {
         const turnId = String(turn?.turn_id || '').trim();
         const userContent = String(turn?.user_content || '').trim();
@@ -2776,11 +2786,11 @@ function startServerReconnectWatcher({ immediate = false } = {}) {
     clearServerReconnectWatcher();
 
     const tick = async () => {
-        const wasReachable = AppState.session.lastServerReachable === true;
+        const wasUnreachable = AppState.session.lastServerReachable === false;
         const reachable = await probeServerReachability();
         AppState.session.lastServerReachable = reachable;
 
-        if (reachable && !wasReachable) {
+        if (reachable && wasUnreachable) {
             await recoverAfterServerReconnect();
         }
 
@@ -3882,7 +3892,7 @@ function shouldDeferLiveChatSessionEvent(entry = null) {
     if (AppState.session.isRestoring) return true;
     if (AppState.chat.activeLocalTurnId || AppState.chat.activeLocalAssistantId) return false;
     if (AppState.session.eventSeq > 0) return false;
-    if (hasSubstantiveChatMessages()) return false;
+    if (hasSubstantiveAssistantMessages()) return false;
     const eventType = String(entry.EventType || '').trim();
     return eventType !== '' && eventType !== 'session.cleared';
 }
@@ -4130,8 +4140,9 @@ function hydrateChatSessionUISnapshot(sessionSnapshot = null) {
             }
         }
         if (isMeaningfulToolState(snapshotToolState)) {
-            ensureToolCard(assistantId, snapshotToolState.toolName || 'Tool');
-            setToolCardState(assistantId, snapshotToolState.state, snapshotToolState.summary, snapshotToolState.args, snapshotToolState.toolName);
+            const toolName = snapshotToolState.tool_name || snapshotToolState.toolName || 'Tool';
+            ensureToolCard(assistantId, toolName);
+            setToolCardState(assistantId, snapshotToolState.state, snapshotToolState.summary, snapshotToolState.args, toolName);
             const card = getActiveToolCard(assistantId);
             if (card) {
                 card._history = Array.isArray(snapshotToolState.history) ? [...snapshotToolState.history] : [];
@@ -4369,8 +4380,12 @@ function applyCurrentChatSessionSnapshot(session) {
 
     const nextClearedAt = extractSessionClearedAt(session);
     if (nextClearedAt && nextClearedAt !== AppState.session.clearedAt) {
-        resetChatViewState();
-        AppState.session.eventSeq = 0;
+        const hasActiveLocalTurn = !!AppState.chat.activeLocalTurnId || !!AppState.chat.activeLocalAssistantId;
+        const snapshotTurns = getSessionSnapshotTurns(getCurrentChatSessionUISnapshot(session));
+        if (!hasActiveLocalTurn && snapshotTurns.length === 0) {
+            resetChatViewState();
+            AppState.session.eventSeq = 0;
+        }
         AppState.session.clearedAt = nextClearedAt;
     } else if (!nextClearedAt && AppState.session.clearedAt) {
         AppState.session.clearedAt = '';
@@ -4378,7 +4393,9 @@ function applyCurrentChatSessionSnapshot(session) {
 
     AppState.session.currentCache = session;
     AppState.chat.passive.sessionLLMRunning = String(session?.Status || '').trim().toLowerCase() === 'running';
-    syncSnapshotUserMessages(session);
+    if (!AppState.session.isRestoring) {
+        syncSnapshotUserMessages(session);
+    }
     syncGlobalLLMComposerUI();
 
     const serverGenerating = session.Status === 'running';
@@ -4888,13 +4905,24 @@ function applyCurrentChatSessionEvent(entry) {
             syncGlobalLLMComposerUI();
             cleanupTrailingEmptyAssistantMessages();
             break;
-        case 'session.cleared':
+        case 'session.cleared': {
+            const clearedAt = String(payload.cleared_at || '').trim();
+            const hasActiveLocalTurn = !!AppState.chat.activeLocalTurnId || !!AppState.chat.activeLocalAssistantId;
+            const alreadyCleared = !!clearedAt && clearedAt === AppState.session.clearedAt;
+            const currentSnapshotTurns = getSessionSnapshotTurns(getCurrentChatSessionUISnapshot(AppState.session.currentCache));
+            if (hasActiveLocalTurn || alreadyCleared || currentSnapshotTurns.length > 0) {
+                if (clearedAt && !AppState.session.clearedAt && currentSnapshotTurns.length === 0) {
+                    AppState.session.clearedAt = clearedAt;
+                }
+                break;
+            }
             resetChatViewState();
             AppState.chat.stateful.pendingResetReason = 'manual_clear_chat';
-            AppState.session.clearedAt = payload.cleared_at || AppState.session.clearedAt;
-            AppState.session.eventSeq = 0;
+            AppState.session.clearedAt = clearedAt || AppState.session.clearedAt;
+            AppState.session.eventSeq = Math.max(AppState.session.eventSeq, Number(entry.EventSeq || 0));
             scheduleChatSessionPolling(1200);
             break;
+        }
     }
 }
 
@@ -4923,7 +4951,7 @@ async function syncCurrentChatSessionFromServerInternal() {
     applyCurrentChatSessionSnapshot(session);
     const hasLocalInFlightResponse = !!AppState.chat.activeLocalTurnId || !!AppState.chat.activeLocalAssistantId || !!AppState.chat.isGenerating;
     const hasServerOwnedSession = !!session && String(session?.Status || '').trim().length > 0;
-    if (hasLocalInFlightResponse && hasServerOwnedSession && !AppState.session.retryRecoveryInProgress) {
+    if (hasLocalInFlightResponse && !AppState.chat.abortController && hasServerOwnedSession && !AppState.session.retryRecoveryInProgress) {
         relinquishLocalStreamOwnership(`session-sync:${session?.Status || 'none'}`);
     }
 
@@ -4933,73 +4961,60 @@ async function syncCurrentChatSessionFromServerInternal() {
     }
 
     const hasRenderedMessages = hasSubstantiveAssistantMessages();
-    if (AppState.session.eventSeq === 0 && !hasRenderedMessages) {
-        const sessionUISnapshot = getCurrentChatSessionUISnapshot(session);
-        const snapshotMessages = sessionUISnapshot.messages || [];
-        if (snapshotMessages.length > 0) {
-            const snapshotLastEventSeq = Number(sessionUISnapshot.last_event_seq || 0);
-            if (snapshotLastEventSeq <= 0) {
-                beginChatSessionRestore(snapshotMessages.length);
-                const seedResult = await fetchCurrentChatSessionEvents(0, 200);
-                const seedItems = Array.isArray(seedResult.items) ? [...seedResult.items] : [];
-                if (seedItems.length > 0) {
-                    try {
-                        updateChatSessionRestoreProgress(seedItems.length, seedResult.totalCount || seedItems.length);
-                        let allItems = seedItems;
-                        let afterSeq = Number(allItems[allItems.length - 1]?.EventSeq || 0);
-                        while (allItems.length < Number(seedResult.totalCount || 0)) {
-                            const page = await fetchCurrentChatSessionEvents(afterSeq, 200);
-                            const pageItems = Array.isArray(page.items) ? page.items : [];
-                            if (pageItems.length === 0) break;
-                            allItems = allItems.concat(pageItems);
-                            afterSeq = Number(pageItems[pageItems.length - 1]?.EventSeq || afterSeq);
-                            updateChatSessionRestoreProgress(allItems.length, seedResult.totalCount || allItems.length);
-                        }
-                        hydrateChatSessionEventsSnapshot(allItems, seedResult.session || session);
-                        for (const entry of allItems) {
-                            AppState.session.eventSeq = Math.max(AppState.session.eventSeq, Number(entry.EventSeq || 0));
-                        }
-                    } finally {
-                        finishChatSessionRestore();
-                    }
-                    scheduleChatSessionPolling(session.Status === 'running' ? 900 : 1600);
-                    return;
-                }
-            }
-            if (!AppState.session.isRestoring) {
-                beginChatSessionRestore(snapshotMessages.length);
-            }
-            try {
-                updateChatSessionRestoreProgress(0, snapshotMessages.length);
-                let trailingItems = [];
-                let afterSeq = snapshotLastEventSeq;
-                while (true) {
-                    const page = await fetchCurrentChatSessionEvents(afterSeq, 200);
-                    if (page.session) {
-                        applyCurrentChatSessionSnapshot(page.session);
-                    }
-                    const pageItems = Array.isArray(page.items) ? page.items : [];
-                    if (pageItems.length === 0) break;
-                    trailingItems = trailingItems.concat(pageItems);
-                    afterSeq = Number(pageItems[pageItems.length - 1].EventSeq || afterSeq);
-                    if (pageItems.length < 200) break;
-                }
-                hydrateChatSessionUISnapshot(session);
-                if (trailingItems.length > 0) {
-                    dismissStartupCards();
-                    for (const entry of trailingItems) {
-                        applyCurrentChatSessionEvent(entry);
-                        AppState.session.eventSeq = Math.max(AppState.session.eventSeq, Number(entry.EventSeq || 0));
-                    }
-                }
-                AppState.session.eventSeq = Math.max(AppState.session.eventSeq, snapshotLastEventSeq);
-                updateChatSessionRestoreProgress(snapshotMessages.length + trailingItems.length, snapshotMessages.length + trailingItems.length);
-            } finally {
-                finishChatSessionRestore();
-            }
-            scheduleChatSessionPolling(session.Status === 'running' ? 900 : 1600);
-            return;
+    const sessionUISnapshot = getCurrentChatSessionUISnapshot(session);
+    const snapshotTurns = getSessionSnapshotTurns(sessionUISnapshot);
+    const hasAssistantTurnInSnapshot = snapshotTurns.some((turn) => (
+        !!turn.task
+        || turn.skills.length > 0
+        || hasAssistantSnapshotContent(turn.assistant_content, turn.reasoning?.content, turn.tool)
+    ));
+    const needsSnapshotHydration = snapshotTurns.length > 0 && (
+        (AppState.session.eventSeq === 0 && !hasRenderedMessages)
+        || (hasUserMessagesWithoutAssistantMessages() && hasAssistantTurnInSnapshot && !AppState.chat.abortController)
+    );
+    if (needsSnapshotHydration) {
+        const snapshotLastEventSeq = Number(sessionUISnapshot.last_event_seq || 0);
+        if (!AppState.session.isRestoring) {
+            beginChatSessionRestore(snapshotTurns.length);
         }
+        let latestSession = session;
+        try {
+            updateChatSessionRestoreProgress(0, snapshotTurns.length);
+            let trailingItems = [];
+            let afterSeq = snapshotLastEventSeq;
+            while (true) {
+                const page = await fetchCurrentChatSessionEvents(afterSeq, 200);
+                if (page.session) {
+                    latestSession = page.session;
+                    applyCurrentChatSessionSnapshot(page.session);
+                }
+                const pageItems = Array.isArray(page.items) ? page.items : [];
+                if (pageItems.length === 0) break;
+                trailingItems = trailingItems.concat(pageItems);
+                afterSeq = Number(pageItems[pageItems.length - 1].EventSeq || afterSeq);
+                if (pageItems.length < 200) break;
+            }
+            const latestUISnapshot = getCurrentChatSessionUISnapshot(latestSession);
+            const latestSnapshotLastEventSeq = Number(latestUISnapshot.last_event_seq || snapshotLastEventSeq || 0);
+            hydrateChatSessionUISnapshot(latestSession);
+            if (trailingItems.length > 0) {
+                dismissStartupCards();
+                for (const entry of trailingItems) {
+                    if (String(entry?.EventType || '').trim() === 'session.cleared') {
+                        AppState.session.eventSeq = Math.max(AppState.session.eventSeq, Number(entry.EventSeq || 0));
+                        continue;
+                    }
+                    applyCurrentChatSessionEvent(entry);
+                    AppState.session.eventSeq = Math.max(AppState.session.eventSeq, Number(entry.EventSeq || 0));
+                }
+            }
+            AppState.session.eventSeq = Math.max(AppState.session.eventSeq, latestSnapshotLastEventSeq);
+            updateChatSessionRestoreProgress(snapshotTurns.length + trailingItems.length, snapshotTurns.length + trailingItems.length);
+        } finally {
+            finishChatSessionRestore();
+        }
+        scheduleChatSessionPolling(latestSession.Status === 'running' ? 900 : 1600);
+        return;
     }
 
     const result = await fetchCurrentChatSessionEvents(AppState.session.eventSeq, 200);
@@ -6063,11 +6078,15 @@ async function clearChat() {
 
     AppState.chat.stateful.pendingResetReason = 'manual_clear_chat';
 
+    let clearMeta = null;
     try {
-        await fetch('/api/chat-session/clear', {
+        const response = await fetch('/api/chat-session/clear', {
             method: 'POST',
             credentials: 'include'
         });
+        if (response.ok) {
+            clearMeta = await response.json().catch(() => null);
+        }
     } catch (e) {
         console.warn('Failed to clear current chat session on server:', e);
     }
@@ -6075,6 +6094,12 @@ async function clearChat() {
     AppState.session.lastCache = null;
     AppState.session.lastFetchPromise = null;
     resetChatViewState();
+    if (clearMeta?.cleared_at) {
+        AppState.session.clearedAt = String(clearMeta.cleared_at);
+    }
+    if (Number(clearMeta?.event_seq || 0) > 0) {
+        AppState.session.eventSeq = Number(clearMeta.event_seq);
+    }
 }
 
 function clearContext() {

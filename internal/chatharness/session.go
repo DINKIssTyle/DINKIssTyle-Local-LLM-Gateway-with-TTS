@@ -237,7 +237,9 @@ func (t *SessionTracker) Finalize(state SessionPersistState) {
 	if t == nil || !t.SessionOK {
 		return
 	}
+	t.UIStateJSON = EncodeUISnapshot(t.Snapshot)
 	state.UIStateJSON = t.UIStateJSON
+	t.Session.UIStateJSON = t.UIStateJSON
 	if _, err := mcp.UpsertChatSession(toChatSessionEntry(t.Session.UserID, t.Session.SessionKey, state)); err != nil {
 		log.Printf("[chat-session] failed to finalize current session for %s: %v", t.UserID, err)
 	}
