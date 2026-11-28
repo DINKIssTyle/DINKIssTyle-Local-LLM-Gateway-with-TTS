@@ -75,7 +75,8 @@ type AuthManager struct {
 }
 
 var disabledToolAliasGroups = map[string][]string{
-	"computer_use": toolruntime.ComputerToolNames,
+	"computer_use":  toolruntime.ComputerToolNames,
+	"skill_creator": toolruntime.SkillToolNames,
 	"personal_memory": {
 		"search_memory",
 		"read_memory",

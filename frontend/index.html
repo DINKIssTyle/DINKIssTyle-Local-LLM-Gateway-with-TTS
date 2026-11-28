@@ -4290,6 +4290,11 @@
                         id: 'computer_use',
                         name: currentServerLanguage === 'ko' ? '컴퓨터 제어 (macOS)' : 'Computer Use (macOS)',
                         desc: currentServerLanguage === 'ko' ? '서버 Mac의 화면 보기, 앱 실행·전환, 마우스·키보드 조작. 화면 기록 및 손쉬운 사용 권한 필요' : 'View the server Mac, launch/switch apps, and use mouse/keyboard. Requires Screen Recording and Accessibility permissions'
+                    },
+                    {
+                        id: 'skill_creator',
+                        name: currentServerLanguage === 'ko' ? '스킬 제작' : 'Skill Creator',
+                        desc: currentServerLanguage === 'ko' ? '웹채팅에서 사용자 스킬을 계획·승인 후 지원 폴더(skills/user)에 생성' : 'Plan, approve, and scaffold user skills in the skills/user directory from web chat'
                     }
                 ];
 
@@ -4327,7 +4332,8 @@
         function expandDisabledToolAliases(tools) {
             const aliasGroups = {
                 personal_memory: ['search_memory', 'read_memory', 'read_memory_context', 'delete_memory'],
-                computer_use: ['computer_observe', 'computer_list_apps', 'computer_launch_app', 'computer_switch_app', 'computer_click', 'computer_type', 'computer_key', 'computer_scroll']
+                computer_use: ['computer_observe', 'computer_list_apps', 'computer_launch_app', 'computer_switch_app', 'computer_click', 'computer_type', 'computer_key', 'computer_scroll'],
+                skill_creator: ['list_skills', 'read_skill', 'create_user_skill']
             };
             const expanded = [];
             const seen = new Set();

@@ -39,6 +39,8 @@ type ExecutionContext struct {
 	UserID                string
 	EnableMemory          bool
 	LocationInfo          string
+	BuiltinSkillsDir      string
+	UserSkillsDir         string
 	DisabledTools         []string
 	DisallowedCommands    []string
 	DisallowedDirectories []string
@@ -196,6 +198,7 @@ func NewDefaultRegistry() *Registry {
 	}
 	registerGoogleTools(registry)
 	registerTranscriptTools(registry)
+	registerSkillTools(registry)
 	registerComputerTools(registry, computeruse.Default)
 	return registry
 }

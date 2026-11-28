@@ -4834,6 +4834,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		UserID:                userID,
 		EnableMemory:          enableMemory,
 		LocationInfo:          locationInfo,
+		BuiltinSkillsDir:      getBundledSkillsDir(),
+		UserSkillsDir:         getWritableSkillsDir(),
 		DisabledTools:         disabledTools,
 		DisallowedCommands:    disallowedCmds,
 		DisallowedDirectories: disallowedDirs,
@@ -5525,6 +5527,8 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	toolUsageCounts := make(map[string]int)
 	toolSignatureCounts := make(map[string]int)
 	webSearchEvidenceAttempts := 0
+	webSearchFailuresWithoutEvidence := 0
+	const maxWebSearchFailClosedRetries = 2
 	webEvidenceSources := make([]chatharness.WebEvidenceSource, 0, 6)
 	webEvidenceSourceURLs := make(map[string]bool)
 	executeCommandFamilyCounts := make(map[string]int)
@@ -7484,15 +7488,28 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 			emitStreamChunk(fmt.Sprintf("data: %s", string(resBytes)))
 
 			if !invalidArguments && chatharness.ShouldFailClosedWebSearch(lastToolName, err, toolEvidenceSourceCount) {
-				failureAnswer := chatharness.BuildWebSearchFailureAnswer(initialUserInputText, err.Error())
-				fullResponse = ""
-				emitCanonicalAssistantDelta(failureAnswer)
-				AddDebugTrace("chat", "web_search.fail_closed", "Stopped generation after web search returned no evidence", map[string]interface{}{
-					"turn":  turn,
-					"tool":  lastToolName,
-					"error": err.Error(),
-				})
-				break
+				webSearchFailuresWithoutEvidence++
+				if len(webEvidenceSources) == 0 && webSearchFailuresWithoutEvidence <= maxWebSearchFailClosedRetries && turn < maxToolTurns-1 {
+					result += chatharness.BuildWebSearchRetryGuidance(initialUserInputText, lastToolName, err.Error(), webSearchFailuresWithoutEvidence, maxWebSearchFailClosedRetries)
+					AddDebugTrace("chat", "web_search.retry_allowed", "Allowing bounded query-refinement retry after web search returned no evidence", map[string]interface{}{
+						"turn":        turn,
+						"tool":        lastToolName,
+						"attempt":     webSearchFailuresWithoutEvidence,
+						"max_retries": maxWebSearchFailClosedRetries,
+						"error":       err.Error(),
+					})
+				} else {
+					failureAnswer := chatharness.BuildWebSearchFailureAnswer(initialUserInputText, err.Error())
+					fullResponse = ""
+					emitCanonicalAssistantDelta(failureAnswer)
+					AddDebugTrace("chat", "web_search.fail_closed", "Stopped generation after web search returned no evidence", map[string]interface{}{
+						"turn":     turn,
+						"tool":     lastToolName,
+						"attempts": webSearchFailuresWithoutEvidence,
+						"error":    err.Error(),
+					})
+					break
+				}
 			}
 
 			if llmMode == "stateful" && lastResponseID == "" {

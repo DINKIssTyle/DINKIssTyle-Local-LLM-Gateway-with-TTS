@@ -121,6 +121,7 @@ func TestDefaultRegistryExposesExpectedAppTools(t *testing.T) {
 		"naver_search": true, "namu_wiki": true, "get_current_location": true,
 		"execute_command":    true,
 		"search_transcripts": true, "read_transcripts": true,
+		"list_skills": true, "read_skill": true, "create_user_skill": true,
 	}
 	if computeruse.Default.Available() {
 		for _, name := range ComputerToolNames {

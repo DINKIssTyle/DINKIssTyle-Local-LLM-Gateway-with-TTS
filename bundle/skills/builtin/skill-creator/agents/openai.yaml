@@ -1,0 +1,4 @@
+interface:
+  display_name: "스킬 제작"
+  short_description: "Plan, approve, and scaffold a new user skill"
+  default_prompt: "Use $skill-creator to plan a new user skill, get user approval, and create it with standard scaffolding."

@@ -361,6 +361,13 @@ func TestFailedWebSearchWithoutEvidenceIsFailClosed(t *testing.T) {
 			t.Fatalf("fail-closed answer contained unsupported claim %q:\n%s", forbidden, answer)
 		}
 	}
+
+	retryGuidance := BuildWebSearchRetryGuidance("리센스 맴버들이 누구누구지?", "search_web", providerErr.Error(), 1, 2)
+	for _, expected := range []string{"Web Search Retry Guidance (1/2)", "DIFFERENT, cleaner search query", "한국어로 답하세요"} {
+		if !strings.Contains(retryGuidance, expected) {
+			t.Fatalf("retry guidance omitted %q:\n%s", expected, retryGuidance)
+		}
+	}
 }
 
 func TestMissingSearchQueryRecoveryUsesOnlyCurrentRequest(t *testing.T) {

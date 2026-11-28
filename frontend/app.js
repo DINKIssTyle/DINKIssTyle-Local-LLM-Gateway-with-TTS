@@ -1059,6 +1059,9 @@ async function handleStreamEvent(json, ctx) {
         } else if (eventType === 'tool_call.arguments') {
             setToolCardState(elementId, 'running', '', json.arguments, json.tool || 'Tool', json.recovered === true);
         } else if (eventType === 'tool_call.success') {
+            if ((json.tool || ctx.lastToolCallHtml) === 'create_user_skill') {
+                loadSkillCatalog().catch(() => {});
+            }
             appendToolEvidenceHistory(elementId, json.evidence);
             setToolCardState(elementId, 'success', getWebEvidenceSummary(elementId) || t('tool.executionFinished'));
         } else if (eventType === 'tool_call.failure') {
@@ -4729,6 +4732,9 @@ function applyCurrentChatSessionEvent(entry) {
             if (AppState.session.replay.currentAssistantId) setToolCardState(AppState.session.replay.currentAssistantId, 'running', '', payload.arguments || null, payload.tool || '', payload.recovered === true);
             break;
         case 'tool_call.success':
+            if (payload.tool === 'create_user_skill') {
+                loadSkillCatalog().catch(() => {});
+            }
             if (isLocalActiveTurn) {
                 if (AppState.chat.activeLocalAssistantId) {
                     appendToolEvidenceHistory(AppState.chat.activeLocalAssistantId, payload.evidence);
@@ -7794,6 +7800,16 @@ function formatToolPreviewFromObject(args, normalizedTool) {
             return t('tool.currentLocationChecked');
         case 'get_current_time':
             return t('tool.currentTimeChecked');
+        case 'read_skill': {
+            const ns = extractToolObjectValue(args, ['namespace']);
+            if (ns) return ns;
+            break;
+        }
+        case 'create_user_skill': {
+            const skillID = extractToolObjectValue(args, ['skill_id']);
+            if (skillID) return `user:${skillID}`;
+            break;
+        }
     }
 
     const candidateKeys = ['query', 'url', 'text', 'prompt', 'input', 'title'];
@@ -7861,7 +7877,10 @@ function formatToolDisplayName(toolName = '') {
         read_buffered_source: 'Read Buffered Source',
         search_memory: 'Search Memory',
         read_memory: 'Read Memory',
-        delete_memory: 'Delete Memory'
+        delete_memory: 'Delete Memory',
+        list_skills: 'List Skills',
+        read_skill: 'Read Skill',
+        create_user_skill: 'Create User Skill'
     };
     if (knownLabels[normalized]) {
         return knownLabels[normalized];
@@ -8697,7 +8716,7 @@ function sanitizeAssistantRenderText(text) {
 function stripHiddenAssistantProtocolText(text) {
     let cleanText = String(text || '');
 
-    const appToolNames = 'search_web|search_web_multi|read_web_page|read_buffered_source|read_help|get_current_time|search_memory|read_memory|read_memory_context|delete_memory|save_user_fact|delete_user_fact|naver_search|namu_wiki|get_current_location|execute_command';
+    const appToolNames = 'search_web|search_web_multi|read_web_page|read_buffered_source|read_help|get_current_time|search_memory|read_memory|read_memory_context|delete_memory|save_user_fact|delete_user_fact|naver_search|namu_wiki|get_current_location|execute_command|list_skills|read_skill|create_user_skill';
     const appToolTagPattern = new RegExp(`<\\/?(?:${appToolNames})\\b[^>]*>`, 'gi');
     const containsAppToolTag = new RegExp(`<\\/?(?:${appToolNames})\\b`, 'i').test(cleanText);
 
@@ -8735,7 +8754,7 @@ function stripHiddenAssistantProtocolText(text) {
         cleanText = cleanText.replace(appToolTagPattern, '');
         cleanText = cleanText.replace(/^\s*\{[^{}\n]*(?:"(?:query|queries|source_id|source_ids|memory_id|chunk_index|fact_key|fact_value|category|keyword|url|command)"\s*:)[^{}\n]*\}\s*$/gmi, '');
     }
-    if (/^\s*(?:search_web|search_web_multi|read_web_page|read_buffered_source|read_help|get_current_time|search_memory|read_memory|read_memory_context|delete_memory|save_user_fact|delete_user_fact|naver_search|namu_wiki|get_current_location|execute_command)\s*\([\s\S]*\)\s*$/i.test(cleanText)) {
+    if (new RegExp(`^\\s*(?:${appToolNames})\\s*\\([\\s\\S]*\\)\\s*$`, 'i').test(cleanText)) {
         cleanText = '';
     }
     if (new RegExp(`^\\s*print\\s*\\(\\s*(?:${appToolNames})\\s*\\([\\s\\S]*\\)\\s*\\)\\s*$`, 'i').test(cleanText)) {
@@ -8747,7 +8766,7 @@ function stripHiddenAssistantProtocolText(text) {
     cleanText = cleanText.replace(/<\|end\|>/g, '');
     cleanText = cleanText.replace(/\{"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*\{[^}]*\}\}/g, '');
     cleanText = cleanText.replace(/\{"name"\s*:\s*"[^"]+"[^}]*\}/g, '');
-    cleanText = cleanText.replace(/\{"tool"\s*:\s*"(?:search_web|search_web_multi|read_web_page|read_buffered_source|read_help|get_current_time|search_memory|read_memory|read_memory_context|delete_memory|save_user_fact|delete_user_fact|naver_search|namu_wiki|get_current_location|execute_command)"\s*,\s*"(?:arguments|parameters|params)"\s*:\s*\{[^}]*\}\}/gi, '');
+    cleanText = cleanText.replace(new RegExp(`\\{"tool"\\s*:\\s*"(?:${appToolNames})"\\s*,\\s*"(?:arguments|parameters|params)"\\s*:\\s*\\{[^}]*\\}\\}`, 'gi'), '');
     cleanText = cleanText.replace(/<\|[\s\S]*?\|>/g, '');
 
     // Strip Gemma 4 reasoning channels

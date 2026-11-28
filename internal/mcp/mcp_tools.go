@@ -1093,6 +1093,23 @@ func ExecuteToolWithContext(toolName string, argumentsJSON []byte, ctx ToolConte
 		if err := json.Unmarshal(argumentsJSON, &args); err != nil {
 			return "", fmt.Errorf("invalid arguments for search_web: %v", err)
 		}
+		if directURL, ok := extractDirectSearchURL(args.Query); ok && !isToolDisabled(disabledTools, "read_web_page") {
+			emitTraceEvent("tool_runtime", "search_web.redirect_to_read_page", "Redirected direct URL query from search_web to read_web_page", traceDetailsMap(
+				"user", userID,
+				"url", directURL,
+			))
+			result, err := ReadPage(directURL)
+			if err == nil {
+				result, err = bufferToolResult(userID, "read_web_page", "", directURL, "", result)
+			} else if !isMSNWeatherPage(directURL) {
+				if fallback, ok := bufferToolFallbackAfterError(userID, "read_web_page", directURL, err); ok {
+					result = fallback
+					err = nil
+				}
+			}
+			emitToolResultTrace(toolName, start, result, err)
+			return result, err
+		}
 		result, err := SearchWeb(args.Query)
 		if err == nil {
 			result, err = bufferToolResult(userID, toolName, args.Query, "", fmt.Sprintf("Search: %s", compactMemoryText(args.Query, 80)), result)
@@ -1484,6 +1501,15 @@ func searchWebMultiWith(queries []string, search func(string) (string, error)) (
 	}
 	emitTraceEvent("tool_runtime", "search_web_multi.complete", "Parallel web searches completed", traceDetailsMap("queries", queries, "count", len(queries), "successes", successes, "failures", len(queries)-successes, "elapsed_ms", toolDurationMs(start)))
 	if successes == 0 {
+		var details []string
+		for _, outcome := range outcomes {
+			if outcome.Err != nil {
+				details = append(details, fmt.Sprintf("%q: %s", outcome.Query, compactMemoryText(outcome.Err.Error(), 180)))
+			}
+		}
+		if len(details) > 0 {
+			return "", fmt.Errorf("all parallel web searches failed (%s)", strings.Join(details, " | "))
+		}
 		return "", fmt.Errorf("all parallel web searches failed")
 	}
 	if successes < len(queries) {
@@ -1523,113 +1549,143 @@ func searchDuckDuckGo(query string, client *http.Client) ([]webSearchResult, err
 	return parseDuckDuckGoResults(htmlContent, 5)
 }
 
+type searchProviderAttempt struct {
+	provider      string
+	label         string
+	rawCount      int
+	filteredCount int
+	err           error
+}
+
+func (a searchProviderAttempt) formatDetail() string {
+	if a.err != nil {
+		return fmt.Sprintf("%s: %v", a.provider, a.err)
+	}
+	if a.rawCount == 0 {
+		return fmt.Sprintf("%s: %s returned no relevant parsed results (0 parsed)", a.provider, a.label)
+	}
+	return fmt.Sprintf("%s: %s filtered out all %d parsed results as irrelevant", a.provider, a.label, a.rawCount)
+}
+
 func searchWebWithProviders(query string, client *http.Client) ([]webSearchResult, string, error) {
-	results, duckErr := searchDuckDuckGo(query, client)
-	results = filterRelevantSearchResults(query, results)
-	if duckErr == nil && len(results) > 0 {
-		return results, "duckduckgo", nil
+	var attempts []searchProviderAttempt
+	recordAttempt := func(provider, label string, raw, filtered []webSearchResult, err error) {
+		attempts = append(attempts, searchProviderAttempt{
+			provider:      provider,
+			label:         label,
+			rawCount:      len(raw),
+			filteredCount: len(filtered),
+			err:           err,
+		})
 	}
 
+	duckRaw, duckErr := searchDuckDuckGo(query, client)
+	duckFiltered := filterRelevantSearchResults(query, duckRaw)
+	if duckErr == nil && len(duckFiltered) > 0 {
+		return duckFiltered, "duckduckgo", nil
+	}
+	recordAttempt("duckduckgo", "DuckDuckGo", duckRaw, duckFiltered, duckErr)
+
 	freshnessSearch := isFreshnessSearchQuery(query)
-	var newsErr error
 	if freshnessSearch {
-		var newsResults []webSearchResult
-		newsResults, newsErr = searchGoogleNewsRSS(query, client)
-		newsResults = filterRelevantSearchResults(query, newsResults)
-		if newsErr == nil && len(newsResults) > 0 {
+		newsRaw, newsErr := searchGoogleNewsRSS(query, client)
+		newsFiltered := filterRelevantSearchResults(query, newsRaw)
+		if newsErr == nil && len(newsFiltered) > 0 {
 			emitTraceEvent("tool_runtime", "search_web.fallback", "Using Google News RSS for freshness-sensitive search", traceDetailsMap(
 				"query", query,
 				"from_provider", "duckduckgo",
 				"to_provider", "google_news_rss",
 				"reason", toolErrorDetail(duckErr),
 			))
-			return newsResults, "google_news_rss", nil
+			return newsFiltered, "google_news_rss", nil
 		}
-		if duckErr == nil && len(results) > 0 {
-			return results, "duckduckgo", nil
-		}
-		if newsErr == nil {
-			newsErr = fmt.Errorf("Google News RSS returned no relevant parsed results")
-		}
+		recordAttempt("google_news_rss", "Google News RSS", newsRaw, newsFiltered, newsErr)
 	}
 
-	results, bingErr := searchBingRSS(query, client)
-	results = filterRelevantSearchResults(query, results)
-	if bingErr == nil && len(results) > 0 {
+	bingRaw, bingErr := searchBingRSS(query, client)
+	bingFiltered := filterRelevantSearchResults(query, bingRaw)
+	if bingErr == nil && len(bingFiltered) > 0 {
 		emitTraceEvent("tool_runtime", "search_web.fallback", "Using Bing RSS after DuckDuckGo did not return usable results", traceDetailsMap(
 			"query", query,
 			"from_provider", "duckduckgo",
 			"to_provider", "bing_rss",
 			"reason", toolErrorDetail(duckErr),
 		))
-		return results, "bing_rss", nil
+		return bingFiltered, "bing_rss", nil
 	}
+	recordAttempt("bing_rss", "Bing RSS", bingRaw, bingFiltered, bingErr)
 
 	// Fall back to Google News RSS for non-freshness queries as well when both
 	// DuckDuckGo and Bing RSS return no usable results.
 	if !freshnessSearch {
-		var newsResults []webSearchResult
-		newsResults, newsErr = searchGoogleNewsRSS(query, client)
-		newsResults = filterRelevantSearchResults(query, newsResults)
-		if newsErr == nil && len(newsResults) > 0 {
+		newsRaw, newsErr := searchGoogleNewsRSS(query, client)
+		newsFiltered := filterRelevantSearchResults(query, newsRaw)
+		if newsErr == nil && len(newsFiltered) > 0 {
 			emitTraceEvent("tool_runtime", "search_web.fallback", "Using Google News RSS after DuckDuckGo and Bing RSS returned no usable results", traceDetailsMap(
 				"query", query,
 				"from_provider", "bing_rss",
 				"to_provider", "google_news_rss",
 				"reason", toolErrorDetail(bingErr),
 			))
-			return newsResults, "google_news_rss", nil
+			return newsFiltered, "google_news_rss", nil
 		}
+		recordAttempt("google_news_rss", "Google News RSS", newsRaw, newsFiltered, newsErr)
 	}
 
 	// If an over-constrained query returned zero results across all providers,
 	// retry once with a compact relaxed query built from its core terms.
 	if relaxed := relaxSearchQuery(query); relaxed != "" && !strings.EqualFold(relaxed, strings.TrimSpace(query)) {
-		if relaxedBing, err := searchBingRSS(relaxed, client); err == nil {
-			relaxedBing = filterRelevantSearchResults(relaxed, relaxedBing)
-			if len(relaxedBing) > 0 {
-				emitTraceEvent("tool_runtime", "search_web.fallback", "Using relaxed query on Bing RSS after exact query returned no usable results", traceDetailsMap(
-					"query", query,
-					"relaxed_query", relaxed,
-					"to_provider", "bing_rss",
-				))
-				return relaxedBing, "bing_rss", nil
-			}
+		relaxedBingRaw, relaxedBingErr := searchBingRSS(relaxed, client)
+		relaxedBing := filterRelevantSearchResults(relaxed, relaxedBingRaw)
+		if relaxedBingErr == nil && len(relaxedBing) > 0 {
+			emitTraceEvent("tool_runtime", "search_web.fallback", "Using relaxed query on Bing RSS after exact query returned no usable results", traceDetailsMap(
+				"query", query,
+				"relaxed_query", relaxed,
+				"to_provider", "bing_rss",
+			))
+			return relaxedBing, "bing_rss", nil
 		}
-		if relaxedNews, err := searchGoogleNewsRSS(relaxed, client); err == nil {
-			relaxedNews = filterRelevantSearchResults(relaxed, relaxedNews)
-			if len(relaxedNews) > 0 {
-				emitTraceEvent("tool_runtime", "search_web.fallback", "Using relaxed query on Google News RSS after exact query returned no usable results", traceDetailsMap(
-					"query", query,
-					"relaxed_query", relaxed,
-					"to_provider", "google_news_rss",
-				))
-				return relaxedNews, "google_news_rss", nil
-			}
+		recordAttempt(fmt.Sprintf("relaxed(%q)/bing_rss", relaxed), "Bing RSS", relaxedBingRaw, relaxedBing, relaxedBingErr)
+
+		relaxedNewsRaw, relaxedNewsErr := searchGoogleNewsRSS(relaxed, client)
+		relaxedNews := filterRelevantSearchResults(relaxed, relaxedNewsRaw)
+		if relaxedNewsErr == nil && len(relaxedNews) > 0 {
+			emitTraceEvent("tool_runtime", "search_web.fallback", "Using relaxed query on Google News RSS after exact query returned no usable results", traceDetailsMap(
+				"query", query,
+				"relaxed_query", relaxed,
+				"to_provider", "google_news_rss",
+			))
+			return relaxedNews, "google_news_rss", nil
 		}
+		recordAttempt(fmt.Sprintf("relaxed(%q)/google_news_rss", relaxed), "Google News RSS", relaxedNewsRaw, relaxedNews, relaxedNewsErr)
 	}
 
-	if duckErr == nil {
-		duckErr = fmt.Errorf("DuckDuckGo returned no parsed results")
+	hadProviderError := false
+	details := make([]string, 0, len(attempts))
+	for _, attempt := range attempts {
+		if attempt.err != nil {
+			hadProviderError = true
+		}
+		details = append(details, attempt.formatDetail())
 	}
-	if bingErr == nil {
-		bingErr = fmt.Errorf("Bing RSS returned no relevant parsed results")
+	compactQuery := compactMemoryText(strings.TrimSpace(query), 80)
+	if hadProviderError {
+		return nil, "", fmt.Errorf("web search failed for %q: %s", compactQuery, strings.Join(details, "; "))
 	}
-	if freshnessSearch {
-		return nil, "", fmt.Errorf("all web search providers failed: duckduckgo: %v; google_news_rss: %v; bing_rss: %v", duckErr, newsErr, bingErr)
-	}
-	return nil, "", fmt.Errorf("all web search providers failed: duckduckgo: %v; bing_rss: %v", duckErr, bingErr)
+	return nil, "", fmt.Errorf("no relevant web search results for %q: %s", compactQuery, strings.Join(details, "; "))
 }
 
 func relaxSearchQuery(query string) string {
-	cleaned := strings.NewReplacer("(", " ", ")", " ", "[", " ", "]", " ", "\"", " ", "'", " ", ",", " ", "/", " ").Replace(strings.TrimSpace(query))
+	cleaned := strings.NewReplacer("(", " ", ")", " ", "[", " ", "]", " ", "\"", " ", "'", " ", ",", " ", "/", " ", "?", " ", "!", " ").Replace(strings.TrimSpace(query))
 	fields := strings.Fields(cleaned)
-	if len(fields) <= 4 {
+	if len(fields) < 3 {
 		return ""
 	}
 	filler := map[string]bool{
 		"관련": true, "정보": true, "내용": true, "상세": true, "자세한": true, "자세히": true,
-		"알려줘": true, "찾아줘": true, "찾아와줘": true, "검색": true, "대한": true, "대해": true,
+		"알려줘": true, "알려주세요": true, "찾아줘": true, "찾아와줘": true, "검색": true, "대한": true, "대해": true,
+		"누구": true, "누구야": true, "누구지": true, "누구누구": true, "누구누구지": true, "누구인가": true, "누구인가요": true,
+		"무엇": true, "뭐야": true, "뭐지": true, "뭔가": true, "어디": true, "어떻게": true,
 		"details": true, "information": true, "about": true, "please": true,
 	}
 	kept := make([]string, 0, 5)
@@ -1648,7 +1704,11 @@ func relaxSearchQuery(query string) string {
 	if len(kept) < 2 {
 		return ""
 	}
-	return strings.Join(kept, " ")
+	relaxed := strings.Join(kept, " ")
+	if strings.EqualFold(relaxed, strings.TrimSpace(query)) {
+		return ""
+	}
+	return relaxed
 }
 
 func searchGoogleNewsRSS(query string, client *http.Client) ([]webSearchResult, error) {
@@ -1673,6 +1733,31 @@ func containsKoreanText(text string) bool {
 	return false
 }
 
+func extractDirectSearchURL(rawQuery string) (string, bool) {
+	trimmed := strings.TrimSpace(rawQuery)
+	if trimmed == "" || strings.ContainsAny(trimmed, " \t\r\n") {
+		return "", false
+	}
+	lower := strings.ToLower(trimmed)
+	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
+		return "", false
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Host == "" {
+		return "", false
+	}
+	return trimmed, true
+}
+
+func isToolDisabled(disabledTools []string, name string) bool {
+	for _, disabled := range disabledTools {
+		if strings.TrimSpace(disabled) == name {
+			return true
+		}
+	}
+	return false
+}
+
 func filterRelevantSearchResults(query string, results []webSearchResult) []webSearchResult {
 	terms := searchRelevanceTerms(query)
 	if len(terms) == 0 {
@@ -1680,7 +1765,7 @@ func filterRelevantSearchResults(query string, results []webSearchResult) []webS
 	}
 	filtered := make([]webSearchResult, 0, len(results))
 	for _, result := range results {
-		haystack := strings.ToLower(result.Title + " " + result.Snippet + " " + result.Publisher)
+		haystack := strings.ToLower(result.Title + " " + result.Snippet + " " + result.Publisher + " " + result.Link)
 		for _, term := range terms {
 			if searchHaystackContainsTerm(haystack, term) {
 				filtered = append(filtered, result)
@@ -1700,7 +1785,10 @@ func searchHaystackContainsTerm(haystack, term string) bool {
 		}
 	}
 	if !asciiShort {
-		return strings.Contains(haystack, term)
+		if strings.Contains(haystack, term) {
+			return true
+		}
+		return hangulJamoNearMatch(haystack, term)
 	}
 	for _, token := range strings.FieldsFunc(haystack, func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
@@ -1712,10 +1800,115 @@ func searchHaystackContainsTerm(haystack, term string) bool {
 	return false
 }
 
+func isHangulSyllable(r rune) bool {
+	return r >= 0xAC00 && r <= 0xD7A3
+}
+
+func decomposeHangulJamo(runes []rune) []rune {
+	out := make([]rune, 0, len(runes)*3)
+	for _, r := range runes {
+		if !isHangulSyllable(r) {
+			return nil
+		}
+		idx := r - 0xAC00
+		cho := idx / (21 * 28)
+		jung := (idx % (21 * 28)) / 28
+		jong := idx % 28
+		out = append(out, 0x1100+cho, 0x1161+jung)
+		if jong > 0 {
+			out = append(out, 0x11A7+jong)
+		}
+	}
+	return out
+}
+
+func jamoEditDistanceAtMostOne(a, b []rune) bool {
+	la, lb := len(a), len(b)
+	if la < 5 || lb < 5 {
+		return false
+	}
+	diff := la - lb
+	if diff < -1 || diff > 1 {
+		return false
+	}
+	if diff == 0 {
+		mismatches := 0
+		for i := 0; i < la; i++ {
+			if a[i] != b[i] {
+				mismatches++
+				if mismatches > 1 {
+					return false
+				}
+			}
+		}
+		return mismatches <= 1
+	}
+	// Ensure a is shorter by 1 rune.
+	if la > lb {
+		a, b = b, a
+		la, lb = lb, la
+	}
+	i, j, edits := 0, 0, 0
+	for i < la && j < lb {
+		if a[i] == b[j] {
+			i++
+			j++
+			continue
+		}
+		edits++
+		if edits > 1 {
+			return false
+		}
+		j++
+	}
+	return true
+}
+
+// hangulJamoNearMatch tolerates a single Hangul jamo typo (e.g. "리센스" vs "리센느",
+// "맴버" vs "멤버") when search engines auto-correct a user's misspelled Korean query.
+func hangulJamoNearMatch(haystack, term string) bool {
+	termRunes := []rune(term)
+	if len(termRunes) < 2 {
+		return false
+	}
+	termJamo := decomposeHangulJamo(termRunes)
+	if len(termJamo) < 5 {
+		return false
+	}
+	windowLen := len(termRunes)
+	var run []rune
+	checkRun := func() bool {
+		if len(run) < windowLen {
+			return false
+		}
+		for i := 0; i <= len(run)-windowLen; i++ {
+			winJamo := decomposeHangulJamo(run[i : i+windowLen])
+			if jamoEditDistanceAtMostOne(termJamo, winJamo) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, r := range haystack {
+		if isHangulSyllable(r) {
+			run = append(run, r)
+		} else if len(run) > 0 {
+			if checkRun() {
+				return true
+			}
+			run = run[:0]
+		}
+	}
+	if len(run) > 0 && checkRun() {
+		return true
+	}
+	return false
+}
+
 var fourDigitSearchYearPattern = regexp.MustCompile(`^\d{4}(?:년)?$`)
 
 func stripKoreanParticleSuffix(term string) string {
-	for _, suffix := range []string{"에서", "으로", "부터", "까지", "은", "는", "이", "가", "을", "를", "의", "에", "로", "와", "과", "도", "만"} {
+	for _, suffix := range []string{"들이", "들은", "들을", "들의", "들도", "에서", "으로", "부터", "까지", "들", "은", "는", "이", "가", "을", "를", "의", "에", "로", "와", "과", "도", "만"} {
 		if strings.HasSuffix(term, suffix) {
 			stem := strings.TrimSuffix(term, suffix)
 			if len([]rune(stem)) >= 2 {
@@ -1731,6 +1924,8 @@ func searchRelevanceTerms(query string) []string {
 		"latest": true, "current": true, "today": true, "recent": true, "news": true, "update": true,
 		"official": true, "announcement": true, "announcements": true, "major": true, "august": true,
 		"최신": true, "현재": true, "오늘": true, "최근": true, "뉴스": true, "소식": true, "동향": true,
+		"누구": true, "누구야": true, "누구지": true, "누구누구": true, "누구누구지": true, "누구인가": true, "누구인가요": true,
+		"무엇": true, "뭐야": true, "뭐지": true, "알려줘": true, "알려주세요": true, "찾아줘": true,
 	}
 	seen := make(map[string]bool)
 	var terms []string

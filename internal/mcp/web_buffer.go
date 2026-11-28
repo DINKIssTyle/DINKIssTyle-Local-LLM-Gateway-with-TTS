@@ -203,11 +203,13 @@ func saveBufferedWebSource(userID, toolName, query, pageURL, title, content stri
 func getBufferedWebSource(userID, sourceID string) (*BufferedWebSource, error) {
 	userID = normalizeBufferedUserID(userID)
 
+	var dbErr error
 	if db != nil {
 		source, err := getBufferedWebSourceDB(userID, sourceID)
 		if err == nil {
 			return source, nil
 		}
+		dbErr = err
 	}
 
 	webBufferMu.Lock()
@@ -215,19 +217,41 @@ func getBufferedWebSource(userID, sourceID string) (*BufferedWebSource, error) {
 
 	buf := webBuffers[userID]
 	if buf == nil {
+		if dbErr != nil {
+			return nil, dbErr
+		}
 		return nil, fmt.Errorf("no buffered web sources for user")
 	}
 
-	if strings.TrimSpace(sourceID) != "" {
-		source := buf.Sources[sourceID]
+	trimmedID := strings.TrimSpace(sourceID)
+	if trimmedID != "" {
+		source := buf.Sources[trimmedID]
 		if source == nil {
-			return nil, fmt.Errorf("buffered source not found: %s", sourceID)
+			for i := len(buf.Order) - 1; i >= 0; i-- {
+				candidate := buf.Sources[buf.Order[i]]
+				if candidate != nil && bufferedSourceMatchesHint(candidate, trimmedID) {
+					source = candidate
+					break
+				}
+			}
+		}
+		if source == nil && !strings.HasPrefix(trimmedID, "src_") && len(buf.Order) > 0 {
+			source = buf.Sources[buf.Order[len(buf.Order)-1]]
+		}
+		if source == nil {
+			if dbErr != nil {
+				return nil, dbErr
+			}
+			return nil, fmt.Errorf("buffered source not found: %s", trimmedID)
 		}
 		source.LastUsedAt = time.Now()
 		return source, nil
 	}
 
 	if len(buf.Order) == 0 {
+		if dbErr != nil {
+			return nil, dbErr
+		}
 		return nil, fmt.Errorf("no buffered web sources available")
 	}
 
@@ -237,6 +261,21 @@ func getBufferedWebSource(userID, sourceID string) (*BufferedWebSource, error) {
 	}
 	source.LastUsedAt = time.Now()
 	return source, nil
+}
+
+func bufferedSourceMatchesHint(source *BufferedWebSource, hint string) bool {
+	if source == nil {
+		return false
+	}
+	h := strings.ToLower(strings.TrimRight(strings.TrimSpace(hint), "/"))
+	if h == "" {
+		return false
+	}
+	u := strings.ToLower(strings.TrimRight(strings.TrimSpace(source.URL), "/"))
+	if u != "" && (u == h || strings.HasSuffix(u, "/"+h) || strings.Contains(u, h)) {
+		return true
+	}
+	return false
 }
 
 func formatBufferedFallbackAfterToolError(userID, failedTool, target string, err error) string {
@@ -859,33 +898,51 @@ func getBufferedWebSourceDB(userID, sourceID string) (*BufferedWebSource, error)
 	}
 
 	userID = normalizeBufferedUserID(userID)
-	query := `
-		SELECT source_id, user_id, tool_name, query_text, url, title, summary, content, fetched_at, last_used_at
-		FROM web_sources
-		WHERE user_id = ?
-	`
-	args := []interface{}{userID}
-	if strings.TrimSpace(sourceID) != "" {
-		query += ` AND source_id = ?`
-		args = append(args, strings.TrimSpace(sourceID))
+	trimmedID := strings.TrimSpace(sourceID)
+	scanOne := func(query string, args ...interface{}) (*BufferedWebSource, error) {
+		source := &BufferedWebSource{}
+		err := db.QueryRow(query, args...).Scan(
+			&source.SourceID,
+			&source.UserID,
+			&source.ToolName,
+			&source.Query,
+			&source.URL,
+			&source.Title,
+			&source.Summary,
+			&source.Content,
+			&source.FetchedAt,
+			&source.LastUsedAt,
+		)
+		return source, err
 	}
-	query += ` ORDER BY last_used_at DESC, fetched_at DESC, id DESC LIMIT 1`
 
-	source := &BufferedWebSource{}
-	err := db.QueryRow(query, args...).Scan(
-		&source.SourceID,
-		&source.UserID,
-		&source.ToolName,
-		&source.Query,
-		&source.URL,
-		&source.Title,
-		&source.Summary,
-		&source.Content,
-		&source.FetchedAt,
-		&source.LastUsedAt,
-	)
+	const selectCols = `SELECT source_id, user_id, tool_name, query_text, url, title, summary, content, fetched_at, last_used_at FROM web_sources WHERE user_id = ?`
+	const orderLimit = ` ORDER BY last_used_at DESC, fetched_at DESC, id DESC LIMIT 1`
+
+	var source *BufferedWebSource
+	var err error
+	if trimmedID != "" {
+		source, err = scanOne(selectCols+` AND source_id = ?`+orderLimit, userID, trimmedID)
+		if err == sql.ErrNoRows {
+			// Models occasionally pass a URL or post ID instead of the src_* handle.
+			hint := strings.TrimRight(trimmedID, "/")
+			source, err = scanOne(selectCols+` AND url != '' AND (LOWER(RTRIM(url, '/')) = LOWER(?) OR LOWER(url) LIKE LOWER(?))`+orderLimit, userID, hint, "%"+hint+"%")
+		}
+		if err == sql.ErrNoRows && !strings.HasPrefix(trimmedID, "src_") {
+			// Fall back to the most recent buffered source when the hint is not a src_* ID.
+			source, err = scanOne(selectCols+orderLimit, userID)
+		}
+	} else {
+		source, err = scanOne(selectCols+orderLimit, userID)
+	}
+
 	if err != nil {
 		if err == sql.ErrNoRows {
+			if trimmedID != "" {
+				if available := listRecentBufferedSourceIDsDB(userID, 3); len(available) > 0 {
+					return nil, fmt.Errorf("buffered source %q not found; recent available source_ids: %s", trimmedID, strings.Join(available, ", "))
+				}
+			}
 			return nil, fmt.Errorf("buffered source not found")
 		}
 		return nil, fmt.Errorf("failed to load buffered source: %w", err)
@@ -897,6 +954,25 @@ func getBufferedWebSourceDB(userID, sourceID string) (*BufferedWebSource, error)
 		return nil, fmt.Errorf("failed to update buffered source usage: %w", err)
 	}
 	return source, nil
+}
+
+func listRecentBufferedSourceIDsDB(userID string, limit int) []string {
+	if db == nil || limit <= 0 {
+		return nil
+	}
+	rows, err := db.Query(`SELECT source_id FROM web_sources WHERE user_id = ? ORDER BY last_used_at DESC, fetched_at DESC, id DESC LIMIT ?`, userID, limit)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil && strings.TrimSpace(id) != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func readBufferedSourceDB(userID, sourceID, query string, maxChunks int) (string, error) {

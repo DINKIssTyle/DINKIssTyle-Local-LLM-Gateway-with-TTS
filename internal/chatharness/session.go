@@ -291,6 +291,16 @@ func compactToolSnapshotDetail(toolName string, args interface{}, summary string
 			return "사용자 위치를 확인했습니다."
 		case "get_current_time":
 			return "현재 시간을 확인했습니다."
+		case "list_skills":
+			return "설치된 스킬과 사용 가능한 도구 목록을 확인했습니다."
+		case "read_skill":
+			if ns := extractStringValue(argsMap, []string{"namespace"}); ns != "" {
+				return compactText(ns, 220)
+			}
+		case "create_user_skill":
+			if skillID := extractStringValue(argsMap, []string{"skill_id"}); skillID != "" {
+				return compactText("user:"+skillID, 220)
+			}
 		}
 
 		for _, key := range []string{"query", "url", "text", "prompt", "input", "title"} {

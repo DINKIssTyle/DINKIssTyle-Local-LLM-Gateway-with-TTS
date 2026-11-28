@@ -140,6 +140,66 @@ func TestFreshnessProviderErrorReportsGoogleNewsParserOutcome(t *testing.T) {
 	}
 }
 
+func TestSearchProviderErrorDistinguishesNoResultsFilteredAndChallenge(t *testing.T) {
+	t.Run("all providers empty without transport errors", func(t *testing.T) {
+		client := &http.Client{Transport: searchRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Host == "lite.duckduckgo.com" {
+				return searchResponse(req, `<html><body></body></html>`), nil
+			}
+			return searchResponse(req, `<?xml version="1.0"?><rss><channel></channel></rss>`), nil
+		})}
+		_, _, err := searchWebWithProviders("우리말샘 멍때리다", client)
+		if err == nil {
+			t.Fatal("expected error for empty search results")
+		}
+		for _, expected := range []string{
+			`no relevant web search results for "우리말샘 멍때리다"`,
+			"duckduckgo:",
+			"bing_rss:",
+			"google_news_rss:",
+			"(0 parsed)",
+		} {
+			if !strings.Contains(err.Error(), expected) {
+				t.Fatalf("expected %q in error: %v", expected, err)
+			}
+		}
+	})
+
+	t.Run("distinguishes relevance-filtered results from zero parsed", func(t *testing.T) {
+		client := &http.Client{Transport: searchRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch req.URL.Host {
+			case "lite.duckduckgo.com":
+				return searchResponse(req, `<html><body><table><tr><td><a class='result-link' href='https://example.com/unrelated'>Unrelated Cooking Recipe</a></td></tr><tr><td class='result-snippet'>Pasta ingredients</td></tr></table></body></html>`), nil
+			default:
+				return searchResponse(req, `<?xml version="1.0"?><rss><channel></channel></rss>`), nil
+			}
+		})}
+		_, _, err := searchWebWithProviders("우리말샘 멍때리다", client)
+		if err == nil {
+			t.Fatal("expected error when all parsed results are filtered out")
+		}
+		if !strings.Contains(err.Error(), "filtered out all 1 parsed results as irrelevant") {
+			t.Fatalf("expected relevance-filtered detail, got: %v", err)
+		}
+	})
+
+	t.Run("provider challenge reports web search failed", func(t *testing.T) {
+		client := &http.Client{Transport: searchRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Host == "lite.duckduckgo.com" {
+				return searchResponse(req, `<form id="challenge-form"><div class="anomaly-modal">bots use DuckDuckGo too</div></form>`), nil
+			}
+			return searchResponse(req, `<?xml version="1.0"?><rss><channel></channel></rss>`), nil
+		})}
+		_, _, err := searchWebWithProviders("우리말샘 멍때리다", client)
+		if err == nil {
+			t.Fatal("expected error on challenge + empty fallback")
+		}
+		if !strings.Contains(err.Error(), `web search failed for "우리말샘 멍때리다"`) || !strings.Contains(err.Error(), "automated-traffic challenge") {
+			t.Fatalf("expected failure prefix and challenge detail, got: %v", err)
+		}
+	})
+}
+
 func TestSearchRelevanceFilterRemovesProviderNoise(t *testing.T) {
 	results := []webSearchResult{
 		{Title: "지방자치단체 인터넷원서접수센터", Snippet: "공무원 시험 접수 안내"},
@@ -159,6 +219,63 @@ func TestSearchRelevanceFilterRemovesProviderNoise(t *testing.T) {
 	})
 	if len(particleFiltered) != 1 {
 		t.Fatalf("Korean particle terms failed to match stem in result: %#v", particleFiltered)
+	}
+
+	linkFiltered := filterRelevantSearchResults("https://damoang.net/free/7818624", []webSearchResult{
+		{Title: "스카이 오디오 안경 1일 사용후기", Link: "https://damoang.net/free/7818624", Snippet: "사용 후기"},
+	})
+	if len(linkFiltered) != 1 {
+		t.Fatalf("URL query failed to match result Link: %#v", linkFiltered)
+	}
+
+	if got, ok := extractDirectSearchURL("https://damoang.net/free/7818624"); !ok || got != "https://damoang.net/free/7818624" {
+		t.Fatalf("expected direct URL detection, got %q (%v)", got, ok)
+	}
+	if _, ok := extractDirectSearchURL("https://damoang.net/free/7818624 요약"); ok {
+		t.Fatalf("multi-word query with URL should not be treated as a bare direct URL")
+	}
+
+	// Single-jamo Korean typos ("리센스" -> "리센느", "맴버들이" -> "멤버") must not be
+	// discarded when search engines return auto-corrected results, while unrelated
+	// pages remain filtered out.
+	typoFiltered := filterRelevantSearchResults("리센스 맴버들이 누구누구지?", []webSearchResult{
+		{Title: "리센느(RESCENE) 멤버 프로필 총정리", Snippet: "원이, 리브, 미나미, 메이, 제나 5인조 걸그룹"},
+		{Title: "Unrelated Cooking Recipe", Snippet: "Pasta ingredients and sauce"},
+	})
+	if len(typoFiltered) != 1 || !strings.Contains(typoFiltered[0].Title, "리센느") {
+		t.Fatalf("Korean typo-corrected search result was incorrectly filtered out: %#v", typoFiltered)
+	}
+	if relaxed := relaxSearchQuery("리센스 맴버들이 누구누구지?"); relaxed != "리센스 맴버들이" {
+		t.Fatalf("expected colloquial question word to be stripped in relaxed query, got %q", relaxed)
+	}
+}
+
+func TestReadBufferedSourceResolvesURLAndPostIDHints(t *testing.T) {
+	if err := InitDB(t.TempDir() + "/web-buffer-hint.db"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(CloseDB)
+
+	const userID = "hint-user"
+	const pageURL = "https://damoang.net/free/7818624"
+	saved := saveBufferedWebSource(userID, "read_web_page", "", pageURL, "스카이 오디오 안경 1일 사용후기", "스카이 오디오 안경 착용감이 가볍고 통화 음질이 준수합니다.")
+	if saved == nil || !strings.HasPrefix(saved.SourceID, "src_") {
+		t.Fatalf("failed to save buffered web source: %#v", saved)
+	}
+
+	for _, hint := range []string{pageURL, "7818624", "unknown-label"} {
+		out, err := readBufferedToolSource(userID, hint, "착용감", 2)
+		if err != nil {
+			t.Fatalf("readBufferedToolSource(%q) failed: %v", hint, err)
+		}
+		if !strings.Contains(out, "스카이 오디오 안경") {
+			t.Fatalf("readBufferedToolSource(%q) returned unexpected output: %s", hint, out)
+		}
+	}
+
+	// An explicit unknown src_* ID should still report the real available source IDs instead of "no buffered web sources for user".
+	if _, err := readBufferedToolSource(userID, "src_missing123456", "착용감", 2); err == nil || !strings.Contains(err.Error(), saved.SourceID) {
+		t.Fatalf("expected error listing available source_id %s, got: %v", saved.SourceID, err)
 	}
 }
 

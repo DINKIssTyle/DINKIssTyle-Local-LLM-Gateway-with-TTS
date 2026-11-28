@@ -626,6 +626,25 @@ func ShouldFailClosedWebSearch(toolName string, toolErr error, evidenceCount int
 	}
 }
 
+// BuildWebSearchRetryGuidance tells the model to refine a failed web search
+// query (e.g. fix typos, extract core nouns, or try another web tool) before
+// fail-closed termination is triggered.
+func BuildWebSearchRetryGuidance(originalUserText, toolName, detail string, attempt, maxRetries int) string {
+	remaining := maxRetries - attempt + 1
+	if remaining < 1 {
+		remaining = 1
+	}
+	langNote := responseLanguageInstruction(originalUserText)
+	return fmt.Sprintf(
+		"\n\n[Web Search Retry Guidance (%d/%d)]\n"+
+			"The previous %s call returned no usable evidence (%s). "+
+			"Do NOT fabricate an answer from memory. "+
+			"Try a DIFFERENT, cleaner search query right now (fix possible spelling/typo errors, remove colloquial question words, use core entity nouns or English/Korean variants, or try another web tool such as namu_wiki or naver_search). "+
+			"Remaining retry attempts before stopping: %d.\n%s",
+		attempt, maxRetries, strings.TrimSpace(toolName), compactText(strings.TrimSpace(detail), 180), remaining, langNote,
+	)
+}
+
 // BuildWebSearchFailureAnswer is deliberately deterministic: no LLM follow-up
 // is allowed to manufacture current claims after every provider returned zero
 // usable evidence.

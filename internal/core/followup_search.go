@@ -32,12 +32,14 @@ var (
 
 var followupAnaphoraCues = []string{
 	"좀더", "좀 더", "더 자세", "자세한", "자세히", "추가로", "추가 정보", "추가 내용",
+	"다른 정보", "다른 내용", "더 알려", "추가해", "추가해줘", "또 뭐", "더 없어",
 	"그 사고", "그 사건", "그 사람", "그 영화", "그 책", "그 회사", "그 모델", "그 제품",
 	"그거", "그것", "이거", "이것", "해당 ", "방금", "아까", "위에서", "위의 ", "거기",
 	"원인이", "원인은", "이유가", "이유는", "결과가", "결과는", "생존자", "사망자", "피해",
 	"몇년", "몇 년", "몇월", "몇 월", "며칠", "언제", "어느 날", "정확한 날짜", "정확한 시점",
 	"알려줘야지", "말해줘야지", "바뀌었어", "바뀐", "이후",
 	"more detail", "more details", "more about", "tell me more", "further detail",
+	"more info", "other info", "other details", "add more",
 	"that accident", "the accident", "that incident", "the incident", "that person",
 	"what happened", "why did it", "how did it", "what date", "which year", "which month",
 }
@@ -56,7 +58,8 @@ var followupGenericLatin = map[string]bool{
 
 var followupGenericHangul = map[string]bool{
 	"사고": true, "사건": true, "내용": true, "내용을": true, "내용이": true, "자세한": true,
-	"자세히": true, "좀더": true, "추가": true, "정보": true, "정보를": true, "검색": true,
+	"자세히": true, "좀더": true, "추가": true, "추가해": true, "추가해줘": true, "다른": true,
+	"정보": true, "정보를": true, "정보도": true, "검색": true,
 	"찾아": true, "찾아와줘": true, "찾아줘": true, "알려": true, "알려줘": true, "설명": true,
 	"번역": true, "한국어": true, "한국어로": true, "원인": true, "원인은": true, "이유": true,
 	"결과": true, "보고서": true, "비행기": true, "추락": true, "생존": true, "화재": true,
@@ -326,7 +329,7 @@ func rewriteFollowupSearchArguments(ctx context.Context, endpoint, token, modelI
 		"model":       modelID,
 		"stream":      false,
 		"temperature": 0,
-		"max_tokens":  120,
+		"max_tokens":  256,
 		"messages": []any{
 			map[string]any{
 				"role": "system",
@@ -347,27 +350,45 @@ func rewriteFollowupSearchArguments(ctx context.Context, endpoint, token, modelI
 			},
 		},
 	}
-	if strings.Contains(strings.ToLower(modelID), "qwen") {
-		payload["chat_template_kwargs"] = map[string]any{"enable_thinking": false}
+	// Disable thinking for OpenAI-compatible models (including Gemma 4 and Qwen)
+	// so auxiliary query rewrites do not exhaust max_tokens inside reasoning blocks.
+	thinkingDisableApplied := applyThinkingDisableToRequest(payload, "standard", modelID)
+
+	doRewriteRequest := func(reqPayload map[string]any) ([]byte, int, error) {
+		body, err := json.Marshal(reqPayload)
+		if err != nil {
+			return nil, 0, err
+		}
+		reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		req, err := http.NewRequestWithContext(reqCtx, "POST", strings.TrimRight(endpoint, "/")+"/v1/chat/completions", bytes.NewReader(body))
+		if err != nil {
+			return nil, 0, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-DKST-Task-Phase", "followup_rewrite")
+		if strings.TrimSpace(token) != "" {
+			req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+		}
+		resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+		if err != nil {
+			return nil, 0, err
+		}
+		defer resp.Body.Close()
+		rawBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+		if readErr != nil {
+			return nil, resp.StatusCode, readErr
+		}
+		return rawBody, resp.StatusCode, nil
 	}
 
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return argsJSON, false
-	}
-	reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, "POST", strings.TrimRight(endpoint, "/")+"/v1/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return argsJSON, false
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-DKST-Task-Phase", "followup_rewrite")
-	if strings.TrimSpace(token) != "" {
-		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
-	}
 	started := time.Now()
-	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	raw, statusCode, err := doRewriteRequest(payload)
+	if err == nil && statusCode != http.StatusOK && thinkingDisableApplied && isUnsupportedReasoningParamError(string(raw)) {
+		markThinkingDisableUnsupportedForModel(modelID, "standard")
+		delete(payload, "chat_template_kwargs")
+		raw, statusCode, err = doRewriteRequest(payload)
+	}
 	if err != nil {
 		log.Printf("[followup-search] rewrite request failed (%s): %v", time.Since(started).Round(time.Millisecond), err)
 		recordLLMIncident(mcp.LLMIncident{
@@ -380,11 +401,13 @@ func rewriteFollowupSearchArguments(ctx context.Context, endpoint, token, modelI
 		})
 		return argsJSON, false
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	if statusCode != http.StatusOK {
+		errBody := string(raw)
+		if len(errBody) > 1024 {
+			errBody = errBody[:1024]
+		}
 		failureKind := "http_error"
-		if isSchemaUnsupportedResponse(resp.StatusCode, string(errBody)) {
+		if isSchemaUnsupportedResponse(statusCode, errBody) {
 			failureKind = "schema_unsupported"
 			noteModelSchemaUnsupported(modelID)
 		}
@@ -393,14 +416,10 @@ func rewriteFollowupSearchArguments(ctx context.Context, endpoint, token, modelI
 			LLMMode:     "standard",
 			Scope:       "aux.followup_search",
 			FailureKind: failureKind,
-			HTTPStatus:  resp.StatusCode,
-			ErrorDetail: compactText(string(errBody), 300),
+			HTTPStatus:  statusCode,
+			ErrorDetail: compactText(errBody, 300),
 			ElapsedMS:   time.Since(started).Milliseconds(),
 		})
-		return argsJSON, false
-	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
-	if err != nil {
 		return argsJSON, false
 	}
 	var completion struct {
@@ -423,11 +442,11 @@ func rewriteFollowupSearchArguments(ctx context.Context, endpoint, token, modelI
 		})
 		return argsJSON, false
 	}
-	controlJSON := strings.TrimSpace(completion.Choices[0].Message.Content)
+	controlJSON := strings.TrimSpace(followupThinkingStrip.ReplaceAllString(completion.Choices[0].Message.Content, ""))
 	if controlJSON == "" {
 		candidate := strings.TrimSpace(completion.Choices[0].Message.ReasoningContent)
-		if strings.HasPrefix(candidate, "{") && json.Valid([]byte(candidate)) {
-			controlJSON = candidate
+		if extracted, ok := chatharness.ExtractBalancedJSONObject(candidate); ok {
+			controlJSON = extracted
 		}
 	}
 	controlJSON = stripJSONFence(controlJSON)

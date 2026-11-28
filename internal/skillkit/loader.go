@@ -16,7 +16,7 @@ import (
 const (
 	defaultMaxFileBytes   = 64 * 1024
 	defaultMaxSelected    = 3
-	defaultMaxPromptChars = 16000
+	defaultMaxPromptChars = 24000
 )
 
 type Config struct {
@@ -261,6 +261,23 @@ func discoverRoot(root, source string, maxFileBytes int64) ([]Skill, []Diagnosti
 		skills = append(skills, skill)
 	}
 	return skills, diagnostics
+}
+
+// ValidSkillID reports whether value is a valid lowercase hyphen-separated skill ID.
+func ValidSkillID(value string) bool {
+	return validSkillID(value)
+}
+
+// ValidateSkillDir validates and loads a single skill directory using the exact
+// same rules as Discover.
+func ValidateSkillDir(dir, source string, maxFileBytes int64) (Skill, error) {
+	if maxFileBytes <= 0 {
+		maxFileBytes = defaultMaxFileBytes
+	}
+	if strings.TrimSpace(source) == "" {
+		source = "user"
+	}
+	return loadSkill(dir, source, maxFileBytes)
 }
 
 func loadSkill(dir, source string, maxFileBytes int64) (Skill, error) {
