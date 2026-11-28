@@ -87,6 +87,46 @@
             }
         }
 
+        function stripTrailingSourcesForTTS(text) {
+            if (!text) return '';
+            let raw = String(text);
+            if (typeof global.DKSTChatStreaming?.splitAssistantSources === 'function') {
+                raw = global.DKSTChatStreaming.splitAssistantSources(raw).bodyText;
+            }
+            const lines = raw.split('\n');
+            const headingRe = /^(?:#{1,6}\s*|\*{1,2}\s*)?(?:검색\s*출처|참고\s*출처|참고\s*자료|출처|sources?|references?)(?:\s*\*{1,2})?\s*:?\s*$/i;
+            const itemRe = /^\s*(?:[-*•+]|\d+[.)])\s*(?:\[[^\]]+\]\(\s*https?:\/\/[^)\s]+\s*\)|.*https?:\/\/\S+).*$/i;
+            let end = lines.length - 1;
+            while (end >= 0 && !lines[end].trim()) end -= 1;
+            if (end < 0) return '';
+            if (headingRe.test(lines[end].trim())) {
+                let cut = end;
+                while (cut > 0 && (!lines[cut - 1].trim() || lines[cut - 1].trim() === '---')) cut -= 1;
+                return lines.slice(0, cut).join('\n').trim();
+            }
+            let i = end;
+            let count = 0;
+            while (i >= 0) {
+                const line = lines[i].trim();
+                if (!line) {
+                    i -= 1;
+                    continue;
+                }
+                if (itemRe.test(line)) {
+                    count += 1;
+                    i -= 1;
+                    continue;
+                }
+                if (count > 0 && headingRe.test(line)) {
+                    let cut = i;
+                    while (cut > 0 && (!lines[cut - 1].trim() || lines[cut - 1].trim() === '---')) cut -= 1;
+                    return lines.slice(0, cut).join('\n').trim();
+                }
+                break;
+            }
+            return raw;
+        }
+
         function cleanTextForTTS(text) {
             if (!text) return '';
             let cleaned = String(text);
@@ -94,6 +134,9 @@
             // Remove reasoning before HTML stripping destroys its delimiters.
             // An unfinished reasoning block must stay silent during streaming.
             cleaned = cleaned.replace(/<think\b[^>]*>[\s\S]*?(?:<\/think\s*>|$)/gi, ' ');
+
+            // Never speak trailing source/citation lists.
+            cleaned = stripTrailingSourcesForTTS(cleaned);
 
             // Remove markdown code blocks
             cleaned = cleaned.replace(/```[\s\S]*?```/g, ' ');
@@ -108,6 +151,8 @@
                 return label;
             });
             cleaned = cleaned.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');
+            // Remove any remaining bare URLs
+            cleaned = cleaned.replace(/https?:\/\/\S+/gi, ' ');
             // Remove headers, bold, italics, strikethrough, blockquotes
             cleaned = cleaned.replace(/^[#>\s*+-]+/gm, ' ');
             cleaned = cleaned.replace(/[*_~]{1,3}([^*_~]+)[*_~]{1,3}/g, '$1');

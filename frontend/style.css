@@ -723,10 +723,72 @@ body.keyboard-open #chat-header {
 }
 
 .assistant-tools,
-.assistant-reasoning {
+.assistant-reasoning,
+.assistant-sources {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.assistant-sources:empty {
+  display: none;
+}
+
+.sources-card-body {
+  padding: 6px 14px 10px 38px;
+}
+
+.sources-card-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sources-card-item {
+  margin: 0;
+  padding: 0;
+}
+
+.sources-card-link {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-decoration: none;
+  padding: 5px 8px;
+  border-radius: 8px;
+  transition: background-color 0.16s ease;
+}
+
+.sources-card-link:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.sources-card-title {
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: #8ab4f8;
+  word-break: break-word;
+}
+
+.sources-card-link:hover .sources-card-title {
+  text-decoration: underline;
+}
+
+.sources-card-domain {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--text-muted);
+}
+
+html[data-theme="light"] .sources-card-link:hover {
+  background: rgba(15, 23, 42, 0.05);
+}
+
+html[data-theme="light"] .sources-card-title {
+  color: #1d4ed8;
 }
 
 .message-block,

@@ -273,8 +273,20 @@ test('continuous STT shows speaking placeholder during TTS playback and live int
     intervals[0]();
     assert.match(h.input.placeholder, /^input\.speaking\./);
 
-    // Once TTS finishes, placeholder switches back to listening
+    // While LLM/tools are generating a reply, placeholder switches to processing (not listening)
     h.state.audio.isPlayingQueue = false;
+    h.state.chat.isGenerating = true;
+    intervals[0]();
+    assert.match(h.input.placeholder, /^input\.processing\./);
+
+    // While STT is transcribing audio, placeholder switches to transcribing
+    h.state.chat.isGenerating = false;
+    h.state.input.isSTTProcessing = true;
+    intervals[0]();
+    assert.match(h.input.placeholder, /^input\.transcribing\./);
+
+    // Once all busy states finish, placeholder switches back to listening
+    h.state.input.isSTTProcessing = false;
     intervals[0]();
     assert.match(h.input.placeholder, /^input\.listening\./);
 });

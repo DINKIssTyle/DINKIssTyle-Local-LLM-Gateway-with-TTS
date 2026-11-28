@@ -4,6 +4,88 @@
  */
 
 (function attachDKSTChatStreaming(global) {
+    const TRAILING_SOURCES_HEADING_RE = /^(?:#{1,6}\s*|\*{1,2}\s*)?(?:검색\s*출처|참고\s*출처|참고\s*자료|출처|sources?|references?)(?:\s*\*{1,2})?\s*:?\s*$/i;
+    const TRAILING_SOURCE_MD_LINK_RE = /^\s*(?:[-*•+]|\d+[.)])\s*\[((?:\\.|[^\]])+)\]\(\s*(https?:\/\/[^)\s]+)\s*\)(?:\s*[-–—:]\s*(.*))?$/i;
+    const TRAILING_SOURCE_BARE_URL_RE = /^\s*(?:[-*•+]|\d+[.)])\s*(?:([^:]+?)\s*[:\-–—]\s*)?(https?:\/\/\S+)\s*$/i;
+
+    function unescapeMarkdownSourceTitle(title) {
+        return String(title || '')
+            .replace(/\\([\\\[\]])/g, '$1')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    function parseTrailingSourceItem(line) {
+        const trimmed = String(line || '').trim();
+        if (!trimmed) return null;
+        const mdMatch = trimmed.match(TRAILING_SOURCE_MD_LINK_RE);
+        if (mdMatch) {
+            const title = unescapeMarkdownSourceTitle(mdMatch[1]);
+            const url = String(mdMatch[2] || '').trim();
+            if (url) return { title: title || url, url };
+        }
+        const bareMatch = trimmed.match(TRAILING_SOURCE_BARE_URL_RE);
+        if (bareMatch) {
+            const url = String(bareMatch[2] || '').replace(/[).,;!?]+$/, '').trim();
+            const title = unescapeMarkdownSourceTitle(bareMatch[1] || '') || url;
+            if (url) return { title, url };
+        }
+        return null;
+    }
+
+    function splitAssistantSources(text) {
+        const source = String(text || '');
+        if (!source.trim()) {
+            return { bodyText: source, sources: [] };
+        }
+        const lines = source.split('\n');
+        let end = lines.length - 1;
+        while (end >= 0 && !lines[end].trim()) end -= 1;
+        if (end < 0) {
+            return { bodyText: source, sources: [] };
+        }
+        if (TRAILING_SOURCES_HEADING_RE.test(lines[end].trim())) {
+            let cut = end;
+            while (cut > 0 && (!lines[cut - 1].trim() || lines[cut - 1].trim() === '---')) cut -= 1;
+            return { bodyText: lines.slice(0, cut).join('\n').trimEnd(), sources: [] };
+        }
+
+        let i = end;
+        const parsedReversed = [];
+        while (i >= 0) {
+            const line = lines[i].trim();
+            if (!line) {
+                i -= 1;
+                continue;
+            }
+            const parsed = parseTrailingSourceItem(line);
+            if (parsed) {
+                parsedReversed.push(parsed);
+                i -= 1;
+                continue;
+            }
+            if (parsedReversed.length > 0 && TRAILING_SOURCES_HEADING_RE.test(line)) {
+                let cut = i;
+                while (cut > 0 && (!lines[cut - 1].trim() || lines[cut - 1].trim() === '---')) cut -= 1;
+                const seen = new Set();
+                const sources = [];
+                for (let k = parsedReversed.length - 1; k >= 0; k -= 1) {
+                    const item = parsedReversed[k];
+                    const key = item.url.toLowerCase();
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    sources.push(item);
+                }
+                return {
+                    bodyText: lines.slice(0, cut).join('\n').trimEnd(),
+                    sources
+                };
+            }
+            break;
+        }
+        return { bodyText: source, sources: [] };
+    }
+
     function createChatStreamingController(options = {}) {
         const { deps = {} } = options;
         const {
@@ -19,6 +101,7 @@
             observeAutoScrollResizes,
             pulseMessageRender,
             reconcileAssistantActionBarForMessage,
+            renderAssistantSourcesCard,
             renderMarkdownIntoHost,
             renderStreamingPreviewIntoHost,
             sanitizeAssistantRenderText,
@@ -132,7 +215,9 @@
             const bubble = el.querySelector('.message-bubble');
             const { markdownBody: mdBody, committedHost, pendingHost } = ensureStreamingMarkdownHosts(bubble);
 
-            let cleanText = sanitizeAssistantRenderText(text);
+            const sanitizedText = sanitizeAssistantRenderText(text);
+            const { bodyText: cleanText, sources } = splitAssistantSources(sanitizedText);
+            renderAssistantSourcesCard?.(el, sources);
             const previousCommittedText = String(el._streamRenderState?.committedText || '');
             const renderMode = getMarkdownRenderMode();
             if (renderMode === 'final') {
@@ -247,7 +332,9 @@
             }
             el._pendingRenderState = null;
 
-            const cleanText = sanitizeAssistantRenderText(text);
+            const sanitizedText = sanitizeAssistantRenderText(text);
+            const { bodyText: cleanText, sources } = splitAssistantSources(sanitizedText);
+            renderAssistantSourcesCard?.(el, sources);
 
             renderMarkdownIntoHost(committedHost, cleanText);
             pendingHost.innerHTML = '';
@@ -290,7 +377,9 @@
             if (!committedHost || !pendingHost) return;
 
             const previousCommittedText = String(el._streamRenderState?.committedText || '');
-            const cleanText = sanitizeAssistantRenderText(text);
+            const sanitizedText = sanitizeAssistantRenderText(text);
+            const { bodyText: cleanText, sources } = splitAssistantSources(sanitizedText);
+            renderAssistantSourcesCard?.(el, sources);
             const renderMode = getMarkdownRenderMode();
             if (renderMode === 'final') {
                 renderStreamingPreviewIntoHost(committedHost, cleanText);
@@ -379,12 +468,14 @@
             normalizeComparableTail,
             schedulePendingMarkdownRender,
             scheduleStreamMessageRender,
+            splitAssistantSources,
             updateMessageContent,
             updateSyncedMessageContent
         };
     }
 
     global.DKSTChatStreaming = {
-        createChatStreamingController
+        createChatStreamingController,
+        splitAssistantSources
     };
 })(window);

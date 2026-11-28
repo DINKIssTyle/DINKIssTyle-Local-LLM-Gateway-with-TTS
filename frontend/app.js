@@ -1091,6 +1091,9 @@ function applyServerCompletion(payload, ctx) {
     ctx.hadAssistantContent = !!ctx.fullText.trim();
     AppState.session.replay.messageBuffers.set(ctx.elementId, ctx.fullText);
     finalizeMessageContent(ctx.elementId, ctx.fullText);
+    if (Array.isArray(payload.sources) && payload.sources.length > 0) {
+        renderAssistantSourcesCard(ctx.elementId, payload.sources, { merge: true });
+    }
     upsertChatMessageState({ role: 'assistant', content: ctx.fullText, turnId: ctx.turnId });
     if (ctx.hadAssistantContent) setAssistantActionBarReady(ctx.elementId);
     if (ctx.useStreamingTTS && typeof syncFinalizedStreamingTTS === 'function') {
@@ -7126,6 +7129,7 @@ function createMessageElement(msg) {
                             </div>
                         </div>
                     </section>
+                    <div class="assistant-sources"></div>
                 </div>
                 <div class="message-actions">
                     <button class="icon-btn save-btn" onclick="saveMessageTurn(this)" title="${escapeAttr(t('action.saveTurn'))}">
@@ -7142,7 +7146,11 @@ function createMessageElement(msg) {
     }
 
     if (msg.role === 'assistant' && textContent.trim()) {
-        const cleanText = sanitizeAssistantRenderText(textContent);
+        const sanitized = sanitizeAssistantRenderText(textContent);
+        const split = typeof window.DKSTChatStreaming?.splitAssistantSources === 'function'
+            ? window.DKSTChatStreaming.splitAssistantSources(sanitized)
+            : { bodyText: sanitized, sources: [] };
+        const cleanText = split.bodyText;
         const committedHost = div.querySelector('.assistant-response-card .markdown-committed');
         const pendingHost = div.querySelector('.assistant-response-card .markdown-pending');
         if (committedHost) {
@@ -7158,6 +7166,9 @@ function createMessageElement(msg) {
             committedText: cleanText,
             pendingText: ''
         };
+        if (split.sources.length > 0) {
+            renderAssistantSourcesCard(div, split.sources);
+        }
     }
 
     return div;
@@ -7342,6 +7353,7 @@ chatStreamingController = appChatStreaming.createChatStreamingController({
         observeAutoScrollResizes,
         pulseMessageRender,
         reconcileAssistantActionBarForMessage,
+        renderAssistantSourcesCard,
         renderMarkdownIntoHost,
         renderStreamingPreviewIntoHost,
         sanitizeAssistantRenderText,
@@ -7917,6 +7929,97 @@ function appendToolHistory(card, toolName, previewText, args) {
         tool: displayTool,
         detail
     });
+}
+
+function formatSourceHostname(rawUrl) {
+    try {
+        return new URL(rawUrl).hostname.replace(/^www\./i, '');
+    } catch {
+        return '';
+    }
+}
+
+function renderAssistantSourcesCard(targetElOrId, sources, options = {}) {
+    const msgEl = typeof targetElOrId === 'string'
+        ? document.getElementById(targetElOrId)
+        : targetElOrId;
+    if (!msgEl) return;
+    let host = msgEl.querySelector('.assistant-sources');
+    if (!host) {
+        const sections = msgEl.querySelector('.assistant-sections');
+        if (!sections) return;
+        host = document.createElement('div');
+        host.className = 'assistant-sources';
+        sections.appendChild(host);
+    }
+
+    const incoming = Array.isArray(sources) ? sources : [];
+    const existing = options.merge && Array.isArray(msgEl._assistantSources) ? msgEl._assistantSources : [];
+    const seen = new Set();
+    const merged = [];
+    [...existing, ...incoming].forEach((item) => {
+        const url = String(item?.url || '').trim();
+        if (!url || !/^https?:\/\//i.test(url)) return;
+        const key = url.toLowerCase();
+        if (seen.has(key)) return;
+        seen.add(key);
+        const title = String(item?.title || '').trim() || url;
+        merged.push({ title, url });
+    });
+
+    msgEl._assistantSources = merged;
+    if (merged.length === 0) {
+        host.innerHTML = '';
+        return;
+    }
+
+    let card = host.querySelector('.sources-status-card');
+    const wasExpanded = card && (card.dataset.userExpanded === 'true' || !card.classList.contains('collapsed'));
+    if (!card) {
+        card = document.createElement('section');
+        card.className = 'tool-status-card sources-status-card collapsed';
+        card.dataset.collapsed = 'true';
+        host.appendChild(card);
+    }
+
+    const signature = merged.map((s) => `${s.title}|${s.url}`).join('\n');
+    if (card.dataset.sourcesSignature === signature) return;
+    card.dataset.sourcesSignature = signature;
+
+    const label = t('sources.label');
+    const countText = t('sources.count').replace('{count}', String(merged.length));
+    const itemsHtml = merged.map((item) => {
+        const hostName = formatSourceHostname(item.url);
+        return `
+            <li class="sources-card-item">
+                <a class="sources-card-link" href="${escapeAttr(item.url)}" target="_blank" rel="noopener noreferrer">
+                    <span class="sources-card-title">${escapeHtml(item.title)}</span>
+                    ${hostName ? `<span class="sources-card-domain">${escapeHtml(hostName)}</span>` : ''}
+                </a>
+            </li>`;
+    }).join('');
+
+    card.innerHTML = `
+        <button type="button" class="reasoning-header tool-strip-header sources-strip-header" onclick="toggleReasoningCard(this)">
+            <span class="reasoning-chevron material-icons-round">play_arrow</span>
+            <span class="tool-header-group">
+                <span class="reasoning-title">${escapeHtml(label)}</span>
+                <span class="tool-header-separator" aria-hidden="true">•</span>
+                <span class="tool-header-status">${escapeHtml(countText)}</span>
+            </span>
+        </button>
+        <div class="tool-card-body sources-card-body">
+            <ul class="sources-card-list">${itemsHtml}</ul>
+        </div>`;
+
+    if (wasExpanded) {
+        card.classList.remove('collapsed');
+        card.dataset.collapsed = 'false';
+        card.dataset.userExpanded = 'true';
+    } else {
+        card.classList.add('collapsed');
+        card.dataset.collapsed = 'true';
+    }
 }
 
 function appendToolEvidenceHistory(elementId, evidence) {
@@ -9151,8 +9254,16 @@ function updateMessageInputPlaceholder() {
         || AppState.audio?.currentAudio
         || AppState.audio?.streamingTTSActive
         || window.speechSynthesis?.speaking);
+    const isSTTPaused = isSpeakingTTS || !!AppState.chat.isGenerating || !!AppState.input.isSTTProcessing;
+    const sttLabel = isSpeakingTTS
+        ? (t('input.speaking') || '말하고 있는 중')
+        : AppState.chat.isGenerating
+            ? (t('input.processing') || '처리 중')
+            : AppState.input.isSTTProcessing
+                ? (t('input.transcribing') || '음성 인식 중')
+                : t('input.listening');
     const nextPlaceholder = AppState.input.isSTTActive
-        ? `${isSpeakingTTS ? (t('input.speaking') || '말하고 있는 중') : t('input.listening')}...`
+        ? `${sttLabel}...`
         : AppState.session.isRestoring
             ? t('input.placeholder.restoring')
             : (AppState.ui.progress.active
@@ -9160,5 +9271,6 @@ function updateMessageInputPlaceholder() {
                 : (AppState.chat.passive.placeholder || backgroundTask?.label || t('input.placeholder')));
 
     messageInput.placeholder = nextPlaceholder;
-    messageInput.classList.toggle('stt-listening', AppState.input.isSTTActive);
+    messageInput.classList.toggle('stt-listening', AppState.input.isSTTActive && !isSTTPaused);
+    messageInput.classList.toggle('stt-busy', AppState.input.isSTTActive && isSTTPaused);
 }

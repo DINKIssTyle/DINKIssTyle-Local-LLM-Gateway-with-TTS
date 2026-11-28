@@ -370,6 +370,23 @@ func TestFailedWebSearchWithoutEvidenceIsFailClosed(t *testing.T) {
 	}
 }
 
+func TestStripTrailingSourcesSectionForGlassesAndTTS(t *testing.T) {
+	withKoreanSources := "리센느는 5인조 걸그룹입니다.\n\n검색 출처:\n- [리센느 프로필](https://example.com/rescene)\n- [위키](https://example.com/wiki)"
+	if got := StripTrailingSourcesSection(withKoreanSources); got != "리센느는 5인조 걸그룹입니다." {
+		t.Fatalf("expected Korean sources block to be stripped, got %q", got)
+	}
+
+	withEnglishSources := "RESCENE is a 5-member girl group.\n\n### Sources\n1. [Profile](https://example.com/profile)\n2. https://example.com/news"
+	if got := StripTrailingSourcesSection(withEnglishSources); got != "RESCENE is a 5-member girl group." {
+		t.Fatalf("expected English sources block to be stripped, got %q", got)
+	}
+
+	normalProse := "출처에 따르면 리센느는 2024년에 데뷔했습니다.\n관련 내용을 계속 설명합니다."
+	if got := StripTrailingSourcesSection(normalProse); got != normalProse {
+		t.Fatalf("normal prose mentioning 출처 should not be stripped, got %q", got)
+	}
+}
+
 func TestMissingSearchQueryRecoveryUsesOnlyCurrentRequest(t *testing.T) {
 	repaired, ok := RepairMissingSearchToolArguments("search_web", `{}`, "자녀들 정보")
 	if !ok {

@@ -52,11 +52,11 @@
                 startPlaceholderAnimation();
             } else {
                 if (messageInput) {
-                    messageInput.classList.remove('stt-active', 'stt-speaking');
+                    messageInput.classList.remove('stt-active', 'stt-speaking', 'stt-busy', 'stt-listening');
                 }
-                if (giantMicBtn) giantMicBtn.classList.remove('stt-speaking');
-                if (inlineMicBtn) inlineMicBtn.classList.remove('stt-speaking');
-                if (micLayoutContainer) micLayoutContainer.classList.remove('stt-speaking');
+                if (giantMicBtn) giantMicBtn.classList.remove('stt-speaking', 'stt-busy');
+                if (inlineMicBtn) inlineMicBtn.classList.remove('stt-speaking', 'stt-busy');
+                if (micLayoutContainer) micLayoutContainer.classList.remove('stt-speaking', 'stt-busy');
                 stopPlaceholderAnimation();
                 updateMessageInputPlaceholder?.();
             }
@@ -70,20 +70,60 @@
                 || global.speechSynthesis?.speaking);
         }
 
+        function getSTTStatusState() {
+            if (isSpeaking()) {
+                return {
+                    state: 'speaking',
+                    label: t('input.speaking') || '말하고 있는 중',
+                    paused: true
+                };
+            }
+            if (AppState.chat?.isGenerating) {
+                return {
+                    state: 'processing',
+                    label: t('input.processing') || '처리 중',
+                    paused: true
+                };
+            }
+            if (processing || AppState.input?.isSTTProcessing) {
+                return {
+                    state: 'transcribing',
+                    label: t('input.transcribing') || '음성 인식 중',
+                    paused: true
+                };
+            }
+            return {
+                state: 'listening',
+                label: t('input.listening') || '듣고 있어요',
+                paused: false
+            };
+        }
+
         function startPlaceholderAnimation() {
             stopPlaceholderAnimation();
             AppState.input.sttPlaceholderIndex = 0;
             const updatePlaceholder = () => {
                 const dots = '.'.repeat((AppState.input.sttPlaceholderIndex % 3) + 1);
-                const speaking = isSpeaking();
+                const status = getSTTStatusState();
+                const speaking = status.state === 'speaking';
                 if (messageInput) {
                     messageInput.classList.toggle('stt-speaking', speaking);
-                    const label = speaking ? (t('input.speaking') || '말하고 있는 중') : t('input.listening');
-                    messageInput.placeholder = `${label}${dots}`;
+                    messageInput.classList.toggle('stt-busy', status.paused);
+                    messageInput.classList.toggle('stt-listening', !status.paused);
+                    messageInput.placeholder = `${status.label}${dots}`;
                 }
-                if (giantMicBtn) giantMicBtn.classList.toggle('stt-speaking', speaking);
-                if (inlineMicBtn) inlineMicBtn.classList.toggle('stt-speaking', speaking);
-                if (micLayoutContainer) micLayoutContainer.classList.toggle('stt-speaking', speaking);
+                if (giantMicBtn) {
+                    giantMicBtn.classList.toggle('stt-speaking', speaking);
+                    giantMicBtn.classList.toggle('stt-busy', status.paused);
+                }
+                if (inlineMicBtn) {
+                    inlineMicBtn.classList.toggle('stt-speaking', speaking);
+                    inlineMicBtn.classList.toggle('stt-busy', status.paused);
+                }
+                if (micLayoutContainer) {
+                    micLayoutContainer.classList.toggle('stt-speaking', speaking);
+                    micLayoutContainer.classList.toggle('stt-busy', status.paused);
+                }
                 AppState.input.sttPlaceholderIndex++;
             };
             updatePlaceholder();
@@ -450,6 +490,7 @@
 
         async function transcribe(audio, id, engine, baseText = '') {
             processing = true;
+            AppState.input.isSTTProcessing = true;
             if (!config.sttContinuous) releaseCapture();
             const controller = new AbortController();
             requestController = controller;
@@ -468,6 +509,7 @@
                 if (requestController === controller) {
                     requestController = null;
                     processing = false;
+                    AppState.input.isSTTProcessing = false;
                 }
             }
         }
@@ -484,6 +526,7 @@
             requestController?.abort();
             requestController = null;
             processing = false;
+            AppState.input.isSTTProcessing = false;
             releaseCapture();
             const recognition = AppState.input.recognition;
             AppState.input.recognition = null;

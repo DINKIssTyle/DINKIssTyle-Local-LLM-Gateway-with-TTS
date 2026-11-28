@@ -606,6 +606,61 @@ func AppendMissingWebEvidenceSources(answer, originalUserText string, sources []
 	return answer + "\n\n" + heading + ":\n" + strings.Join(lines, "\n")
 }
 
+var (
+	trailingSourcesHeadingPattern = regexp.MustCompile(`(?i)^(?:#{1,6}\s*|\*{1,2}\s*)?(?:검색\s*출처|참고\s*출처|참고\s*자료|출처|sources?|references?)(?:\s*\*{1,2})?\s*:?\s*$`)
+	trailingSourceItemPattern     = regexp.MustCompile(`(?i)^\s*(?:[-*•+]|\d+[.)])\s*(?:\[[^\]]+\]\(\s*https?://[^)\s]+\s*\)|https?://\S+|.*https?://\S+).*$`)
+)
+
+// StripTrailingSourcesSection removes a trailing citation/sources block (e.g.
+// "검색 출처:" or "Sources:" followed by link bullets) from prose destined for
+// HUD/glasses or spoken TTS surfaces.
+func StripTrailingSourcesSection(answer string) string {
+	trimmed := strings.TrimSpace(answer)
+	if trimmed == "" {
+		return trimmed
+	}
+	lines := strings.Split(trimmed, "\n")
+	end := len(lines) - 1
+	for end >= 0 && strings.TrimSpace(lines[end]) == "" {
+		end--
+	}
+	if end < 0 {
+		return ""
+	}
+	// Case 1: trailing standalone sources heading with no items yet.
+	if trailingSourcesHeadingPattern.MatchString(strings.TrimSpace(lines[end])) {
+		cut := end
+		for cut > 0 && (strings.TrimSpace(lines[cut-1]) == "" || strings.TrimSpace(lines[cut-1]) == "---") {
+			cut--
+		}
+		return strings.TrimSpace(strings.Join(lines[:cut], "\n"))
+	}
+	// Case 2: trailing block of bulleted/numbered links under a sources heading.
+	i := end
+	itemCount := 0
+	for i >= 0 {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			i--
+			continue
+		}
+		if trailingSourceItemPattern.MatchString(line) {
+			itemCount++
+			i--
+			continue
+		}
+		if itemCount > 0 && trailingSourcesHeadingPattern.MatchString(line) {
+			cut := i
+			for cut > 0 && (strings.TrimSpace(lines[cut-1]) == "" || strings.TrimSpace(lines[cut-1]) == "---") {
+				cut--
+			}
+			return strings.TrimSpace(strings.Join(lines[:cut], "\n"))
+		}
+		break
+	}
+	return trimmed
+}
+
 // ShouldFinalizeAfterWebSearch leaves evidence sufficiency to the model.
 // Execution budgets are enforced separately by the caller.
 func ShouldFinalizeAfterWebSearch(toolName, result string, deepResearch, bulkDiagnostic bool) bool {

@@ -113,3 +113,27 @@ test('scrollToBottom(true) completes animated scroll to bottom in label-top mode
     env.flushAnimationFrames();
     assert.ok(Math.abs(env.chatMessages.scrollTop - 1800) <= 1, `expected scrollTop near 1800, got ${env.chatMessages.scrollTop}`);
 });
+
+test('splitAssistantSources separates trailing Korean and English source lists cleanly', async () => {
+    await import('./app-chat-streaming.js');
+    const { splitAssistantSources } = globalThis.DKSTChatStreaming;
+
+    const input = [
+        '리센느는 5인조 걸그룹입니다.',
+        '',
+        '검색 출처:',
+        '- [리센느 \\[공식\\] 프로필](https://example.com/rescene)',
+        '- [위키](https://example.com/wiki)'
+    ].join('\n');
+    const parsed = splitAssistantSources(input);
+    assert.equal(parsed.bodyText, '리센느는 5인조 걸그룹입니다.');
+    assert.deepEqual(parsed.sources, [
+        { title: '리센느 [공식] 프로필', url: 'https://example.com/rescene' },
+        { title: '위키', url: 'https://example.com/wiki' }
+    ]);
+
+    const prose = '출처를 확인해보니 2024년 데뷔입니다.';
+    const parsedProse = splitAssistantSources(prose);
+    assert.equal(parsedProse.bodyText, prose);
+    assert.deepEqual(parsedProse.sources, []);
+});

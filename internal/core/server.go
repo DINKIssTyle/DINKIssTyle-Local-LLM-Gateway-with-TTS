@@ -7670,7 +7670,11 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 		})
 		fullResponse = cleanedResponse
 	}
-	fullResponse = chatharness.AppendMissingWebEvidenceSources(fullResponse, initialUserInputText, webEvidenceSources)
+	if glassesRequest || glassesChat {
+		fullResponse = chatharness.StripTrailingSourcesSection(fullResponse)
+	} else {
+		fullResponse = chatharness.AppendMissingWebEvidenceSources(fullResponse, initialUserInputText, webEvidenceSources)
+	}
 
 	// A malformed call that still remains after the bounded retry loop is never
 	// forwarded as assistant content.
@@ -7759,6 +7763,9 @@ func handleChat(w http.ResponseWriter, r *http.Request, app *App, authMgr *AuthM
 	}
 	if finalToolPayload != nil {
 		requestCompletePayload["tool"] = finalToolPayload
+	}
+	if !glassesRequest && !glassesChat && len(webEvidenceSources) > 0 {
+		requestCompletePayload["sources"] = webEvidenceSources
 	}
 	appendChatEvent("assistant", "request.complete", requestCompletePayload)
 	if requestCompleteBytes, err := json.Marshal(requestCompletePayload); err == nil {

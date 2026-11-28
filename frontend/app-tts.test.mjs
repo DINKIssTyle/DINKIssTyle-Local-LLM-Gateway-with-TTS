@@ -121,6 +121,35 @@ test('stopAllAudio aborts in-flight server TTS fetch', async () => {
     }
 });
 
+test('cleanTextForTTS strips trailing Korean/English sources blocks and bare URLs', () => {
+    const harness = createServerTTSTestHarness();
+    try {
+        const sampleKo = [
+            '리센느는 5인조 걸그룹입니다.',
+            '',
+            '검색 출처:',
+            '- [리센느 프로필](https://example.com/rescene)',
+            '- [위키백과](https://ko.wikipedia.org/wiki/RESCENE)'
+        ].join('\n');
+        const cleanedKo = harness.controller.cleanTextForTTS(sampleKo);
+        assert.equal(cleanedKo, '리센느는 5인조 걸그룹입니다.');
+
+        const sampleEn = [
+            'RESCENE debuted in 2024.',
+            '',
+            'Sources:',
+            '- [Official Site](https://example.com/official)'
+        ].join('\n');
+        const cleanedEn = harness.controller.cleanTextForTTS(sampleEn);
+        assert.equal(cleanedEn, 'RESCENE debuted in 2024.');
+
+        const streamingHeadingOnly = '리센느는 5인조 걸그룹입니다.\n\n검색 출처:';
+        assert.equal(harness.controller.cleanTextForTTS(streamingHeadingOnly), '리센느는 5인조 걸그룹입니다.');
+    } finally {
+        harness.cleanup();
+    }
+});
+
 test('streaming server TTS pipelines next sentence fetch while previous sentence is still playing', async () => {
     const resolvers = [];
     const harness = createServerTTSTestHarness({

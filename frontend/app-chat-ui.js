@@ -66,6 +66,7 @@
                 msgEl,
                 reasoningHost: msgEl.querySelector('.assistant-reasoning'),
                 toolsHost: msgEl.querySelector('.assistant-tools'),
+                sourcesHost: msgEl.querySelector('.assistant-sources'),
                 bubble: msgEl.querySelector('.assistant-response-card .message-bubble'),
                 markdownBody: msgEl.querySelector('.assistant-response-card .markdown-body'),
                 committedHost: msgEl.querySelector('.assistant-response-card .markdown-committed'),
